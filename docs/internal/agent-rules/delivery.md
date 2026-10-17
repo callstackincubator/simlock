@@ -102,9 +102,10 @@ is open, done means closed as completed.
    those comments change about the spec. The maintainer accepts or rejects
    each item. Only then does the session write the section it was started
    for. Before its first question, it maps what exists today (the code, the
-   docs and ADRs, open work in the same area, other tools) with read-only
-   explorer agents, and puts every contradiction and conflict they find to
-   the maintainer first. It ends by editing the body and leaving one short
+   docs and ADRs, open work in the same area, other tools) with direct searches
+   or bounded read-only explorers under `docs/internal/EXPLORATION.md`. It
+   checks the evidence and puts unresolved requirement contradictions and
+   work conflicts to the maintainer first; intended changes are not conflicts. It ends by editing the body and leaving one short
    comment saying which sections moved, so a reader of the thread can see
    where the spec last caught up.
 
@@ -351,7 +352,7 @@ retyping the steps. `deliver` is the orchestrator: it claims, then hands
 each stage to a background agent — `implementer`, `reviewer`,
 `hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
 `spec-session` and `triage-bug` cover the rest; `spec-session` starts with
-`spec-explorer` agents (rule 4) and ends with the `spec-checker` agent
+selective exploration (rule 4) and ends with the `spec-checker` agent
 (rule 7).
 
 ## Automation

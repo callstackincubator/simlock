@@ -29,4 +29,8 @@ Output, one JSON object per line and nothing else:
 
 {"file":"<path>","line":<n>,"title":"<exact title>","sign":"<sign>","other":"<file:line or null>","action":"delete|merge|table|rewrite","why":"<at most 25 words>"}
 
-Reply with one line: `<n> findings in <files>`.
+Reply with the reviewed commit, searched files, files fully scanned,
+excluded or truncated files and uncertainty, plus `<n> candidates in <files>`.
+Use the evidence and coverage rules in `docs/internal/EXPLORATION.md`.
+The findings file remains JSONL candidates only; the coverage report is
+separate. Zero candidates does not establish that the tests are sound.

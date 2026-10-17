@@ -5,9 +5,9 @@ rule it breaks), and ends in `src` (the fix changes production source) or
 `text` (a test, a comment, a doc or an assumption line is enough).
 
 1. **Find every instance.** The line is one instance of its class. Search
-   the whole diff for others, and for a stale claim have an `Explore`
-   agent (`model: haiku`) search the whole repo. For an order, interleaving or conflict between two
-   components, list every path through the same code (each caller, flag,
+   the whole diff for others, and for a stale claim search the repo directly
+   or use bounded Haiku discovery under `docs/internal/EXPLORATION.md`. For an order, interleaving or conflict
+   between two components, list every path through the same code (each caller, flag,
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
    - behaviour: make a test fail first, then fix. Extend the test that

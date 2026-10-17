@@ -56,19 +56,17 @@ approach) and any `## Decision` comment; the latest `## Handoff` comment
 (its Findings are facts). Never the rest of the comment thread. Reread the
 files under Rules in play before touching the code they cover.
 
-Read code narrowly: find what you need with `grep -n`, then read only those
+Read code narrowly: find what you need with `rg -n`, then read only those
 lines. Never print a whole file to skim it: everything you read stays in
 your context and is paid for again on every later turn.
 
-**Delegate searches.** A search across files you have not opened, or one
-likely to print more than about 20 lines (every caller, reader or writer of
-a name; every doc, comment or test that states a fact; the helper or
-fixture that already does X), goes to an `Explore` agent with
-`model: haiku`: the question, then `Answer with path:line lines only, one
-per line, no prose.` Read only the lines it returns. Run `grep` yourself
-only for one name in files you already know, with `-c` first when you
-cannot guess the count. To check a library's or tool's documentation, fetch it (WebFetch,
-WebSearch); fetch nothing else.
+**Explore selectively.** Follow `docs/internal/EXPLORATION.md`: direct
+`rg` and source reads for straightforward lookups; bounded Haiku discovery
+when it saves context. Require evidence, scope and uncertainty, not locations
+alone. Inspect surrounding source. Reuse commit-bound maps and revalidate
+entries affected by changes. Escalate ambiguous relationships to Sonnet and
+consequential architecture/concurrency judgments to Opus. To check a library
+or tool's documentation, use WebFetch or WebSearch.
 
 **Helpers run in the foreground.** Start every helper agent of a step in
 one message, each an Agent call with `run_in_background: false`, so they

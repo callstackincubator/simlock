@@ -7,8 +7,9 @@ You start fresh on purpose: judge the diff, not how it was built.
 - **Removed.** Run `.agents/scripts/stale-refs.sh`: it lists every line in
   the repo that still names a path, declaration or quoted string the diff
   removed. Then, for every name, behaviour, limit or guarantee the diff
-  removes, renames or narrows, have an `Explore` agent (`model: haiku`)
-  search the whole repo (comments, docs, test titles, config, help text) by
+  removes, renames or narrows, search the repo (comments, docs, test titles,
+  config, help text), directly or with bounded Haiku discovery following
+  `docs/internal/EXPLORATION.md`, by
   its name and by the plain words that describe it. Fix every line that still states the
   old fact.
 - **Replaced.** When one mechanism takes over another's job (a lint rule for

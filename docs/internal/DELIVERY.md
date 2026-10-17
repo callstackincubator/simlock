@@ -75,12 +75,12 @@ still change.
 2. **Reconcile.** The session lists every comment posted since the body was
    last edited, on both threads, as proposed changes; you accept or reject
    each.
-3. **Explore.** Before the first question, `spec-explorer` agents (a small,
-   fast model, read-only) map what exists today, one per area: the code,
-   the docs and ADRs, open issues and PRs in the same area, and any other
-   tool involved. Each returns facts as `path:line` lines, plus the
-   contradictions and conflicts it found. The session opens every cited
-   line itself and keeps only what the line bears out.
+3. **Explore.** Map relevant code, docs/ADRs and open work using direct
+   searches or bounded read-only Haiku helpers when they save context.
+   [The exploration contract](EXPLORATION.md) requires the commit, searched
+   scope, supporting excerpts, uncertainty and omissions. The session reads
+   surrounding source before relying on facts, reuses verified maps and
+   revalidates changed entries. Intended changes are not contradictions.
 4. **Interview.** The session opens with today's flow as a diagram, the
    contradictions and conflicts it kept, and its one-line read of what you
    want, with a confidence. Then it asks in rounds: each round is every

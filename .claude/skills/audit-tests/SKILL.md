@@ -33,7 +33,8 @@ together. Start one Agent per group in one message: `model: "haiku"`,
 `subagent_type: "general-purpose"`, `run_in_background: false`, with the
 worktree, its files, an output path `<scratch>/scan-<n>.jsonl`, and the
 brief `.agents/briefs/audit-tests-scan.md`. Concatenate the outputs into
-`<scratch>/scan.jsonl`. No findings: report `PR: none` and stop.
+`<scratch>/scan.jsonl`. Keep each scan coverage report. Zero candidates
+is not permission to skip the clean sample below.
 
 ## 3. Verify (stronger model)
 
@@ -43,6 +44,24 @@ part: `model: "sonnet"`, `subagent_type: "general-purpose"`,
 `<scratch>/verdict-<n>.jsonl`, and the brief
 `.agents/briefs/audit-tests-verify.md`. Only the verdicts that change
 something (`DELETE`, `MERGE`, `TABLE`, `FIX`) go on.
+
+### Sample clean results
+
+Before applying findings, Sonnet independently scans up to three files that
+Haiku marked fully scanned with no candidates (all if fewer). Sort eligible
+paths, rotate the starting index by ISO week modulo their count, and record
+the selected paths and commit. This runs even when the entire scan found
+zero candidates. Give Sonnet the scan brief and files, without Haiku's
+conclusions. Verify any new candidates using the verifier brief before fixes.
+If a sample reveals a confirmed miss, scan every remaining clean file with
+Sonnet this run. Incomplete Haiku coverage is not clean: finish it with
+Sonnet or report the omitted scope and do not call the audit complete.
+
+Record scanned/omitted files, sampled files, Haiku candidate count, confirmed
+candidates and confirmed sample misses separately in the PR or final report.
+No eligible clean files: record zero sampled with the reason. Only after
+verification and sampling yield no actionable findings report `PR: none`.
+These are measured misses in the sample, not a repository-wide recall rate.
 
 ## 4. Apply
 
