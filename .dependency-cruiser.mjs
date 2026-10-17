@@ -234,6 +234,15 @@ export default {
       { path: "^ui/src/(app|data|model)/" },
     ),
     direction(
+      "cli-router-imports-no-component-values",
+      "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types or by dynamic import, so the fast paths load no module code",
+      "^src/cli/(index|tree|errors|types|usage-error|environment)\\.ts$",
+      {
+        path: "^src/(admin|bus|client|contract|core|lease-policy|module-registry|ports|simlock-client)/",
+        dependencyTypesNot: ["type-only", "dynamic-import"],
+      },
+    ),
+    direction(
       "contract-imports-nothing",
       "the contract imports nothing outside src/contract/",
       "^src/contract/",

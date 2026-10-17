@@ -6,9 +6,9 @@ import { errorExitCode, UsageError, withHelpHint, writeError } from "./errors.js
 import type { CliEnvironment } from "./types.js";
 
 export type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
-/** why: re-exported, not re-implemented, so a test of another edge enters the CLI through its
- * index; `environment.ts` loads only the identity resolver and the CLI's own helpers, so this
- * costs `simlock --help` nothing. */
+/** why: re-exported, not re-implemented, so another edge enters the CLI through its index;
+ * `environment.js` loads only the identity resolver and the CLI's own cheap helpers, measured
+ * against the same fast path, so this costs `simlock --help` nothing. */
 export { buildCliEnvironment } from "./environment.js";
 
 const USAGE = `Usage: simlock <command> [options]
@@ -61,11 +61,11 @@ function extractGlobalToken(argv: readonly string[]): {
   return { token, rest };
 }
 
-/** why: the ports barrel and the environment builder are loaded here, not statically, so
- * `simlock --help` answers without touching either; only a real command builds an environment.
- * A `SIMLOCK_HOME` whose socket path exceeds the platform limit throws
- * `SocketPathTooLongError`, and this runs inside `runCli`'s try, where that throw becomes the
- * single structured error line `docs/CLI.md` promises instead of a raw stack trace. */
+/** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
+ * touching it; only a real command builds an environment. A `SIMLOCK_HOME` whose socket path
+ * exceeds the platform limit throws `SocketPathTooLongError`, and this runs inside `runCli`'s
+ * try, where that throw becomes the single structured error line `docs/CLI.md` promises instead
+ * of a raw stack trace. */
 async function buildDefaultEnvironment(): Promise<CliEnvironment> {
   const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }] = await Promise.all([
     import("node:path"),

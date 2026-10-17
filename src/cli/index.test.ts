@@ -983,6 +983,27 @@ describe("CLI: exit codes", () => {
     await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
     expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
   });
+
+  // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
+  // pointer, and each command repeats that hint at its own guard -- one lost `withHelpHint` call
+  // takes the pointer away silently, so a sample of both guarded paths is pinned here.
+  it("points a missing required argument at simlock --help", async () => {
+    const output = outputCapture();
+    await expect(runCli(["lease"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: "lease requires --platform <ios|android> (run `simlock --help` for usage)",
+    });
+  });
+
+  it("points an unknown command at simlock --help", async () => {
+    const output = outputCapture();
+    await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: "Unknown command: nope (run `simlock --help` for usage)",
+    });
+  });
 });
 
 describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
@@ -5472,13 +5493,21 @@ describe("CLI: daemon logs --follow", () => {
     // poll timer is armed, which is the point the old single settle proved the follower was
     // live. The wait is a real timer: the lazy import resolves through I/O callbacks, which
     // `setImmediate` turns alone would not drain.
-    const settle = async () => {
+    const settle = async (): Promise<void> => {
       for (let attempt = 0; attempt < 200; attempt += 1) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         if (clock.pendingTimerCount > 0) return;
       }
+      throw new Error("the follower never armed its poll timer -- lazy load of the module hung");
     };
     await settle();
+    /** why: unlike the first settle this cannot require a timer -- after a signal the follower
+     * is meant to leave none armed -- and the lazy import is resolved by now, so immediate
+     * turns are enough to drain the poll's reads. */
+    const settleTick = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 20; attempt += 1)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    };
     return {
       clock,
       exit,
@@ -5487,7 +5516,7 @@ describe("CLI: daemon logs --follow", () => {
       settle,
       tick: async () => {
         clock.advance(250);
-        await settle();
+        await settleTick();
       },
     };
   }

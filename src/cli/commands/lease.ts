@@ -8,7 +8,7 @@ import { ERROR_TABLE } from "../../contract/index.js";
 import type { LeaseGrant } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
-import { commandArgs, requiredPositional, UsageError, writeResult } from "../args.js";
+import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
 import { writeError } from "../errors.js";
 import { waitForTermination } from "../termination.js";
@@ -72,7 +72,7 @@ async function runLease(
     return 0;
   }
   if (values.platform !== "ios" && values.platform !== "android")
-    throw new UsageError("lease requires --platform <ios|android>");
+    throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   const platform = values.platform as "ios" | "android";
   if (values.device === "") throw new UsageError("lease --device must not be empty");
   if (values.class === "") throw new UsageError("lease --class must not be empty");
@@ -144,9 +144,12 @@ async function runLease(
   // last `await` is the chain's tail, so the lines are on the wire before this process exits.
   let stderrWrites: Promise<void> = Promise.resolve();
   const queueErrorWrite = (error: unknown): void => {
-    stderrWrites = stderrWrites.then(() =>
-      writeError((value) => environment.stderr.write(value), error),
-    );
+    // why: a write that fails (a closed pipe, say) is swallowed like the base's synchronous
+    // write was: the chain the command's last `await` joins must stay resolved, or a failed
+    // line skips the release, the unsubscribes and the close in the `finally` below.
+    stderrWrites = stderrWrites
+      .then(() => writeError((value) => environment.stderr.write(value), error))
+      .catch(() => undefined);
   };
   const releaseHeldLease = async (): Promise<void> => {
     // why: A dead connection can neither carry the release nor needs it: the lease outlives this

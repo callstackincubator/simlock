@@ -1,5 +1,5 @@
-// why: only command modules import this -- the router never does, so `--help` and the
-// connect-free commands never load the human renderers.
+// why: only command modules import this -- the router never does, so `--help` and a usage
+// error never load the human renderers.
 import type { StatusGetOutput, WorkerView } from "../admin/index.js";
 
 export function formatWorkers(

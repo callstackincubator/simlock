@@ -13,8 +13,9 @@ import {
 } from "../ports/index.js";
 
 // why: each mock passes its module through untouched and only records the first real import, so
-// a value import added back to the router or the environment builder shows up as a load the
-// command never asked for.
+// a command's load is measured rather than assumed. The static half of the same claim -- that the
+// router's own files never import a component for a value -- is enforced in one place by the
+// dependency rule `cli-router-imports-no-component-values`, not here.
 const loaded = vi.hoisted(() => new Set<string>());
 
 vi.mock("../core/index.js", async (importOriginal) => {
@@ -39,6 +40,10 @@ vi.mock("../bus/index.js", async (importOriginal) => {
 });
 vi.mock("../contract/index.js", async (importOriginal) => {
   loaded.add("contract");
+  return await importOriginal();
+});
+vi.mock("../ports/index.js", async (importOriginal) => {
+  loaded.add("ports");
   return await importOriginal();
 });
 
@@ -66,26 +71,19 @@ async function environment(): Promise<CliEnvironment> {
 }
 
 describe("the CLI loads what a command asks for, not the whole control plane", () => {
-  it("imports the router without loading any heavy module", async () => {
-    const before = new Set(loaded);
-    const { runCli } = await import("./index.js");
-    expect(runCli).toBeTypeOf("function");
-    expect([...loaded].filter((id) => !before.has(id))).toEqual([]);
-  });
-
-  it("builds an environment without loading any heavy module", async () => {
-    const before = new Set(loaded);
-    await environment();
-    expect([...loaded].filter((id) => !before.has(id))).toEqual([]);
-  });
-
-  it("loads no heavy module to answer --help", async () => {
+  it("loads no component to answer --help", async () => {
     const { runCli } = await import("./index.js");
     const cli = await environment();
     expect(await loadsDuring(() => runCli(["--help"], cli))).toEqual([]);
   });
 
-  it("loads no heavy module to answer a usage error", async () => {
+  it("loads no component to answer -h", async () => {
+    const { runCli } = await import("./index.js");
+    const cli = await environment();
+    expect(await loadsDuring(() => runCli(["-h"], cli))).toEqual([]);
+  });
+
+  it("loads no component to answer a usage error", async () => {
     const { runCli } = await import("./index.js");
     const cli = await environment();
     expect(await loadsDuring(() => runCli(["bogus"], cli))).toEqual([]);
@@ -99,5 +97,17 @@ describe("the CLI loads what a command asks for, not the whole control plane", (
     expect(loads).toEqual(expect.arrayContaining(["core", "module-registry"]));
     expect(loads).not.toContain("admin");
     expect(loads).not.toContain("lease-policy");
+  });
+
+  it("loads a runnable module for every node of the command tree", async () => {
+    // why: the tree's thunks are the only seam between a command word and its module, so a node
+    // that points at a missing or mis-shaped module must fail here, not when a person runs it.
+    const { COMMANDS } = await import("./tree.js");
+    const nodes = COMMANDS.flatMap((node) => [node, ...(node.children ?? [])]);
+    expect(nodes.length).toBeGreaterThan(COMMANDS.length);
+    for (const node of nodes) {
+      const module = await node.load();
+      expect(module.run, node.name).toBeTypeOf("function");
+    }
   });
 });

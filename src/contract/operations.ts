@@ -668,15 +668,13 @@ export const eventsUnsubscribe = defineOperation({
 });
 
 // ---- token.create / token.list / token.revoke --------------------------------------------
-//
-// ADR §11: "token create|list|revoke become daemon operations. The daemon is the only owner of
-// tokens.json." No daemon-side handler exists for these yet -- today `TokenStore` is read and
-// written directly by the CLI (`src/cli/index.ts`, `src/http/token-store.ts`). Declaring the
-// operation here, with no matching case in `DaemonServer#handleRequest`, is expected and fine
-// per this PR's brief ("declaring an operation whose handler does not exist yet"); moving the
-// CLI onto a daemon round-trip for these is later work (PR 4, per the ADR's sequencing).
 
-// fallow-ignore-next-line unused-export -- see the block comment above; declared now per this PR's brief.
+// why: ADR §11 makes the daemon the only owner of tokens.json, and that move has landed: both
+// dispatchers handle these three, the CLI reaches them as admin round-trips from
+// `src/cli/commands/token.ts`, and no CLI code reads `tokens.json` itself. The declarations live
+// here because the `OPERATIONS` map every dispatcher validates against is built from this file.
+
+// fallow-ignore-next-line unused-export -- reachable from outside this file only through OPERATIONS.
 export const tokenCreate = defineOperation({
   name: "token.create",
   role: "admin",
