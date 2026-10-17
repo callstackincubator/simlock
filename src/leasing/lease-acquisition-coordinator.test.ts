@@ -1546,8 +1546,8 @@ describe("LeaseAcquisitionCoordinator", () => {
         queueDepth: 0,
       });
 
-      // why: the refused plan gave back the capacity reservation and device claim it held, so the
-      // next request is served rather than told the worker is full.
+      // why: the refused plan gave back the capacity or device claim it held, so the next request
+      // is served rather than told the worker is full.
       refuses = false;
       await expect(
         harness.coordinator.request(request, {

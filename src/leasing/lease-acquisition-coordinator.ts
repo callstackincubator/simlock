@@ -899,7 +899,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     // why: a refusal means the queue has just rejected this waiter at its deadline, so the device
     // work this plan stands for would run for a requester who was already answered. The plan holds
-    // a capacity reservation or a device claim, so it gives both back here rather than at a
+    // a capacity reservation or a device claim, so it gives those back here rather than at a
     // performer that will never be reached.
     if (!this.options.queue.markProcessing(waiter)) {
       releasePlanResources(operation);
