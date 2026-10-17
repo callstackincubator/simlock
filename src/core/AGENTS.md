@@ -85,8 +85,8 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. Spent `fresh`:
    shutdown → destroy → `deleted`. Else commit what `driver.reclaim` returns. Failure → quarantine;
    physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.
-4. **Quarantine** — from a failed purge, a failed spent delete, or `doctor --fix` on a stall. Retry
-   under `reclaim` (claim held: wait one backoff). Out of retries: destroy a virtual device
+4. **Quarantine** — from a failed purge, a failed spent delete, a failed boot-destroy, or
+   `doctor --fix` on a stall. Retry under `reclaim` (claim held: wait one backoff). Out of retries: destroy a virtual device
    (`device.quarantine-abandoned`; failed destroy: `device.quarantine-stranded`, stays), unenrol a
    physical one. Physical not present: wait `health.probeIntervalMs`, not counted.
 5. **Cleanup** — `CleanupReaper` on `lease.released`, `daemon.started`, `disk.pressure-detected`, a

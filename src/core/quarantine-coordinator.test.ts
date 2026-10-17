@@ -1320,7 +1320,7 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
 });
 
 describe("QuarantineCoordinator enterFromStalledTransition under the device's reclaim claim (ADR 0022 §8)", () => {
-  type StalledEntry = (deviceId: string, findingState: string) => Promise<void>;
+  type StalledEntry = (deviceId: string, findingState: string) => Promise<boolean>;
 
   async function reclaimingHarness() {
     const harness = await createHarness();
@@ -1356,7 +1356,7 @@ describe("QuarantineCoordinator enterFromStalledTransition under the device's re
   it("enterFromStalledTransition of a claimed device, or of one no longer in the finding's state, writes nothing and arms no retry; otherwise it holds the device's reclaim claim while it writes and releases it after, also when the write throws", async () => {
     const claimed = await reclaimingHarness();
     const held = claimed.claims.tryClaim(claimed.target.id, "boot");
-    await claimed.enter(claimed.target.id, "reclaiming");
+    await expect(claimed.enter(claimed.target.id, "reclaiming")).resolves.toBe(false);
     expect(claimed.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
     expect(eventsOf(claimed.bus)).toEqual([]);
     expect(claimed.clock.pendingTimerCount).toBe(0);
@@ -1365,7 +1365,7 @@ describe("QuarantineCoordinator enterFromStalledTransition under the device's re
 
     const moved = await reclaimingHarness();
     moved.registry.forceState(moved.target.id, "ready");
-    await moved.enter(moved.target.id, "reclaiming");
+    await expect(moved.enter(moved.target.id, "reclaiming")).resolves.toBe(false);
     expect(moved.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
     expect(eventsOf(moved.bus)).toEqual([]);
     expect(moved.clock.pendingTimerCount).toBe(0);
@@ -1377,7 +1377,7 @@ describe("QuarantineCoordinator enterFromStalledTransition under the device's re
       heldDuringWrite.push(written.claims.operationFor(written.target.id));
       return original(...args);
     });
-    await written.enter(written.target.id, "reclaiming");
+    await expect(written.enter(written.target.id, "reclaiming")).resolves.toBe(true);
     expect(heldDuringWrite).toEqual(["reclaim"]);
     expect(written.claims.isClaimed(written.target.id)).toBe(false);
     expect(written.registry.snapshot.virtualDevices[0]?.state).toBe("quarantined");
