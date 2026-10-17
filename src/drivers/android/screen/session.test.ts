@@ -615,7 +615,7 @@ describe("Android screen capture: open", () => {
 
 describe("Android screen capture: a phone's screen state", () => {
   it("refuses a phone whose screen is off with its own reason and pushes nothing, for each wakefulness that means off", async () => {
-    for (const printed of ["Asleep", "Dozing", "Asleep\r"]) {
+    for (const printed of ["Asleep", "Dozing", "Asleep\r", "Dozing "]) {
       const world = await setup({
         device: PHONE,
         power: { code: 0, stdout: `  mWakefulness=${printed}\n` },
@@ -633,7 +633,7 @@ describe("Android screen capture: a phone's screen state", () => {
   });
 
   it("goes on to the push for every other wakefulness, including a word that is not one and no line at all", async () => {
-    for (const printed of ["Awake", "Dreaming", "Awaken", "Dozing ", "asleep"]) {
+    for (const printed of ["Awake", "Dreaming", "Awaken", "asleep"]) {
       const world = await setup({
         device: PHONE,
         power: { code: 0, stdout: `  mWakefulness=${printed}\n` },
