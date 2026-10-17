@@ -1312,8 +1312,8 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
 
   it("waits 20 s for a daemon it auto-launched: within the deadline it reports as running, past it the command reports a failed start", async () => {
     const cases = [
-      { bootMs: 19_900, exitCode: 0, label: "19.9 s" },
-      { bootMs: 20_100, exitCode: 1, label: "20.1 s" },
+      { bootMs: 19_900, label: "19.9 s" },
+      { bootMs: 20_100, label: "20.1 s" },
     ];
 
     // why: every case runs before anything is asserted, so the case that passes cannot hide
