@@ -71,19 +71,19 @@ async function environment(): Promise<CliEnvironment> {
 }
 
 describe("the CLI loads what a command asks for, not the whole control plane", () => {
-  it("loads no component to answer --help", async () => {
+  it("loads no heavy component to answer --help", async () => {
     const { runCli } = await import("./index.js");
     const cli = await environment();
     expect(await loadsDuring(() => runCli(["--help"], cli))).toEqual([]);
   });
 
-  it("loads no component to answer -h", async () => {
+  it("loads no heavy component to answer -h", async () => {
     const { runCli } = await import("./index.js");
     const cli = await environment();
     expect(await loadsDuring(() => runCli(["-h"], cli))).toEqual([]);
   });
 
-  it("loads no component to answer a usage error", async () => {
+  it("loads no heavy component to answer a usage error", async () => {
     const { runCli } = await import("./index.js");
     const cli = await environment();
     expect(await loadsDuring(() => runCli(["bogus"], cli))).toEqual([]);

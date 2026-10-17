@@ -238,7 +238,10 @@ export default {
       "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types or by dynamic import, so the fast paths load no module code",
       "^src/cli/(index|tree|errors|types|usage-error|environment)\\.ts$",
       {
-        path: "^src/(admin|bus|client|contract|core|lease-policy|module-registry|ports|simlock-client)/",
+        // why: every component but agent-identity, the one AGENTS.md carves out as the cheap
+        // static import, plus the command modules: a static edge to one of those from the
+        // router is the same eager load this rule exists to keep out
+        path: "^src/((?!agent-identity/|cli/)[a-z0-9-]+/)|^src/cli/commands/",
         dependencyTypesNot: ["type-only", "dynamic-import"],
       },
     ),
