@@ -1319,6 +1319,73 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(sink.records.filter((record) => record.fields?.["step"] === "grant")).toHaveLength(1);
   });
 
+  it.each(["booted", "provisioned"] as const)(
+    "defers a waiter whose grant of the %s device failed to store, logs the grant step, and grants it on the next wake",
+    async (path) => {
+      const { logger, sink } = capturingLogger();
+      const harness = await createHarness({ logger });
+      // why: both paths funnel through the coordinator's one handoff grant; pinning only the
+      // booted one would leave a provisioned grant free to orphan its waiter again.
+      if (path === "booted") await seedShutdown(harness);
+      let failing = true;
+      const write = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
+      harness.filesystem.writeFileAtomic = (statePathArg, contents) => {
+        // why: the grant is one registry commit, so failing the write that stores this waiter's
+        // lease is how a dead disk looks to the coordinator; the registry keeps its old state.
+        const stored =
+          (JSON.parse(contents) as { leases?: { requesterId: string }[] }).leases ?? [];
+        if (failing && stored.some((lease) => lease.requesterId === "orphaned")) {
+          return Promise.reject(new Error("state.json write refused"));
+        }
+        return write(statePathArg, contents);
+      };
+
+      const acquisition = harness.coordinator.request(request, {
+        ownerId: "orphaned",
+        requesterId: "orphaned",
+      });
+      const outcome = promiseState(acquisition);
+      await settle();
+
+      const [device] = harness.registry.snapshot.devices;
+      expect(device).toBeDefined();
+      const failedGrant = sink.records.filter((record) => record.fields?.["step"] === "grant");
+      expect(failedGrant).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          fields: {
+            deviceId: device?.id,
+            error: "Error: state.json write refused",
+            requesterId: "orphaned",
+            step: "grant",
+          },
+        }),
+      ]);
+      expect({
+        deviceStates: harness.registry.snapshot.devices.map((candidate) => candidate.state),
+        leaseRequesters: harness.registry.snapshot.leases.map((lease) => lease.requesterId),
+        outcome: outcome.state,
+        queueDepth: harness.coordinator.queueDepth,
+        storedRequestStates: harness.registry
+          .leaseRequests()
+          .map((record) => [record.requesterId, record.state]),
+      }).toEqual({
+        deviceStates: ["ready"],
+        leaseRequesters: [],
+        outcome: "pending",
+        queueDepth: 1,
+        storedRequestStates: [["orphaned", "open"]],
+      });
+
+      failing = false;
+      harness.coordinator.kick();
+      await expect(acquisition).resolves.toMatchObject({ device: { id: device?.id } });
+      // why: the retry is a fresh grant, so a second `grant` line here means the failed one left
+      // more behind than the one warning it earned.
+      expect(sink.records.filter((record) => record.fields?.["step"] === "grant")).toHaveLength(1);
+    },
+  );
+
   it("writes no lease for a ready grant the queue will not put in flight", async () => {
     const harness = await createHarness();
     await seedReady(harness);
