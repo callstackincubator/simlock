@@ -5,6 +5,7 @@
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
+import SimlockCapture
 import CoreVideo
 import CoreMedia
 import CoreGraphics

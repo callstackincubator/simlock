@@ -1,4 +1,5 @@
 import Foundation
+import SimlockCapture
 
 enum SimFrameworks {
     /// Loads the private simulator frameworks (CoreSimulator + SimulatorKit) into

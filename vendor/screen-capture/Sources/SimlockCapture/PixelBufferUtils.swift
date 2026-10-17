@@ -38,14 +38,13 @@ extension CVPixelBuffer {
 /// few allocations instead of creating one per frame. That is the only reason this
 /// holds state; the pool is rebuilt whenever the frame size changes, which happens on
 /// a rotation.
-struct Photocopier {
+public struct Photocopier {
     private var pool: CVPixelBufferPool?
     /// The frame size `pool` was built for, so a size change is noticed rather than
     /// silently copied into a buffer of the wrong dimensions.
     private var poolSize: Dimensions?
 
-    init() {}
-
+    public init() {}
     /// The pool that fits `size`, rebuilding it when the one on hand does not.
     private mutating func pool(for size: Dimensions) -> CVPixelBufferPool? {
         if let pool, poolSize == size {
@@ -70,7 +69,7 @@ struct Photocopier {
 
     /// A buffer of our own holding the same pixels as `source`, or nil when no copy
     /// could be made.
-    mutating func copy(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+    public mutating func copy(_ source: CVPixelBuffer) -> CVPixelBuffer? {
         guard let pool = pool(for: source.dimensions) else { return nil }
         var fresh: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &fresh) == kCVReturnSuccess,
