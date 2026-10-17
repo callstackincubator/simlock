@@ -22,11 +22,15 @@ NSData * _Nullable simlockOffer(NSObject *negotiator);
 NSDictionary * _Nullable simlockAnswer(NSObject *negotiator, NSData *answer);
 
 /// Binds a UDP socket on the host's own address on the route to the iPhone's tunnel, and returns
-/// that address. The bound socket becomes the receiver `simlockAdoptedSocket` later reports.
+/// that address. Its port is the one `startMediaStream` is asked to send to.
 NSString * _Nullable simlockBindForTunnel(NSString *tunnelIPAddress);
 
-/// The port `simlockBindForTunnel` landed on, 0 when there is no receiver.
+/// The port `simlockBindForTunnel` landed on, 0 when no socket was bound.
 uint16_t simlockReceiverPort(void);
+
+/// Puts down the socket bound for the tunnel route, keeping its port. `simlockAdopt` hands the receiver
+/// to the socket CoreDevice shares for the stream, asked for on that same address and port.
+void simlockReleaseBoundSocket(void);
 
 /// One datagram from the receiver, or nil when none arrived within `milliseconds`.
 NSData * _Nullable simlockReceive(int milliseconds);
@@ -34,8 +38,11 @@ NSData * _Nullable simlockReceive(int milliseconds);
 /// Sends one RTCP packet on the receiver.
 BOOL simlockSend(NSData *packet);
 
-/// Takes the socket CoreDevice hands back for this stream when the process has not bound one yet.
-void simlockAdopt(xpc_object_t sockets);
+/// Takes the first descriptor CoreDevice hands back for this stream as the receiver; the rest are
+/// closed. NO when the dictionary carried none, which leaves this process with nothing to receive on.
+/// The PoC streamed and reported over this socket with a plain `send`, so it is the one the iPhone's
+/// sender answers.
+BOOL simlockAdopt(xpc_object_t sockets);
 
 /// Closes the receiver, which is what unblocks a `simlockReceive` that is waiting.
 void simlockCloseReceiver(void);

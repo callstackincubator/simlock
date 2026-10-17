@@ -117,6 +117,11 @@ NSDictionary *simlockAnswer(NSObject *negotiator, NSData *answer) {
 
 // MARK: - The receiver socket
 
+// One socket receives at a time, and the one bound for the tunnel route is not it for long: that one
+// exists to name the address and port `startMediaStream` is asked to send to, so it is put down once
+// the stream has answered and `simlockAdopt` gives the receiver to the socket CoreDevice shares for the
+// stream. `send` on a socket that was bound but never connected fails with EDESTADDRREQ, so while the
+// reserved-port socket held the receiver every RTCP report, key-frame request and bye went nowhere.
 static int simlockReceiverFd = -1;
 static uint16_t simlockReceiverBoundPort = 0;
 
@@ -162,6 +167,14 @@ uint16_t simlockReceiverPort(void) {
     return simlockReceiverBoundPort;
 }
 
+void simlockReleaseBoundSocket(void) {
+    if (simlockReceiverFd < 0) {
+        return;
+    }
+    close(simlockReceiverFd);
+    simlockReceiverFd = -1;
+}
+
 NSData *simlockReceive(int milliseconds) {
     if (simlockReceiverFd < 0) {
         return nil;
@@ -182,7 +195,7 @@ BOOL simlockSend(NSData *packet) {
     return send(simlockReceiverFd, packet.bytes, packet.length, 0) == (ssize_t)packet.length;
 }
 
-void simlockAdopt(xpc_object_t sockets) {
+BOOL simlockAdopt(xpc_object_t sockets) {
     xpc_dictionary_apply(sockets, ^bool(const char *key, xpc_object_t value) {
         if (xpc_get_type(value) != XPC_TYPE_FD) {
             return true;
@@ -197,6 +210,7 @@ void simlockAdopt(xpc_object_t sockets) {
         }
         return true;
     });
+    return simlockReceiverFd >= 0;
 }
 
 void simlockCloseReceiver(void) {
