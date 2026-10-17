@@ -1,0 +1,26 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+// swift-module-flags: -target arm64-apple-macos26.0 -enable-library-evolution -swift-version 5 -module-name CoreDeviceTypes -module-abi-name CoreDevice
+// Hand-written stub. Mirrors the ABI of the "CoreDevice"-mangled shared types that live in
+// CoreDeviceUtilities.framework / CoreDevice.framework (no .swiftinterface ships with Xcode).
+import Swift
+import Foundation
+import CoreGraphics
+
+public enum TransportType {
+  public var description: Swift.String { get }
+  public var rawValue: Swift.String { get }
+}
+
+public struct Display {
+  public var displayId: Swift.UInt32 { get }
+  public var name: Swift.String { get }
+  public var primary: Swift.Bool { get }
+  public var nativeSize: CoreGraphics.CGSize { get }
+  public var bounds: CoreGraphics.CGRect { get }
+  public var uniqueId: Swift.String? { get }
+}
+
+public struct DisplayInfo {
+  public var displays: [CoreDeviceTypes.Display] { get }
+}
