@@ -194,7 +194,7 @@ export function overviewOf(input: {
   const minutes = held === undefined ? [] : leaseHistory(held, events, now);
   return {
     activity: [...events]
-      .sort((a, b) => b.seq - a.seq)
+      .sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
       .slice(0, ACTIVITY_ROWS)
       .map((event) => {
         const tone = eventTone(event.event);
