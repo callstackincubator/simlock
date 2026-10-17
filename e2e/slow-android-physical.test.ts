@@ -13,6 +13,7 @@ const PROBE_INTERVAL_MS = 2_000;
 const EXEC_TIMEOUT_MS = 5_000;
 const MINUTE = 60_000;
 const AGENT = "phone-lane-android";
+const TAG = { alive: 0x06, description: 0x01, keyframe: 0x02, delta: 0x03, meta: 0x05 } as const;
 
 const missing =
   SERIAL === undefined || SERIAL === ""
@@ -20,6 +21,11 @@ const missing =
     : APK === undefined || APK === ""
       ? "SIMLOCK_PHYSICAL_ANDROID_APK"
       : undefined;
+
+interface Frame {
+  readonly tag: number;
+  readonly payload: Uint8Array;
+}
 
 interface Grant {
   readonly device: { readonly driverDeviceId: string };
@@ -69,12 +75,17 @@ async function serverPid(): Promise<string> {
   return stdout.trim().split("\n")[0] ?? "";
 }
 
-async function rig(execTimeoutMs?: number): Promise<Rig> {
+async function rig(options: { readonly execTimeoutMs?: number } = {}): Promise<Rig> {
   const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: {
-      ...(execTimeoutMs === undefined ? {} : { exec: { timeoutMs: execTimeoutMs } }),
+      ...(options.execTimeoutMs === undefined
+        ? {}
+        : { exec: { timeoutMs: options.execTimeoutMs } }),
       health: { probeIntervalMs: PROBE_INTERVAL_MS, stableObservations: 2 },
       http: { enabled: true, host: "127.0.0.1", port },
+      capabilities: {
+        stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
+      },
     },
     driver: "real",
   }));
@@ -123,6 +134,50 @@ async function exec(daemon: Rig, leaseId: string, args: readonly string[]): Prom
   });
   expect(response.status).toBe(200);
   return response.text();
+}
+
+// why: the body is an endless stream, so this reads frames until it has what it came for and then
+// lets go, rather than reading to an end that never comes.
+async function readFrames(
+  body: ReadableStream<Uint8Array>,
+  enough: (frames: readonly Frame[]) => boolean,
+): Promise<Frame[]> {
+  const reader = body.getReader();
+  const frames: Frame[] = [];
+  let buffer = new Uint8Array(0);
+  try {
+    while (!enough(frames)) {
+      const step = await reader.read();
+      if (step.done) break;
+      const joined = new Uint8Array(buffer.length + step.value.length);
+      joined.set(buffer);
+      joined.set(step.value, buffer.length);
+      buffer = joined;
+      while (buffer.length >= 5) {
+        const length = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0);
+        if (buffer.length < 4 + length) break;
+        frames.push({ payload: buffer.slice(5, 4 + length), tag: buffer[4]! });
+        buffer = buffer.slice(4 + length);
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return frames;
+}
+
+async function streamOf(daemon: Rig, leaseId: string): Promise<Response> {
+  const response = await fetch(`${daemon.base}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+    headers: daemon.auth,
+  });
+  expect(
+    response.status,
+    await response
+      .clone()
+      .text()
+      .catch(() => ""),
+  ).toBe(200);
+  return response;
 }
 
 describe.skipIf(missing !== undefined)(
@@ -224,10 +279,60 @@ describe.skipIf(missing !== undefined)(
     );
 
     it(
+      "a lease on the phone streams a meta frame and a key frame over GET /v1/stream/leases/{leaseId}, and after the lease ends the phone holds no simlock-scrcpy jar and no scrcpy server process and the host keeps no capture shell",
+      { timeout: 10 * MINUTE },
+      async () => {
+        const daemon = await rig();
+        await enroll(daemon.env, serial);
+        const grant = await leasePhysical(daemon.env);
+
+        const response = await streamOf(daemon, grant.lease.id);
+        if (response.body === null) throw new Error("the stream answered without a body");
+        const frames = await readFrames(response.body, (read) =>
+          read.some((frame) => frame.tag === TAG.keyframe),
+        );
+
+        const tags = frames.map((frame) => frame.tag);
+        expect(tags).toContain(TAG.meta);
+        expect(tags).toContain(TAG.keyframe);
+        const meta = JSON.parse(new TextDecoder().decode(frames[0]!.payload)) as {
+          codec: string;
+          width: number;
+          height: number;
+        };
+        expect(meta.codec).toBe("h264");
+        expect(Math.max(meta.width, meta.height)).toBeGreaterThan(0);
+
+        expect(await daemon.env.cli(["release", grant.lease.id])).toMatchObject({ code: 0 });
+
+        await waitFor(
+          async () => {
+            const processes = await adbOut(serial, ["shell", "ps", "-A", "-o", "ARGS"]);
+            const files = await adbOut(serial, ["shell", "ls", "/data/local/tmp"]);
+            return (
+              !processes.includes("com.genymobile.scrcpy.Server") &&
+              !files.includes("simlock-scrcpy-")
+            );
+          },
+          {
+            interval: 500,
+            label: "no scrcpy server process and no pushed jar left on the phone",
+            timeout: 30_000,
+          },
+        );
+
+        const hostShells = await new Promise<string>((resolve) => {
+          execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
+        });
+        expect(hostShells, "a host adb shell for the capture outlived the lease").toBe("");
+      },
+    );
+
+    it(
       "with a short exec.timeoutMs, a device.exec adb shell sleep 60 on the leased phone ends EXEC_TIMEOUT, and the adb server listening on 5037 still runs with the pid it had before the command",
       { timeout: 5 * MINUTE },
       async () => {
-        const daemon = await rig(EXEC_TIMEOUT_MS);
+        const daemon = await rig({ execTimeoutMs: EXEC_TIMEOUT_MS });
         await enroll(daemon.env, serial);
         const grant = await leasePhysical(daemon.env);
         const pidBefore = await serverPid();

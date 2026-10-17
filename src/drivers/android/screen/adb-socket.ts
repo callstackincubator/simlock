@@ -1,4 +1,4 @@
-import type { TcpStream, TcpStreamConnector } from "../../../ports/index.js";
+import type { TcpStream } from "../../../ports/index.js";
 import {
   ADB_FAIL,
   ADB_LENGTH_BYTES,
@@ -51,21 +51,22 @@ type DeviceSocketOutcome =
   | { readonly kind: "no-transport"; readonly reason: string };
 
 interface DeviceSocketRequest {
-  readonly tcp: TcpStreamConnector;
-  readonly adbServerPort: number;
+  // why: the raw connection is made by the device's target, which owns the choice of adb server:
+  // Simlock's own for an emulator, port 5037 for a physical phone.
+  readonly connect: (timeoutMs: number) => Promise<TcpStream>;
   readonly serial: string;
   readonly socketName: string;
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
 }
 
-// why: speaking adb's host protocol directly reaches the device socket through Simlock's own server
-// without an `adb forward`, so a daemon that dies mid-stream leaves no listening port on the host.
-// adb answers `localabstract:` with OKAY only once adbd's connect to that socket succeeded, and with
-// FAIL "closed" while nothing listens there yet:
+// why: speaking adb's host protocol directly reaches the device socket through the target's adb
+// server without an `adb forward`, so a daemon that dies mid-stream leaves no listening port on the
+// host. adb answers `localabstract:` with OKAY only once adbd's connect to that socket succeeded, and
+// with FAIL "closed" while nothing listens there yet:
 // https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/sockets.cpp
 export async function openDeviceSocket(request: DeviceSocketRequest): Promise<DeviceSocketOutcome> {
-  const stream = await request.tcp.connect(request.adbServerPort, request.timeoutMs);
+  const stream = await request.connect(request.timeoutMs);
   const onAbort = () => {
     stream.close();
   };

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { OWNED_ROOT_MARKER_FILE, PassthroughRefusedError } from "../../core/index.js";
+import {
+  OWNED_ROOT_MARKER_FILE,
+  PassthroughRefusedError,
+  ScreenUnavailableError,
+} from "../../core/index.js";
 import {
   FakeClock,
   FakeProcessSupervisor,
   FakeTcpProbe,
+  FakeTcpStreamConnector,
   type Filesystem,
   MemoryFilesystem,
   type ProcessHandle,
@@ -17,6 +22,8 @@ import {
   type StreamingProcessHandle,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
+import { AndroidPhysicalHandler } from "./physical-handler.js";
+import type { ScreenTarget } from "./screen/index.js";
 
 const sdk = "/android-sdk";
 const home = "/home/simlock";
@@ -1493,6 +1500,94 @@ describe("Android physical handler: passthrough", () => {
     });
     expect(emulator).toEqual(without);
     expect(defaultServerSends(probe)).toEqual([]);
+  });
+});
+
+describe("Android physical handler: the screen target", () => {
+  // why: the target a phone's scrcpy session runs on, built straight from the handler: the capture
+  // reaches it only through the driver, and what it must never see is the port or the check.
+  async function screenWorld(options: { readonly reply?: string } = {}): Promise<{
+    readonly runner: PhoneAdb;
+    readonly target: ScreenTarget;
+    readonly tcp: FakeTcpStreamConnector;
+  }> {
+    const runner = new PhoneAdb([]);
+    const probe = new FakeTcpProbe([]);
+    probe.replyWith(options.reply ?? VERSION_REPLY_41);
+    const handler = new AndroidPhysicalHandler({
+      adb,
+      // why: an env that aims adb elsewhere on purpose — a target that leaked these to a child
+      // would reach a server other than the one it just checked.
+      baseEnv: {
+        ADB_SERVER_SOCKET: "tcp:10.0.0.5:5037",
+        ANDROID_ADB_SERVER_ADDRESS: "10.0.0.5",
+        ANDROID_HOME: sdk,
+        ANDROID_SERIAL: "SOMEONE-ELSES-PHONE",
+      },
+      filesystem: await androidFilesystem(),
+      isBareShell: () => false,
+      processRunner: runner,
+      tcpProbe: probe,
+    });
+    const tcp = new FakeTcpStreamConnector();
+    return { runner, target: handler.screenTargetFor(PHYSICAL, tcp), tcp };
+  }
+
+  it("sends nothing and refuses with the check's own message when the check is closed, for run, spawn and connect, at a mismatch and an unreadable server", async () => {
+    const closed = [
+      { message: /speaks protocol 40/, name: "another protocol", reply: VERSION_REPLY_40 },
+      { message: /unreadable/, name: "a server it cannot read", reply: "gibberish" },
+    ] as const;
+    const verbs = [
+      {
+        call: (target: ScreenTarget) => target.run(["shell", "dumpsys", "power"], 10_000),
+        name: "run",
+      },
+      {
+        call: (target: ScreenTarget) => target.spawn(["shell", "app_process"]),
+        name: "spawn",
+      },
+      {
+        call: (target: ScreenTarget) => target.connect(5_000),
+        name: "connect",
+      },
+    ] as const;
+    for (const refusal of closed) {
+      for (const verb of verbs) {
+        const world = await screenWorld({ reply: refusal.reply });
+
+        const error = await rejectionOf(verb.call(world.target));
+
+        expect(error, `${refusal.name} via ${verb.name}`).toBeInstanceOf(ScreenUnavailableError);
+        expect((error as Error).message, `${refusal.name} via ${verb.name}`).toMatch(
+          refusal.message,
+        );
+        expect(world.runner.commands, `${refusal.name} via ${verb.name}`).toEqual([]);
+        expect(world.tcp.connections, `${refusal.name} via ${verb.name}`).toEqual([]);
+      }
+    }
+  });
+
+  it("runs adb -P 5037 with the shared server's env for run and spawn, and connects to 5037, when the check is open", async () => {
+    const world = await screenWorld();
+
+    await world.target.run(["shell", "dumpsys", "power"], 10_000);
+    await world.target.spawn(["shell", "app_process"]);
+    await world.target.connect(4_000);
+
+    expect(world.runner.calls.map((call) => [...call.args])).toEqual([
+      ["version"],
+      ["-P", "5037", "-s", PHONE, "shell", "dumpsys", "power"],
+      ["-P", "5037", "-s", PHONE, "shell", "app_process"],
+    ]);
+    for (const call of world.runner.commands) {
+      expect(call.options.env).toEqual({
+        ANDROID_ADB_SERVER_PORT: "5037",
+        ANDROID_HOME: sdk,
+      });
+    }
+    expect(world.runner.commands[0]?.options.timeoutMs).toBe(10_000);
+    expect(world.tcp.connections.map((connection) => connection.port)).toEqual([5037]);
   });
 });
 
