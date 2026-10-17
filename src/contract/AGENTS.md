@@ -120,7 +120,7 @@ Three identities:
 5. Client: a method on `SimlockClient` or `SimlockAdminClient` (`src/simlock-client/client.ts`),
    types in `src/simlock-client/types.ts`, re-exported from `src/client/index.ts` or
    `src/admin/index.ts`.
-6. Frontends as needed: CLI (`src/cli/index.ts`), HTTP (`src/http/app.ts`), MCP only for an
+6. Frontends as needed: CLI (`src/cli/commands/`), HTTP (`src/http/app.ts`), MCP only for an
    agent session's need.
 7. A new error code: `ErrorDetailsMap` and `ERROR_TABLE` (`errors.ts`).
 8. Docs: [CLIENT.md](../../docs/CLIENT.md), [CLI.md](../../docs/CLI.md),

@@ -234,6 +234,18 @@ export default {
       { path: "^ui/src/(app|data|model)/" },
     ),
     direction(
+      "cli-router-imports-no-component-values",
+      "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types, by dynamic import, or statically for agent-identity alone, so the fast paths load no component code",
+      "^src/cli/(main|index|tree|errors|types|usage-error|environment|stdio|log-file|args|connect)\\.ts$",
+      {
+        // why: every component but agent-identity, the one AGENTS.md carves out as the cheap
+        // static import, plus the command modules: a static edge to one of those from the
+        // router is the same eager load this rule exists to keep out
+        path: "^src/((?!agent-identity/|cli/)[a-z0-9-]+/)|^src/cli/commands/",
+        dependencyTypesNot: ["type-only", "dynamic-import"],
+      },
+    ),
+    direction(
       "contract-imports-nothing",
       "the contract imports nothing outside src/contract/",
       "^src/contract/",

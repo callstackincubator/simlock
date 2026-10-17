@@ -66,8 +66,9 @@ describe("HTTP API", () => {
 
     const baseUrl = `http://127.0.0.1:${port}`;
 
-    // 1. Mint an agent token via the CLI, against the same SIMLOCK_HOME the daemon reads
-    //    tokens.json from -- no daemon round-trip for `token create` (see src/cli/index.ts).
+    // why: 1. Mint an agent token via the CLI: `token create` is a daemon operation, so this
+    //    round-trips to the daemon started above -- the token lands in the tokens.json that
+    //    daemon owns, which is what this test's later calls authenticate against.
     const tokenResult = await env.cli(["token", "create", "--role", "agent"]);
     expect(tokenResult.code).toBe(0);
     const { secret } = tokenResult.json as { secret: string };

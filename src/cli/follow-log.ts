@@ -4,11 +4,7 @@ import {
   type Filesystem,
   type TimerHandle,
 } from "../ports/index.js";
-
-export interface Signals {
-  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-  off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-}
+import type { Signals } from "./types.js";
 
 export interface FollowLogOptions {
   readonly clock: Clock;

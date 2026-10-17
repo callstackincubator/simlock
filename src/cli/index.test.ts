@@ -47,15 +47,11 @@ import type {
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
-import {
-  buildCliEnvironment,
-  parseDuration,
-  readLogFile,
-  readPipedStdin,
-  runCli,
-  type CliEnvironment,
-  type CliEnvironmentPorts,
-} from "./index.js";
+import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
+import { buildCliEnvironment } from "./environment.js";
+import { readLogFile } from "./log-file.js";
+import { readPipedStdin } from "./stdio.js";
+import { parseDuration } from "./duration.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
@@ -964,6 +960,28 @@ describe("CLI: exit codes", () => {
     const output = outputCapture();
     await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
     expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
+
+  // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
+  // pointer, and guards reach it two ways -- an explicit `withHelpHint` call or
+  // `requiredPositional` -- either of which can be dropped silently, so a sample of both
+  // paths (a command guard and the router's unknown command) is pinned here.
+  it("points a missing required argument at simlock --help", async () => {
+    const output = outputCapture();
+    await expect(runCli(["lease"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: "lease requires --platform <ios|android> (run `simlock --help` for usage)",
+    });
+  });
+
+  it("points an unknown command at simlock --help", async () => {
+    const output = outputCapture();
+    await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: "Unknown command: nope (run `simlock --help` for usage)",
+    });
   });
 });
 
@@ -5434,8 +5452,26 @@ describe("CLI: daemon logs --follow", () => {
     };
     const output = outputCapture(ports);
     const exit = runCli(["daemon", "logs", "--follow"], output.environmentWith());
-    const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+    // why: `followLogFile` loads its follower module on first use, so settling once is no
+    // longer enough for the tail read to have started; this yields to the event loop until the
+    // poll timer is armed, which is the point the old single settle proved the follower was
+    // live. The wait is a real timer: the lazy import resolves through I/O callbacks, which
+    // `setImmediate` turns alone would not drain.
+    const settle = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (clock.pendingTimerCount > 0) return;
+      }
+      throw new Error("the follower never armed its poll timer -- lazy load of the module hung");
+    };
     await settle();
+    /** why: unlike the first settle this cannot require a timer -- after a signal the follower
+     * is meant to leave none armed -- and the lazy import is resolved by now, so immediate
+     * turns are enough to drain the poll's reads. */
+    const settleTick = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 20; attempt += 1)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    };
     return {
       clock,
       exit,
@@ -5444,7 +5480,7 @@ describe("CLI: daemon logs --follow", () => {
       settle,
       tick: async () => {
         clock.advance(250);
-        await settle();
+        await settleTick();
       },
     };
   }
