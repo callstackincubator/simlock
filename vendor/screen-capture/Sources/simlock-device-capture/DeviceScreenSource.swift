@@ -309,9 +309,11 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
         }
         // The iPhone's own RTP synchronization source, which every RTCP packet is addressed to. Read
         // through `Encodable` rather than as a struct layout — the shape of a private type is the
-        // thing a hand-written stub is most likely to have wrong.
+        // thing a hand-written stub is most likely to have wrong. The encoder asked is the
+        // connection, not the whole answer: the configuration is a part of the connection, so it is
+        // one level below the answer's own keys.
         guard
-            let json = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(response)),
+            let json = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(response.connection)),
             let object = json as? [String: Any],
             let streamConfiguration = object["streamConfig"] as? [String: Any],
             let remoteSSRC = (streamConfiguration["RemoteSSRC"] as? NSNumber)?.uint32Value
