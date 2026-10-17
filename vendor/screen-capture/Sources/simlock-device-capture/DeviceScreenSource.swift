@@ -471,10 +471,16 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
             clearStartingCall()
         }
 
-        // On a thread of its own, because the waits below are blocking and a CoreDevice call to an
-        // iPhone that has just been unplugged can take minutes to answer. The bound is what keeps the
-        // close the daemon is waiting on from turning into a SIGKILL.
-        await Task.detached { self.closeBlockedParts(by: bound) }.value
+        // why: on a queue of its own rather than a `Task`, because everything below blocks and the
+        // CoreDevice call it waits for needs one of the pool's threads to answer — a blocking close
+        // on that pool is one thread short of the answer it is waiting for. The bound is what keeps
+        // the close the daemon is waiting on from turning into a SIGKILL.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue(label: "device-capture-close").async {
+                self.closeBlockedParts(by: bound)
+                continuation.resume()
+            }
+        }
     }
 
     /// The blocking half of the way back: the two waits, and the calls that may never be answered.
