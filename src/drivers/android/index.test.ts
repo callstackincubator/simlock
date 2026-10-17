@@ -4668,6 +4668,16 @@ const HOST_IMAGES: readonly FitImage[] = [
   ["34", "android-tv", "arm64-v8a"],
 ];
 
+// why: the verbatim source.properties of the real android-Baklava image installed beside
+// android-36 and android-37.0 on a reporting host, so the fixture holds what the SDK really stores.
+const BAKLAVA_SOURCE_PROPERTIES =
+  "Pkg.Desc=System Image arm64-v8a with Google APIs.\n" +
+  "Pkg.Revision=4\n" +
+  "AndroidVersion.ApiLevel=35\n" +
+  "AndroidVersion.CodeName=Baklava\n" +
+  "SystemImage.Abi=arm64-v8a\n" +
+  "SystemImage.TagId=google_apis\n";
+
 describe("AndroidDriver image fit", () => {
   describe("each row of the In short table", () => {
     interface Row {
@@ -4884,6 +4894,24 @@ describe("AndroidDriver image fit", () => {
 
       expect(catalog.modelRuntimes["Pixel 9"]).toEqual(["Baklava"]);
       expect(await resolve("Pixel 9")).toMatchObject({ osVersion: "Baklava" });
+    });
+
+    it("ranks a preview image by the API level it records, so a newer numeric level stays the newest", async () => {
+      const { driver, resolve } = await fitHarness([
+        ["35", "google_apis", "arm64-v8a"],
+        ["36", "google_apis", "arm64-v8a"],
+        ["37.0", "google_apis", "arm64-v8a"],
+        ["Baklava", "google_apis", "arm64-v8a", BAKLAVA_SOURCE_PROPERTIES],
+      ]);
+
+      const catalog = await driver.listCatalog();
+
+      // why: stated first so the assertions below can only fail on the *ranking* — the preview is
+      // genuinely a listed candidate, not something the catalog left out.
+      expect(catalog.runtimes).toContain("Baklava");
+      expect(catalog.modelRuntimes["Pixel 9"]).toContain("Baklava");
+      expect(catalog.defaultRuntime).toBe("37.0");
+      expect(await resolve("Pixel 9")).toMatchObject({ osVersion: "37.0" });
     });
 
     it("uses the folder name for --image-tag and the catalog's images[].tag when SystemImage.TagId differs", async () => {

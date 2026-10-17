@@ -2258,7 +2258,17 @@ class AndroidImageTagMissingError extends RuntimeMissingError {
 }
 
 function installedApiLevels(images: readonly SystemImage[]): string[] {
-  return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels);
+  const rank = new Map(
+    images.map((image) => [
+      image.apiLevel,
+      /^\d/.test(image.apiLevel) ? image.apiLevel : (image.sourceApiLevel ?? image.apiLevel),
+    ]),
+  );
+  return [...new Set(images.map((image) => image.apiLevel))].sort(
+    (left, right) =>
+      compareApiLevels(rank.get(left) ?? left, rank.get(right) ?? right) ||
+      left.localeCompare(right),
+  );
 }
 
 function fittingApiLevels(profile: DeviceProfile, images: readonly SystemImage[]): string[] {
