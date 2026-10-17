@@ -115,8 +115,9 @@ public enum Wire {
     }
 
     /// Writes one envelope frame to the video channel: length prefix (covering the tag and payload),
-    /// tag, payload. A partial write would desynchronize every frame after it, so the whole frame
-    /// goes out under one lock. Only the encode loop writes, which is why this is not `public`.
+    /// tag, payload. A partial write would desynchronize every frame after it, so a short one is
+    /// retried until the frame is out; the only way a frame stops part-way is a failed write, which
+    /// ends the stream. Only the encode loop writes, which is why this is not `public`.
     static func emit(_ tag: Tag, _ data: Data, countedBy session: Session) {
         let total = UInt32(data.count + 1)
         var out = Data(capacity: data.count + 5)
