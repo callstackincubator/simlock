@@ -82,7 +82,7 @@ first key frame, so an encoder that never paints meets the stream's silence boun
 
 | What                 | Default                         | Key                                                         |
 | -------------------- | ------------------------------- | ----------------------------------------------------------- |
-| Phone's screen read  | 10 s                            | none                                                        |
+| Phone's screen read  | 10 s                            | `SCREEN_READ_TIMEOUT_MS`                                    |
 | Push / start / close | 30 s / 15 s, retry 100 ms / 5 s | `PUSH_TIMEOUT_MS`, `START_DEADLINE_MS`, `CLOSE_DEADLINE_MS` |
 | Quiet before `alive` | 5 s                             | `ALIVE_AFTER_MS`                                            |
 
