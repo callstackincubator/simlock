@@ -199,7 +199,7 @@ async function createHarness(
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
   });
 
-  return { clock, driver, engine, eventBus, filesystem, reaper, registry };
+  return { clock, driver, engine, eventBus, executor, filesystem, reaper, registry };
 }
 
 async function seedReady(harness: Awaited<ReturnType<typeof createHarness>>) {
@@ -555,6 +555,131 @@ describe("CleanupReaper", () => {
     await flush();
     expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
     expect(harness.driver.calls.map((call) => call.operation)).toContain("destroy");
+    harness.reaper.dispose();
+  });
+
+  it("does not abort its run on a device whose platform has no driver, and still cleans up every device proposed after it", async () => {
+    const harness = await createHarness(automaticCleanupRules);
+    // why: the driverless records are registered first so the proposals that must throw precede
+    // the healthy ones -- that order is what a whole-run abort turns on. Only an ios driver is
+    // registered, so acting on an android record throws NoDriverError, as it does for a platform
+    // discovery refused. The ready one exercises the shutdown path, the shut-down one the
+    // destroy path; a healthy device follows each.
+    const ghostReady = await harness.registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "ghost-ready-android",
+      provisionDuration: 0,
+      spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },
+    });
+    await harness.registry.transitionDevice(ghostReady.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: ghostReady.id },
+    });
+    const ghostReadyLease = await harness.registry.createLease({
+      deviceId: ghostReady.id,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlMs: 60_000,
+      ttlDeadline: 2_000,
+    });
+    await harness.registry.beginRelease(ghostReadyLease.id);
+    await harness.registry.transitionDevice(ghostReady.id, "ready", {
+      event: "device.reclaimed",
+      payload: { deviceId: ghostReady.id, duration: 0, strategy: "erase" },
+    });
+    const idleReady = await seedReleased(harness, "ready");
+    const ghostShutdown = await harness.registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "ghost-shutdown-android",
+      provisionDuration: 0,
+      spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },
+    });
+    await harness.registry.transitionDevice(ghostShutdown.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: ghostShutdown.id },
+    });
+    await harness.registry.transitionDevice(ghostShutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: ghostShutdown.id, initiator: "test" },
+    });
+    const idleShutdown = await seedReleased(harness, "shutdown");
+    // why: one second past T2, so every destroy proposal fires and every shutdown one already has.
+    harness.clock.advance(31_000);
+
+    // why: loose on purpose -- whether the run still reports the driverless devices' proposals is
+    // for the fix to decide; skipping the platform or surviving the failed action both answer it.
+    await expect(harness.reaper.run()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "shutdown",
+          rule: "idle-shutdown",
+          target: idleReady.id,
+        }),
+        expect.objectContaining({
+          action: "destroy",
+          rule: "idle-destroy",
+          target: idleShutdown.id,
+        }),
+      ]),
+    );
+
+    const stateOf = (deviceId: string) =>
+      harness.registry.snapshot.devices.find((device) => device.id === deviceId)?.state;
+    expect([
+      stateOf(ghostReady.id),
+      stateOf(idleReady.id),
+      stateOf(ghostShutdown.id),
+      stateOf(idleShutdown.id),
+    ]).toEqual(["ready", "shutdown", "shutdown", "deleted"]);
+    expect(
+      harness.driver.calls
+        .filter((call) => call.operation === "shutdown" || call.operation === "destroy")
+        .map((call) => `${call.operation} ${(call.arguments[0] as { deviceId: string }).deviceId}`)
+        .sort(),
+    ).toEqual(
+      [`destroy ${idleShutdown.driverDeviceId}`, `shutdown ${idleReady.driverDeviceId}`].sort(),
+    );
+    expect(
+      harness.eventBus
+        .replay()
+        .filter((entry) => entry.event === "cleanup.executed")
+        .map((entry) => (entry.payload as { target: string }).target)
+        .sort(),
+    ).toEqual([idleReady.id, idleShutdown.id].sort());
+
+    harness.reaper.dispose();
+  });
+
+  it("logs a cleanup action that throws at error, naming the action, rule and target, and still resolves the run", async () => {
+    const sink = new MemoryLogSink();
+    const rule: CleanupRule = {
+      evaluate: () => [
+        { action: "shutdown", reason: "test cleanup", rule: "test-rule", target: "dev_1" },
+      ],
+      name: "test-rule",
+    };
+    const harness = await createHarness(
+      [rule],
+      {},
+      { logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }), tickMs: 10_000 },
+    );
+    await seedReady(harness);
+    vi.spyOn(harness.executor, "execute").mockRejectedValue(new Error("action exploded"));
+
+    await expect(harness.reaper.run()).resolves.toHaveLength(1);
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "error",
+        module: "daemon.reaper",
+        fields: {
+          action: "shutdown",
+          error: "Error: action exploded",
+          rule: "test-rule",
+          step: "cleanup",
+          target: "dev_1",
+        },
+      }),
+    ]);
     harness.reaper.dispose();
   });
 
