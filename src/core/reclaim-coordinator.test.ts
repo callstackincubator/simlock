@@ -366,7 +366,7 @@ describe("ReclaimCoordinator", () => {
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
-  it("recovers an unleased interrupted reclaim through shutdown and a committed fact", async () => {
+  it("recovers an unleased interrupted reclaim through shutdown, a committed fact, and itself as the emitter", async () => {
     const harness = await createHarness();
     let stateAtFact: VirtualDevice["state"] | undefined;
     harness.bus.subscribe("device.shutdown", () => {
@@ -378,6 +378,20 @@ describe("ReclaimCoordinator", () => {
     expect(stateAtFact).toBe("shutdown");
     expect(harness.driver.calls.map((call) => call.operation)).toContain("shutdown");
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
+    // why: Events rule 7 binds the emitting module onto every event, and both EVENTS.md cuts name
+    // the reclaim coordinator as this shutdown's emitter — `simlock events` and the `events.jsonl`
+    // audit trail print that string, so it must name the module that actually did it.
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "device.shutdown")
+        .map((event) => ({ module: event.module, payload: event.payload })),
+    ).toEqual([
+      {
+        module: "reclaim-coordinator",
+        payload: { deviceId: harness.reclaiming.id, initiator: "startup-interrupted-reclaim" },
+      },
+    ]);
   });
 
   describe("a device whose wipe a daemon start put off", () => {
