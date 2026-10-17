@@ -51,6 +51,7 @@ import {
   type ModelPreferences,
   type CatalogReader,
   type AcquisitionMaintenance,
+  type Core,
   type ManagedDeviceLifecycle,
   type ReadyDeviceHandoff,
   toDriverDevice,
@@ -101,7 +102,8 @@ export interface LeaseAcquisitionRegistry {
   };
 }
 
-export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive" | "isClaimed" | "tryClaim">;
+export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive">;
+export type AcquisitionQuarantine = Pick<Core["quarantine"], "enterFromStalledTransition">;
 export type AcquisitionDecision = Pick<SerializedDecision, "run">;
 export type AcquisitionDrivers = Pick<DriverCatalog, "get">;
 export type AcquisitionPlannerPort = Pick<AcquisitionPlanner, "plan" | "planPhysical">;
@@ -147,6 +149,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly queue: AcquisitionQueue;
+  readonly quarantine: AcquisitionQuarantine;
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
   readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "holdsLeaseId" | "replay">;
@@ -1041,8 +1044,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       );
       let destroyed = true;
       try {
-        // `undefined` means the device is no longer this waiter's (another boot claimed it, or it
-        // was deleted or leased), so its reservation is free to go. Only a throw keeps it.
         await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
       } catch (destroyError: unknown) {
         this.#logFailure(
@@ -1054,10 +1055,35 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         );
         destroyed = false;
       }
+      // why: a device the destroy could not retire may still be running, so it goes to quarantine
+      // rather than back to `shutdown`, where every planner would boot it again: `quarantined` is
+      // the one state that retries it, keeps it out of every plan and counts it as running. The
+      // waiter's reservation is released once that is committed, so the slot is never counted twice
+      // and never left to an in-memory claim nothing else holds.
+      if (!destroyed) {
+        try {
+          const quarantined = await this.options.quarantine.enterFromStalledTransition(
+            device.id,
+            device.state,
+          );
+          if (!quarantined) {
+            this.#logger.warn(
+              "a device that failed to be destroyed was not quarantined: something else owns it now",
+              { deviceId: device.id, requesterId: waiter.options.requesterId, step: "quarantine" },
+            );
+          }
+        } catch (quarantineError: unknown) {
+          this.#logFailure(
+            "quarantining a device that failed to boot and to be destroyed failed",
+            waiter,
+            device,
+            "quarantine",
+            quarantineError,
+          );
+        }
+      }
       await this.options.decisions.run(async () => {
-        if (destroyed) capacityReservation.release();
-        else if (!this.options.claims.isClaimed(device.id))
-          this.options.claims.tryClaim(device.id, "boot", waiter.id);
+        capacityReservation.release();
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
