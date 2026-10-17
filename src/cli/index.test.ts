@@ -1247,6 +1247,137 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
   });
 });
 
+describe("CLI: auto-launch's startup deadline (#663)", () => {
+  /**
+   * why: the launcher hands back a daemon that claims its socket only `bootMs` later, the way
+   * `NodeDaemonLauncher` returns while the detached process it spawned is still booting; what
+   * the CLI can see is how long the socket stays absent, not how long `launch` itself blocks.
+   */
+  function slowBootPorts(bootMs: number): {
+    readonly ports: CliEnvironmentPorts;
+    readonly clock: FakeClock;
+  } {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(0);
+    const ipcTransport = new MemoryIpcTransport();
+    const ports: CliEnvironmentPorts = {
+      filesystem,
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: ipcTransport,
+      launcher: new FakeDaemonLauncher(() => {
+        clock.setTimer(bootMs, () => {
+          void startInMemoryDaemon({
+            adminTokenPath: "/simlock/admin.token",
+            filesystem,
+            ipcTransport,
+            socketPath: "/simlock/daemon.sock",
+          });
+        });
+      }),
+      dataDirectory: "/simlock",
+    };
+    return { clock, ports };
+  }
+
+  /**
+   * why: turns the clock at the auto-launch poll's own 50 ms step, with room to run past the
+   * startup deadline and keep pumping the boot the CLI abandoned; the clock is fake, so the
+   * extra ticks cost nothing. The `settled` guard makes a hang fail on a named assertion
+   * instead of on a test timeout.
+   */
+  async function runWithTicks(
+    command: readonly string[],
+    ports: CliEnvironmentPorts,
+    clock: FakeClock,
+    runOnMs: number,
+  ): Promise<{ readonly exitCode: number; readonly output: ReturnType<typeof outputCapture> }> {
+    const output = outputCapture(ports);
+    let settled = false;
+    const exitCode = runCli(command, output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 500 && (!settled || clock.now() < runOnMs); tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(
+      settled,
+      `simlock ${command.join(" ")} still had not settled at ${String(clock.now())}ms`,
+    ).toBe(true);
+    return { exitCode: await exitCode, output };
+  }
+
+  it("waits 20 s for a daemon it auto-launched: within the deadline it reports as running, past it the command reports a failed start", async () => {
+    const cases = [
+      { bootMs: 19_900, label: "19.9 s" },
+      { bootMs: 20_100, label: "20.1 s" },
+    ];
+
+    // why: every case runs before anything is asserted, so the case that passes cannot hide
+    // what the case that fails did to the daemon it launched.
+    const outcomes = await Promise.all(
+      cases.map(async (testCase) => {
+        const { clock, ports } = slowBootPorts(testCase.bootMs);
+        const { exitCode, output } = await runWithTicks(
+          ["daemon", "start", "--json"],
+          ports,
+          clock,
+          testCase.bootMs + 1_000,
+        );
+        const after = outputCapture(ports);
+        const statusExit = await runCli(["daemon", "status", "--json"], after.environmentWith());
+        const status = JSON.parse(after.stdout || "{}") as { daemon?: { health?: string } };
+        return {
+          exitCode,
+          label: testCase.label,
+          timedOutStarting: output.stderr.includes("Timed out starting simlock daemon"),
+          stdout: output.stdout,
+          statusHealth: status.daemon?.health ?? after.stdout,
+          statusExit,
+        };
+      }),
+    );
+
+    expect(
+      outcomes.map((outcome) => ({
+        exitCode: outcome.exitCode,
+        label: outcome.label,
+        // why: the failed start is asserted as the timeout's wording, not the whole line or
+        // its error code, so what the code reports can change without moving this test.
+        timedOutStarting: outcome.timedOutStarting,
+        stdout: outcome.stdout,
+      })),
+    ).toEqual([
+      {
+        exitCode: 0,
+        label: "19.9 s",
+        timedOutStarting: false,
+        stdout: '{"status":"running"}\n',
+      },
+      {
+        exitCode: 1,
+        label: "20.1 s",
+        timedOutStarting: true,
+        stdout: "",
+      },
+    ]);
+
+    // why: asserted apart from the exit code so a fix that only softens the timeout message
+    // fails here -- `daemon status` never launches one, so what it reaches is the daemon this
+    // command launched and then gave up on.
+    for (const outcome of outcomes) {
+      expect(outcome.statusExit, `${outcome.label}: status stderr`).toBe(0);
+      expect(
+        ["starting", "running"].includes(outcome.statusHealth as string),
+        `${outcome.label}: status says ${JSON.stringify(outcome.statusHealth)}`,
+      ).toBe(true);
+    }
+  });
+});
+
 describe("CLI: daemon status (ADR 0003 §11)", () => {
   it("reports stopped when the socket cannot be reached at all", async () => {
     const output = outputCapture();
