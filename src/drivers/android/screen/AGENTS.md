@@ -37,8 +37,8 @@ the iOS driver, not here.
 ## How it works
 
 1. Jar missing at `scrcpyServerPath` → `ScreenUnavailableError` (`unavailable()` gives the same reason). Then the
-   device's target. **A phone's screen state is read before anything is pushed** (`#618` builds this step; its tests
-   are on the branch, its code is not yet): `run(["shell", "dumpsys", "power"], 10_000)`, the line
+   device's target. **A phone's screen state is read before anything is pushed**:
+   `run(["shell", "dumpsys", "power"], 10_000)`, the line
    `^\s*mWakefulness=(\S+)\s*$` after a trailing `\r` is stripped, compared exactly. `Asleep` or
    `Dozing` → `ScreenUnavailableError` naming the screen, and nothing is pushed. Anything else — `Awake`, `Dreaming`,
    a word that is not one, no line, a non-zero exit, a timed-out read — goes on. Emulators skip this read. The phone

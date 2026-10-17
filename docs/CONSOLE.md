@@ -263,12 +263,15 @@ The panel is on every lease's page, and streams wherever the worker the lease
 runs on has screen streaming turned on (see [`capabilities.stream.enabled`](CONFIGURATION.md)).
 Where it is off, the panel says so before you press anything, and the button
 cannot be pressed; where the lease is on a device a screen cannot be
-captured from — a physical iPhone or Android phone — it says that a live screen
-comes only from a simulator or an emulator. Either way it starts nothing.
+captured from — a physical iPhone — it says that a live screen comes only from a
+simulator, an emulator or a physical Android phone. Either way it starts nothing.
 
-The first picture can take a while on a slow emulator. The panel waits up to 90
-seconds for it, longer than a worker takes to give up, so a capture that cannot
-start shows the worker's reason rather than a timeout.
+The first picture can take a while — on a slow emulator, or on a physical
+Android phone, whose screen state and shared adb server are read before the
+capture starts. The panel waits up to 150 seconds for it, longer than a worker
+takes to give up, so a capture that cannot start shows the worker's reason
+rather than a timeout. A phone whose screen is off is refused at once with a
+message that says so; nothing wakes the screen.
 
 ### Who holds a lease
 
