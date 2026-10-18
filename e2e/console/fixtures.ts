@@ -113,9 +113,7 @@ export async function startDaemon(
     // Read the tail here, before any caller's catch reaches `dispose`, and fail with both.
     const log = await readFile(join(home, "daemon.log"), "utf8").catch(() => "");
     const tail = log.split("\n").slice(-20).join("\n");
-    throw new Error(
-      `daemon start failed (exit ${String(started.code)}): ${started.stderr}\n${tail}`,
-    );
+    expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
   };
   const dispose = async () => {
     for (const handle of background) handle.kill("SIGTERM");
