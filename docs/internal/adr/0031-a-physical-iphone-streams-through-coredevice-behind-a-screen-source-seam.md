@@ -1,6 +1,6 @@
 # 0031. A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-16
 - **Issue:** [#617](https://github.com/callstackincubator/simlock/issues/617), task [#619](https://github.com/callstackincubator/simlock/issues/619)
 - **Supersedes:** nothing. Builds on the stream module as it is, and on
