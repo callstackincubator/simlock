@@ -37,7 +37,10 @@ export class NodeDaemonLauncher implements DaemonLauncher {
 
   async launch(): Promise<void> {
     await mkdir(dirname(this.options.logPath), { recursive: true });
-    const log = await open(this.options.logPath, "a");
+    // why: 0600 at creation, like every other file under `SIMLOCK_HOME` (`#258`'s rule): this
+    // `open` is what first creates `daemon.log` for an auto-launched daemon -- the daemon's own
+    // sink only appends to the file this one made.
+    const log = await open(this.options.logPath, "a", 0o600);
     try {
       const child = spawn(this.options.command, this.options.args, {
         detached: true,

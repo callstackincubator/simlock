@@ -30,7 +30,8 @@ Uses: nothing from other components. Imported by: every component that touches t
 | Paths                                      | `paths.ts`                  | `resolveSimlockHome`, `resolveDaemonSocketPath`              | —                             | `SIMLOCK_HOME` (default `~/.simlock`), socket path length |
 
 `productionHostLoadProbe` picks the Darwin or Linux probe. `NodeFileLogSink` rotates to
-`<path>.1`, or keeps numbered generations when given `retentionMs` or `totalMaxBytes`.
+`<path>.1`, or keeps numbered generations when given `retentionMs` or `totalMaxBytes`. The
+files it opens, and the log `NodeDaemonLauncher` pre-creates, are opened mode `0600`.
 
 ## Rules
 

@@ -103,7 +103,8 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    quarantine stalls (age > estimate × `stalledTransition.thresholdMultiplier`, unclaimed).
 9. **Physical** — `PhysicalEnrollment.add` refuses Simlock's own devices, reads `inspectPhysical`,
    writes `ready` with `enrolledApps`, or re-enrols under `enrollment`; `remove` unenrols. Busy: `DeviceBusyError`.
-10. **Ownership** — `loadInstanceId` creates `instance.json` once (exclusive create). `ensureOwnedRoot`
+10. **Ownership** — `loadInstanceId` creates `instance.json` once (exclusive create, mode
+    `0600`). `ensureOwnedRoot`
     stages a root with `.simlock-owned.json` (instance id, platform), mode `0700`; doubt is `OwnedRootError`.
 11. **Components** — `ComponentInstaller`, the only caller of `installComponent`/`removeComponent`.
     One FIFO per platform; a call for the same component joins. At the front: `stillNeeded` →

@@ -144,6 +144,12 @@ function readTail(file: string): string {
   }
 }
 
+// why: Owner-only, like every other file the daemon keeps under `SIMLOCK_HOME` (`config.json`,
+// `state.json`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and a shared
+// runner's other users have no business reading a daemon's log or event stream. Set at each
+// `open`, never a later `chmod`, so no generation is ever born world-readable.
+const FILE_MODE = 0o600;
+
 export interface NodeFileLogSinkOptions {
   /** One generation: the size at which the current file rotates. */
   readonly maxBytes?: number;
@@ -200,7 +206,7 @@ export class NodeFileLogSink implements LogSink {
     this.#totalMaxBytes = options.totalMaxBytes;
     this.#clock = options.clock ?? new SystemClock();
     mkdirSync(dirname(this.#path), { recursive: true });
-    this.#fd = openSync(this.#path, "a");
+    this.#fd = openSync(this.#path, "a", FILE_MODE);
     this.#bytesWritten = fstatSync(this.#fd).size;
     this.#sweep();
   }
@@ -232,7 +238,7 @@ export class NodeFileLogSink implements LogSink {
       this.#shiftGenerations();
     }
     renameSync(this.#path, `${this.#path}.1`);
-    this.#fd = openSync(this.#path, "a");
+    this.#fd = openSync(this.#path, "a", FILE_MODE);
     this.#bytesWritten = 0;
     this.#sweep();
   }
