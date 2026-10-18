@@ -15,6 +15,24 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const STREAM_OPEN_BOUND = 240_000;
+const KEY_FRAME_BOUND = 120_000;
+
+async function within<T>(work: Promise<T>, bound: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${String(bound)} ms waiting for ${what}`)),
+      bound,
+    );
+  });
+  try {
+    return await Promise.race([work, stalled]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const SIMULATOR_PROGRAM = join(REPO_ROOT, "dist", "bin", "simlock-screen-capture");
 
 // why: `pgrep -x` matches the program's own name only; a pattern match would also find the shell
@@ -56,17 +74,18 @@ describe.skipIf(process.platform !== "darwin")(
           expect(created.code, created.stderr).toBe(0);
           const authorization = `Bearer ${(created.json as { secret: string }).secret}`;
           const open = async (signal: AbortSignal) => {
-            const response = await fetch(
-              `${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
-              { headers: { authorization }, signal },
+            const response = await within(
+              fetch(`${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+                headers: { authorization },
+                signal,
+              }),
+              STREAM_OPEN_BOUND,
+              "the stream to open",
             );
-            expect(
-              response.status,
-              await response
-                .clone()
-                .text()
-                .catch(() => ""),
-            ).toBe(200);
+            // why: a 200 body is an endless stream, so its text is read only for a failure, never
+            // as an argument evaluated up front.
+            const detail = response.status === 200 ? "" : await response.text().catch(() => "");
+            expect(response.status, detail).toBe(200);
             if (response.body === null) throw new Error("the stream answered without a body");
             return { reader: response.body.getReader(), response };
           };
@@ -74,8 +93,10 @@ describe.skipIf(process.platform !== "darwin")(
           const viewer = new AbortController();
           const first = await open(viewer.signal);
           expect(first.response.headers.get("simlock-stream-codec")).toBe("h264");
-          const frames = await readFrames(first.reader, (read) =>
-            read.some((frame) => frame.tag === TAG.keyframe),
+          const frames = await within(
+            readFrames(first.reader, (read) => read.some((frame) => frame.tag === TAG.keyframe)),
+            KEY_FRAME_BOUND,
+            "the first stream's key frame",
           );
           expect(await capturesRunning()).toBe(1);
           viewer.abort();
@@ -101,17 +122,27 @@ describe.skipIf(process.platform !== "darwin")(
           });
 
           const second = await open(new AbortController().signal);
-          await readFrames(second.reader, (read) =>
-            read.some((frame) => frame.tag === TAG.keyframe),
+          await within(
+            readFrames(second.reader, (read) => read.some((frame) => frame.tag === TAG.keyframe)),
+            KEY_FRAME_BOUND,
+            "the second stream's key frame",
           );
           // why: nothing touches the simulator here, so its screen is still; the stream must stay
           // open well past the 30 s silence bound on the capture's own idle repaints.
           const stillUntil = Date.now() + 35_000;
-          const held = await readFrames(second.reader, () => Date.now() > stillUntil);
+          const held = await within(
+            readFrames(second.reader, () => Date.now() > stillUntil),
+            KEY_FRAME_BOUND,
+            "the still stream's frames",
+          );
           expect(held.length, "a still simulator's stream sent nothing for 35 s").toBeGreaterThan(
             0,
           );
-          const after = await second.reader.read();
+          const after = await within(
+            second.reader.read(),
+            KEY_FRAME_BOUND,
+            "the still stream's next read",
+          );
           expect(after.done, "a still simulator's stream ended inside 35 s").toBe(false);
           const release = await env.cli(["release", leaseId]);
           expect(release.code, release.stderr).toBe(0);
