@@ -12,6 +12,8 @@ const APK = process.env["SIMLOCK_PHYSICAL_ANDROID_APK"];
 const PROBE_INTERVAL_MS = 2_000;
 const EXEC_TIMEOUT_MS = 5_000;
 const MINUTE = 60_000;
+const STREAM_OPEN_BOUND = 4 * MINUTE;
+const KEY_FRAME_BOUND = 2 * MINUTE;
 const AGENT = "phone-lane-android";
 const TAG = { alive: 0x06, description: 0x01, keyframe: 0x02, delta: 0x03, meta: 0x05 } as const;
 
@@ -136,6 +138,21 @@ async function exec(daemon: Rig, leaseId: string, args: readonly string[]): Prom
   return response.text();
 }
 
+async function within<T>(work: Promise<T>, bound: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${bound} ms waiting for ${what}`)),
+      bound,
+    );
+  });
+  try {
+    return await Promise.race([work, stalled]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // why: the body is an endless stream, so this reads frames until it has what it came for and then
 // lets go, rather than reading to an end that never comes.
 async function readFrames(
@@ -148,7 +165,7 @@ async function readFrames(
   let buffer = new Uint8Array(0);
   try {
     while (!enough(frames)) {
-      const step = await reader.read();
+      const step = await within(reader.read(), KEY_FRAME_BOUND, "the stream's frames");
       if (step.done) break;
       const joined = new Uint8Array(buffer.length + step.value.length);
       joined.set(buffer);
@@ -172,14 +189,12 @@ async function readFrames(
 async function streamOf(daemon: Rig, leaseId: string): Promise<Response> {
   const response = await fetch(`${daemon.base}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
     headers: daemon.auth,
+    // why: covers the ~185 s worst case of opening the stream, so a stall fails here naming its step.
+    signal: AbortSignal.timeout(STREAM_OPEN_BOUND),
   });
-  expect(
-    response.status,
-    await response
-      .clone()
-      .text()
-      .catch(() => ""),
-  ).toBe(200);
+  // why: a 200 body is an endless stream, so its text is read only for a failure, never as an argument evaluated up front.
+  const detail = response.status === 200 ? "" : await response.text().catch(() => "");
+  expect(response.status, detail).toBe(200);
   return response;
 }
 
