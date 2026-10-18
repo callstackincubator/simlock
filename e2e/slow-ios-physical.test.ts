@@ -522,20 +522,29 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
             { headers: daemon.auth, signal },
           );
           if (response.body === null) throw new Error("the stream answered without a body");
+          // why: the reader is taken only for a 200; any other answer keeps its body unread so the
+          // assertions below can still read it, and a 200's endless body is never read for a message.
+          if (response.status !== 200) return { reader: null, response };
           return { reader: response.body.getReader(), response };
+        };
+        const reading = async (opened: Awaited<ReturnType<typeof open>>) => {
+          expect(
+            opened.response.status,
+            opened.response.status === 200
+              ? ""
+              : await opened.response
+                  .clone()
+                  .text()
+                  .catch(() => ""),
+          ).toBe(200);
+          return opened.reader!;
         };
 
         const viewer = new AbortController();
         const first = await open(grant.lease.id, viewer.signal);
-        expect(
-          first.response.status,
-          await first.response
-            .clone()
-            .text()
-            .catch(() => ""),
-        ).toBe(200);
+        const firstReader = await reading(first);
         expect(first.response.headers.get("simlock-stream-codec")).toBe("h264");
-        const frames = await readFrames(first.reader, (read) =>
+        const frames = await readFrames(firstReader, (read) =>
           read.some((frame) => frame.tag === TAG.keyframe),
         );
         expect(frames.map((frame) => frame.tag).slice(0, 3)).toEqual([
@@ -556,15 +565,15 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         // why: nothing touches the iPhone here, so its screen is still; the stream must stay open
         // well past the 30 s silence bound, on the source's own idle repaints.
         const stillUntil = Date.now() + 35_000;
-        const held = await readFrames(first.reader, () => Date.now() > stillUntil);
+        const held = await readFrames(firstReader, () => Date.now() > stillUntil);
         expect(held.length, "a still iPhone's stream sent nothing for 35 s").toBeGreaterThan(0);
-        expect((await first.reader.read()).done, "a still iPhone's stream ended inside 35 s").toBe(
+        expect((await firstReader.read()).done, "a still iPhone's stream ended inside 35 s").toBe(
           false,
         );
 
         const second = await open(grant.lease.id, new AbortController().signal);
         if (second.response.status === 200) {
-          await readFrames(second.reader, (read) =>
+          await readFrames(second.reader!, (read) =>
             read.some((frame) => frame.tag === TAG.keyframe),
           );
         } else {
@@ -575,7 +584,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         // why: whatever the second viewer gets, the first must keep its own stream: read it for a
         // further 10 s and count what arrives.
         const alongsideUntil = Date.now() + 10_000;
-        const alongside = await readFrames(first.reader, () => Date.now() > alongsideUntil);
+        const alongside = await readFrames(firstReader, () => Date.now() > alongsideUntil);
         expect(alongside.length, "the first viewer received no frames for 10 s").toBeGreaterThan(0);
 
         const released = await daemon.env.cli(["release", grant.lease.id]);
@@ -590,9 +599,9 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         // then has already failed or will not fail visibly; the race only names the claim.
         const again = await leasePhysical(daemon.env, "phone-lane-stream-2");
         const reopened = await open(again.lease.id, new AbortController().signal);
-        expect(reopened.response.status).toBe(200);
+        const reopenedReader = await reading(reopened);
         const keyFrameArrived = await Promise.race([
-          readFrames(reopened.reader, (read) =>
+          readFrames(reopenedReader, (read) =>
             read.some((frame) => frame.tag === TAG.keyframe),
           ).then((read) => read.some((frame) => frame.tag === TAG.keyframe)),
           new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
