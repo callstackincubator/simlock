@@ -5056,6 +5056,40 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     expect(released).toBe("lse_1");
   });
 
+  it("still closes the connection when stderr cannot take the failed release's error line", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    let closed = false;
+    const client = fakeClient({
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+      releaseLease: () => Promise.reject(new Error("release failed")),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock: new FakeClock(0),
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+        stderr: {
+          write: (value: string) => {
+            if (value.includes("release failed")) throw new Error("EPIPE");
+            return undefined;
+          },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+
+    signals.emit("SIGINT");
+
+    // why: a closed stderr pipe must not skip the dispose and the close that follow the release.
+    expect(await runPromise).toBe(0);
+    expect(closed).toBe(true);
+  });
+
   it("exits 14 without a farewell release when a renewal is answered UNKNOWN_LEASE", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();

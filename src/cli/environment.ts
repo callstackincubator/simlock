@@ -36,7 +36,7 @@ class AutoLaunchIpcConnector implements IpcConnector {
     }
     await this.checkConfig();
     await this.launcher.launch();
-    // why: the constant lives behind the ports barrel, which loads only once a daemon launches.
+    // why: the constant lives behind the ports barrel, which loads on the first connection that needs it.
     const { DAEMON_STARTUP_TIMEOUT_MS } = await import("../ports/index.js");
     const deadline = this.clock.now() + DAEMON_STARTUP_TIMEOUT_MS;
     let lastError: unknown;
