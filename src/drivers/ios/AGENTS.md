@@ -86,7 +86,9 @@ Screen — `screenCapture` (only when `create` is given a launcher): `simlock-sc
 simulator, and the same arguments without that variable for a physical iPhone run by
 `simlock-device-capture`. stdout is the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL.
 Either program missing → `ScreenUnavailableError` (a missing iPhone program refuses an iPhone
-open only). Default programs: dist/bin, built by `pnpm build`;
+open only). A physical open first asks the physical handler for the iPhone's iOS version
+(`devicectl list devices`) and below iOS 27 refuses without starting anything; an unreadable or
+unparsable version goes on. Default programs: dist/bin, built by `pnpm build`;
 `drivers.ios.screenCaptureCommand` and `drivers.ios.deviceCaptureCommand` name others. Neither
 program's environment carries `SIMLOCK_COREDEVICE_INFO_PLIST`; the iPhone program enforces its own
 pin — a CoreDevice major other than 642 exits 69 with the reason, a 503 for the viewer. Asked to

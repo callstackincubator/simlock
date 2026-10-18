@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DeviceSpec, PhysicalDriverDevice, PhysicalInspection } from "../../core/index.js";
 import {
+  FakeBytePipeLauncher,
   FakeClock,
   MemoryFilesystem,
   ScriptedProcessRunner,
@@ -289,7 +290,10 @@ class Lab {
     });
   }
 
-  async driver(runner: ProcessRunner = this.runner): Promise<IosSimctlDriver> {
+  async driver(
+    runner: ProcessRunner = this.runner,
+    screenCapture?: NonNullable<Parameters<typeof IosSimctlDriver.create>[0]["screenCapture"]>,
+  ): Promise<IosSimctlDriver> {
     await this.filesystem.mkdirp(SIMLOCK_HOME);
     return IosSimctlDriver.create({
       clock: this.clock,
@@ -298,6 +302,7 @@ class Lab {
       idGenerator: { generate: () => "device-1" },
       instanceId: "instance-1",
       processRunner: runner,
+      ...(screenCapture === undefined ? {} : { screenCapture }),
       simlockHome: SIMLOCK_HOME,
     });
   }
@@ -1056,6 +1061,47 @@ describe("IosSimctlDriver physical handler: enrollment", () => {
       expect(fromProperties).toEqual(fromDeprecated);
     },
   );
+});
+
+describe("IosSimctlDriver physical handler: stream iOS version", () => {
+  const streamSettings = { bitrateKbps: 1_500, fps: 30, maxDimension: 720 };
+  const DEVICE_PROGRAM = "/dist/bin/simlock-device-capture";
+
+  async function streamDriver(lab: Lab, launcher: FakeBytePipeLauncher): Promise<IosSimctlDriver> {
+    await lab.filesystem.mkdirp("/dist/bin");
+    await lab.filesystem.writeFileAtomic(DEVICE_PROGRAM, "");
+    return lab.driver(undefined, {
+      baseEnvironment: {},
+      command: "/dist/bin/simlock-screen-capture",
+      deviceCommand: DEVICE_PROGRAM,
+      launcher,
+    });
+  }
+
+  async function openStream(driver: IosSimctlDriver): Promise<unknown> {
+    const capture = driver.screenCapture;
+    if (capture === undefined) throw new Error("the driver offers no screen capture");
+    return capture.open(PHYSICAL_DEVICE, streamSettings, new AbortController().signal);
+  }
+
+  it("a listed iPhone's osVersionNumber decides the stream: iOS 18.4 is refused naming it, and nothing starts", async () => {
+    const lab = new Lab().list([listed(PHONE_UDID)]);
+    const launcher = new FakeBytePipeLauncher();
+    const driver = await streamDriver(lab, launcher);
+
+    await expect(openStream(driver)).rejects.toThrow(`${PHONE_UDID} runs iOS 18.4`);
+    expect(lab.calls()).toEqual([LIST_ARGV]);
+    expect(launcher.starts).toEqual([]);
+  });
+
+  it("an iPhone devicectl does not list starts the device program, the program's own error deciding", async () => {
+    const lab = new Lab().list([]);
+    const launcher = new FakeBytePipeLauncher();
+    const driver = await streamDriver(lab, launcher);
+
+    await openStream(driver);
+    expect(launcher.starts.map((start) => start.command)).toEqual([DEVICE_PROGRAM]);
+  });
 });
 
 describe("IosSimctlDriver physical handler: presence", () => {

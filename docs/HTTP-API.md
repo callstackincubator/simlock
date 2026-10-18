@@ -945,7 +945,8 @@ leases, an operator sees any, and anything else is a `404`. `STREAM_NOT_SUPPORTE
 platform that has no screen source. Physical iPhones and physical Android phones are not
 refused that way: they stream like a simulator, on a worker that can capture
 them. `STREAM_UNAVAILABLE` (503) means it could but cannot now: a
-capture program that is not installed, a physical Android phone whose screen is
+capture program that is not installed, a physical iPhone below iOS 27 (its
+message names the iPhone's version), a physical Android phone whose screen is
 off and did not turn on when woken (a phone whose screen is off is woken first),
 or a device that painted nothing within
 30 seconds; asking again is the right move. A stream that stops receiving frames

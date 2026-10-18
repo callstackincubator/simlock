@@ -274,6 +274,13 @@ export class IosPhysicalHandler {
     return { driverDeviceId: udid, osVersion: listed.osVersion, present: true };
   }
 
+  async osVersion(udid: string): Promise<string | undefined> {
+    const listed = await this.#list();
+    if (!listed.ok) return undefined;
+    const presence = listedPresence(listed.entries, udid);
+    return presence.kind === "listed" ? presence.osVersion : undefined;
+  }
+
   async listPresent(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
     const listed = await this.#list();
     if (!listed.ok) {

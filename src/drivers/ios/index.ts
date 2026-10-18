@@ -333,6 +333,7 @@ export class IosSimctlDriver implements Driver {
                   deviceCommand:
                     configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
                 }),
+            deviceOsVersion: (udid) => this.#physical.osVersion(udid),
             deviceSet: deviceRoot,
             filesystem: options.filesystem,
             launcher: options.screenCapture.launcher,

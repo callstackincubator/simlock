@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ScreenUnavailableError } from "../../core/index.js";
 import { FakeBytePipeLauncher, FakeClock, MemoryFilesystem } from "../../ports/index.js";
@@ -21,7 +21,12 @@ const physical = {
 const COMMAND = "/opt/simlock/simlock-screen-capture";
 const DEVICE_COMMAND = "/opt/simlock/simlock-device-capture";
 
-async function setup(options: { deviceCommand?: string } = {}) {
+async function setup(
+  options: {
+    deviceCommand?: string;
+    deviceOsVersion?: (udid: string) => Promise<string | undefined>;
+  } = {},
+) {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp("/opt/simlock");
   await filesystem.writeFileAtomic(COMMAND, "");
@@ -33,6 +38,7 @@ async function setup(options: { deviceCommand?: string } = {}) {
     clock,
     command: COMMAND,
     ...(options.deviceCommand === undefined ? {} : { deviceCommand: options.deviceCommand }),
+    ...(options.deviceOsVersion === undefined ? {} : { deviceOsVersion: options.deviceOsVersion }),
     deviceSet: "/home/.simlock/devices/ios",
     filesystem,
     launcher,
@@ -114,6 +120,77 @@ describe("iOS screen capture", () => {
     await expect(
       capture.open(simulator, settings, new AbortController().signal),
     ).resolves.toBeDefined();
+  });
+
+  it.each([["26.5"], ["17.0"]])(
+    "refuses a physical open on an iPhone running iOS %s, naming the UDID and version, and starts nothing",
+    async (version) => {
+      const asked: string[] = [];
+      const { capture, launcher } = await setup({
+        deviceCommand: DEVICE_COMMAND,
+        deviceOsVersion: (udid) => {
+          asked.push(udid);
+          return Promise.resolve(version);
+        },
+      });
+      const open = capture.open(physical, settings, new AbortController().signal);
+      await expect(open).rejects.toBeInstanceOf(ScreenUnavailableError);
+      await expect(open).rejects.toThrow(
+        `Physical iPhone streams need iOS 27 or later on the iPhone; UDID-1 runs iOS ${version}. Update the iPhone and ask for the stream again.`,
+      );
+      expect(asked).toEqual(["UDID-1"]);
+      expect(launcher.starts).toEqual([]);
+    },
+  );
+
+  it.each([["27.0"], ["27.1.2"], ["28.0"], [undefined], [""], ["beta"], ["throws"]])(
+    "starts the device program on an iPhone whose iOS version reads %s",
+    async (version) => {
+      const { capture, launcher } = await setup({
+        deviceCommand: DEVICE_COMMAND,
+        deviceOsVersion: () =>
+          version === "throws"
+            ? Promise.reject(new Error("devicectl failed"))
+            : Promise.resolve(version),
+      });
+      await capture.open(physical, settings, new AbortController().signal);
+      expect(launcher.starts.map((start) => start.command)).toEqual([DEVICE_COMMAND]);
+    },
+  );
+
+  it("a simulator open never asks for an iOS version", async () => {
+    let asked = 0;
+    const { capture, launcher } = await setup({
+      deviceCommand: DEVICE_COMMAND,
+      deviceOsVersion: () => {
+        asked += 1;
+        return Promise.resolve("26.5");
+      },
+    });
+    await capture.open(simulator, settings, new AbortController().signal);
+    expect(asked).toBe(0);
+    expect(launcher.starts.map((start) => start.command)).toEqual([COMMAND]);
+  });
+
+  it("a stop during the iOS version read starts nothing", async () => {
+    let release: (version: string) => void = () => undefined;
+    let asking = false;
+    const { capture, launcher } = await setup({
+      deviceCommand: DEVICE_COMMAND,
+      deviceOsVersion: () =>
+        new Promise<string | undefined>((resolve) => {
+          asking = true;
+          release = resolve;
+        }),
+    });
+    const stop = new AbortController();
+    const open = capture.open(physical, settings, stop.signal);
+    void open.catch(() => undefined);
+    await vi.waitFor(() => expect(asking).toBe(true));
+    stop.abort();
+    release("27.0");
+    await expect(open).rejects.toBeInstanceOf(ScreenUnavailableError);
+    expect(launcher.starts).toEqual([]);
   });
 
   it("starts either program without SIMLOCK_COREDEVICE_INFO_PLIST, even when the daemon's environment has it", async () => {

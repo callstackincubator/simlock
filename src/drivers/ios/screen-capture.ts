@@ -12,6 +12,9 @@ export interface IosScreenCaptureOptions {
   // why: a physical iPhone streams through a second program (`simlock-device-capture`); when it did
   // not build on this Mac the option is still set, and the missing file is what refuses the open.
   readonly deviceCommand?: string;
+  // why: CoreDevice refuses a stream to an iPhone below iOS 27; the driver reads the iPhone's iOS
+  // version through the physical handler, the one place that runs `devicectl` for a phone.
+  readonly deviceOsVersion?: (udid: string) => Promise<string | undefined>;
   readonly launcher: BytePipeLauncher;
   readonly clock: Clock;
   readonly filesystem: Filesystem;
@@ -28,6 +31,15 @@ const STOP_GRACE_MS = 2_000;
 // wait forever on an exit that the OS never reports.
 const KILL_WAIT_MS = 2_000;
 const LOG_TAIL = 20;
+const MIN_DEVICE_OS_MAJOR = 27;
+
+// why: a read that fails, a missing version or one that does not parse is no evidence the iPhone is
+// too old, so the capture goes on and the device program's own error decides.
+async function tooOld(options: IosScreenCaptureOptions, udid: string): Promise<string | undefined> {
+  const version = await options.deviceOsVersion?.(udid).catch(() => undefined);
+  const major = version === undefined ? undefined : /^(\d+)/.exec(version)?.[1];
+  return major !== undefined && Number(major) < MIN_DEVICE_OS_MAJOR ? version : undefined;
+}
 
 export function createIosScreenCapture(options: IosScreenCaptureOptions): ScreenCapture {
   // why: only a command that spells a path can be checked; a bare program name is resolved by the
@@ -54,6 +66,12 @@ export function createIosScreenCapture(options: IosScreenCaptureOptions): Screen
       const physical = isPhysicalDriverDevice(device);
       const reason = physical ? await missingDeviceProgram() : await missing();
       if (reason !== undefined) throw new ScreenUnavailableError(reason);
+      const oldVersion = physical ? await tooOld(options, device.deviceId) : undefined;
+      if (oldVersion !== undefined) {
+        throw new ScreenUnavailableError(
+          `Physical iPhone streams need iOS 27 or later on the iPhone; ${device.deviceId} runs iOS ${oldVersion}. Update the iPhone and ask for the stream again.`,
+        );
+      }
       if (signal.aborted)
         throw new ScreenUnavailableError("The capture was stopped before it started");
       return startCapture(options, device.deviceId, settings, physical);

@@ -52,6 +52,8 @@ interface Grant {
 interface ListedDevice {
   readonly identifier: string;
   readonly hardwareProperties?: { readonly udid?: string };
+  readonly deviceProperties?: { readonly osVersionNumber?: string };
+  readonly properties?: { readonly software?: { readonly osVersionNumber?: string } };
   readonly connectionProperties?: {
     readonly transportType?: string;
     readonly tunnelState?: string;
@@ -88,6 +90,17 @@ async function wiredEntry(udid: string): Promise<ListedDevice> {
   );
   if (entry === undefined) throw new Error(`devicectl lists no wired device with UDID ${udid}`);
   return entry;
+}
+
+/** why: CoreDevice streams an iPhone only from iOS 27, so which stream cases run depends on what the lane's iPhone runs. */
+async function iosVersionOf(
+  udid: string,
+): Promise<{ readonly version: string; readonly major: number }> {
+  const entry = await wiredEntry(udid);
+  const version =
+    entry.deviceProperties?.osVersionNumber ?? entry.properties?.software?.osVersionNumber;
+  if (version === undefined) throw new Error(`devicectl gives no iOS version for ${udid}`);
+  return { major: Number.parseInt(version, 10), version };
 }
 
 async function installedBundles(udid: string): Promise<string[]> {
@@ -511,7 +524,9 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
     it(
       "a lease on the iPhone streams its screen as meta with codec h264, an avcC description and a key frame; a still screen keeps the stream open past 35 s; a second viewer on the same lease either streams or refuses with a reason while the first keeps its frames; after the lease ends no device capture remains and a new lease streams a key frame",
       { timeout: 15 * MINUTE },
-      async () => {
+      async (context) => {
+        // why: below iOS 27 CoreDevice refuses the stream; the refusal case below runs instead.
+        if ((await iosVersionOf(udid)).major < 27) context.skip();
         expect(await deviceCapturesRunning(), "a device capture was already running").toBe(0);
         const daemon = await rig();
         await enroll(daemon.env, udid);
@@ -611,6 +626,34 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
           "a new lease on the same iPhone streamed no key frame in 30 s",
         ).toBe(true);
         await daemon.env.cli(["release", again.lease.id]);
+      },
+    );
+
+    it(
+      "a lease on an iPhone below iOS 27 answers its stream 503 STREAM_UNAVAILABLE within 10 s, naming iOS 27 and the iPhone's version, and starts no device capture",
+      { timeout: 5 * MINUTE },
+      async (context) => {
+        const { major, version } = await iosVersionOf(udid);
+        if (major >= 27) context.skip();
+        expect(await deviceCapturesRunning(), "a device capture was already running").toBe(0);
+        const daemon = await rig();
+        await enroll(daemon.env, udid);
+        const grant = await leasePhysical(daemon.env, "phone-lane-old-ios");
+        const asked = Date.now();
+        const response = await fetch(
+          `${daemon.base}/v1/stream/leases/${encodeURIComponent(grant.lease.id)}`,
+          { headers: daemon.auth, signal: AbortSignal.timeout(10_000) },
+        );
+        // why: the status is read before any reader is taken; a 200's endless body is never read.
+        const text = response.status === 200 ? "" : await response.text();
+        expect(response.status, text).toBe(503);
+        expect(Date.now() - asked, "the refusal took longer than 10 s").toBeLessThan(10_000);
+        const refusal = JSON.parse(text) as { error?: { code?: string; message?: string } };
+        expect(refusal.error?.code).toBe("STREAM_UNAVAILABLE");
+        expect(refusal.error?.message).toContain("iOS 27");
+        expect(refusal.error?.message).toContain(version);
+        expect(await deviceCapturesRunning(), "a device capture was started").toBe(0);
+        await daemon.env.cli(["release", grant.lease.id]);
       },
     );
   },

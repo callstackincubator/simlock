@@ -264,8 +264,8 @@ runs on has screen streaming turned on (see [`capabilities.stream.enabled`](CONF
 Simulators, emulators, physical Android phones and physical iPhones all stream.
 Where it is off, the panel says so before you press anything, and the button
 cannot be pressed; it starts nothing. An iPhone streams on a worker running
-Xcode 27: on another worker, the panel reports that the screen cannot be
-captured there and why.
+Xcode 27, and only when the iPhone runs iOS 27 or later: on another worker or an
+older iPhone, the panel reports that the screen cannot be captured there and why.
 
 The first picture can take a while — on a slow emulator, or on a physical
 Android phone, whose screen state and shared adb server are read before the
