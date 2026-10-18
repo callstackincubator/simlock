@@ -321,9 +321,11 @@ async function setup(
     options.expectations ?? [push(), shell({}, phone ? 21 : 20), remove()],
     server,
   );
-  if (options.power !== undefined) target.power = options.power;
-  if (options.wake !== undefined) target.wake = options.wake;
-  if (options.refuses !== undefined) target.refuses = options.refuses;
+  const scripted = { power: options.power, refuses: options.refuses, wake: options.wake };
+  Object.assign(
+    target,
+    Object.fromEntries(Object.entries(scripted).filter(([, value]) => value !== undefined)),
+  );
   const other = new FakeTarget(phone ? SERIAL : PHONE_SERIAL, clock, [], new AdbServer());
   const capture = createAndroidScreenCapture({
     clock,
