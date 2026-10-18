@@ -144,7 +144,7 @@ function readTail(file: string): string {
   }
 }
 
-// why: Owner-only, like every other file the daemon keeps under `SIMLOCK_HOME` (`config.json`,
+// why: Owner-only, like the other files that hold secrets or state (`config.json`,
 // `state.json`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and a shared
 // runner's other users have no business reading a daemon's log or event stream. Set at each
 // `open`, never a later `chmod`, so no generation is ever born world-readable.
