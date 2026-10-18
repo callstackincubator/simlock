@@ -4914,6 +4914,26 @@ describe("AndroidDriver image fit", () => {
       expect(await resolve("Pixel 9")).toMatchObject({ osVersion: "37.0" });
     });
 
+    it("ranks a preview image above the numeric levels when the level it records is higher", async () => {
+      const { driver } = await fitHarness([
+        ["37.0", "google_apis", "arm64-v8a"],
+        ["Baklava", "google_apis", "arm64-v8a", "AndroidVersion.ApiLevel=38\n"],
+      ]);
+
+      expect((await driver.listCatalog()).defaultRuntime).toBe("Baklava");
+    });
+
+    it("ranks a preview folder by the highest level any of its images records, so an image recording none does not raise it", async () => {
+      const { driver } = await fitHarness([
+        ["36", "google_apis", "arm64-v8a"],
+        ["37.0", "google_apis", "arm64-v8a"],
+        ["Baklava", "google_apis", "arm64-v8a", BAKLAVA_SOURCE_PROPERTIES],
+        ["Baklava", "google_apis_playstore", "arm64-v8a"],
+      ]);
+
+      expect((await driver.listCatalog()).defaultRuntime).toBe("37.0");
+    });
+
     it("uses the folder name for --image-tag and the catalog's images[].tag when SystemImage.TagId differs", async () => {
       const { driver, refusal, resolve } = await fitHarness([
         ["35", "custom-folder", "arm64-v8a", "SystemImage.TagId=google_apis_playstore\n"],

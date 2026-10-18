@@ -2258,12 +2258,16 @@ class AndroidImageTagMissingError extends RuntimeMissingError {
 }
 
 function installedApiLevels(images: readonly SystemImage[]): string[] {
-  const rank = new Map(
-    images.map((image) => [
-      image.apiLevel,
-      /^\d/.test(image.apiLevel) ? image.apiLevel : (image.sourceApiLevel ?? image.apiLevel),
-    ]),
-  );
+  // why: a preview folder (`Baklava`) ranks by the highest level any of its images records, so an
+  // image that records none cannot make the preview outrank a numeric level.
+  const rank = new Map<string, string>();
+  for (const image of images) {
+    const level = /^\d/.test(image.apiLevel) ? image.apiLevel : image.sourceApiLevel;
+    const current = rank.get(image.apiLevel);
+    if (level !== undefined && (current === undefined || compareApiLevels(level, current) > 0)) {
+      rank.set(image.apiLevel, level);
+    }
+  }
   return [...new Set(images.map((image) => image.apiLevel))].sort(
     (left, right) =>
       compareApiLevels(rank.get(left) ?? left, rank.get(right) ?? right) ||
