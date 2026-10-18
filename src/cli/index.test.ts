@@ -1378,6 +1378,48 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
   });
 });
 
+describe("CLI: auto-launch's failed start (#672)", () => {
+  it("reports a daemon it launched but never reached as DAEMON_STARTUP_FAILED, exit 1", async () => {
+    // why: nothing ever claims the socket, which is what a daemon still booting past the
+    // deadline looks like to the CLI. The run goes well past any deadline the loop could hold,
+    // so the code asserted here is the one the CLI chose for giving up, never one a clock reached.
+    const clock = new FakeClock(0);
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    let settled = false;
+    const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
+      (code) => {
+        settled = true;
+        return code;
+      },
+    );
+    for (let tick = 0; tick < 700 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, `simlock daemon start still had not settled at ${String(clock.now())}ms`).toBe(
+      true,
+    );
+    expect(await exitCode).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: expect.stringContaining("Timed out starting simlock daemon"),
+      },
+    });
+    expect(launcher.launches).toBe(1);
+  });
+});
+
 describe("CLI: daemon status (ADR 0003 §11)", () => {
   it("reports stopped when the socket cannot be reached at all", async () => {
     const output = outputCapture();
