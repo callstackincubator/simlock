@@ -59,6 +59,7 @@ export interface WarmPoolOptions {
   readonly config: WarmPoolConfig;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly eventBus: Pick<EventBus, "emit" | "subscribe">;
+  readonly hasDriver: (platform: Platform) => boolean;
   readonly idle: { readonly shutdownAfterMs: number };
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
@@ -440,11 +441,15 @@ export class WarmPool {
   }
 
   #view(): Parameters<typeof evaluate>[0] {
-    const { leases, virtualDevices: devices } = this.options.registry.snapshot;
+    const { leases, virtualDevices: all } = this.options.registry.snapshot;
     for (const id of this.#reset) {
-      if (devices.find((device) => device.id === id)?.state !== "shutdown") this.#reset.delete(id);
+      if (all.find((device) => device.id === id)?.state !== "shutdown") this.#reset.delete(id);
     }
-    const everyDevice = capacityDevices(devices);
+    // why: a platform discovery refused has no driver, so acting on its devices only fails and
+    // spends the pass's victim; startup skips them the same way. The capacity totals below stay
+    // unfiltered: the device holds its slot, or the pool would see a free one and over-subscribe.
+    const devices = all.filter((device) => this.options.hasDriver(device.spec.platform));
+    const everyDevice = capacityDevices(all);
     return {
       admit: {
         boot: (device) => {

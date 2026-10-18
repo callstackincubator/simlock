@@ -163,7 +163,7 @@ export class ReclaimCoordinator {
       this.options.eventBus.emit(
         "device.shutdown",
         { deviceId, initiator: "startup-interrupted-reclaim" },
-        "warm-pool-coordinator",
+        "reclaim-coordinator",
       );
       return true;
     });

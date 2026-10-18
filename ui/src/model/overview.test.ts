@@ -61,6 +61,21 @@ const fleet = [
   worker("down-1", [], { connection: "disconnected" }),
 ];
 
+// why: A worker whose uplink is open but which answers `starting`: its view carries no leases, no
+// devices and no capacity, which is "not known" (ADR 0005, #365), not "none". A gateway sends
+// exactly this view (test: "lists no device or lease for a worker that is starting..." in
+// src/gateway/dispatcher.test.ts), and it holds whatever the console cannot see: its live leases.
+function unread(id: string): WorkerView {
+  return {
+    connection: "connected",
+    drained: false,
+    health: "starting",
+    id,
+    label: id,
+    lastSeenAt: NOW,
+  } as unknown as WorkerView;
+}
+
 describe("the overview", () => {
   it("counts the fleet's headline figures from what the workers, the queue and the events say", () => {
     const requests = [{ createdAt: NOW - 74_000, id: "r1" }] as unknown as WaitingRequest[];
@@ -146,5 +161,59 @@ describe("the overview", () => {
     ]);
     expect(workers[0]?.slotsLabel).toBe("2 leased, 1 ready, 3 free");
     expect(workers[2]).not.toHaveProperty("cpu");
+  });
+
+  it("leaves the fleet's lease and device figures and the lease chart unknown, not zero, while a connected worker is starting", () => {
+    const events = [
+      event(1, "lease.granted", NOW - 10 * 60 * 1_000),
+      event(2, "lease.granted", NOW - 9 * 60 * 1_000),
+      event(3, "lease.granted", NOW - 8 * 60 * 1_000),
+    ];
+
+    const alone = overviewOf({ events, now: NOW, requests: [], workers: [unread("mini-3")] });
+
+    expect(alone.tiles.map((tile) => [tile.label, tile.value])).toEqual([
+      ["Utilisation", "—"],
+      ["Leases", "—"],
+      ["Waiting", "0"],
+      ["Workers", "1"],
+      ["Granted", "3"],
+    ]);
+
+    expect(alone.minutes).toEqual([]);
+    expect(alone.chartSummary).toBe("");
+
+    expect(alone.platforms.map((p) => [p.name, p.running, p.limit])).toEqual([
+      ["iOS", undefined, undefined],
+      ["Android", undefined, undefined],
+    ]);
+
+    const row = alone.workers[0];
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty("leases");
+    expect(row?.slotsLabel).toBe("Not reported");
+
+    const reporting = worker("mini-1", [device("a", "leased", "ios"), device("b", "ready", "ios")]);
+    const mixed = overviewOf({
+      events,
+      now: NOW,
+      requests: [],
+      workers: [reporting, unread("mini-3")],
+    });
+
+    expect(mixed.tiles.map((tile) => [tile.label, tile.value])).toEqual([
+      ["Utilisation", "—"],
+      ["Leases", "—"],
+      ["Waiting", "0"],
+      ["Workers", "2"],
+      ["Granted", "3"],
+    ]);
+    expect(mixed.minutes).toEqual([]);
+    expect(mixed.chartSummary).toBe("");
+
+    expect(mixed.workers.map((r) => [r.name, r.leases, r.slotsLabel])).toEqual([
+      ["mini-1", 1, "1 leased, 1 ready, 4 free"],
+      ["mini-3", undefined, "Not reported"],
+    ]);
   });
 });

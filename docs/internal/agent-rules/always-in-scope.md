@@ -6,7 +6,9 @@ adds no policy of its own, it only puts them in one list. A spec does not
 need to repeat them. The implementer builds them, the spec review reads
 this file with every spec and treats each item as asked for, and the
 `check-spec` skill does not report a spec for leaving them out. Where a
-spec says otherwise in its own words, the spec wins.
+spec conflicts with a binding rule or accepted ADR, the rule or ADR wins
+unless the maintainer explicitly authorizes its amendment. See
+[the review protocol](../REVIEW.md) for precedence and assessment scope.
 
 1. **Claims the change makes false.** A comment, doc paragraph or test name
    the change makes false is fixed or deleted in the same change

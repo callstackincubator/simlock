@@ -11,6 +11,7 @@ import {
 } from "../ports/index.js";
 import {
   type Config,
+  type ConfigOverrides,
   type Core,
   createCore,
   type DriverRejection,
@@ -33,9 +34,14 @@ async function build(
     readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
     readonly warmTargets?: Config["warmPool"]["targets"];
     readonly physicalDevices?: readonly FakePhysicalDevice[];
+    readonly overrides?: ConfigOverrides;
+    readonly sink?: MemoryLogSink;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
+  const logger =
+    options.logger ??
+    (options.sink === undefined ? undefined : new JsonLinesLogger({ sink: options.sink, clock }));
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({
     availableOsVersions: ["1"],
@@ -61,11 +67,18 @@ async function build(
   });
   const core = createCore({
     clock,
-    config: withWarmTargets(await loadConfig({ filesystem, systemStats }), options.warmTargets),
+    config: withWarmTargets(
+      await loadConfig({
+        filesystem,
+        systemStats,
+        ...(options.overrides === undefined ? {} : { overrides: options.overrides }),
+      }),
+      options.warmTargets,
+    ),
     drivers: [driver],
     driverRejections: options.driverRejections,
     eventBus,
-    logger: options.logger,
+    logger,
     prerequisiteChecks: options.prerequisiteChecks,
     registry,
     systemStats,
@@ -585,5 +598,82 @@ describe("createCore", () => {
     await expect(harness.core.converge(await harness.core.readStartup())).resolves.toBeUndefined();
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "shutdown" }]);
+  });
+
+  describe("the warm pool over budget with a device on a platform that has no driver", () => {
+    // why: one tick plus a second, because a failed shutdown pauses its device for exactly a
+    // tick; advancing to the tick's end or less would let a pass decline the proposal without
+    // acting on it at all.
+    const PAST_A_TICK = 31_000;
+
+    async function overBudgetWithARefusedPlatformsDeviceFirst() {
+      const sink = new MemoryLogSink();
+      const rig = await build({
+        overrides: { capacity: { config: { maxRunning: 1 }, strategy: "fixed" } },
+        sink,
+      });
+      rig.core.connect(ports());
+
+      const ghost = await rig.registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "ghost-android",
+        provisionDuration: 0,
+        spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },
+      });
+      await rig.registry.transitionDevice(ghost.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: ghost.id },
+      });
+      rig.clock.advance(1_000);
+
+      const bootable = await rig.driver.provision({
+        model: "Phone",
+        osVersion: "1",
+        physical: false,
+        platform: "ios",
+      });
+      const idle = await rig.registry.registerDevice({
+        driverData: bootable.driverData,
+        driverDeviceId: bootable.deviceId,
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", physical: false, platform: "ios" },
+      });
+      await rig.registry.transitionDevice(idle.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: idle.id },
+      });
+
+      const shutdownCalls = () =>
+        rig.driver.calls
+          .filter((call) => call.operation === "shutdown")
+          .map((call) => (call.arguments[0] as { deviceId: string }).deviceId);
+      const failureLines = () =>
+        sink.records.filter(
+          (record) =>
+            record.level === "warn" && record.message === "warm pool shutdown of a device failed",
+        );
+      const stateOf = (deviceId: string) =>
+        rig.registry.snapshot.devices.find((device) => device.id === deviceId)?.state;
+      return { ...rig, failureLines, ghost, healthy: idle, shutdownCalls, stateOf };
+    }
+
+    it("leaves a device of a platform with no driver out of the shutdown choice, shutting down the next least recently used device and coming back under budget", async () => {
+      const rig = await overBudgetWithARefusedPlatformsDeviceFirst();
+
+      await rig.core.passWarmPool();
+      await rig.core.settle();
+      rig.clock.advance(PAST_A_TICK);
+      await rig.core.passWarmPool();
+      await rig.core.settle();
+      rig.clock.advance(PAST_A_TICK);
+      await rig.core.passWarmPool();
+      await rig.core.settle();
+
+      expect(rig.shutdownCalls()).toEqual([rig.healthy.driverDeviceId]);
+      expect(rig.stateOf(rig.healthy.id)).toBe("shutdown");
+      expect(rig.stateOf(rig.ghost.id)).toBe("ready");
+      expect(rig.failureLines()).toEqual([]);
+      expect(rig.core.capacityReader.runningCapacity.global.overLimit).toBe(false);
+    });
   });
 });

@@ -1,14 +1,21 @@
 # Mode `audit`: prove it
 
 You start fresh on purpose: judge the diff, not how it was built.
+The orchestrator supplies immutable `base`, `merge-base` and `head` from the
+actual PR inputs. After fixes it also supplies `previous` (last reviewed
+commit): audit `git diff <previous> <head>` and affected contracts/classes,
+not the whole PR again. Missing inputs mean incomplete assessment. Run the
+stale-reference sweep with that same explicit range. Recheck affected Done
+when and assumptions; retain earlier evidence for unaffected claims.
 
-**Audit `git diff origin/main`** as someone who has not seen the spec:
+**Audit `git diff <merge-base> <head>`** as someone who has not seen the spec:
 
-- **Removed.** Run `.agents/scripts/stale-refs.sh`: it lists every line in
+- **Removed.** Run `.agents/scripts/stale-refs.sh <range-start> <head>`: it lists every line in
   the repo that still names a path, declaration or quoted string the diff
   removed. Then, for every name, behaviour, limit or guarantee the diff
-  removes, renames or narrows, have an `Explore` agent (`model: haiku`)
-  search the whole repo (comments, docs, test titles, config, help text) by
+  removes, renames or narrows, search the repo (comments, docs, test titles,
+  config, help text), directly or with bounded Haiku discovery following
+  `docs/internal/EXPLORATION.md`, by
   its name and by the plain words that describe it. Fix every line that still states the
   old fact.
 - **Replaced.** When one mechanism takes over another's job (a lint rule for
@@ -50,7 +57,7 @@ tests from mode `green` pass, and you push.
    (`gh issue list --label flaky-test --search "<title>"`): list it under
    `flaky` and move on.
 2. Otherwise run that one file up to three times in a worktree of the base
-   commit (`git worktree add <scratch>/base origin/main`), with the
+   commit (`git worktree add --detach <scratch>/base <merge-base>`), with the
    one-file command from `toolchain.md` (testing rule 5). It fails there:
    open a `bug:new` issue labelled `flaky-test` naming the file, the title
    and the error line, list it, and move on. It never fails there: it is

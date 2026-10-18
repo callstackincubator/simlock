@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import { EventBus } from "../bus/index.js";
+import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import { Registry } from "./index.js";
 import type { VirtualDevice, LeaseRecord } from "./domain.js";
+import { FakeDriver } from "./fake-driver.js";
+import { DeviceOperationClaims } from "./device-operation-claims.js";
+import { DriverCatalog } from "./driver-catalog.js";
+import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
+import { SerializedDecision } from "./serialized-decision.js";
 import { NukeService, type NukeDeviceLifecycle, type NukeRegistryView } from "./nuke-service.js";
 
 const device = (id: string, state: VirtualDevice["state"]): VirtualDevice => ({
@@ -233,6 +241,149 @@ describe("NukeService", () => {
       "release:killed",
       "release-maintenance:end",
       "maintenance:end",
+    ]);
+  });
+
+  it("does not abort the reset on a device whose platform has no driver, and still resets every device after it", async () => {
+    // why: the driverless records are registered first so the attempts that must throw precede
+    // the healthy ones — that order is what a whole-run abort turns on. Only an ios driver is
+    // catalogued, so acting on an android record throws NoDriverError, as it does for a platform
+    // discovery refused. The ready ghost exercises the shutdown verb, the shut-down ghost the
+    // destroy verb; a healthy ios device follows each. `--delete-devices` makes one pass prove
+    // both verbs.
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
+    let nextId = 1;
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => `${nextId++}` },
+      statePath: "/state.json",
+    });
+    const lifecycle = new ManagedDeviceLifecycle(
+      new DriverCatalog([driver]),
+      registry,
+      new SerializedDecision(),
+      new DeviceOperationClaims(),
+      clock,
+    );
+    const service = new NukeService({
+      acquisition: {
+        async beginMaintenance() {},
+        async endMaintenance() {},
+      },
+      devices: lifecycle,
+      leases: {
+        async beginMaintenance() {},
+        async releaseAllDuringMaintenance() {
+          return [];
+        },
+        async endMaintenance() {},
+      },
+      registry,
+    });
+
+    async function register(
+      spec: VirtualDevice["spec"],
+      driverData: unknown,
+      driverDeviceId: string,
+    ) {
+      const device = await registry.registerDevice({
+        driverData,
+        driverDeviceId,
+        provisionDuration: 0,
+        spec,
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      return device;
+    }
+    const android = {
+      physical: false,
+      model: "Pixel 8",
+      osVersion: "35",
+      platform: "android",
+    } as const;
+    const ios = { physical: false, model: "Phone", osVersion: "1", platform: "ios" } as const;
+
+    const ghostReady = await register(android, {}, "ghost-ready-android");
+    const provisionedReady = await driver.provision(ios);
+    const healthyReady = await register(
+      ios,
+      provisionedReady.driverData,
+      provisionedReady.deviceId,
+    );
+    const ghostShutdown = await register(android, {}, "ghost-shutdown-android");
+    await registry.transitionDevice(ghostShutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: ghostShutdown.id, initiator: "test" },
+    });
+    const provisionedShutdown = await driver.provision(ios);
+    const healthyShutdown = await register(
+      ios,
+      provisionedShutdown.driverData,
+      provisionedShutdown.deviceId,
+    );
+    await registry.transitionDevice(healthyShutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: healthyShutdown.id, initiator: "test" },
+    });
+
+    await expect(service.nuke(true)).resolves.toEqual({ releasedLeaseIds: [] });
+
+    const stateOf = (deviceId: string) =>
+      registry.snapshot.devices.find((candidate) => candidate.id === deviceId)?.state;
+    expect([
+      stateOf(ghostReady.id),
+      stateOf(healthyReady.id),
+      stateOf(ghostShutdown.id),
+      stateOf(healthyShutdown.id),
+    ]).toEqual(["ready", "deleted", "shutdown", "deleted"]);
+    expect(
+      driver.calls
+        .filter((call) => call.operation === "shutdown" || call.operation === "destroy")
+        .map((call) => `${call.operation} ${(call.arguments[0] as { deviceId: string }).deviceId}`)
+        .sort(),
+    ).toEqual(
+      [
+        `destroy ${healthyShutdown.driverDeviceId}`,
+        `destroy ${healthyReady.driverDeviceId}`,
+        `shutdown ${healthyReady.driverDeviceId}`,
+      ].sort(),
+    );
+  });
+
+  it("logs a device it cannot reset at error, naming the device, platform and error", async () => {
+    const sink = new MemoryLogSink();
+    const harness = createHarness([device("dev_1", "ready")]);
+    harness.lifecycle.shutdown = async () => {
+      throw new Error("reset exploded");
+    };
+    const service = new NukeService({
+      acquisition: { async beginMaintenance() {}, async endMaintenance() {} },
+      devices: harness.lifecycle,
+      leases: {
+        async beginMaintenance() {},
+        async releaseAllDuringMaintenance() {
+          return [];
+        },
+        async endMaintenance() {},
+      },
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
+      registry: harness.registry,
+    });
+
+    await service.nuke(false);
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "error",
+        module: "daemon.nuke",
+        fields: { deviceId: "dev_1", error: "Error: reset exploded", platform: "ios" },
+      }),
     ]);
   });
 });

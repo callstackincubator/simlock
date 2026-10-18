@@ -51,6 +51,7 @@ import {
   type ModelPreferences,
   type CatalogReader,
   type AcquisitionMaintenance,
+  type Core,
   type ManagedDeviceLifecycle,
   type ReadyDeviceHandoff,
   toDriverDevice,
@@ -101,7 +102,8 @@ export interface LeaseAcquisitionRegistry {
   };
 }
 
-export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive" | "isClaimed" | "tryClaim">;
+export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive">;
+export type AcquisitionQuarantine = Pick<Core["quarantine"], "enterFromStalledTransition">;
 export type AcquisitionDecision = Pick<SerializedDecision, "run">;
 export type AcquisitionDrivers = Pick<DriverCatalog, "get">;
 export type AcquisitionPlannerPort = Pick<AcquisitionPlanner, "plan" | "planPhysical">;
@@ -147,6 +149,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly queue: AcquisitionQueue;
+  readonly quarantine: AcquisitionQuarantine;
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
   readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "holdsLeaseId" | "replay">;
@@ -876,7 +879,17 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.options.drivers.get(plan.device.spec.platform),
         plan.device.spec,
       );
-      await this.#grant(waiter, plan.device, plan.kind);
+      // why: the queue's own rule is that a timeout firing mid-attempt does not reject
+      // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
+      // this mark the waiter is still `queued` while the lease is written, so a timeout that
+      // falls due in that window rejects the caller over a lease that is being stored.
+      if (!this.options.queue.markProcessing(waiter)) return undefined;
+      try {
+        await this.#grant(waiter, plan.device, plan.kind);
+      } catch (error: unknown) {
+        this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
+        this.#defer(waiter);
+      }
       return undefined;
     }
     const operation = operationPlan(plan);
@@ -884,7 +897,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#defer(waiter);
       return undefined;
     }
-    this.options.queue.markProcessing(waiter);
+    // why: a refusal means the queue has just rejected this waiter at its deadline, so the device
+    // work this plan stands for would run for a requester who was already answered. The plan holds
+    // a capacity reservation or a device claim, so it gives those back here rather than at a
+    // performer that will never be reached.
+    if (!this.options.queue.markProcessing(waiter)) {
+      releasePlanResources(operation);
+      return undefined;
+    }
     return operation;
   }
 
@@ -1041,8 +1061,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       );
       let destroyed = true;
       try {
-        // `undefined` means the device is no longer this waiter's (another boot claimed it, or it
-        // was deleted or leased), so its reservation is free to go. Only a throw keeps it.
         await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
       } catch (destroyError: unknown) {
         this.#logFailure(
@@ -1054,10 +1072,34 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         );
         destroyed = false;
       }
+      // why: a device the destroy could not retire may still be running, so it is handed to
+      // quarantine before the waiter's reservation is freed: `quarantined` is the one state that
+      // retries it, keeps it out of every plan and still counts it as running. Freeing the slot
+      // first would leave a window where the next planner boots a device that may be running.
+      if (!destroyed) {
+        try {
+          const quarantined = await this.options.quarantine.enterFromStalledTransition(
+            device.id,
+            device.state,
+          );
+          if (!quarantined) {
+            this.#logger.warn(
+              "a device that failed to be destroyed was not quarantined: something else owns it now",
+              { deviceId: device.id, requesterId: waiter.options.requesterId, step: "quarantine" },
+            );
+          }
+        } catch (quarantineError: unknown) {
+          this.#logFailure(
+            "quarantining a device that failed to boot and to be destroyed failed",
+            waiter,
+            device,
+            "quarantine",
+            quarantineError,
+          );
+        }
+      }
       await this.options.decisions.run(async () => {
-        if (destroyed) capacityReservation.release();
-        else if (!this.options.claims.isClaimed(device.id))
-          this.options.claims.tryClaim(device.id, "boot", waiter.id);
+        capacityReservation.release();
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
@@ -1116,6 +1158,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       try {
         if (waiter.state === "rejected") return;
         await this.#grant(waiter, handoff.device, kind);
+      } catch (error: unknown) {
+        // why: a grant that failed to store leaves no lease behind (`#commit` mutates memory
+        // only after the file write), so the waiter is re-queued for a fresh grant like every
+        // sibling step; without this catch the error dies in `#track` and the waiter is never
+        // planned again -- no timer, no wake, and its request stays open for the process.
+        this.#logFailure(
+          kind === "provision"
+            ? "granting a provisioned device failed"
+            : "granting a booted device failed",
+          waiter,
+          handoff.device,
+          "grant",
+          error,
+        );
+        this.#defer(waiter);
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
@@ -1234,6 +1291,18 @@ function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
 /** `standard`: every release path asks for it; a holder cannot request another clean level. */
 function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
   return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
+}
+
+/**
+ * why: a plan handed out the capacity or device claim its operation needs; dropping the plan has
+ * to give it back, or the resource stays held with nobody left to release it.
+ */
+function releasePlanResources(plan: OperationPlan): void {
+  if (plan.kind === "provision") plan.reservation.release();
+  else if (plan.kind === "boot-shutdown") {
+    plan.capacityReservation.release();
+    plan.claim.release();
+  } else plan.claim.release();
 }
 
 function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {

@@ -85,16 +85,16 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. Spent `fresh`:
    shutdown → destroy → `deleted`. Else commit what `driver.reclaim` returns. Failure → quarantine;
    physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.
-4. **Quarantine** — from a failed purge, a failed spent delete, or `doctor --fix` on a stall. Retry
-   under `reclaim` (claim held: wait one backoff). Out of retries: destroy a virtual device
+4. **Quarantine** — from a failed purge, a failed spent delete, a failed boot-destroy, or
+   `doctor --fix` on a stall. Retry under `reclaim` (claim held: wait one backoff). Out of retries: destroy a virtual device
    (`device.quarantine-abandoned`; failed destroy: `device.quarantine-stranded`, stays), unenrol a
    physical one. Physical not present: wait `health.probeIntervalMs`, not counted.
 5. **Cleanup** — `CleanupReaper` on `lease.released`, `daemon.started`, `disk.pressure-detected`, a
    tick. `idle-shutdown`: leased once, `ready`, idle past T1, not warm-targeted. `idle-destroy`:
-   `shutdown`, idle (lease end, else `shutdownAt`) past T2, or T1 under disk pressure.
-   `CleanupExecutor` revalidates, acts under `cleanup`, emits `cleanup.executed`.
+   `shutdown`, idle (lease end, else `shutdownAt`) past T2, or T1 under pressure. `CleanupExecutor`
+   revalidates, acts, emits `cleanup.executed`; a throwing action is logged, the run goes on.
 6. **Nuke** — one at a time: close acquisition, settle reclaim and warm pool → release all leases
-   `killed` → shut down each unleased `ready` virtual device; with delete, destroy each `shutdown` one.
+   `killed` → shut down each unleased `ready` virtual device; with delete, destroy each `shutdown` one; a device it cannot reset is logged, the rest go on.
 7. **Startup** — `readStartup` (`listManaged` per driver, parallel) → `doctor.reconcile({ read })`
    → leasing's reconcile → `core.converge`: re-arm quarantine → recover interrupted reclaims →
    delete spent devices → start warm pool and `CapacityObserver`. Skips unreadable, leased, claimed.

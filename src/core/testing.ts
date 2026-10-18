@@ -20,6 +20,7 @@ export {
 export { readyTransitionUpdate } from "./driver.js";
 export { FakeDriver } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
+export { QuarantineCoordinator } from "./quarantine-coordinator.js";
 
 /**
  * Test-only: the decision gate and the component installer `createCore` and `createLeasing` are

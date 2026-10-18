@@ -16,18 +16,20 @@ The issue body is the spec. Build exactly what it says, plus what
 `always-in-scope.md` lists. Do not claim, review, mark ready or merge.
 
 Arguments: `issue`, `branch`, `pr` once there is one, `mode`, `base` for a
-red stage stacked on another PR's branch, and for some modes `map` or
+red stage stacked on another PR's branch; audit/fix inputs also carry
+immutable `base-sha`, `merge-base`, `head`, `previous` and resolution history.
+For some modes `map` or
 `fixes`. Anything else is context. Each mode is a fresh
 agent, so the work runs in short contexts. Steps 1 and 2 are every mode's;
 step 3 is the mode's own brief in `.agents/briefs/`:
 
-| Mode           | Brief                       | Starts from                              | Ends with                              |
-| -------------- | --------------------------- | ---------------------------------------- | -------------------------------------- |
-| `red`          | `implement-red.md`          | the spec                                 | red commit, draft PR, `map`            |
-| `green`        | `implement-green.md`        | the branch and `map`                     | spec tests green, or `map` of the rest |
-| `audit`        | `implement-audit.md`        | the spec and `git diff origin/main` only | fixes, PR body done                    |
-| `fix`          | `implement-fix.md`          | the branch and `fixes`                   | each finding fixed                     |
-| `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests   | those tests pass on the lane           |
+| Mode           | Brief                       | Starts from                            | Ends with                              |
+| -------------- | --------------------------- | -------------------------------------- | -------------------------------------- |
+| `red`          | `implement-red.md`          | the spec                               | red commit, draft PR, `map`            |
+| `green`        | `implement-green.md`        | the branch and `map`                   | spec tests green, or `map` of the rest |
+| `audit`        | `implement-audit.md`        | the spec and immutable PR diff         | fixes, PR body done                    |
+| `fix`          | `implement-fix.md`          | the branch and `fixes`                 | each finding fixed                     |
+| `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests | those tests pass on the lane           |
 
 ## 1. Workspace
 
@@ -56,19 +58,17 @@ approach) and any `## Decision` comment; the latest `## Handoff` comment
 (its Findings are facts). Never the rest of the comment thread. Reread the
 files under Rules in play before touching the code they cover.
 
-Read code narrowly: find what you need with `grep -n`, then read only those
+Read code narrowly: find what you need with `rg -n`, then read only those
 lines. Never print a whole file to skim it: everything you read stays in
 your context and is paid for again on every later turn.
 
-**Delegate searches.** A search across files you have not opened, or one
-likely to print more than about 20 lines (every caller, reader or writer of
-a name; every doc, comment or test that states a fact; the helper or
-fixture that already does X), goes to an `Explore` agent with
-`model: haiku`: the question, then `Answer with path:line lines only, one
-per line, no prose.` Read only the lines it returns. Run `grep` yourself
-only for one name in files you already know, with `-c` first when you
-cannot guess the count. To check a library's or tool's documentation, fetch it (WebFetch,
-WebSearch); fetch nothing else.
+**Explore selectively.** Follow `docs/internal/EXPLORATION.md`: direct
+`rg` and source reads for straightforward lookups; bounded Haiku discovery
+when it saves context. Require evidence, scope and uncertainty, not locations
+alone. Inspect surrounding source. Reuse commit-bound maps and revalidate
+entries affected by changes. Escalate ambiguous relationships to Sonnet and
+consequential architecture/concurrency judgments to Opus. To check a library
+or tool's documentation, use WebFetch or WebSearch.
 
 **Helpers run in the foreground.** Start every helper agent of a step in
 one message, each an Agent call with `run_in_background: false`, so they
@@ -109,6 +109,7 @@ does not produce.
 
 ```
 issue: <N>  branch: <kind>/<N>  pr: <M>  mode: <mode>  head: <short sha>
+Assessment: complete | incomplete — <missing scope>
 tests: <green>/<spec tests>  red: <short sha>
 failing:
   <test file:line>

@@ -97,8 +97,11 @@ export class QuarantineCoordinator {
     this.#arm(failure.deviceId, nextRetryAt);
   }
 
-  /** why: the claim is taken here and released on every exit, so a reclaim the watcher has just started is never quarantined under it. */
-  async enterFromStalledTransition(deviceId: string, findingState?: DeviceState): Promise<void> {
+  /**
+   * why: the claim is taken here and released on every exit, so a reclaim the watcher has just started is never quarantined under it.
+   * Answers whether it entered: a caller handing a device over needs to know when one was already claimed or had moved on.
+   */
+  async enterFromStalledTransition(deviceId: string, findingState?: DeviceState): Promise<boolean> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     const entered = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.devices.find(
@@ -120,6 +123,7 @@ export class QuarantineCoordinator {
       return true;
     });
     if (entered) this.#arm(deviceId, nextRetryAt);
+    return entered;
   }
 
   restore(include: (device: DeviceRecord) => boolean = () => true): void {

@@ -78,6 +78,7 @@ command starts it again) to bring the platform up.
 |---|---|---|
 | 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
+| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout |
 | 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down), or a worker named with `component install --worker` cannot be asked |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |

@@ -10,19 +10,19 @@ import { itemPath } from "./paths";
 import { formatDuration } from "./time";
 import type { Tone, Toned } from "./tones";
 import type { WaitingRequest } from "./waiting";
-import { leasesHeld, type WorkerView, workerName, workerPath } from "./workers";
+import { isUnread, leasesHeld, type WorkerView, workerName, workerPath } from "./workers";
 
 export interface OverviewTile {
   readonly label: string;
   readonly value: string;
-  readonly unit: string;
+  readonly unit?: string;
   readonly to?: string;
 }
 
 export interface PlatformUse {
   readonly name: string;
-  readonly running: number;
-  readonly limit: number;
+  readonly running?: number;
+  readonly limit?: number;
   readonly leasedPercent: number;
   readonly readyPercent: number;
   readonly busyPercent: number;
@@ -43,7 +43,7 @@ export interface OverviewWorker {
   readonly slotsLabel: string;
   readonly cpu?: Gauge;
   readonly memory?: Gauge;
-  readonly leases: number;
+  readonly leases?: number;
 }
 
 export interface OverviewItem {
@@ -82,6 +82,10 @@ function percentOf(part: number, whole: number): number {
 
 function platformUse(workers: readonly WorkerView[], platform: "ios" | "android"): PlatformUse {
   const live = workers.filter((worker) => worker.connection === "connected");
+  const name = platform === "ios" ? "iOS" : "Android";
+  if (workers.some(isUnread)) {
+    return { busyPercent: 0, leasedPercent: 0, name, readyPercent: 0 };
+  }
   const limit = live.reduce((sum, worker) => sum + (worker.capacity?.[platform].limit ?? 0), 0);
   const devices = live.flatMap((worker) =>
     (worker.devices ?? []).filter((device) => device.spec.platform === platform),
@@ -95,7 +99,7 @@ function platformUse(workers: readonly WorkerView[], platform: "ios" | "android"
     busyPercent: percentOf(busy, limit),
     leasedPercent: percentOf(leased, limit),
     limit,
-    name: platform === "ios" ? "iOS" : "Android",
+    name,
     readyPercent: percentOf(ready, limit),
     running: leased + ready + busy,
   };
@@ -108,7 +112,7 @@ function gauge(percent: number | undefined): Gauge | undefined {
 }
 
 function overviewWorker(worker: WorkerView): OverviewWorker {
-  const slots = workerSlots(worker);
+  const slots = isUnread(worker) ? [] : workerSlots(worker);
   const gauges =
     worker.connection === "connected" && worker.load !== undefined ? loadGauges(worker.load) : {};
   const cpu = gauge(gauges.cpu);
@@ -116,11 +120,11 @@ function overviewWorker(worker: WorkerView): OverviewWorker {
   return {
     health: workerHealth(worker),
     id: worker.id,
-    leases: worker.leases?.length ?? 0,
     name: workerName(worker),
     slots,
-    slotsLabel: slotsLabel(slots),
+    slotsLabel: isUnread(worker) ? "Not reported" : slotsLabel(slots),
     to: workerPath(worker.id),
+    ...(worker.leases === undefined ? {} : { leases: worker.leases.length }),
     ...(cpu === undefined ? {} : { cpu }),
     ...(memory === undefined ? {} : { memory }),
   };
@@ -141,15 +145,25 @@ function tiles(
   now: number,
 ): readonly OverviewTile[] {
   const held = leasesHeld(workers);
-  const limit = platforms.reduce((sum, platform) => sum + platform.limit, 0);
+  const limit = platforms.reduce((sum, platform) => sum + (platform.limit ?? 0), 0);
   const connected = workers.filter((worker) => worker.connection === "connected").length;
   const granted = events.filter(
     (event) => event.event === "lease.granted" && event.timestamp > now - HOUR,
   ).length;
   const oldest = Math.min(...requests.map((request) => request.createdAt));
+  const unknown = held === undefined;
   return [
-    { label: "Utilisation", unit: "%", value: String(Math.round(percentOf(held, limit))) },
-    { label: "Leases", to: "/leases", unit: `of ${formatCount(limit)}`, value: formatCount(held) },
+    {
+      label: "Utilisation",
+      ...(unknown ? {} : { unit: "%" }),
+      value: unknown ? "—" : String(Math.round(percentOf(held, limit))),
+    },
+    {
+      label: "Leases",
+      to: "/leases",
+      ...(unknown ? {} : { unit: `of ${formatCount(limit)}` }),
+      value: unknown ? "—" : formatCount(held),
+    },
     {
       label: "Waiting",
       to: "/waiting",
@@ -176,7 +190,8 @@ export function overviewOf(input: {
 }): Overview {
   const { events, now, requests, workers } = input;
   const platforms = [platformUse(workers, "ios"), platformUse(workers, "android")];
-  const minutes = leaseHistory(leasesHeld(workers), events, now);
+  const held = leasesHeld(workers);
+  const minutes = held === undefined ? [] : leaseHistory(held, events, now);
   return {
     activity: [...events]
       .sort((a, b) => b.seq - a.seq)

@@ -36,7 +36,9 @@ class AutoLaunchIpcConnector implements IpcConnector {
     }
     await this.checkConfig();
     await this.launcher.launch();
-    const deadline = this.clock.now() + 5_000;
+    // why: the constant lives behind the ports barrel, which loads only once a daemon launches.
+    const { DAEMON_STARTUP_TIMEOUT_MS } = await import("../ports/index.js");
+    const deadline = this.clock.now() + DAEMON_STARTUP_TIMEOUT_MS;
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
@@ -47,7 +49,13 @@ class AutoLaunchIpcConnector implements IpcConnector {
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
-    throw new Error(`Timed out starting simlock daemon: ${errorMessage(lastError)}`);
+    const { SimlockError } = await import("../contract/index.js");
+    throw new SimlockError(
+      "DAEMON_STARTUP_FAILED",
+      "transport",
+      `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+      {},
+    );
   }
 }
 

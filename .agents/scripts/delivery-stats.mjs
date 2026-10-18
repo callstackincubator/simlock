@@ -158,7 +158,7 @@ function inRows(pr, now) {
 function reviewOf(body) {
   const section = reviewSection(body);
   if (section === null) return null;
-  const spec = counts(section, "Spec");
+  const spec = counts(section, "Spec") ?? (/Spec review: skipped/.test(section) ? zero() : null);
   if (spec === null) return null;
   const code = counts(section, "Code") ?? zero();
   const claims = counts(section, "Claims") ?? zero();
@@ -174,6 +174,9 @@ function reviewOf(body) {
     rounds: roundsOf(body, section),
     tokens: tokensOf(section),
     rejected: rejectedIn(section),
+    measured: /^Review checks: (\d+)\. Invocations: (\d+)\. Cost USD: ([\d.]+|unknown)\./m.exec(
+      section,
+    ),
   };
 }
 
@@ -195,7 +198,9 @@ function rejectedIn(section) {
   const rejected = [];
   for (const line of section.slice(list.index).split("\n")) {
     const item = /^- (?:(spec|code|claims|comments): )?(.+)$/.exec(line.trim());
-    if (item !== null) rejected.push({ review: item[1] ?? "untagged", text: item[2] });
+    if (item !== null && !/\[(duplicate|intentional|nonblocking)\]/i.test(item[2])) {
+      rejected.push({ review: item[1] ?? "untagged", text: item[2] });
+    } else if (item === null && line.trim() !== "" && !line.startsWith("Rejected:")) break;
   }
   return rejected;
 }
@@ -263,7 +268,7 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
     `# Delivery stats, ${weekCount} weeks to ${new Date(end).toISOString().slice(0, 10)}`,
     "",
     "Review columns are confirmed-and-fixed / blocking raised (every finding raised, on PRs",
-    "from before the blocking/note split). Rejected = raised − fixed. Notes are never verified.",
+    "from before the blocking/note split). Raised minus fixed includes several outcomes, not just false positives. Notes are never verified.",
     "Hours, rounds and tokens are medians over the week's reviewed PRs; tokens are the session's",
     "total when the PR body was finished, so a run of several PRs counts them cumulatively.",
     "",
@@ -271,6 +276,17 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
     "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |",
     ...windows.map((window) => weekRow(window, prs, handoffs)),
     ...prRows(prs, now),
+    "",
+    "## Measured review work (unknown means unavailable; legacy totals remain above)",
+    "",
+    "| PR | Checks including fix-check | Invocations | Cost USD |",
+    "| --- | --: | --: | --: |",
+    ...prs
+      .filter((pr) => inRows(pr, now))
+      .map((pr) => {
+        const measured = reviewOf(pr.body ?? "")?.measured;
+        return `| #${pr.number} | ${measured?.[1] ?? "unknown"} | ${measured?.[2] ?? "unknown"} | ${measured?.[3] ?? "unknown"} |`;
+      }),
     ...rejectedSection(prs, thisWeek),
     ...handoffSection(handoffs, thisWeek),
     "",

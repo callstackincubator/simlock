@@ -17,7 +17,8 @@ rules 1, 2, 3, 9, 14, 15 and 16.
 `description` naming the issue and stage (`#362 implement`); and a prompt
 of `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
-report (`map`, `fixes`, the reviewer's arguments). No prose, and no
+report (`map`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
+`previous` plus the resolution ledger. No prose, and no
 reminders of what the agent's own instructions already say. Never pass a
 model or `isolation`: every stage of a task works in the task's one
 worktree, one after another. Never invoke the stage skills from here: a skill waits for an
@@ -141,13 +142,15 @@ they name; never build again or restart review at round 1.
 1. **Implement**, one fresh `implementer` per mode: `mode: red`; then
    `mode: green` with the report's `map`; while a `green` report still lists
    `failing` and turned at least one test green since the last, another
-   `green` with its `map`; then `mode: audit`. An audit run takes no
+   `green` with its `map`; then `mode: audit` with the actual PR base/merge-base/head from
+   `review-inputs.sh`. An audit run takes no
    `fixes`: an agent given both does the fixes and skips the audit, so a
    CI failure waits for the fix run after the audit (item 2). `spec needs`
    under `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number. The diff's kind sets which
    reviews run (rule 14): a tests-only or docs-only diff gets fewer, a
-   large one two code reviewers.
+   risk and test complexity select additional lenses, not size alone.
+   Use `docs/internal/REVIEW.md` for routing and metrics.
    Before every review round
    and every fix run, run `node .agents/scripts/ci-failures.mjs <M>` and
    `gh pr view <M> --json mergeable` once. The script reads the newest
@@ -158,26 +161,23 @@ they name; never build again or restart review at round 1.
    PR). With no fix run due, they get one
    before the round.
 3. **Decide** on the review report:
-   - Fix lines with `Rerun: round 2` or `fix-check`: one `implementer` run
-     with `mode: fix` and the Fix lines pasted under `fixes`, then
-     `reviewer` with that check's name, `previous <Commit>` and the Fix
-     lines pasted.
-   - `Rerun: none` with Fix lines, all `text`: one `implementer` fix run,
-     told to edit tests, comments and docs only, no review; list them in
-     the PR body's `## Review` section as fixed unreviewed. One `src` line
-     (after `fix-check`): the findings are open; park (step 5).
-   - A commit after the reviews passed (a merge of the base branch that
-     needed conflicts resolved, a fix the gate needed): `reviewer` with
-     `fix-check`, `previous <Commit>` and
-     no Fix lines, then the hardware check again if one ran, before the
-     gate. A CI fix that changes only tests the PR's diff does not touch
-     (a flaky test elsewhere) gets no fix check: list it under `## Review`
-     as fixed unreviewed.
-   - After every check, add its counts and Rejected lines to the PR body's
-     `## Review` section (item 4), and its Notes under `Notes so far:`
-     there; item 5 moves them into one comment.
-   - Out of scope lines: open one `bug:new` issue each, naming the PR. They
-     do not block it.
+   - Incomplete assessment: preserve findings and missing scope; park. It
+     is neither a defect nor a pass.
+   - Fix lines with `Rerun: round 2` or `fix-check`: one consolidated fix
+     run with the immutable base/merge-base, `previous <Commit>`, ledger
+     and findings. Audit only `previous..new-head` and affected contracts.
+     Invoke targeted lenses from actual impacts; test assertions need code
+     recheck, acceptance changes spec, affected claims claims.
+   - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
+     at the cap: park. Mechanical changes get a coordinator diff check.
+   - Commits after reviews passed, including conflict resolutions and CI
+     test fixes, need the applicable targeted fix-check before the gate.
+     A clean base merge alone needs no repeat review; record its new head
+     and base and let CI check it. Never silently reset the round cap.
+   - After each check persist the resolution ledger, all invocation metrics
+     (fix-check included), counts and dispositions in `## Review`.
+   - Out of scope lines may become separate issues only when verified as
+     pre-existing and unrelated. New PR regressions block even if found late.
    - Spec needs: decide, then tell (above), before the fix run.
    - No Fix lines, and the audit reported `hardware` lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
@@ -187,7 +187,7 @@ they name; never build again or restart review at round 1.
      `pass`, with no review in between. After six failed lane runs, park.
      On `pass` after a loop: `reviewer` with `fix-check` and `previous
 <the commit the review passed>`, covering every loop commit; its
-     `text` fixes need no lane run, a `src` fix one more.
+     fixes affecting device behavior need the lane again.
    - Hardware `busy` or `unavailable`: finish the checks, do items 4
      and 5, run `gh pr ready <M>`, add the `needs-hardware` label to the PR,
      and park instead of running the gate.
@@ -211,9 +211,15 @@ they name; never build again or restart review at round 1.
    `<m>` those confirmed and fixed, `<k>` its notes; `skipped` in place of
    the counts for a review the diff's kind left out (for an ADR-only diff:
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
-   rounds, 1 or 2; a fix check adds none. `<t>` is
+   legacy full/targeted rounds, 1 or 2; record fix-check invocations separately
+   with the metrics ledger and summary from `review-metrics.mjs`. Add
+   `Assessment: complete` only when coverage is complete and no finding is
+   open; otherwise `Assessment: incomplete` and park. `<t>` is
    `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
-   far. Every blocking finding not fixed is a Rejected line; omit
+   far (legacy session total, not per-PR cost; use `n/a` when unavailable).
+   Keep duplicate outcomes in the ledger, not Rejected. Tag rejections
+   `[incorrect]`, `[intentional]` or `[nonblocking]`. Every blocking finding
+   not fixed or open has its disposition recorded; omit
    "Rejected:" when there is none. Then run
    `node .agents/scripts/pr-body-check.mjs <M>`: it checks the shape
    `.agents/scripts/delivery-stats.mjs` parses, the footer
@@ -258,9 +264,9 @@ stage works on, if any.
 
 ```
 ### Status
-Implement: done (5/5 green)  Review: round 1, 2 src open  Hardware: n/a  Gate: not run
+Implement: done (5/5 green)  Review: round 1, 2 behavior findings open  Hardware: n/a  Gate: not run
 Next: implement fix, then review round 2
-- code: src/x.ts:12 <defect> [testing 2] src
+- code: src/x.ts:12 <defect> [testing 2] test-logic
 ```
 
 ## 3. Walk a feature's tasks

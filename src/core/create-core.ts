@@ -249,6 +249,7 @@ export function createCore(options: CoreOptions): Core {
     config: options.config.warmPool,
     decisions,
     eventBus: options.eventBus,
+    hasDriver: (platform) => drivers.select(platform).length > 0,
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -270,6 +271,7 @@ export function createCore(options: CoreOptions): Core {
     },
     devices: deviceLifecycle,
     leases: leaseMaintenance.leases,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
   const doctor = new Doctor({

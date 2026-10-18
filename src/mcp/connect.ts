@@ -14,7 +14,13 @@ import {
   SimlockError,
   type SimlockClient,
 } from "../client/index.js";
-import { IpcError, type Clock, type DaemonLauncher, type IpcConnector } from "../ports/index.js";
+import {
+  DAEMON_STARTUP_TIMEOUT_MS,
+  IpcError,
+  type Clock,
+  type DaemonLauncher,
+  type IpcConnector,
+} from "../ports/index.js";
 
 /** What it takes to reach a daemon that is already listening -- no launcher anywhere in it,
  * which is the whole point of the type existing separately. The `heartbeat` option that used
@@ -48,7 +54,7 @@ export async function connectWithAutoLaunch(
     if (!isUnavailable(error)) throw error;
   }
   await options.launcher.launch();
-  const deadline = options.clock.now() + (options.startupTimeoutMs ?? 5_000);
+  const deadline = options.clock.now() + (options.startupTimeoutMs ?? DAEMON_STARTUP_TIMEOUT_MS);
   let lastError: unknown;
   while (options.clock.now() < deadline) {
     try {

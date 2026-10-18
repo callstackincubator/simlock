@@ -44,7 +44,9 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    idle device (device or running limit) → wait, or `NO_CAPACITY` under `noWait`.
    Only the head of the virtual line plans; every physical waiter plans.
 4. **Perform** (no lock) — provision, boot or evict through core, then plan again.
-   A boot failure destroys the device and rejects `boot-timeout`.
+   A boot failure destroys the device and rejects `boot-timeout`; a destroy
+   that fails hands the device to core's quarantine through a port leasing
+   declares, and the waiter's slot is freed either way.
 5. **Grant** (lock) — `LeaseLifecycle.grant` → one registry commit: device
    `leased` + lease + request granted. Emits `lease.granted`. Arms the TTL.
 6. **Renew** — moves `ttlDeadline`; emits `lease.renewed`. The gateway forwards

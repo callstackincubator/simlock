@@ -83,12 +83,12 @@ issue.
 
 ## 4. Explore before you ask
 
-Before the first question, map what exists today. Start `spec-explorer`
-agents with the Agent tool, all in one message, with
-`run_in_background: false`, one per area: `code`, `docs` and `work`, plus
-`tool:<name>` for every other tool the request involves. Each prompt is
-`key: value` lines: `issue`, `request` (the request in a few lines),
-`area`, and `questions` when you already have some.
+Before the first question, map relevant code, docs/ADRs and open work.
+Follow `docs/internal/EXPLORATION.md`. Use direct searches for straightforward
+lookups. For broader independent questions, start bounded `spec-explorer`
+helpers together, one per useful area, with `run_in_background: false`.
+Give each `issue`, `request`, `area`, commit and concrete `questions`.
+Do not require three helpers when direct evidence already answers the scope.
 
 Then, yourself:
 
@@ -103,10 +103,10 @@ What you kept is the session's ground. A contradiction or conflict is a
 question for the first round, unless a rule, an accepted ADR or the code's
 handling of the same case already settles it.
 
-A fact you need later: one more `spec-explorer`, now with
-`run_in_background: true` and the question under `questions`. Only the
-questions that depend on its answer wait for it. Never ask the maintainer
-something an explorer can find.
+For later facts, reuse verified commit-bound evidence or search directly.
+Delegate only a bounded question that benefits from it; only dependent
+questions wait. Revalidate affected entries when the commit changes. Never
+ask the maintainer something source evidence can answer.
 
 ## 5. Interview in rounds
 
@@ -201,7 +201,8 @@ mechanism is itself a requirement. Add Decisions, Shared values and Tasks.
 starts from the facts you kept in step 4. For every other fact the design
 rests on:
 
-1. Ask a `spec-explorer`, then open the line it cites yourself.
+1. Search directly or use a bounded `spec-explorer`; inspect the source
+   context yourself and record the commit with the Facts.
 2. A value the change sends to another module, process or tool (an id,
    name, key, header, path, flag, JSON shape): find the line that parses or
    validates it, and check the value passes. A pattern gets a table of

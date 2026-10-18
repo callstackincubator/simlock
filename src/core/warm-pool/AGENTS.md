@@ -29,6 +29,8 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
    device; it is never booted back unasked.
 3. **Resolve** — each target through `warmPoolDemand.resolve`, downloads off, every pass.
    A refusal is a report. An `unresolvable` target keeps its last spec, so its devices stay spared.
+   A device of a platform whose driver was refused at discovery is never proposed — boot or
+   shutdown — but still holds its capacity slot, and `targeted()` still lists it to the reaper.
 4. **Plan** (lock) — `evaluate(view)`, first to last:
    - pool off: shut down every idle `ready` device (`disabled`);
    - over budget: shut down idle devices, LRU first, never one a waiting request would take;

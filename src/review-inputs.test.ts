@@ -86,12 +86,17 @@ beforeAll(() => {
 const comment = (body: string) => ({ body });
 const plain = (n: number) => Array.from({ length: n }, (_, i) => comment(`Comment ${i}.`));
 
-function inputs(issue: object, comments: readonly { body: string }[]) {
+function inputs(
+  issue: object,
+  comments: readonly { body: string }[],
+  previous?: string,
+  base = "main",
+) {
   const file = join(mkdtempSync(join(root, "gh-")), "github.json");
   writeFileSync(
     file,
     JSON.stringify({
-      "repos/o/r/pulls/7": { head: { ref: "bug/12" }, base: { ref: "main" }, body: null },
+      "repos/o/r/pulls/7": { head: { ref: "bug/12" }, base: { ref: base }, body: null },
       "repos/o/r/issues/12": issue,
       "repos/o/r/issues/12/comments": comments,
       "repos/o/r/issues/5": { body: "Feature\r\nfive." },
@@ -106,7 +111,7 @@ function inputs(issue: object, comments: readonly { body: string }[]) {
     TMPDIR: root,
   };
   delete env.GH_REPO;
-  const stdout = execFileSync("sh", [SCRIPT, "7"], {
+  const stdout = execFileSync("sh", [SCRIPT, "7", ...(previous === undefined ? [] : [previous])], {
     cwd: work,
     env,
     encoding: "utf8",
@@ -147,5 +152,39 @@ describe("review-inputs.sh over repo-scoped REST", { timeout: 30_000 }, () => {
   it("writes no triage.md for a bug with no triage report", () => {
     expect(inputs(BUG, plain(3)).read("triage.md")).toBeNull();
     expect(inputs(BUG, [comment("## Simplest fix\nold")]).read("triage.md")).not.toBeNull();
+  });
+  it("rejects unavailable or non-ancestor previous commits instead of losing the fix delta", () => {
+    expect(() => inputs(BUG, [], "deadbeef")).toThrow(/previous commit/);
+    git(work, "checkout", "-q", "-b", "unrelated", "main");
+    writeFileSync(join(work, "unrelated.md"), "other branch");
+    git(work, "add", "-A");
+    git(work, "commit", "-q", "-m", "docs: unrelated");
+    const other = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: work,
+      encoding: "utf8",
+    }).trim();
+    git(work, "checkout", "-q", "bug/12");
+    expect(() => inputs(BUG, [], other)).toThrow(/ancestor/);
+  });
+
+  it("pins the actual stacked base and limits fix.patch to changes since previous", () => {
+    git(work, "branch", "stack-base", "bug/12");
+    const previous = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: work,
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(join(work, "src", "fix.test.ts"), "fixed assertion\n");
+    git(work, "add", "-A");
+    git(work, "commit", "-q", "-m", "test: fix");
+    git(work, "push", "-q", "origin", "stack-base", "bug/12:refs/pull/7/head");
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work, encoding: "utf8" }).trim();
+    const result = inputs(BUG, [], previous, "stack-base");
+    expect(result.read("base")).toBe(`${previous}\n`);
+    expect(result.read("merge-base")).toBe(`${previous}\n`);
+    expect(result.read("previous")).toBe(`${previous}\n`);
+    expect(result.read("commit")).toBe(`${head}\n`);
+    expect(result.read("fix.patch")).toContain("+fixed assertion");
+    expect(result.read("diff.patch")).toContain("fix.test.ts");
+    expect(result.read("diff.patch")).not.toContain("a.test.ts");
   });
 });

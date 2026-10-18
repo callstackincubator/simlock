@@ -47,14 +47,20 @@ export function OverviewBody({ overview }: { readonly overview: Overview }) {
       </StatRow>
       <Row>
         <Panel title="Leases held, last hour">
-          <MinuteChart
-            kind="area"
-            title="Leases held, last hour"
-            unit="leases held"
-            minutes={overview.minutes}
-          />
-          <p className="chart-summary">{overview.chartSummary}</p>
-          <MinuteTable minutes={overview.minutes} heading="Leases held" />
+          {overview.minutes.length === 0 ? (
+            <p className="muted">Not reported.</p>
+          ) : (
+            <>
+              <MinuteChart
+                kind="area"
+                title="Leases held, last hour"
+                unit="leases held"
+                minutes={overview.minutes}
+              />
+              <p className="chart-summary">{overview.chartSummary}</p>
+              <MinuteTable minutes={overview.minutes} heading="Leases held" />
+            </>
+          )}
         </Panel>
         <Panel title="Capacity">
           <div className="capacity">
@@ -87,21 +93,30 @@ export function OverviewBody({ overview }: { readonly overview: Overview }) {
 }
 
 function PlatformBar({ platform }: { readonly platform: PlatformUse }) {
+  const known = platform.running !== undefined && platform.limit !== undefined;
   return (
     <div className="platform">
       <p className="platform-head">
         <span>{platform.name}</span>
         <span className="mono">
-          {platform.running} <span className="muted">of {platform.limit} running</span>
+          {!known ? (
+            <span className="muted">—</span>
+          ) : (
+            <>
+              {platform.running} <span className="muted">of {platform.limit} running</span>
+            </>
+          )}
         </span>
       </p>
-      <ShareBar
-        shares={[
-          { kind: "leased", percent: platform.leasedPercent },
-          { kind: "ready", percent: platform.readyPercent },
-          { kind: "busy", percent: platform.busyPercent },
-        ]}
-      />
+      {known ? (
+        <ShareBar
+          shares={[
+            { kind: "leased", percent: platform.leasedPercent },
+            { kind: "ready", percent: platform.readyPercent },
+            { kind: "busy", percent: platform.busyPercent },
+          ]}
+        />
+      ) : null}
     </div>
   );
 }
@@ -150,7 +165,7 @@ function WorkerTable({ workers }: { readonly workers: readonly OverviewWorker[] 
               <GaugeCell gauge={worker.memory} />
             </td>
             <td data-label="Leases" className="num">
-              {worker.leases}
+              {worker.leases ?? <span className="muted">—</span>}
             </td>
           </tr>
         ))}

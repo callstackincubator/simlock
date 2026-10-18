@@ -49,3 +49,9 @@ and report.
 Routine: calibrate-reviews  Rejected: <n> in four weeks
 PR: #M merged | #M open (<why>) | none
 ```
+
+Calibration uses canonical incorrect findings, excluding duplicate,
+intentional and nonblocking outcomes. Preserve unknown legacy outcomes;
+do not infer false positives from raised-minus-fixed. For model promotion,
+use the replay/shadow protocol and per-invocation ledger in
+`docs/internal/REVIEW.md`, not this rejection sample alone.

@@ -19,19 +19,26 @@ file: `path: 12 34-40 true, 56 F3`:
 3. For each function, type, module or behaviour the diff changes: its doc
    comment, and every line in the docs that names it (search for its name
    and for the plain words that describe it).
-4. In each file the diff touches: every comment within 20 lines of a hunk,
-   and the doc comment of every declaration the diff changes.
-5. For each module the diff touches (`src/<module>/`): every line of its
-   manual, `src/<module>/AGENTS.md`, and of each flow doc under
-   `docs/internal/flows/` the manual links to.
+4. Read affected module manuals and linked flows for context. Check claims
+   the change makes false; do not audit unrelated lines simply because the
+   manual or nearby comment was opened.
 
-Find them all now: a false claim this round misses costs a later round.
+Only changed claims or claims invalidated by this PR block. Existing
+unrelated debt is separate. Accepted future-state ADRs remain targets;
+current implementation gaps do not make those target statements false.
 Whether a comment may exist at all is the commit hook's (rule 17 in
 `architecture.md`): judge only whether it is true.
 
 A claim is false when the code at this commit contradicts it: a name or
 path that no longer exists, a behaviour, order, owner, default or limit that
 changed. Blocking: a false claim. Note: a claim that is true but misleading.
+
+## Assessment
+
+Follow `review-protocol.md` in the inputs. End with `Assessment: complete`
+or `Assessment: incomplete — <missing scope and reason>`. Exhausted budget
+or missing evidence is incomplete, never a defect or F0/pass. Findings
+already supported remain valid; identify unresolved coverage separately.
 
 ## Output
 
@@ -44,4 +51,4 @@ notes; write no other note. One line per defect, in this form and no other:
 F<n> B|N <path:line> <the claim and what the code does instead, at most 25 words> [architecture 13] ev: <path:line, ...>
 ```
 
-B is blocking, N a note. Do not suggest fixes. No findings: `F0`.
+B is blocking, N a note. Do not suggest fixes. No findings after complete assessment: `F0`. Append the Assessment line.
