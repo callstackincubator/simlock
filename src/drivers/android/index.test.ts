@@ -4934,6 +4934,22 @@ describe("AndroidDriver image fit", () => {
       expect((await driver.listCatalog()).defaultRuntime).toBe("37.0");
     });
 
+    it.each([
+      ["lower first", "35", "38"],
+      ["higher first", "38", "35"],
+    ])(
+      "ranks a preview folder by the highest level among its images, whichever is read first (%s)",
+      async (_order, first, second) => {
+        const { driver } = await fitHarness([
+          ["37.0", "google_apis", "arm64-v8a"],
+          ["Baklava", "google_apis", "arm64-v8a", `AndroidVersion.ApiLevel=${first}\n`],
+          ["Baklava", "google_apis_playstore", "arm64-v8a", `AndroidVersion.ApiLevel=${second}\n`],
+        ]);
+
+        expect((await driver.listCatalog()).defaultRuntime).toBe("Baklava");
+      },
+    );
+
     it("uses the folder name for --image-tag and the catalog's images[].tag when SystemImage.TagId differs", async () => {
       const { driver, refusal, resolve } = await fitHarness([
         ["35", "custom-folder", "arm64-v8a", "SystemImage.TagId=google_apis_playstore\n"],
