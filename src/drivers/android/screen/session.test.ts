@@ -32,6 +32,7 @@ const SCID = 0x1234abcd;
 const DEVICE_JAR = "/data/local/tmp/simlock-scrcpy-1234abcd.jar";
 const SETTINGS = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 const SCREEN_READ_MS = 10_000;
+const WAKE_MS = 10_000;
 const DEVICE: VirtualDriverDevice = {
   address: SERIAL,
   deviceId: "simlock_1",
@@ -51,7 +52,9 @@ const PHONE: PhysicalDriverDevice = {
 const GATE_REFUSAL =
   "the adb server on port 5037 speaks protocol 40 and Simlock's adb speaks 41. " +
   "No command goes to physical Android devices until they match, and Simlock will not restart that server.";
-const SCREEN_OFF = "The phone's screen is off. Turn it on and ask for the stream again.";
+const SCREEN_OFF =
+  "The phone's screen is off and did not turn on. Turn it on and ask for the stream again.";
+const WAKE_ARGS = "shell input keyevent KEYCODE_WAKEUP";
 
 type Behaviour = "accept" | "refuse" | "no-transport" | "connection-refused" | "silent";
 
@@ -156,11 +159,20 @@ interface PowerAnswer {
 class FakeTarget implements ScreenTarget {
   readonly log: string[] = [];
   readonly powerReads: number[] = [];
+  readonly wakes: number[] = [];
+  // why: the order of the screen steps, so "reads again after the wake" can fail.
+  readonly screenSteps: string[] = [];
   readonly connects: number[] = [];
   readonly runner: ScriptedProcessRunner;
   readonly server: AdbServer;
   // why: `"refuse"` is the version check refusing the read, `"slow"` a read that ends later.
-  power: PowerAnswer | "refuse" | "slow" = { code: 0, stdout: "  mWakefulness=Awake\n" };
+  // why: a list answers the reads in turn, the last one for every read after it.
+  power: PowerAnswer | "refuse" | "slow" | readonly (PowerAnswer | "refuse" | "slow")[] = {
+    code: 0,
+    stdout: "  mWakefulness=Awake\n",
+  };
+  // why: what the wake does: exits 0, exits non-zero, hangs to its limit, or is refused by the check.
+  wake: "ok" | "fail" | "slow" | "refuse" = "ok";
   // why: stands in for a check that closes mid-session: a command whose args this picks out is refused as a closed check refuses it.
   refuses: (args: readonly string[]) => boolean = () => false;
   // why: stand-ins for the check a target runs before its own command or connection, so a bound can be measured against it.
@@ -185,13 +197,27 @@ class FakeTarget implements ScreenTarget {
 
   async run(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
     if (isScreenRead(args)) {
+      const answer = Array.isArray(this.power)
+        ? (this.power[Math.min(this.powerReads.length, this.power.length - 1)] as PowerAnswer)
+        : (this.power as PowerAnswer | "refuse" | "slow");
       this.powerReads.push(timeoutMs);
-      if (this.power === "refuse") throw new ScreenUnavailableError(GATE_REFUSAL);
-      if (this.power === "slow") {
+      this.screenSteps.push("read");
+      if (answer === "refuse") throw new ScreenUnavailableError(GATE_REFUSAL);
+      if (answer === "slow") {
         await this.#sleep(SCREEN_READ_MS);
         return { code: null, stderr: "", stdout: "" };
       }
-      return { code: this.power.code, stderr: "", stdout: this.power.stdout };
+      return { code: answer.code, stderr: "", stdout: answer.stdout };
+    }
+    if (args.join(" ") === WAKE_ARGS) {
+      this.wakes.push(timeoutMs);
+      this.screenSteps.push("wake");
+      if (this.wake === "refuse") throw new ScreenUnavailableError(GATE_REFUSAL);
+      if (this.wake === "slow") {
+        await this.#sleep(WAKE_MS);
+        return { code: null, stderr: "", stdout: "" };
+      }
+      return { code: this.wake === "fail" ? 1 : 0, stderr: "", stdout: "" };
     }
     if (this.refuses(args)) throw new ScreenUnavailableError(GATE_REFUSAL);
     this.log.push(args.join(" "));
@@ -235,11 +261,15 @@ function push(result: Partial<{ code: number; stderr: string }> = {}): ScriptedP
   };
 }
 
-function shell(extra: Partial<ScriptedProcessExpectation> = {}): ScriptedProcessExpectation {
+// why: a phone's server command carries one more option (stay_awake) than an emulator's 20 arguments.
+function shell(
+  extra: Partial<ScriptedProcessExpectation> = {},
+  options = 20,
+): ScriptedProcessExpectation {
   return {
     hangs: true,
     match: {
-      args: ["shell", ...Array.from({ length: 20 }, () => /.*/)],
+      args: ["shell", ...Array.from({ length: options }, () => /.*/)],
       command: ADB,
     },
     ...extra,
@@ -264,6 +294,7 @@ async function setup(
     readonly expectations?: ScriptedProcessExpectation[];
     readonly jar?: boolean;
     readonly power?: FakeTarget["power"];
+    readonly wake?: FakeTarget["wake"];
     readonly refuses?: (args: readonly string[]) => boolean;
     readonly scid?: (() => number) | null;
     readonly server?: AdbServer;
@@ -287,10 +318,11 @@ async function setup(
   const target = new FakeTarget(
     phone ? PHONE_SERIAL : SERIAL,
     clock,
-    options.expectations ?? [push(), shell(), remove()],
+    options.expectations ?? [push(), shell({}, phone ? 21 : 20), remove()],
     server,
   );
   if (options.power !== undefined) target.power = options.power;
+  if (options.wake !== undefined) target.wake = options.wake;
   if (options.refuses !== undefined) target.refuses = options.refuses;
   const other = new FakeTarget(phone ? SERIAL : PHONE_SERIAL, clock, [], new AdbServer());
   const capture = createAndroidScreenCapture({
@@ -398,6 +430,22 @@ describe("Android screen capture: open", () => {
     expect(world.other.steps).toEqual([]);
     expect(world.other.powerReads).toEqual([]);
     expect(world.other.connects).toEqual([]);
+  });
+
+  it("adds stay_awake=true to a phone's server options and to nothing of an emulator's", async () => {
+    const emulator = await setup();
+    await opened(emulator);
+    const phone = await setup({ device: PHONE });
+    const opening = phone.capture.open(PHONE, SETTINGS, new AbortController().signal);
+    await drive(phone.clock, waitThenStart(phone.target, opening));
+    const serverOf = (log: readonly string[]) => log.find((l) => l.includes("app_process"))!;
+    const emulatorOptions = serverOf(emulator.target.log).split(" ");
+    expect(emulatorOptions).not.toContain("stay_awake=true");
+    expect(emulatorOptions).toContain("control=false");
+    const phoneOptions = serverOf(phone.target.log).split(" ");
+    expect(phoneOptions).toContain("stay_awake=true");
+    expect(phoneOptions).toContain("control=false");
+    expect(phoneOptions.filter((o) => o !== "stay_awake=true")).toEqual(emulatorOptions);
   });
 
   it("reads no screen state for an emulator", async () => {
@@ -614,22 +662,66 @@ describe("Android screen capture: open", () => {
 });
 
 describe("Android screen capture: a phone's screen state", () => {
-  it("refuses a phone whose screen is off with its own reason and pushes nothing, for each wakefulness that means off", async () => {
+  it("wakes a phone whose screen is off through its target with a 10 s limit, reads again, and pushes once the second read says it is on, for each wakefulness that means off", async () => {
     for (const printed of ["Asleep", "Dozing", "Asleep\r", "Dozing "]) {
       const world = await setup({
         device: PHONE,
-        power: { code: 0, stdout: `  mWakefulness=${printed}\n` },
+        power: [
+          { code: 0, stdout: `  mWakefulness=${printed}\n` },
+          { code: 0, stdout: "  mWakefulness=Awake\n" },
+        ],
       });
-      const error = await drive(
-        world.clock,
-        world.capture.open(PHONE, SETTINGS, new AbortController().signal),
-      ).catch((caught: unknown) => caught);
+      const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
+      const feed = await drive(world.clock, waitThenStart(world.target, opening));
+      expect(await feed.body.getReader().read(), printed).toBeDefined();
 
-      expect(error, printed).toBeInstanceOf(ScreenUnavailableError);
-      expect((error as Error).message, printed).toBe(SCREEN_OFF);
-      expect(world.target.steps, printed).toEqual([]);
-      expect(world.target.connects, printed).toEqual([]);
+      expect(world.target.screenSteps, printed).toEqual(["read", "wake", "read"]);
+      expect(world.target.wakes, printed).toEqual([WAKE_MS]);
+      expect(world.target.powerReads, printed).toEqual([SCREEN_READ_MS, SCREEN_READ_MS]);
+      expect(world.target.log[0], printed).toBe(`push ${SERVER} ${DEVICE_JAR}`);
     }
+  });
+
+  it("refuses a phone whose second read still says the screen is off, with its own reason, and pushes nothing, whatever the wake did", async () => {
+    for (const second of ["Asleep", "Dozing"]) {
+      for (const wake of ["ok", "fail", "slow"] as const) {
+        const world = await setup({
+          device: PHONE,
+          wake,
+          power: [
+            { code: 0, stdout: "  mWakefulness=Asleep\n" },
+            { code: 0, stdout: `  mWakefulness=${second}\n` },
+          ],
+        });
+        const error = await drive(
+          world.clock,
+          world.capture.open(PHONE, SETTINGS, new AbortController().signal),
+        ).catch((caught: unknown) => caught);
+
+        const name = `${second} after a wake that is ${wake}`;
+        expect(error, name).toBeInstanceOf(ScreenUnavailableError);
+        expect((error as Error).message, name).toBe(SCREEN_OFF);
+        // why: a wake that exited non-zero or timed out is not looked at; the second read decides.
+        expect(world.target.screenSteps, name).toEqual(["read", "wake", "read"]);
+        expect(world.target.steps, name).toEqual([]);
+        expect(world.target.connects, name).toEqual([]);
+      }
+    }
+  });
+
+  it("sends no wake to a phone whose screen is on, and none to an emulator", async () => {
+    const world = await setup({ device: PHONE });
+    await drive(
+      world.clock,
+      waitThenStart(
+        world.target,
+        world.capture.open(PHONE, SETTINGS, new AbortController().signal),
+      ),
+    );
+    expect(world.target.wakes).toEqual([]);
+    const emulator = await setup({ power: { code: 0, stdout: "  mWakefulness=Asleep\n" } });
+    await opened(emulator);
+    expect(emulator.target.wakes).toEqual([]);
   });
 
   it("goes on to the push for every other wakefulness, including a word that is not one and no line at all", async () => {
@@ -644,6 +736,7 @@ describe("Android screen capture: a phone's screen state", () => {
 
       expect(world.target.log[0], printed).toBe(`push ${SERVER} ${DEVICE_JAR}`);
       expect(world.target.powerReads, printed).toEqual([SCREEN_READ_MS]);
+      expect(world.target.wakes, printed).toEqual([]);
     }
   });
 
@@ -668,46 +761,89 @@ describe("Android screen capture: a phone's screen state", () => {
       expect(await feed.body.getReader().read(), String(answer)).toBeDefined();
 
       expect(world.target.powerReads, String(answer)).toEqual([SCREEN_READ_MS]);
+      expect(world.target.wakes, String(answer)).toEqual([]);
       expect(world.target.log[0], String(answer)).toBe(`push ${SERVER} ${DEVICE_JAR}`);
     }
   });
 
-  it("pushes nothing when it is stopped while the screen is being read", async () => {
-    const stop = new AbortController();
-    const world = await setup({ device: PHONE, power: "slow" });
-    const opening = world.capture.open(PHONE, SETTINGS, stop.signal);
-    for (let flush = 0; flush < 10; flush += 1)
-      await new Promise((resolve) => setImmediate(resolve));
+  it("checks for a stop after each of the first read, the wake and the second read, and does nothing after the step it was stopped in", async () => {
+    const asleep = { code: 0, stdout: "  mWakefulness=Asleep\n" };
+    const awake = { code: 0, stdout: "  mWakefulness=Awake\n" };
+    const cases = [
+      { name: "the first read", power: ["slow"], wake: "ok", wakes: 0, reads: 1 },
+      { name: "the wake", power: [asleep, awake], wake: "slow", wakes: 1, reads: 1 },
+      { name: "the second read", power: [asleep, "slow"], wake: "ok", wakes: 1, reads: 2 },
+    ] as const;
+    for (const stage of cases) {
+      const stop = new AbortController();
+      const world = await setup({
+        device: PHONE,
+        power: stage.power as unknown as FakeTarget["power"],
+        wake: stage.wake,
+      });
+      const opening = world.capture.open(PHONE, SETTINGS, stop.signal);
+      // why: stops at the step itself: the step is in flight once its entry is recorded.
+      while (
+        stage.name === "the first read"
+          ? world.target.powerReads.length < 1
+          : stage.name === "the wake"
+            ? world.target.wakes.length < 1
+            : world.target.powerReads.length < 2
+      )
+        await new Promise((resolve) => setImmediate(resolve));
+      stop.abort();
+      const failed = await drive(world.clock, opening).catch((caught: unknown) => caught);
 
-    stop.abort();
-    const failed = await drive(world.clock, opening).catch((caught: unknown) => caught);
-
-    expect(failed).toBeInstanceOf(ScreenUnavailableError);
-    expect(world.target.log).toEqual([]);
-    expect(world.target.connects).toEqual([]);
+      expect(failed, stage.name).toBeInstanceOf(ScreenUnavailableError);
+      expect(world.target.wakes.length, stage.name).toBe(stage.wakes);
+      expect(world.target.powerReads.length, stage.name).toBe(stage.reads);
+      expect(world.target.log, stage.name).toEqual([]);
+      expect(world.target.connects, stage.name).toEqual([]);
+    }
   });
 
-  it("fails the open with a target's own reason and runs nothing after it, for the screen read, the push, the server start and a connection attempt", async () => {
+  it("fails the open with a target's own reason and runs nothing after it, for the first screen read, the wake, the second screen read, the push, the server start and a connection attempt", async () => {
     const stages: readonly {
       readonly name: string;
       readonly power?: FakeTarget["power"];
+      readonly wake?: FakeTarget["wake"];
       readonly refuses: (args: readonly string[]) => boolean;
+      readonly screenBefore: string[];
       readonly stepsBefore: string[];
     }[] = [
       {
-        name: "the screen read",
+        name: "the first screen read",
         power: "refuse",
         refuses: () => false,
+        screenBefore: ["read"],
+        stepsBefore: [],
+      },
+      {
+        // why: the wake's exit is ignored, but a closed check at the wake still refuses the open.
+        name: "the wake",
+        power: { code: 0, stdout: "  mWakefulness=Asleep\n" },
+        wake: "refuse",
+        refuses: () => false,
+        screenBefore: ["read", "wake"],
+        stepsBefore: [],
+      },
+      {
+        name: "the second screen read",
+        power: [{ code: 0, stdout: "  mWakefulness=Asleep\n" }, "refuse"],
+        refuses: () => false,
+        screenBefore: ["read", "wake", "read"],
         stepsBefore: [],
       },
       {
         name: "the push",
         refuses: (args) => args[0] === "push",
+        screenBefore: ["read"],
         stepsBefore: [],
       },
       {
         name: "the server start",
         refuses: (args) => args.includes("app_process"),
+        screenBefore: ["read"],
         stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, `shell rm -f ${DEVICE_JAR}`],
       },
       {
@@ -715,6 +851,7 @@ describe("Android screen capture: a phone's screen state", () => {
         // log by the time the attempt's check refuses; only the `rm -f` follows it.
         name: "a connection attempt",
         refuses: (args) => args[0] === "connect",
+        screenBefore: ["read"],
         stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, "server", `shell rm -f ${DEVICE_JAR}`],
       },
     ];
@@ -722,6 +859,7 @@ describe("Android screen capture: a phone's screen state", () => {
       const world = await setup({
         device: PHONE,
         ...(stage.power === undefined ? {} : { power: stage.power }),
+        ...(stage.wake === undefined ? {} : { wake: stage.wake }),
         refuses: stage.refuses,
       });
       const started = world.clock.now();
@@ -736,6 +874,7 @@ describe("Android screen capture: a phone's screen state", () => {
       // it, and the viewer would get a start timeout instead of the check's reason.
       expect(world.clock.now() - started, stage.name).toBeLessThan(START_DEADLINE_MS);
       expect(world.target.steps, stage.name).toEqual(stage.stepsBefore);
+      expect(world.target.screenSteps, stage.name).toEqual(stage.screenBefore);
     }
   });
 

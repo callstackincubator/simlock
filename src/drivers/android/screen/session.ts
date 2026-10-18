@@ -31,7 +31,9 @@ const PUSH_TIMEOUT_MS = 30_000;
 // goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
 const SCREEN_READ_TIMEOUT_MS = 10_000;
 const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)\s*$/;
-const SCREEN_OFF_MESSAGE = "The phone's screen is off. Turn it on and ask for the stream again.";
+const WAKE_TIMEOUT_MS = 10_000;
+const SCREEN_OFF_MESSAGE =
+  "The phone's screen is off and did not turn on. Turn it on and ask for the stream again.";
 // why: measured from the moment the push returned, through every connect retry, to the first session
 // packet; the budget never restarts, so a server that keeps refusing cannot hold a viewer longer.
 export const START_DEADLINE_MS = 15_000;
@@ -148,13 +150,7 @@ class ScrcpySession {
     stopped.addEventListener("abort", stop, { once: true });
     try {
       if (stopped.aborted) throw this.#startFailure("was stopped before it started");
-      if (this.#isPhone) {
-        await this.#readScreenState();
-        // why: like the push, the screen read cannot be cut short from outside; a stop that arrived
-        // during it waits for the read to end and pushes nothing onto a device being handed back.
-        if (this.#abort.signal.aborted)
-          throw this.#startFailure("was stopped while the phone's screen was being read");
-      }
+      if (this.#isPhone) await this.#wakeIfOff();
       await this.#push();
       // why: the push is the one step that cannot be interrupted; a stop that arrived during it
       // starts no server on a device that is being handed back.
@@ -204,19 +200,35 @@ class ScrcpySession {
     return this.#closing;
   }
 
+  // why: each of the three steps cannot be cut short from outside; a stop that arrived during one
+  // waits for it to end and runs nothing after it, so a device being handed back gets no more keys.
+  async #wakeIfOff(): Promise<void> {
+    const wasOff = await this.#screenIsOff();
+    this.#throwIfStopped("the phone's screen was being read");
+    if (!wasOff) return;
+    // why: the wake's exit is not looked at; the second read decides. A closed check still throws.
+    await this.#target.run(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], WAKE_TIMEOUT_MS);
+    this.#throwIfStopped("the phone was being woken");
+    const stillOff = await this.#screenIsOff();
+    this.#throwIfStopped("the phone's screen was being read");
+    if (stillOff) throw new ScreenUnavailableError(SCREEN_OFF_MESSAGE);
+  }
+
+  #throwIfStopped(during: string): void {
+    if (this.#abort.signal.aborted) throw this.#startFailure(`was stopped while ${during}`);
+  }
+
   // why: only a read that names Asleep or Dozing is a fact about the screen; every other answer —
-  // another word, no line, a non-zero exit, a timed-out read — reads as unknown and goes on to the
-  // push, where a phone that paints nothing meets the same silence bounds as an emulator.
-  async #readScreenState(): Promise<void> {
+  // another word, no line, a non-zero exit, a timed-out read — reads as unknown and goes on.
+  async #screenIsOff(): Promise<boolean> {
     const read = await this.#target.run(["shell", "dumpsys", "power"], SCREEN_READ_TIMEOUT_MS);
-    if (read.code !== 0) return;
+    if (read.code !== 0) return false;
     for (const line of read.stdout.split("\n")) {
       const word = WAKEFULNESS_LINE.exec(line.endsWith("\r") ? line.slice(0, -1) : line)?.[1];
       if (word === undefined) continue;
-      if (word === "Asleep" || word === "Dozing")
-        throw new ScreenUnavailableError(SCREEN_OFF_MESSAGE);
-      return;
+      return word === "Asleep" || word === "Dozing";
     }
+    return false;
   }
 
   async #push(): Promise<void> {
@@ -256,6 +268,9 @@ class ScrcpySession {
       "send_stream_meta=true",
       "send_frame_meta=true",
       "cleanup=true",
+      // why: scrcpy puts the phone's stay-awake setting back when the server ends (its clean-up
+      // process), and needs no controller for it; an emulator's screen is not held.
+      ...(this.#isPhone ? ["stay_awake=true"] : []),
       `max_size=${String(maxDimension)}`,
       `max_fps=${String(fps)}`,
       `video_bit_rate=${String(bitrateKbps * 1000)}`,
