@@ -1109,7 +1109,6 @@ export class IosSimctlDriver implements Driver {
     await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through the Driver interface by the leasing watcher.
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
     return this.#physical.listPresent(enrolledIds);
   }
