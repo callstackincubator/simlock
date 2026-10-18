@@ -141,6 +141,7 @@ async function exec(daemon: Rig, leaseId: string, args: readonly string[]): Prom
 async function readFrames(
   body: ReadableStream<Uint8Array>,
   enough: (frames: readonly Frame[]) => boolean,
+  whileOpen?: () => Promise<void>,
 ): Promise<Frame[]> {
   const reader = body.getReader();
   const frames: Frame[] = [];
@@ -160,6 +161,8 @@ async function readFrames(
         buffer = buffer.slice(4 + length);
       }
     }
+    // why: runs once the frames are in and before the stream is let go, so it sees the stream open.
+    await whileOpen?.();
   } finally {
     await reader.cancel().catch(() => undefined);
   }
@@ -314,8 +317,26 @@ describe.skipIf(missing !== undefined)(
 
           const response = await streamOf(daemon, grant.lease.id);
           if (response.body === null) throw new Error("the stream answered without a body");
-          const frames = await readFrames(response.body, (read) =>
-            read.some((frame) => frame.tag === TAG.keyframe),
+          const frames = await readFrames(
+            response.body,
+            (read) => read.some((frame) => frame.tag === TAG.keyframe),
+            async () => {
+              // why: 7 is scrcpy's stay_awake value; read while the stream body is still open, so the viewer's cancel cannot have put it back.
+              expect(
+                (
+                  await adbOut(serial, [
+                    "shell",
+                    "settings",
+                    "get",
+                    "global",
+                    "stay_on_while_plugged_in",
+                  ])
+                ).trim(),
+                "stay_on_while_plugged_in while the stream is open",
+              ).toBe("7");
+              // why: the lease ends with the stream still open, so the wait below cannot be met by the viewer's own cancel.
+              expect(await daemon.env.cli(["release", grant.lease.id])).toMatchObject({ code: 0 });
+            },
           );
 
           const tags = frames.map((frame) => frame.tag);
@@ -328,22 +349,6 @@ describe.skipIf(missing !== undefined)(
           };
           expect(meta.codec).toBe("h264");
           expect(Math.max(meta.width, meta.height)).toBeGreaterThan(0);
-
-          // why: 7 is scrcpy's stay_awake value; it proves the stay awake reached the phone while the stream is open.
-          expect(
-            (
-              await adbOut(serial, [
-                "shell",
-                "settings",
-                "get",
-                "global",
-                "stay_on_while_plugged_in",
-              ])
-            ).trim(),
-            "stay_on_while_plugged_in while the stream is open",
-          ).toBe("7");
-
-          expect(await daemon.env.cli(["release", grant.lease.id])).toMatchObject({ code: 0 });
 
           await waitFor(
             async () =>

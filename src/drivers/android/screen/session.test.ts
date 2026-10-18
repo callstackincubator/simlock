@@ -173,7 +173,7 @@ class FakeTarget implements ScreenTarget {
   };
   // why: what the wake does: exits 0, exits non-zero, hangs to its limit, or is refused by the check.
   wake: "ok" | "fail" | "slow" | "refuse" = "ok";
-  // why: holds every screen read in flight for the read limit before it answers as scripted, so a stop can arrive while a read that will say Asleep is still running.
+  // why: holds each screen read the check lets through in flight for the read limit before it answers as scripted (a refused read throws before the hold), so a stop can arrive while a read that will say Asleep is still running.
   holdReads = false;
   // why: stands in for a check that closes mid-session: a command whose args this picks out is refused as a closed check refuses it.
   refuses: (args: readonly string[]) => boolean = () => false;
