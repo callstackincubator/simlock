@@ -15,6 +15,7 @@ import {
   FakeClock,
   FakeDaemonLauncher,
   FakeParentWatch,
+  IpcError,
   MemoryFilesystem,
   MemoryIpcTransport,
   NodeFilesystem,
@@ -22,6 +23,8 @@ import {
   NoopLogger,
   type Filesystem,
   type IdGenerator,
+  type IpcConnection,
+  type IpcConnector,
 } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import { TokenStore } from "../http/token-store.js";
@@ -29,7 +32,12 @@ import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import { AdminSecretManager } from "../daemon/admin-secret.js";
 import { createCredentialRoleResolver } from "../daemon/session.js";
-import { fromWireError, SimlockError, type AnySimlockError } from "../contract/index.js";
+import {
+  PROTOCOL_VERSION_RANGE,
+  fromWireError,
+  SimlockError,
+  type AnySimlockError,
+} from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -1435,6 +1443,70 @@ describe("CLI: auto-launch's failed start (#672)", () => {
       },
     });
     expect(launcher.launches).toBe(1);
+  });
+});
+
+describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)", () => {
+  it("reports a daemon it launched that answers hello then dies during that start as a failed start, not a lost connection", async () => {
+    // why: this stages the daemon that loses its HTTP port race exactly as the socket shows it
+    // to the CLI: absent before the launch, then listening, answering `hello`, and closing on
+    // its own `http-start-failed` stop before the command's first real request is answered.
+    // The connection is the auto-launch poll's own, so `daemon start` never had a daemon to
+    // lose -- yet it currently prints `DAEMON_CONNECTION_LOST`, the code docs/CLI.md reserves
+    // for a live connection that died, leaving a script unable to tell a failed start from a
+    // lost daemon. The expectation below (the contract's start-failure code, which #672 gave
+    // the timeout sibling of this same auto-launch path) is the report's proposal.
+    const dyingDaemon = new HelloThenDeathIpc();
+    const clock = new FakeClock(0);
+    const launcher = new FakeDaemonLauncher(() => {
+      dyingDaemon.startListening();
+    });
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: dyingDaemon,
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    let settled = false;
+    const exitCode = runCli(
+      ["daemon", "start", "--json", "--token", "probe"],
+      output.environmentWith(),
+    ).then((code) => {
+      settled = true;
+      return code;
+    });
+    // why: the tick bound is generous because #671 made every module a command loads lazy, so
+    // one `daemon start` now passes through several more import turns than when this repro was
+    // first staged; the clock is fake and the loop stops the moment the command settles, so the
+    // extra headroom pins nothing -- it only keeps a hung command failing on this named
+    // assertion instead of on a test timeout.
+    for (let tick = 0; tick < 100 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, `simlock daemon start still had not settled at ${String(clock.now())}ms`).toBe(
+      true,
+    );
+
+    // why: the staging itself, proven from the fake's side -- the socket was absent until this
+    // command launched the daemon, the daemon did answer that command's `hello`, and every
+    // connection it accepted died by its own hand. Without these the assertion below could be
+    // reached by a connection that never saw a daemon at all.
+    expect(launcher.launches).toBe(1);
+    expect(dyingDaemon.helloReplies).toBe(1);
+    expect(dyingDaemon.deaths).toBe(1);
+
+    expect(await exitCode).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: expect.stringContaining("daemon"),
+      },
+    });
   });
 });
 
@@ -6203,6 +6275,90 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
     },
   };
   return capture;
+}
+
+// why: the auto-launch poll's view of the daemon that loses the race for its HTTP port
+// (#684): absent until this command launches it, then listening, answering one frame -- the
+// `hello` -- and closing every connection it handed out when it stops itself on
+// `http-start-failed`. `deaths` counts only the connections the daemon itself killed, never
+// one the client closed.
+class HelloThenDeathIpc implements IpcConnector {
+  helloReplies = 0;
+  deaths = 0;
+  #listening = false;
+
+  startListening(): void {
+    this.#listening = true;
+  }
+
+  async connect(): Promise<IpcConnection> {
+    if (!this.#listening) {
+      throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
+    }
+    return new HelloThenDeathConnection(this);
+  }
+}
+
+class HelloThenDeathConnection implements IpcConnection {
+  readonly #dataListeners = new Set<(chunk: string) => void>();
+  readonly #closeListeners = new Set<() => void>();
+  #closed = false;
+
+  constructor(private readonly daemon: HelloThenDeathIpc) {}
+
+  get closed(): boolean {
+    return this.#closed;
+  }
+
+  onData(listener: (chunk: string) => void): () => void {
+    this.#dataListeners.add(listener);
+    return () => this.#dataListeners.delete(listener);
+  }
+
+  onClose(listener: () => void): () => void {
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
+  }
+
+  onError(): () => void {
+    return () => {};
+  }
+
+  async write(contents: string): Promise<void> {
+    if (this.#closed) return;
+    for (const line of contents.split("\n")) {
+      if (line.trim() === "") continue;
+      const frame = JSON.parse(line) as { id?: unknown; type?: unknown };
+      if (frame.type !== "hello" || typeof frame.id !== "number") continue;
+      this.daemon.helloReplies += 1;
+      const reply = {
+        id: frame.id,
+        ok: true,
+        payload: {
+          protocolVersion: PROTOCOL_VERSION_RANGE.max,
+          daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+          version: "0.0.0-test",
+          role: "admin",
+          principal: "test-requester",
+        },
+      };
+      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+    }
+    // why: the daemon's own stop, right after the handshake -- this start never held a live
+    // daemon, so the close is the death of a boot, not the loss of a running one.
+    this.#shutDown(true);
+  }
+
+  async close(): Promise<void> {
+    this.#shutDown(false);
+  }
+
+  #shutDown(killedByDaemon: boolean): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    if (killedByDaemon) this.daemon.deaths += 1;
+    for (const listener of this.#closeListeners) listener();
+  }
 }
 
 function sequence(): IdGenerator {
