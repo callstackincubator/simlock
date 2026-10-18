@@ -17,10 +17,11 @@ describe("what a refused stream says", () => {
   });
 
   it("waits for a stream's headers past the longest open a physical Android phone's capture can take", () => {
-    // why: a phone's open may spend about 135 s — the shared adb server's version check up to 45 s
-    // the first time, the screen read 20 s, the push 40 s, the server 15 s and a last check past it.
+    // why: a phone's open may spend about 185 s: the shared adb server's version check up to 45 s
+    // the first time and 5 s before each later step, the screen read, the wake and the second read
+    // 20 s each, the push 40 s, the server 15 s and a last check past it.
     // A console that gave up sooner would show its own timeout instead of the worker's reason.
-    expect(STREAM_HEAD_TIMEOUT_MS).toBe(150_000);
+    expect(STREAM_HEAD_TIMEOUT_MS).toBe(200_000);
   });
 
   it("keeps the daemon's own reason when it named one, and says what else to check", () => {

@@ -944,7 +944,8 @@ leases, an operator sees any, and anything else is a `404`. `STREAM_NOT_SUPPORTE
 (415) means the device behind the lease can never produce a picture here — a
 physical iPhone. `STREAM_UNAVAILABLE` (503) means it could but cannot now: a
 capture program that is not installed, a physical Android phone whose screen is
-off, or a device that painted nothing within
+off and did not turn on when woken (a phone whose screen is off is woken first),
+or a device that painted nothing within
 30 seconds; asking again is the right move. A stream that stops receiving frames
 for 30 seconds ends with an error rather than freezing on its last picture. `WORKER_UNREACHABLE` on
 a gateway means the worker that holds the lease is gone.

@@ -41,17 +41,21 @@ the iOS driver, not here.
    `run(["shell", "dumpsys", "power"], 10_000)`, the line
    `^\s*mWakefulness=(\S+)\s*$` after a trailing `\r` is stripped — what follows the word, if anything,
    is blanks, so a printed `Dozing ` (a trailing blank) is the word `Dozing` — compared exactly. `Asleep` or
-   `Dozing` → `ScreenUnavailableError` naming the screen, and nothing is pushed. Anything else — `Awake`, `Dreaming`,
-   a word that is not one, no line, a non-zero exit, a timed-out read — goes on. Emulators skip this read. The phone
-   is never woken.
+   `Dozing` → wake it: `run(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], 10_000)` (its exit is not looked at; a
+   closed check at the wake still refuses), then the same read again. A second read of `Asleep` or `Dozing` →
+   `ScreenUnavailableError("The phone's screen is off and did not turn on. …")`, and nothing is pushed. Anything
+   else — `Awake`, `Dreaming`, a word that is not one, no line, a non-zero exit, a timed-out read — goes on, with no
+   wake after a first read of those. Emulators skip the read and the wake. The wake is the only key sent.
 2. `scid`: random 31-bit, written `%08x`. `<target> push <jar> /data/local/tmp/simlock-scrcpy-<scid>.jar` (40 s: the
    phone's own check plus the 30 s push).
 3. `<target> shell CLASSPATH=<that path> app_process / com.genymobile.scrcpy.Server 5.0.1 scid=<scid>
 log_level=info tunnel_forward=true video=true audio=false control=false video_codec=h264
 send_device_meta=false send_dummy_byte=true send_stream_meta=true send_frame_meta=true cleanup=true
-max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. No option that changes a
-   device setting (`show_touches`, `stay_awake`, `screen_off_timeout`, `power_off_on_close`); with
-   `control=false` the server never powers the screen on.
+[stay_awake=true for a phone] max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. Only a
+   phone's gets `stay_awake=true`: scrcpy sets `stay_on_while_plugged_in` to 7 and its clean-up process puts
+   the old value back when the server ends. No other option changes a device setting (`show_touches`,
+   `screen_off_timeout`, `power_off_on_close`); with `control=false` the server never powers the screen on, so the
+   wake above is simlock's.
 4. No `adb forward`: `target.connect` reaches the device socket and the session sends `host:transport:<serial>`, then
    `localabstract:scrcpy_<scid>`. `FAIL` on the second (nothing listening yet), a refused connect, or a
    socket that closes before the server's zero byte → retry every 100 ms. `FAIL` on the first → refuse.
@@ -60,7 +64,8 @@ max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. No op
    budget; each attempt's own check is inside it, and one still running past the deadline is waited for,
    ≤ 5 s) to here. Past it, or when the shell exits first → `ScreenUnavailableError` with the server's last
    20 output lines. Each step keeps its own limit; there is no overall budget. A phone's worst case is
-   about 135 s, which is why the console waits 150 s for a stream's headers.
+   about 185 s (checks 45 s the first time and 5 s before each later step, three screen steps 20 s each, the push
+   40 s, the server 15 s and a last check 5 s), which is why the console waits 200 s for a stream's headers.
 6. Body: meta (session size, configured fps) on every session packet; the `avcC` description before
    the first picture after config packets; key/delta frames as 4-byte-length AVCC. Pull-based
    (`highWaterMark: 0`): the socket is read only when the body's reader pulls; nothing is dropped.
@@ -73,8 +78,8 @@ max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. No op
 A rotation starts a new scrcpy session: a new meta frame, then a new description before the next
 picture; the browser decoder re-reads both mid-stream.
 
-Stop: `open` takes an `AbortSignal`. A stop before the screen read or the push runs nothing; one during either of
-them (neither can be interrupted) waits for it and starts no server after it; one while connecting ends the retries.
+Stop: `open` takes an `AbortSignal`. A stop before the screen read runs nothing; one during the first read, the
+wake, the second read or the push (none can be interrupted) waits for it and runs nothing after it; one while connecting ends the retries.
 A stopped open cleans up (shell killed, jar removed) before it throws. `alive` frames begin only after the
 first key frame, so an encoder that never paints meets the stream's silence bound.
 
@@ -83,6 +88,7 @@ first key frame, so an encoder that never paints meets the stream's silence boun
 | What                 | Default                         | Key                                                         |
 | -------------------- | ------------------------------- | ----------------------------------------------------------- |
 | Phone's screen read  | 10 s                            | `SCREEN_READ_TIMEOUT_MS`                                    |
+| Phone's wake         | 10 s                            | `WAKE_TIMEOUT_MS`                                           |
 | Push / start / close | 30 s / 15 s, retry 100 ms / 5 s | `PUSH_TIMEOUT_MS`, `START_DEADLINE_MS`, `CLOSE_DEADLINE_MS` |
 | Quiet before `alive` | 5 s                             | `ALIVE_AFTER_MS`                                            |
 
@@ -92,7 +98,8 @@ process at its start and by `rm -f` on close.
 ## Rules
 
 - A screen stream touches only its own `scid`: its jar path and socket name; never another stream's.
-- A screen stream changes no device setting and drops no frame.
+- A screen stream changes no device setting and drops no frame. One exception: a phone's stream sets stay
+  awake (`stay_on_while_plugged_in` to 7) while it runs, and scrcpy puts the old value back.
 - Every adb command and connection of a session goes through its target. The capture names no adb server port and
   runs no version check of its own.
 
@@ -103,9 +110,15 @@ process at its start and by `rm -f` on close.
   `adb shell` died no scrcpy process and no jar were left on the device.
 - **Key frames every 10 s** (scrcpy's default): a viewer that resets its decoder waits up to 10 s.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
-- **A phone whose screen turns off mid-stream** shows its last picture, still marked live by `alive` frames, until
-  the screen is on again or the lease ends. Nothing wakes it and nothing ends the stream for it. Keep the phone's
-  screen on (Stay awake while charging; `settings get global stay_on_while_plugged_in` with bit 2 set).
+- **A phone that is not charging is woken but not held awake**: stay awake does nothing without power. When its
+  screen turns off mid-stream it shows its last picture, still marked live by `alive` frames, until the screen is on
+  again or the lease ends. Nothing ends the stream for it.
+- **A phone woken to its lock screen streams the lock screen.** simlock does not unlock it.
+- **Two viewers of one lease**: the second's server finds the setting at 7 already and remembers nothing; when the
+  first viewer's stream ends, the old value comes back while the second still streams.
+- **The setting stays at 7** if the phone loses power or reboots before the clean-up process writes the old value back.
+- **A holder's own stay-awake change is overwritten**: a holder that changes `stay_on_while_plugged_in` over
+  passthrough `adb` while a stream is open has it replaced when the stream ends, since scrcpy writes back the value it found.
 - **A pushed jar can survive on a phone** when the version check closes after the push and stays closed through the
   close and the server never started: the `rm -f` goes through that check and is not sent. A server that started
   deletes its own jar (`cleanup=true`). The jar's digest is not checked at push either.

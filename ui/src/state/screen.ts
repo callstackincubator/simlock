@@ -25,12 +25,12 @@ const EMPTY: StreamStats = {
 };
 
 // why: a worker answers a stream's headers only once its capture wrote its first frame, and it may
-// take about 135 s on a physical Android phone (the shared adb server's version check up to 45 s
-// the first time, the phone's screen read 20 s, the push 40 s, the server 15 s and a last check of
-// up to 5 s past it); an emulator's worst case is 75 s (its push 30 s, its server 15 s, the first
-// frame 30 s). A console that gave up sooner would show its own timeout instead of the worker's
-// reason.
-export const STREAM_HEAD_TIMEOUT_MS = 150_000;
+// take about 185 s on a physical Android phone (the shared adb server's version check up to 45 s
+// the first time and 5 s before each later step, the screen read 20 s, the wake 20 s, the second
+// read 20 s, the push 40 s, the server 15 s and a last check of up to 5 s past it); an emulator's
+// worst case is 75 s (its push 30 s, its server 15 s, the first frame 30 s). A console that gave up
+// sooner would show its own timeout instead of the worker's reason.
+export const STREAM_HEAD_TIMEOUT_MS = 200_000;
 
 export interface Screen {
   readonly canvas: RefObject<HTMLCanvasElement | null>;

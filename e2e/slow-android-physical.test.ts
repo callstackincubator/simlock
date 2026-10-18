@@ -279,52 +279,106 @@ describe.skipIf(missing !== undefined)(
     );
 
     it(
-      "a lease on the phone streams a meta frame and a key frame over GET /v1/stream/leases/{leaseId}, and after the lease ends the phone holds no simlock-scrcpy jar and no scrcpy server process and the host keeps no capture shell",
+      "a lease on the phone streams a meta frame and a key frame over GET /v1/stream/leases/{leaseId}, and after the lease ends the phone holds no simlock-scrcpy jar and no scrcpy server process and the host keeps no capture shell, with the phone's screen off when the stream asks and its stay-awake setting put back within 10 s of the lease's end",
       { timeout: 10 * MINUTE },
       async () => {
-        const daemon = await rig();
-        await enroll(daemon.env, serial);
-        const grant = await leasePhysical(daemon.env);
-
-        const response = await streamOf(daemon, grant.lease.id);
-        if (response.body === null) throw new Error("the stream answered without a body");
-        const frames = await readFrames(response.body, (read) =>
-          read.some((frame) => frame.tag === TAG.keyframe),
-        );
-
-        const tags = frames.map((frame) => frame.tag);
-        expect(tags).toContain(TAG.meta);
-        expect(tags).toContain(TAG.keyframe);
-        const meta = JSON.parse(new TextDecoder().decode(frames[0]!.payload)) as {
-          codec: string;
-          width: number;
-          height: number;
+        const stayOn = (
+          await adbOut(serial, ["shell", "settings", "get", "global", "stay_on_while_plugged_in"])
+        ).trim();
+        const screenIsOff = async (): Promise<boolean> => {
+          const power = await adbOut(serial, ["shell", "dumpsys", "power"]);
+          const word = /^\s*mWakefulness=(\S+)\s*$/m.exec(power)?.[1];
+          return word === "Asleep" || word === "Dozing";
         };
-        expect(meta.codec).toBe("h264");
-        expect(Math.max(meta.width, meta.height)).toBeGreaterThan(0);
-
-        expect(await daemon.env.cli(["release", grant.lease.id])).toMatchObject({ code: 0 });
-
-        await waitFor(
-          async () => {
-            const processes = await adbOut(serial, ["shell", "ps", "-A", "-o", "ARGS"]);
-            const files = await adbOut(serial, ["shell", "ls", "/data/local/tmp"]);
-            return (
-              !processes.includes("com.genymobile.scrcpy.Server") &&
-              !files.includes("simlock-scrcpy-")
-            );
-          },
-          {
+        // why: the setting is put back whatever the case does, so a failure leaves the phone as it was found.
+        try {
+          // why: 2 is not scrcpy's 7, so a restore of the recorded value shows in the setting.
+          await adbOut(serial, [
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "stay_on_while_plugged_in",
+            "2",
+          ]);
+          await adbOut(serial, ["shell", "input", "keyevent", "KEYCODE_SLEEP"]);
+          await waitFor(screenIsOff, {
             interval: 500,
-            label: "no scrcpy server process and no pushed jar left on the phone",
-            timeout: 30_000,
-          },
-        );
+            label: "the phone's screen off before the stream asks",
+            timeout: 15_000,
+          });
 
-        const hostShells = await new Promise<string>((resolve) => {
-          execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
-        });
-        expect(hostShells, "a host adb shell for the capture outlived the lease").toBe("");
+          const daemon = await rig();
+          await enroll(daemon.env, serial);
+          const grant = await leasePhysical(daemon.env);
+
+          const response = await streamOf(daemon, grant.lease.id);
+          if (response.body === null) throw new Error("the stream answered without a body");
+          const frames = await readFrames(response.body, (read) =>
+            read.some((frame) => frame.tag === TAG.keyframe),
+          );
+
+          const tags = frames.map((frame) => frame.tag);
+          expect(tags).toContain(TAG.meta);
+          expect(tags).toContain(TAG.keyframe);
+          const meta = JSON.parse(new TextDecoder().decode(frames[0]!.payload)) as {
+            codec: string;
+            width: number;
+            height: number;
+          };
+          expect(meta.codec).toBe("h264");
+          expect(Math.max(meta.width, meta.height)).toBeGreaterThan(0);
+
+          expect(await daemon.env.cli(["release", grant.lease.id])).toMatchObject({ code: 0 });
+
+          await waitFor(
+            async () =>
+              (
+                await adbOut(serial, [
+                  "shell",
+                  "settings",
+                  "get",
+                  "global",
+                  "stay_on_while_plugged_in",
+                ])
+              ).trim() === "2",
+            {
+              interval: 500,
+              label: "stay_on_while_plugged_in back at 2 after the lease ended",
+              timeout: 10_000,
+            },
+          );
+
+          await waitFor(
+            async () => {
+              const processes = await adbOut(serial, ["shell", "ps", "-A", "-o", "ARGS"]);
+              const files = await adbOut(serial, ["shell", "ls", "/data/local/tmp"]);
+              return (
+                !processes.includes("com.genymobile.scrcpy.Server") &&
+                !files.includes("simlock-scrcpy-")
+              );
+            },
+            {
+              interval: 500,
+              label: "no scrcpy server process and no pushed jar left on the phone",
+              timeout: 30_000,
+            },
+          );
+
+          const hostShells = await new Promise<string>((resolve) => {
+            execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
+          });
+          expect(hostShells, "a host adb shell for the capture outlived the lease").toBe("");
+        } finally {
+          await adbOut(serial, [
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "stay_on_while_plugged_in",
+            stayOn,
+          ]);
+        }
       },
     );
 

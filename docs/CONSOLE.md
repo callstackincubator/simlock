@@ -268,10 +268,10 @@ simulator, an emulator or a physical Android phone. Either way it starts nothing
 
 The first picture can take a while — on a slow emulator, or on a physical
 Android phone, whose screen state and shared adb server are read before the
-capture starts. The panel waits up to 150 seconds for it, longer than a worker
+capture starts. The panel waits up to 200 seconds for it, longer than a worker
 takes to give up, so a capture that cannot start shows the worker's reason
-rather than a timeout. A phone whose screen is off is refused at once with a
-message that says so; nothing wakes the screen.
+rather than a timeout. A phone whose screen is off is woken first; one that does
+not wake is refused with a message that says so.
 
 ### Who holds a lease
 
