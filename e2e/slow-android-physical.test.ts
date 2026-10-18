@@ -329,6 +329,20 @@ describe.skipIf(missing !== undefined)(
           expect(meta.codec).toBe("h264");
           expect(Math.max(meta.width, meta.height)).toBeGreaterThan(0);
 
+          // why: 7 is scrcpy's stay_awake value; it proves the stay awake reached the phone while the stream is open.
+          expect(
+            (
+              await adbOut(serial, [
+                "shell",
+                "settings",
+                "get",
+                "global",
+                "stay_on_while_plugged_in",
+              ])
+            ).trim(),
+            "stay_on_while_plugged_in while the stream is open",
+          ).toBe("7");
+
           expect(await daemon.env.cli(["release", grant.lease.id])).toMatchObject({ code: 0 });
 
           await waitFor(

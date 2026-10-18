@@ -27,7 +27,7 @@ import { ScrcpyVideoParser } from "./scrcpy-video.js";
 const SCRCPY_SERVER_VERSION = "5.0.1";
 const DEVICE_DIRECTORY = "/data/local/tmp";
 const PUSH_TIMEOUT_MS = 30_000;
-// why: a phone's screen state is read once, before anything is pushed; a read that outlives this
+// why: a phone's screen state is read before anything is pushed, and read again only after a wake; a read that outlives this
 // goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
 const SCREEN_READ_TIMEOUT_MS = 10_000;
 const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)\s*$/;

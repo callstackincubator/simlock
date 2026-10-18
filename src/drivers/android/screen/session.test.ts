@@ -173,6 +173,8 @@ class FakeTarget implements ScreenTarget {
   };
   // why: what the wake does: exits 0, exits non-zero, hangs to its limit, or is refused by the check.
   wake: "ok" | "fail" | "slow" | "refuse" = "ok";
+  // why: holds every screen read in flight for the read limit before it answers as scripted, so a stop can arrive while a read that will say Asleep is still running.
+  holdReads = false;
   // why: stands in for a check that closes mid-session: a command whose args this picks out is refused as a closed check refuses it.
   refuses: (args: readonly string[]) => boolean = () => false;
   // why: stand-ins for the check a target runs before its own command or connection, so a bound can be measured against it.
@@ -207,6 +209,7 @@ class FakeTarget implements ScreenTarget {
         await this.#sleep(SCREEN_READ_MS);
         return { code: null, stderr: "", stdout: "" };
       }
+      if (this.holdReads) await this.#sleep(SCREEN_READ_MS);
       return { code: answer.code, stderr: "", stdout: answer.stdout };
     }
     if (args.join(" ") === WAKE_ARGS) {
@@ -772,9 +775,16 @@ describe("Android screen capture: a phone's screen state", () => {
     const asleep = { code: 0, stdout: "  mWakefulness=Asleep\n" };
     const awake = { code: 0, stdout: "  mWakefulness=Awake\n" };
     const cases = [
-      { name: "the first read", power: ["slow"], wake: "ok", wakes: 0, reads: 1 },
-      { name: "the wake", power: [asleep, awake], wake: "slow", wakes: 1, reads: 1 },
-      { name: "the second read", power: [asleep, "slow"], wake: "ok", wakes: 1, reads: 2 },
+      { name: "the first read", power: [asleep], wake: "ok", wakes: 0, reads: 1, hold: true },
+      { name: "the wake", power: [asleep, awake], wake: "slow", wakes: 1, reads: 1, hold: false },
+      {
+        name: "the second read",
+        power: [asleep, "slow"],
+        wake: "ok",
+        wakes: 1,
+        reads: 2,
+        hold: false,
+      },
     ] as const;
     for (const stage of cases) {
       const stop = new AbortController();
@@ -783,6 +793,7 @@ describe("Android screen capture: a phone's screen state", () => {
         power: stage.power as unknown as FakeTarget["power"],
         wake: stage.wake,
       });
+      world.target.holdReads = stage.hold;
       const opening = world.capture.open(PHONE, SETTINGS, stop.signal);
       // why: stops at the step itself: the step is in flight once its entry is recorded.
       while (
