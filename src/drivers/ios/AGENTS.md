@@ -83,16 +83,14 @@ Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>`; physical `SIMLOCK_DE
 
 Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture
 <udid> --codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>` for a
-simulator, and the same arguments without that variable for a physical iPhone run by
-`simlock-device-capture`. stdout is the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL.
-Either program missing → `ScreenUnavailableError` (a missing iPhone program refuses an iPhone
-open only). A physical open first asks the physical handler for the iPhone's iOS version
-(`devicectl list devices`) and below iOS 27 refuses without starting anything; an unreadable or
-unparsable version goes on. Default programs: dist/bin, built by `pnpm build`;
-`drivers.ios.screenCaptureCommand` and `drivers.ios.deviceCaptureCommand` name others. Neither
-program's environment carries `SIMLOCK_COREDEVICE_INFO_PLIST`; the iPhone program enforces its own
-pin — a CoreDevice major other than 642 exits 69 with the reason, a 503 for the viewer. Asked to
-stop while still starting, a program stops and goes inside its 2 s.
+simulator; a physical iPhone runs `simlock-device-capture` with the same arguments, no such
+variable. stdout is the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL. A missing program
+→ `ScreenUnavailableError` (the iPhone one refuses iPhone opens only), as does an iPhone below
+iOS 27 per the physical handler's `devicectl list devices` (an unreadable version goes on).
+Programs: dist/bin from `pnpm build`, or `drivers.ios.screenCaptureCommand` and
+`drivers.ios.deviceCaptureCommand`; neither gets `SIMLOCK_COREDEVICE_INFO_PLIST`. The iPhone
+program enforces its pin: a CoreDevice major other than 642 exits 69 with the reason, a 503 for
+the viewer. Asked to stop while still starting, a program stops and goes inside its 2 s.
 
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
