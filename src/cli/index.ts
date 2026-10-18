@@ -33,6 +33,7 @@ import { resolveRequesterId } from "../agent-identity/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import {
   isSimlockError,
+  SimlockError,
   type CatalogGetOutput,
   type AnySimlockError,
   type DoctorReport,
@@ -245,7 +246,12 @@ class AutoLaunchIpcConnector implements IpcConnector {
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
-    throw new Error(`Timed out starting simlock daemon: ${errorMessage(lastError)}`);
+    throw new SimlockError(
+      "DAEMON_STARTUP_FAILED",
+      "transport",
+      `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+      {},
+    );
   }
 }
 
