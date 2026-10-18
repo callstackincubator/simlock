@@ -198,20 +198,7 @@ class FakeTarget implements ScreenTarget {
   }
 
   async run(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
-    if (isScreenRead(args)) {
-      const answer = Array.isArray(this.power)
-        ? (this.power[Math.min(this.powerReads.length, this.power.length - 1)] as PowerAnswer)
-        : (this.power as PowerAnswer | "refuse" | "slow");
-      this.powerReads.push(timeoutMs);
-      this.screenSteps.push("read");
-      if (answer === "refuse") throw new ScreenUnavailableError(GATE_REFUSAL);
-      if (answer === "slow") {
-        await this.#sleep(SCREEN_READ_MS);
-        return { code: null, stderr: "", stdout: "" };
-      }
-      if (this.holdReads) await this.#sleep(SCREEN_READ_MS);
-      return { code: answer.code, stderr: "", stdout: answer.stdout };
-    }
+    if (isScreenRead(args)) return await this.#readScreen(timeoutMs);
     if (args.join(" ") === WAKE_ARGS) {
       this.wakes.push(timeoutMs);
       this.screenSteps.push("wake");
@@ -241,6 +228,18 @@ class FakeTarget implements ScreenTarget {
     const peer = this.server.newPeer(this.#clock);
     if (peer === undefined) throw new Error("connect ECONNREFUSED 127.0.0.1");
     return peer.stream;
+  }
+
+  async #readScreen(timeoutMs: number): Promise<ProcessResult> {
+    const answer = Array.isArray(this.power)
+      ? (this.power[Math.min(this.powerReads.length, this.power.length - 1)] as PowerAnswer)
+      : (this.power as PowerAnswer | "refuse" | "slow");
+    this.powerReads.push(timeoutMs);
+    this.screenSteps.push("read");
+    if (answer === "refuse") throw new ScreenUnavailableError(GATE_REFUSAL);
+    if (this.holdReads || answer === "slow") await this.#sleep(SCREEN_READ_MS);
+    if (answer === "slow") return { code: null, stderr: "", stdout: "" };
+    return { code: answer.code, stderr: "", stdout: answer.stdout };
   }
 
   #sleep(ms: number): Promise<void> {
