@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -107,7 +107,15 @@ export async function startDaemon(
   };
   const start = async () => {
     const started = await cli(["daemon", "start"], env, { timeout: 30_000 });
-    expect(started.code, started.stderr).toBe(0);
+    if (started.code === 0) return;
+    // why: a failed start reports only what the CLI saw while polling the socket, and `dispose`
+    // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.
+    // Read the tail here, before any caller's catch reaches `dispose`, and fail with both.
+    const log = await readFile(join(home, "daemon.log"), "utf8").catch(() => "");
+    const tail = log.split("\n").slice(-20).join("\n");
+    throw new Error(
+      `daemon start failed (exit ${String(started.code)}): ${started.stderr}\n${tail}`,
+    );
   };
   const dispose = async () => {
     for (const handle of background) handle.kill("SIGTERM");
