@@ -85,7 +85,8 @@ never falls through to a weaker one. When every strategy says `not-mine`,
 the answer is `401`, with today's messages: "Missing bearer token" when no
 `Authorization` header was sent, else "Unknown bearer token".
 
-`Identity` is `{ principal, name, role, via, expiresAt?, ambient }`.
+`Identity` is `{ principal, name, role, via, expiresAt?, ambient }`. `role`
+is `operator` or `agent`, the HTTP roles a token has today.
 `ambient` is true when a browser attaches the credential by itself (a
 cookie the proxy turns into a JWT). It drives §5 without the HTTP module
 knowing which strategy set it.
@@ -110,8 +111,9 @@ daemon refuses to start and names the missing key.
 | `http.proxyAuth.audience` | the proxy application's audience tag |
 | `http.proxyAuth.signOutUrl` (optional) | `https://team.cloudflareaccess.com/cdn-cgi/access/logout` |
 
-`jwksUrl` must be `https://`, or `http://` on a loopback host only (the
-rule `gateway.url` already follows for `ws://`).
+`jwksUrl` must be `https://`, or `http://` on a loopback host only
+(`127.0.0.1`, `::1` or `localhost`). The keys decide who is trusted, so a
+plain-HTTP fetch across a network could be swapped on the way.
 
 The check, with the `jose` library:
 
@@ -137,7 +139,7 @@ An identified person is:
 |---|---|
 | `principal` | `proxy:<iss>#<sub>` |
 | `name` | the `name` claim, else `email`, else `sub` |
-| `role` | `admin` (an operator). Who gets in is the proxy's policy. |
+| `role` | `operator`, which the dispatcher runs as `admin`, as for an operator token. Who gets in is the proxy's policy. |
 | `via` | `proxy` |
 | `expiresAt` | `exp` + 60 s |
 | `ambient` | `true` |
