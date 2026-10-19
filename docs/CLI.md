@@ -79,7 +79,7 @@ command starts it again) to bring the platform up.
 |---|---|---|
 | 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
-| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout, or answered the handshake then closed before the first request succeeded |
+| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout, or answered the handshake then closed before the CLI's startup status probe answered |
 | 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down), or a worker named with `component install --worker` cannot be asked |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
@@ -2277,11 +2277,14 @@ from a worker whose clock is behind prints after a later gateway event.
 ## `simlock daemon <start|stop|status|logs [--follow]>`
 
 If a command auto-starts a daemon and it answers the handshake but closes
-before the command's first request succeeds, the command reports
-`DAEMON_STARTUP_FAILED` (exit 1). After a successful request, later deaths
-report `DAEMON_CONNECTION_LOST`, including during a held lease or an operation
-on the same connection. A connection to an already listening daemon keeps
-the usual `DAEMON_CONNECTION_LOST` behavior.
+before the CLI's startup status probe answers, the command reports
+`DAEMON_STARTUP_FAILED` (exit 1). The probe shares the launch timeout and runs
+before the command's operation, including after a rejected credential falls
+back to an agent session. Once status answers (even `starting`), later deaths
+report `DAEMON_CONNECTION_LOST`, including while a lease request queues or
+boots, during a held lease, or during an operation on the same connection. An
+unanswered probe times out with `DAEMON_STARTUP_FAILED`. A connection to an
+already listening daemon keeps the usual `DAEMON_CONNECTION_LOST` behavior.
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode

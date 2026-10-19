@@ -1447,13 +1447,18 @@ describe("CLI: auto-launch's failed start (#672)", () => {
 });
 
 describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)", () => {
-  it.each(["hello", "request"] as const)(
-    "reports a daemon it launched that answers hello then dies during that start as a failed start, not a lost connection (after %s)",
-    async (closeAfter) => {
+  it.each([
+    { closeAfter: "hello", rejectedCredential: false },
+    { closeAfter: "request", rejectedCredential: false },
+    { closeAfter: "hello", rejectedCredential: true },
+    { closeAfter: "request", rejectedCredential: true },
+  ] as const)(
+    "reports a daemon it launched that answers hello then dies during that start as a failed start, not a lost connection (after $closeAfter, credential rejected: $rejectedCredential)",
+    async ({ closeAfter, rejectedCredential }) => {
       // why: this stages the daemon that loses its HTTP port race exactly as the socket shows it
       // to the CLI: absent before the launch, then listening, answering `hello`, and closing on
       // its own `http-start-failed` stop before the command's first real request is answered.
-      const dyingDaemon = new HelloThenDeathIpc(closeAfter);
+      const dyingDaemon = new HelloThenDeathIpc(closeAfter, rejectedCredential);
       const clock = new FakeClock(0);
       const launcher = new FakeDaemonLauncher(() => {
         dyingDaemon.startListening();
@@ -1490,16 +1495,17 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       ).toBe(true);
 
       // why: the staging itself, proven from the fake's side -- the socket was absent until this
-      // command launched the daemon, the daemon did answer that command's `hello`, and every
-      // connection it accepted died by its own hand. Without these the assertion below could be
+      // command launched the daemon and answered `hello` before it closed the connection. Without
+      // these the assertion below could be
       // reached by a connection that never saw a daemon at all.
       expect(launcher.launches).toBe(1);
       expect(dyingDaemon.helloReplies).toBe(1);
       expect(dyingDaemon.deaths).toBe(1);
+      expect(dyingDaemon.rejectedCredentials).toBe(rejectedCredential ? 1 : 0);
 
       expect(await exitCode).toBe(1);
       expect(output.stdout).toBe("");
-      expect(JSON.parse(output.stderr)).toMatchObject({
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toMatchObject({
         error: {
           code: "DAEMON_STARTUP_FAILED",
           message: expect.stringContaining("daemon"),
@@ -1508,31 +1514,85 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     },
   );
 
-  it("keeps a pre-existing daemon's hello-then-close as DAEMON_CONNECTION_LOST", async () => {
-    const dyingDaemon = new HelloThenDeathIpc();
-    dyingDaemon.startListening();
-    const launcher = new FakeDaemonLauncher();
-    const output = outputCapture({
-      ...realCliEnvironmentPorts(),
-      ipc: dyingDaemon,
-      launcher,
-    });
+  it.each([false, true])(
+    "keeps a pre-existing daemon's hello-then-close as DAEMON_CONNECTION_LOST (credential rejected: %s)",
+    async (rejectedCredential) => {
+      const dyingDaemon = new HelloThenDeathIpc("hello", rejectedCredential);
+      dyingDaemon.startListening();
+      const launcher = new FakeDaemonLauncher();
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(),
+        ipc: dyingDaemon,
+        launcher,
+      });
 
+      expect(
+        await runCli(["daemon", "start", "--json", "--token", "probe"], output.environmentWith()),
+      ).toBe(1);
+      expect(launcher.launches).toBe(0);
+      expect(dyingDaemon.helloReplies).toBe(1);
+      expect(dyingDaemon.deaths).toBe(1);
+      expect(output.stdout).toBe("");
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toEqual({
+        error: { code: "DAEMON_CONNECTION_LOST", message: "Daemon connection closed" },
+      });
+    },
+  );
+
+  it("preserves DAEMON_STOPPING from the startup status probe and closes its client", async () => {
+    const daemon = new HelloThenDeathIpc("stopping");
+    const launcher = new FakeDaemonLauncher(() => daemon.startListening());
+    const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, launcher });
+    expect(await runCli(["daemon", "start", "--token", "probe"], output.environmentWith())).toBe(1);
+    expect(launcher.launches).toBe(1);
+    expect(daemon.helloReplies).toBe(1);
+    expect(daemon.clientCloses).toBe(1);
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "DAEMON_STOPPING" } });
+  });
+
+  it("bounds the startup status probe by the original launch deadline and closes its client", async () => {
+    const daemon = new HelloThenDeathIpc("silent");
+    const clock = new FakeClock(0);
+    const launcher = new FakeDaemonLauncher(() => {
+      clock.setTimer(19_000, () => daemon.startListening());
+    });
+    const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, clock, launcher });
+    let settled = false;
+    const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+      (code) => {
+        settled = true;
+        return code;
+      },
+    );
+    for (let tick = 0; tick < 500 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+    }
+    expect(settled, "silent startup probe must settle within the launch budget").toBe(true);
     expect(
-      await runCli(["daemon", "start", "--json", "--token", "probe"], output.environmentWith()),
-    ).toBe(1);
-    expect(launcher.launches).toBe(0);
-    expect(dyingDaemon.helloReplies).toBe(1);
-    expect(dyingDaemon.deaths).toBe(1);
-    expect(output.stdout).toBe("");
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "DAEMON_CONNECTION_LOST", message: "Daemon connection closed" },
+      clock.now(),
+      "probe must use the budget left after the socket appeared",
+    ).toBeLessThanOrEqual(20_050);
+    expect(await run).toBe(1);
+    expect(launcher.launches).toBe(1);
+    expect(daemon.helloReplies).toBe(1);
+    expect(daemon.clientCloses).toBe(1);
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: expect.stringContaining("Timed out starting"),
+      },
     });
   });
 
-  it.each(["held lease", "in-flight request"] as const)(
-    "keeps an auto-launched daemon's death after a successful request as DAEMON_CONNECTION_LOST during %s",
-    async (operation) => {
+  it.each([
+    { operation: "pending lease", health: "running" },
+    { operation: "pending lease", health: "starting" },
+    { operation: "held lease", health: "running" },
+    { operation: "in-flight request", health: "running" },
+  ] as const)(
+    "keeps an auto-launched daemon's death after its startup status probe as DAEMON_CONNECTION_LOST during $operation (status: $health)",
+    async ({ operation, health }) => {
       const ipc = new MemoryIpcTransport();
       const clock = new FakeClock(0);
       const requests: string[] = [];
@@ -1553,10 +1613,10 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
                     role: "admin",
                     principal: "test-requester",
                   }
-                : frame.type === "lease.request"
+                : frame.type === "lease.request" && operation !== "pending lease"
                   ? detachedGrant
                   : frame.type === "status.get"
-                    ? EMPTY_STATUS
+                    ? { ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, health } }
                     : undefined;
             if (payload === undefined) return;
             replies.push(frame.type);
@@ -1572,7 +1632,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       });
       let settled = false;
       const runPromise = runCli(
-        operation === "held lease"
+        operation !== "in-flight request"
           ? ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--token", "probe"]
           : ["simctl", "list", "--token", "probe"],
         output.environmentWith(),
@@ -1581,7 +1641,11 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         return code;
       });
       const ready = (): boolean =>
-        operation === "held lease" ? output.stdout !== "" : requests.includes("driver.passthrough");
+        operation === "held lease"
+          ? output.stdout !== ""
+          : requests.includes(
+              operation === "pending lease" ? "lease.request" : "driver.passthrough",
+            );
       for (let tick = 0; tick < 100 && !ready() && !settled; tick += 1) {
         clock.advance(50);
         await settle();
@@ -1591,22 +1655,22 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       expect(settled).toBe(false);
       expect(launcher.launches).toBe(1);
       expect(connections).toHaveLength(1);
-      expect(replies).toEqual([
-        "hello",
-        operation === "held lease" ? "lease.request" : "status.get",
-      ]);
+      expect(requests).toContain(
+        operation === "in-flight request" ? "driver.passthrough" : "lease.request",
+      );
+      if (operation === "pending lease") expect(replies).not.toContain("lease.request");
       await connections[0]!.close();
       expect(await runPromise).toBe(1);
       expect(JSON.parse(output.stderr)).toMatchObject({
         error: { code: "DAEMON_CONNECTION_LOST" },
       });
+      expect(replies).toContain("status.get");
       if (operation === "held lease") {
         expect(JSON.parse(output.stdout)).toMatchObject({ lease: detachedGrant.lease });
         expect(JSON.parse(output.stderr).error.message).toContain(detachedGrant.lease.id);
-        expect(requests).toEqual(["hello", "lease.request"]);
+        expect(requests).toContain("lease.request");
       } else {
         expect(output.stdout).toBe("");
-        expect(requests).toEqual(["hello", "status.get", "driver.passthrough"]);
       }
     },
   );
@@ -6405,17 +6469,18 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
   return capture;
 }
 
-// why: the auto-launch poll's view of the daemon that loses the race for its HTTP port
-// (#684): absent until this command launches it, then listening, answering one frame -- the
-// `hello` -- and closing every connection it handed out when it stops itself on
-// `http-start-failed`. `deaths` counts only the connections the daemon itself killed, never
-// one the client closed.
 class HelloThenDeathIpc implements IpcConnector {
   helloReplies = 0;
   deaths = 0;
   #listening = false;
 
-  constructor(readonly closeAfter: "hello" | "request" = "hello") {}
+  rejectedCredentials = 0;
+  clientCloses = 0;
+
+  constructor(
+    readonly closeAfter: "hello" | "request" | "silent" | "stopping" = "hello",
+    readonly rejectCredential = false,
+  ) {}
 
   startListening(): void {
     this.#listening = true;
@@ -6459,8 +6524,39 @@ class HelloThenDeathConnection implements IpcConnection {
     let answeredHello = false;
     for (const line of contents.split("\n")) {
       if (line.trim() === "") continue;
-      const frame = JSON.parse(line) as { id?: unknown; type?: unknown };
+      const frame = JSON.parse(line) as {
+        id?: unknown;
+        type?: unknown;
+        payload?: { credential?: string };
+      };
+      if (frame.type === "status.get" && this.daemon.closeAfter === "stopping") {
+        const reply = {
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "DAEMON_STOPPING",
+            message: "Daemon is stopping",
+            details: {},
+          },
+        };
+        for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+      }
       if (frame.type !== "hello" || typeof frame.id !== "number") continue;
+      if (this.daemon.rejectCredential && frame.payload?.credential !== undefined) {
+        this.daemon.rejectedCredentials += 1;
+        const reply = {
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "ADMIN_AUTHENTICATION_FAILED",
+            message: "Rejected credential",
+            details: {},
+          },
+        };
+        for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+        this.#shutDown(false);
+        return;
+      }
       answeredHello = true;
       this.daemon.helloReplies += 1;
       const reply = {
@@ -6476,10 +6572,15 @@ class HelloThenDeathConnection implements IpcConnection {
       };
       for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
     }
-    if (!answeredHello || this.daemon.closeAfter === "hello") this.#shutDown(true);
+    if (
+      this.daemon.closeAfter === "hello" ||
+      (!answeredHello && this.daemon.closeAfter === "request")
+    )
+      this.#shutDown(true);
   }
 
   async close(): Promise<void> {
+    this.daemon.clientCloses += 1;
     this.#shutDown(false);
   }
 
