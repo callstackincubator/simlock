@@ -49,7 +49,7 @@ reads none of its config. With no destinations, the gateway behaves
 exactly as before (architecture rule 15).
 
 It subscribes per event name, one subscription for each of the eleven
-events (§3), with `EventBus.subscribe`. The handler only puts a message on
+events (§3) that at least one destination lists, with `EventBus.subscribe`. The handler only puts a message on
 a queue and returns. It never awaits and never throws to the emitter
 (events rules 4 and 5).
 
@@ -161,7 +161,8 @@ sequenceDiagram
   queue drops the oldest waiting one. The one being sent is never dropped.
 - Nothing is written to disk. A gateway restart loses what was waiting.
 - On stop, the module aborts the send in flight and drops the queues. It
-  waits for nothing.
+  waits for nothing. It stops before the HTTP gateway closes the worker
+  uplinks, so a gateway's own stop sends no `worker.disconnected`.
 
 Every message ends in one named way, each a log line on the `alerts`
 child logger that names the destination, never its URL. A failed try is
@@ -202,7 +203,12 @@ drop a repeat by `X-Simlock-Delivery`.
 body. Slack is the promised receiver; other services that take the same body
 may work. Each of the eleven
 events has one written message, held in a table typed over the event list,
-so a missing message fails the type check. A message names the worker by
+so a missing message fails the type check.
+
+**Formats are an extension point** (architecture rules 19-21): a
+definition per format in `src/alerts/formats/<name>/`, one registry typed
+over core's `ALERT_FORMATS`, and a conformance suite. The queue never
+names a format. A message names the worker by
 `workerLabel`. Its words are part of #707's spec, not of this ADR.
 
 ### 6. Secrets and the test command
