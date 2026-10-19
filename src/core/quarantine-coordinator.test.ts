@@ -1646,6 +1646,17 @@ describe("QuarantineCoordinator quarantine cause", () => {
     },
   );
 
+  it("enterFromStalledTransition of a device in another state, the lease engine's hand-over after a failed destroy, writes kind delete-failed", async () => {
+    const harness = await build({ physical: false, state: "shutdown" });
+
+    const entered = await harness.coordinator.enterFromStalledTransition(harness.id, "shutdown");
+
+    expect(entered).toBe(true);
+    expect(harness.device()?.state).toBe("quarantined");
+    expect(harness.device()?.quarantineCause).toEqual({ kind: "delete-failed" });
+    expect(harness.quarantinedPayload()).toMatchObject({ kind: "delete-failed" });
+  });
+
   it.each(["ios", "android"] as const)(
     "device.quarantined carries the %s device's platform from enter and from enterFromStalledTransition",
     async (platform) => {
