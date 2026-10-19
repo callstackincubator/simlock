@@ -29,10 +29,11 @@ Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.
    falls back to `index.html`. An unbuilt console answers 404 and logs one warning.
 2. Log middleware — one `request` line per answer (method, path, status, `durationMs`,
    `requesterId`). Not for `/v1/healthz`.
-3. `requireAuth` on every route but `GET /v1/healthz`. No or unknown token → 401
-   `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
+3. `requireAuth` on every route but `GET /v1/healthz`. It asks `src/auth` with the request's
+   headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
+   Neither valid → 401 `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
 4. Body — strict zod schema (`jsonBody`), else 400 `BAD_REQUEST`.
-5. `buildHttpSession` — principal = token id; `operator` → `admin`, `agent` → `agent`.
+5. `buildHttpSession` — principal = the identity's (a token's id, or `proxy:<iss>#<sub>`); `operator` → `admin`, `agent` → `agent`.
 6. `deps.dispatch` — the daemon's own dispatcher, in process: `DaemonServer.dispatch`.
    Role check, `authorize` and readiness parking run there.
 7. `app.onError` → `mapError` → `{ error: { code, message, ...details } }`. `NO_CAPACITY`
@@ -57,7 +58,8 @@ agent-device front and the stream (`/v1/stream`).
 
 ## Streams
 
-- `pipeSse` writes events in order, `: keepalive` every 15 s, unsubscribes on abort.
+- `pipeSse` writes events in order, `: keepalive` every 15 s, unsubscribes on abort. A stream
+  opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`).
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.
 - `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).

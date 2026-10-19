@@ -44,11 +44,11 @@ terminal state. No route blocks on device work in flight.
 
 ## Authentication
 
-Every route requires `Authorization: Bearer slk_<secret>` except two: `GET
+Every route requires `Authorization: Bearer slk_<secret>` (or, with `http.proxyAuth` set, a request that passes through the sign-in proxy: see [Signing in through a proxy](#signing-in-through-a-proxy)) except two: `GET
 /v1/healthz`, and the web console's own files, which the daemon serves at
 every path outside `/v1` (see [CONSOLE.md](CONSOLE.md)). They hold no data;
 the console reads everything it shows from the routes below, with the
-operator's token. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
+operator's token. A request with neither a recognized token nor a trusted proxy JWT is `401 UNAUTHENTICATED`.
 
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
@@ -57,7 +57,7 @@ the daemon is the only process that reads or writes `tokens.json`, so unlike
 is
 `{ id, role, label?, createdAt }`, hashed at rest in `~/.simlock/tokens.json`
 (SHA-256; the plaintext secret is shown exactly once, at `create`, and never
-persisted). The token id doubles as the requester identity over HTTP: unlike
+persisted). For a request signed in by a token, the token id is the requester identity over HTTP (a proxy sign-in uses the principal below): unlike
 the CLI's `--agent-id`/`SIMLOCK_AGENT_ID`, identity is never client-declared
 here, so the one-lease-per-requester rule keys off which token authenticated
 the request, not anything the request body says.
@@ -170,13 +170,21 @@ Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 
 ### `GET /v1/identity`
 
-Role: `agent`. Who Simlock thinks the caller is: `principal` (the token's id),
-`name` (the token's label, or its id when it has none), `role` (`admin` for an
-operator token, `agent` for an agent token) and `via` (`token`). A `worker`
+Role: `agent`. Who Simlock thinks the caller is: `principal` (the token's id, or
+`proxy:<iss>#<sub>` for a person signed in through the proxy), `name` (the token's
+label, or its id when it has none; a person's `name` claim or `email`), `role`
+(`admin` for an operator token or a person, `agent` for an agent token), `via`
+(`token` or `proxy`) and, when one is configured, `signOutUrl`. A `worker`
 token is refused with `403`, as on every route.
 
 ```json
 {"principal":"tok_9f2c","name":"ci-runner","role":"agent","via":"token"}
+```
+
+Signed in through the proxy:
+
+```json
+{"principal":"proxy:https://idp.example#u1","name":"Ada","role":"admin","via":"proxy","signOutUrl":"https://idp.example/logout"}
 ```
 
 ### `GET /v1/status`
