@@ -57,6 +57,12 @@ describe("checkIdentity", () => {
     expect(outcomes).toEqual(cases.map(([, outcome]) => outcome));
   });
 
+  it("after a loss, a 5xx from the identity check counts as unreachable, not none", async () => {
+    const outcome = await checkIdentity(asking(json(503, simlock("UNAVAILABLE"))).fetch, true);
+
+    expect(outcome).toEqual({ kind: "unreachable" });
+  });
+
   it("asks /v1/healthz when the answer is not Simlock's, and says the proxy's session ended when that answers", async () => {
     const notSimlock: readonly Answer[] = [
       NETWORK_ERROR,

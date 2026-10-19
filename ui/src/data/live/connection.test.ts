@@ -174,6 +174,29 @@ describe("LiveConnection", () => {
     }
   });
 
+  it("an answer to reconnect that arrives after the tab was hidden or the connection disposed opens nothing", async () => {
+    for (const end of ["hidden", "disposed"] as const) {
+      let answer: (value: "reconnect") => void = () => {};
+      const { connection, daemon, visibility } = connect(
+        () => new Promise((resolve) => (answer = resolve)),
+      );
+      connection.watch("/v1/workers", () => {});
+      await settle();
+      daemon.openStream()?.end();
+      await settle();
+      if (end === "hidden") visibility.set(true);
+      else connection.dispose();
+      const streams = daemon.streams.length;
+
+      answer("reconnect");
+      await settle();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(daemon.streams).toHaveLength(streams);
+      connection.dispose();
+    }
+  });
+
   it("a stream silent for 40 seconds in a proxy session reconnects at once when the proxy still knows the person", async () => {
     const { daemon } = connect(() => Promise.resolve("reconnect"));
     await settle();

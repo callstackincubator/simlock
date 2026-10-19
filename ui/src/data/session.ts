@@ -53,10 +53,10 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
     );
   };
   // why: callers while a check runs get its outcome, and only the first applies it.
-  const check = (): Promise<IdentityOutcome> | undefined => {
+  const check = (afterLoss: boolean): Promise<IdentityOutcome> | undefined => {
     if (deps === undefined) return undefined;
     if (inFlight !== undefined) return inFlight;
-    const running = checkIdentity(deps.fetch).finally(() => {
+    const running = checkIdentity(deps.fetch, afterLoss).finally(() => {
       inFlight = undefined;
     });
     inFlight = running;
@@ -78,7 +78,7 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
   };
   const opening = async (atLoad: boolean) => {
     const first = inFlight === undefined;
-    const running = check();
+    const running = check(!atLoad);
     if (running === undefined) return set({ kind: "none" });
     const outcome = await running;
     // why: only the caller that started the check applies its outcome, and a token signed in while
@@ -119,7 +119,7 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
     async lost() {
       if (state.kind !== "proxy") return "backoff";
       const first = inFlight === undefined;
-      const running = check();
+      const running = check(true);
       if (running === undefined) return "backoff";
       const outcome = await running;
       if (outcome.kind === "proxy") return "reconnect";

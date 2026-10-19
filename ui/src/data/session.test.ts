@@ -282,6 +282,12 @@ describe("a session behind a sign-in proxy", () => {
         reloads: 0,
         state: "proxy",
       },
+      {
+        answer: "backoff",
+        identity: answers(502, { error: { code: "BAD_GATEWAY" } }),
+        reloads: 0,
+        state: "proxy",
+      },
       { answer: "stop", identity: HTML_403, reloads: 1, state: "proxy" },
       { answer: "stop", identity: answers(200, { via: "token" }), reloads: 0, state: "none" },
     ] as const;

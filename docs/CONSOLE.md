@@ -536,7 +536,9 @@ it):
 | Daemon is starting | The daemon is back, and is still starting up. |
 
 While reconnecting, the console keeps the last data on screen and tries the
-daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. When the
+daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. Behind a
+sign-in proxy it first checks that your proxy session is still valid, and
+reconnects at once if it is. When the
 daemon answers, the console refreshes the page and it goes back to
 Connected. You do not need to reload.
 
