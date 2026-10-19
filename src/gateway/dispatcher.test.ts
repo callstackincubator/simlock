@@ -112,7 +112,12 @@ class FakeTokens implements TokenOperations {
   async list() {
     return [
       { createdAt: 1, hash: "unused", id: "tok_1", role: "worker" as const },
-      ...this.records.map((record) => ({ createdAt: 1, hash: "unused", role: "agent" as const, ...record })),
+      ...this.records.map((record) => ({
+        createdAt: 1,
+        hash: "unused",
+        role: "agent" as const,
+        ...record,
+      })),
     ];
   }
 
