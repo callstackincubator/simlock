@@ -107,12 +107,12 @@ function personOf(
   payload: JWTPayload,
   settings: { readonly issuer: string; readonly signOutUrl?: string | undefined },
 ): Identity | undefined {
-  const { sub, email, iss, exp } = payload;
+  const { sub, email, exp } = payload;
   const person = nonEmpty(sub);
   const address = nonEmpty(email);
   if (person === undefined || address === undefined) return undefined;
   return {
-    principal: `proxy:${iss ?? settings.issuer}#${person}`,
+    principal: `proxy:${settings.issuer}#${person}`,
     name: nonEmpty(payload["name"]) ?? address,
     role: "operator",
     via: "proxy",

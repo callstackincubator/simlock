@@ -38,6 +38,7 @@ async function readCapped(response: Response, signal: AbortSignal): Promise<stri
 
 export class FakeKeySetFetcher implements KeySetFetcher {
   readonly urls: string[] = [];
+  readonly signals: AbortSignal[] = [];
   #handler: (signal: AbortSignal) => Promise<KeySetResponse> = () =>
     Promise.reject(new Error("FakeKeySetFetcher has no answer scripted"));
 
@@ -67,6 +68,7 @@ export class FakeKeySetFetcher implements KeySetFetcher {
 
   fetch(url: string, options: { readonly signal: AbortSignal }): Promise<KeySetResponse> {
     this.urls.push(url);
+    this.signals.push(options.signal);
     return this.#handler(options.signal);
   }
 }

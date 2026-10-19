@@ -95,8 +95,10 @@ export function unsigned(payload: Record<string, unknown>): string {
 }
 
 export function withAlteredSignature(jwt: string): string {
-  const last = jwt.at(-1) === "A" ? "B" : "A";
-  return `${jwt.slice(0, -1)}${last}`;
+  // why: the last base64url character of a signature carries padding bits, so changing it can leave the bytes unchanged; the first one is all data.
+  const start = jwt.lastIndexOf(".") + 1;
+  const first = jwt.at(start) === "A" ? "B" : "A";
+  return `${jwt.slice(0, start)}${first}${jwt.slice(start + 1)}`;
 }
 
 export function proxyRequest(jwt: string, header: string = proxyAuthConfig.header): Headers {

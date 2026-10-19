@@ -2114,6 +2114,31 @@ describe("loadConfig over http.proxyAuth", () => {
     );
   });
 
+  it("bounds the header name to 64 characters, the audience to 512, and refuses an empty issuer or audience", async () => {
+    await expect(load({ ...complete, header: "h".repeat(64) })).resolves.toBeDefined();
+    await expect(load({ ...complete, header: "h".repeat(65) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected an HTTP header name',
+    );
+    await expect(load({ ...complete, audience: "a".repeat(512) })).resolves.toBeDefined();
+    await expect(load({ ...complete, audience: "a".repeat(513) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.audience": expected at most 512 characters',
+    );
+    await expect(load({ ...complete, issuer: "" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.issuer": expected a non-empty string',
+    );
+    await expect(load({ ...complete, audience: "" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.audience": expected a non-empty string',
+    );
+  });
+
+  it("refuses a sign-out URL that is not an http or https URL", async () => {
+    for (const signOutUrl of ["not a url", "ftp://team.dev/out"]) {
+      await expect(load({ ...complete, signOutUrl }), signOutUrl).rejects.toThrow(
+        'Invalid config value for "http.proxyAuth.signOutUrl": expected an http:// or https:// URL',
+      );
+    }
+  });
+
   it("accepts an issuer of 128 characters and refuses one of 129", async () => {
     await expect(load({ ...complete, issuer: "i".repeat(128) })).resolves.toBeDefined();
 

@@ -184,14 +184,11 @@ describe("authenticateRequest with the proxy strategy", () => {
 
   it("refuses a header over 8 KiB as malformed without asking the key URL", async () => {
     const { auth, keySetFetcher } = await harness();
-    const good = await k1.sign(personClaims());
-    expect(await outcome(auth, proxyRequest(good))).toEqual(person());
-    const fetchesForGood = keySetFetcher.urls.length;
 
     const answer = await outcome(auth, proxyRequest("e".repeat(8 * 1024 + 1)));
 
     expect(answer).toEqual(refused("malformed"));
-    expect(keySetFetcher.urls).toHaveLength(fetchesForGood);
+    expect(keySetFetcher.urls).toHaveLength(0);
   });
 
   it("does not take a verified JWT with no person claims for a person: its Simlock token decides", async () => {
@@ -238,6 +235,25 @@ describe("authenticateRequest with the proxy strategy", () => {
     expect(await outcome(auth, bearer(secret))).toMatchObject({ identity: { via: "token" } });
     expect(await outcome(auth, bearer(await k1.sign(personClaims())))).toEqual(person());
     expect(await outcome(auth, bearer("abc"))).toEqual(refused("malformed"));
+    expect(await outcome(auth, bearer("slk_unknown"))).toEqual({
+      status: 401,
+      message: "Unknown bearer token",
+    });
+  });
+
+  it("takes header authorization written with capitals as authorization", async () => {
+    const { auth } = await harness({ proxyAuth: { ...proxyAuthConfig, header: "Authorization" } });
+    const { secret } = await auth.tokens.create("agent", "ci");
+
+    expect(await outcome(auth, new Headers({ authorization: `Bearer ${secret}` }))).toMatchObject({
+      identity: { via: "token" },
+    });
+    expect(
+      await outcome(
+        auth,
+        new Headers({ authorization: `Bearer ${await k1.sign(personClaims())}` }),
+      ),
+    ).toEqual(person());
   });
 
   it("keeps answering Unknown bearer token for a Bearer value that is not a token when proxy sign-in is off", async () => {
@@ -334,10 +350,12 @@ describe("the proxy strategy's key URL", () => {
     clock.advance(4_999);
     await flush();
     expect(settled).toEqual([]);
+    expect(keySetFetcher.signals[0]?.aborted).toBe(false);
     clock.advance(1);
     await pending;
 
     expect(settled).toEqual([refused("keys-unavailable")]);
+    expect(keySetFetcher.signals[0]?.aborted).toBe(true);
   });
 
   it("serves a second JWT from the keys it holds and fetches again once they are 10 minutes old", async () => {
