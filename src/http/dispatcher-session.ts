@@ -25,6 +25,14 @@ function toRole(identityRole: Identity["role"]): Role {
   return identityRole === "operator" ? "admin" : "agent";
 }
 
+const VIA_VALUES = ["token", "proxy", "socket", "uplink"] as const;
+
+function toVia(via: string): DispatchSession["via"] {
+  const known = VIA_VALUES.find((value) => value === via);
+  if (known === undefined) throw new Error(`Unknown identity via: ${via}`);
+  return known;
+}
+
 // why: `onProgress` and the like are per-call, not part of the identity, so the routes that need one pass an override in `extra`; every other route gets inert defaults that no operation it dispatches ever calls.
 
 export function buildHttpSession(
@@ -61,7 +69,9 @@ export function buildHttpSession(
   return {
     manageEventSubscription: extra?.manageEventSubscription ?? (() => undefined),
     principal: identity.principal,
+    name: identity.name,
     role: toRole(identity.role),
+    via: toVia(identity.via),
     ...(extra?.onProgress === undefined ? {} : { onProgress: extra.onProgress }),
     ...(extra?.onRequestAdmitted === undefined
       ? {}

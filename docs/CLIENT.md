@@ -337,6 +337,14 @@ Three limits worth knowing:
 Paths in `args` resolve on the daemon's filesystem, not yours. Getting an
 `.app` or an `.apk` there is out of scope for now.
 
+## Who you are: `identity()`
+
+`client.identity()` asks the daemon who it thinks this connection is and
+resolves to `{ principal, name, role, via }`. `name` is the principal when
+nothing else was declared, `role` is `"admin"` or `"agent"`, and `via` is
+`"socket"` for a socket connection. Both `connectSimlock` and
+`connectSimlockAdmin` clients have it.
+
 ## Picking a device: `getCatalog`
 
 `getCatalog({ platform? })` returns what can be leased, per platform:

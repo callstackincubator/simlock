@@ -51,7 +51,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
    Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
    Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 46, max: 46 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 47, max: 47 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.

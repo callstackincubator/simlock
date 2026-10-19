@@ -1374,6 +1374,22 @@ under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
 `allowDownload`, `requesterId`, ...); those did not change shape, only their
 schema's source of truth.
 
+## `simlock whoami [--json]`
+
+Prints who Simlock thinks you are, for this CLI's own session: the principal,
+the name to show, the role and how you signed in. Like every command it
+starts the daemon when none runs.
+
+```
+$ simlock whoami
+Principal: claude-1
+Name:      claude-1
+Role:      admin
+Via:       socket
+```
+
+`--json` prints `{"principal","name","role","via"}` as one object.
+
 ## `simlock status`
 
 In `status --json`, an enrolled physical device's entry carries `driverDeviceId`,

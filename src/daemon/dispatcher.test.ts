@@ -397,6 +397,7 @@ async function buildDispatcher(
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
   return {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "tok_agent",
     role: "agent",
     ...overrides,

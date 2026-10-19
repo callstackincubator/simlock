@@ -140,6 +140,17 @@ ignores every one of them keeps working against a gateway unchanged.
 
 Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 
+### `GET /v1/identity`
+
+Role: `agent`. Who Simlock thinks the caller is: `principal` (the token's id),
+`name` (the token's label, or its id when it has none), `role` (`admin` for an
+operator token, `agent` for an agent token) and `via` (`token`). A `worker`
+token is refused with `403`, as on every route.
+
+```json
+{"principal":"tok_9f2c","name":"ci-runner","role":"agent","via":"token"}
+```
+
 ### `GET /v1/status`
 
 Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,

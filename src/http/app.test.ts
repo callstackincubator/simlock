@@ -1089,6 +1089,7 @@ describe("lease-request ownership", () => {
       { model: "iPhone 17 Pro", platform: "ios", requesterId: "tok_agent" },
       {
         manageEventSubscription: () => undefined,
+        via: "socket",
         onRequestAdmitted: (admitted) => (id = admitted),
         principal: "tok_other",
         role: "agent",

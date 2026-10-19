@@ -24,12 +24,14 @@ async function freeLoopbackPort(): Promise<number> {
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "test-operator",
   role: "admin",
 };
 
 const agent: DispatchSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "agent-1",
   role: "agent",
 };

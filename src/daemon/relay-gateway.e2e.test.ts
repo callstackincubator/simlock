@@ -167,6 +167,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
   const agent = (overrides: Partial<DispatchSession> = {}): DispatchSession => ({
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "fleet-agent-1",
     role: "agent",
     ...overrides,

@@ -57,12 +57,18 @@ const endedMessage = "lease ended by simlock; run disconnect, then open";
 
 const adminSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "admin",
   role: "admin",
 } as const;
 
 function sessionFor(principal: string) {
-  return { manageEventSubscription: () => undefined, principal, role: "agent" } as const;
+  return {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal,
+    role: "agent",
+  } as const;
 }
 
 interface Envelope {

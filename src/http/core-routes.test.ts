@@ -44,6 +44,7 @@ describe("the routes createHttpApp registers", () => {
         "devices",
         "events",
         "healthz",
+        "identity",
         "lease-requests",
         "leases",
         "stats",

@@ -521,7 +521,7 @@ class SimlockClientImpl {
   }
 
   identity(): Promise<IdentityOutput> {
-    return Promise.reject(new Error("not implemented"));
+    return this.#call("identity.get", {});
   }
 
   listComponents(input: ComponentListInput = {}): Promise<ComponentListOutput> {

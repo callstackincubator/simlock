@@ -1037,7 +1037,7 @@ export const identityGet = defineOperation({
     principal: z.string(),
     name: z.string(),
     role: z.enum(["admin", "agent"]),
-    via: z.enum(["socket", "uplink"]),
+    via: z.enum(["token", "proxy", "socket", "uplink"]),
     signOutUrl: z.string().optional(),
   }),
 });

@@ -629,6 +629,10 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity")))),
   );
 
+  app.get("/v1/identity", agentAuth, async (c) =>
+    c.json(await deps.dispatch("identity.get", {}, buildHttpSession(c.get("identity")))),
+  );
+
   app.get("/v1/devices", agentAuth, async (c) => {
     const devices = await deps.dispatch(
       "list.get",

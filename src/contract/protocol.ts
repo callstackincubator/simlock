@@ -10,7 +10,7 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /** Widen only once a second version is kept alive side by side with the first; a bump that leaves no shim behind moves both ends. */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 46, max: 46 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 47, max: 47 };
 
 const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
@@ -85,6 +85,7 @@ export const CORE_ROUTE_SEGMENTS: readonly string[] = [
   "devices",
   "events",
   "healthz",
+  "identity",
   "lease-requests",
   "leases",
   "stats",

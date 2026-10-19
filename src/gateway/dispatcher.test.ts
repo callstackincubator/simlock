@@ -241,6 +241,7 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
     manageEventSubscription: () => "sub_1",
     principal: "operator-1",
     role: "admin",
+    via: "socket",
     ...overrides,
   };
 }

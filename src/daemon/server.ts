@@ -1123,6 +1123,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "identity.get":
+        return this.#dispatcher.dispatch(
+          "identity.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "token.create":
         return this.#dispatcher.dispatch("token.create", frame.payload, this.#session(connection));
       case "token.list":
@@ -1208,6 +1214,7 @@ export class DaemonServer {
       principal: connection.principal,
       relays: connection.relays,
       role: connection.role,
+      via: connection.isGatewayUplink === true ? "uplink" : "socket",
     };
   }
 

@@ -61,7 +61,7 @@ export interface DispatchSession {
    */
   readonly isGatewayUplink?: boolean;
   readonly name?: string;
-  readonly via?: "token" | "proxy" | "socket" | "uplink";
+  readonly via: "token" | "proxy" | "socket" | "uplink";
   readonly signOutUrl?: string;
   /** Called for each progress update while this specific `lease.request` call is in flight.
    * Ignored by every other operation. */
@@ -123,10 +123,6 @@ export interface DispatchSession {
 /** Thrown for a role/ownership rejection or a malformed request; `DaemonServer` maps this the
  * same way it already maps its own protocol errors (see `errorCode` in `server.ts`), and
  * `classifyError` trusts its `code` verbatim (see `error-code.ts`). */
-export function identityGet(_input: unknown, session: DispatchSession) {
-  return { principal: "", name: "", role: session.role, via: "socket" as const };
-}
-
 export class DispatchError extends Error {
   constructor(
     readonly code: string,
@@ -136,6 +132,17 @@ export class DispatchError extends Error {
     super(message);
     this.name = "DispatchError";
   }
+}
+
+// why: the one handler both dispatchers use; `name` absent means the principal.
+export function identityGet(_input: unknown, session: DispatchSession) {
+  return {
+    principal: session.principal,
+    name: session.name ?? session.principal,
+    role: session.role,
+    via: session.via,
+    ...(session.signOutUrl === undefined ? {} : { signOutUrl: session.signOutUrl }),
+  };
 }
 
 /**
