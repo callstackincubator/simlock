@@ -20,6 +20,7 @@ const SCRIPTS = new Set([
   "test:timing",
   "typecheck",
   "typecheck:e2e",
+  "typecheck:e2e:types",
   "lint",
   "lint:comments",
   "format",

@@ -41,4 +41,4 @@ pre-push:
       fail_text: "A contract shape change and a PROTOCOL_VERSION_RANGE bump go together (toolchain.md, Contract shapes)."
     typecheck-e2e:
       priority: 2
-      run: pnpm run typecheck:e2e
+      run: pnpm run typecheck:e2e:types
