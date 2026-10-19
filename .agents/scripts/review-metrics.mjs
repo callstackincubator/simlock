@@ -125,61 +125,59 @@ function tagOf(file) {
 }
 
 function run(file, tag) {
-  const messages = new Map();
-  let startedAt = null;
-  let finishedAt = null;
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    const rec = parsed(line);
-    if (rec === null) continue;
-    if (typeof rec.timestamp === "string") {
-      startedAt ??= rec.timestamp;
-      finishedAt = rec.timestamp;
-    }
-    const usage = rec.message?.usage;
-    if (rec.type === "assistant" && usage && rec.message.id) {
-      messages.set(rec.message.id, { model: rec.message.model, usage });
-    }
-  }
+  const { messages, startedAt, finishedAt } = read(file);
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const models = new Set();
   let cost = 0;
   for (const { model, usage } of messages.values()) {
     models.add(model);
-    const split = usage.cache_creation;
-    const write5m = split
-      ? (split.ephemeral_5m_input_tokens ?? 0)
-      : (usage.cache_creation_input_tokens ?? 0);
-    const write1h = split ? (split.ephemeral_1h_input_tokens ?? 0) : 0;
-    const counts = [
-      usage.input_tokens ?? 0,
-      usage.output_tokens ?? 0,
-      usage.cache_read_input_tokens ?? 0,
-      write5m,
-      write1h,
-    ];
+    const counts = countsOf(usage);
     tokens.input += counts[0];
     tokens.output += counts[1];
     tokens.cacheRead += counts[2];
-    tokens.cacheWrite += write5m + write1h;
-    const price = PRICES[model];
-    cost =
-      price === undefined || cost === null
-        ? null
-        : cost + counts.reduce((sum, n, i) => sum + n * price[i], 0) / 1e6;
+    tokens.cacheWrite += counts[3] + counts[4];
+    cost = cost === null ? null : priced(model, counts, cost);
   }
+  const seconds =
+    startedAt === null ? null : Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 1000);
   return {
     file,
     ...tag,
     models: [...models],
     startedAt,
     finishedAt,
-    seconds:
-      startedAt === null
-        ? null
-        : Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 1000),
+    seconds,
     tokens,
     costUsd: cost === null ? null : Math.round(cost * 1e4) / 1e4,
   };
+}
+
+function read(file) {
+  const records = readFileSync(file, "utf8").split("\n").map(parsed).filter(Boolean);
+  const stamps = records.map((r) => r.timestamp).filter((t) => typeof t === "string");
+  const messages = new Map();
+  for (const { message } of records.filter((r) => r.type === "assistant")) {
+    if (message?.usage && message.id) messages.set(message.id, message);
+  }
+  return { messages, startedAt: stamps[0] ?? null, finishedAt: stamps.at(-1) ?? null };
+}
+
+// why: PRICES lists its rates in this order: input, output, cache read, 5-minute, 1-hour write.
+function countsOf(usage) {
+  const split = usage.cache_creation;
+  return [
+    usage.input_tokens ?? 0,
+    usage.output_tokens ?? 0,
+    usage.cache_read_input_tokens ?? 0,
+    split ? (split.ephemeral_5m_input_tokens ?? 0) : (usage.cache_creation_input_tokens ?? 0),
+    split ? (split.ephemeral_1h_input_tokens ?? 0) : 0,
+  ];
+}
+
+function priced(model, counts, sofar) {
+  const price = PRICES[model];
+  if (price === undefined) return null;
+  return sofar + counts.reduce((sum, n, i) => sum + n * price[i], 0) / 1e6;
 }
 
 function checked(file) {
@@ -189,18 +187,19 @@ function checked(file) {
   for (const f of list) {
     if (typeof f.id !== "string" || ids.has(f.id)) throw new Error("finding IDs must be unique");
     ids.add(f.id);
-    for (const key of ["role", "class", "path"]) {
-      if (typeof f[key] !== "string" || f[key] === "")
-        throw new Error(`finding ${f.id} has no ${key}`);
-    }
-    if (!OUTCOMES.includes(f.outcome)) throw new Error(`finding ${f.id} has an invalid outcome`);
-  }
-  for (const f of list.filter((x) => x.outcome === "duplicate")) {
-    if (!list.some((x) => x.id === f.canonicalId && x.outcome !== "duplicate")) {
-      throw new Error(`duplicate ${f.id} must name a canonical finding`);
-    }
+    checkFinding(f, list);
   }
   return list;
+}
+
+function checkFinding(f, list) {
+  const missing = ["role", "class", "path"].find((k) => typeof f[k] !== "string" || f[k] === "");
+  if (missing !== undefined) throw new Error(`finding ${f.id} has no ${missing}`);
+  if (!OUTCOMES.includes(f.outcome)) throw new Error(`finding ${f.id} has an invalid outcome`);
+  const canonical = list.some((x) => x.id === f.canonicalId && x.outcome !== "duplicate");
+  if (f.outcome === "duplicate" && !canonical) {
+    throw new Error(`duplicate ${f.id} must name a canonical finding`);
+  }
 }
 
 function promptOf(rec) {

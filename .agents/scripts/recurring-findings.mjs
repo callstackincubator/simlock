@@ -75,19 +75,19 @@ if (recurring.length === 0) console.log(`No class was fixed in ${minPrs} or more
 function ledgerFindings(pr) {
   for (let page = 1; ; page++) {
     const comments = get(`issues/${pr}/comments`, { page });
-    for (const { body } of comments) {
-      const text = (body ?? "").replace(/\r/g, "");
-      if (!/^## Review ledger\s*$/m.test(text)) continue;
-      const block = /```json\n([\s\S]*?)\n```/.exec(text);
-      if (block === null) return null;
-      try {
-        const findings = JSON.parse(block[1]).findings;
-        return Array.isArray(findings) ? findings : null;
-      } catch {
-        return null;
-      }
-    }
+    const ledger = comments.find(({ body }) => /^## Review ledger\s*$/m.test(body ?? ""));
+    if (ledger !== undefined) return findingsIn(ledger.body.replace(/\r/g, ""));
     if (comments.length < 100) return null;
+  }
+}
+
+function findingsIn(text) {
+  const block = /```json\n([\s\S]*?)\n```/.exec(text);
+  try {
+    const findings = block === null ? null : JSON.parse(block[1]).findings;
+    return Array.isArray(findings) ? findings : null;
+  } catch {
+    return null;
   }
 }
 

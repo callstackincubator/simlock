@@ -153,43 +153,43 @@ print(total, ranges.length, alive);
 function stryker(mutate, testFiles, incrementalFile) {
   // why: a killed run leaves its sandboxes behind, and a stale report would be read as this one.
   rmSync(".stryker-tmp", { force: true, recursive: true });
-  const argv = ["exec", "stryker", "run", "--mutate", mutate];
-  if (testFiles.length > 0) argv.push("--testFiles", testFiles.join(","));
+  const only = testFiles.length > 0 ? ["--testFiles", testFiles.join(",")] : [];
+  const argv = ["exec", "stryker", "run", "--mutate", mutate, ...only];
   argv.push("--incremental", "--incrementalFile", incrementalFile);
   const run = spawnSync("pnpm", argv, {
     stdio: ["ignore", "inherit", "pipe"],
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  process.stderr.write(run.stderr ?? "");
-  if (!existsSync(REPORT)) {
-    // why: last, so a caller that keeps only the tail of the output still sees the cause.
-    const tail = (run.stderr ?? "").trimEnd().split("\n").slice(-15).join("\n");
-    console.error(
-      `\nStryker exited ${run.status} without a report: no mutant was tested.\n${tail}`,
-    );
-    process.exit(2);
-  }
+  const stderr = run.stderr ?? "";
+  process.stderr.write(stderr);
+  if (!existsSync(REPORT)) failed(run.status, stderr);
   const report = JSON.parse(readFileSync(REPORT, "utf8"));
-  const alive = [];
-  let total = 0;
-  for (const [path, { mutants }] of Object.entries(report.files)) {
-    for (const m of mutants) {
-      total += 1;
-      if (m.status === "Survived" || m.status === "NoCoverage") {
-        const { start, end } = m.location;
-        const replacement = (m.replacement ?? "").replace(/\s+/g, " ").slice(0, 80);
-        alive.push({
-          // why: the report counts columns from 1 and a --mutate range from 0; keeping the end
-          // as reported widens the range by one column, which can only take this mutant in.
-          range: `${path}:${start.line}:${start.column - 1}-${end.line}:${end.column}`,
-          key: `${path}:${start.line}:${start.column}-${end.line}:${end.column} ${m.mutatorName} ${m.replacement}`,
-          text: `${path}:${start.line} ${m.status} ${m.mutatorName}: ${replacement}`,
-        });
-      }
-    }
-  }
-  return { total, alive };
+  const mutants = Object.entries(report.files).flatMap(([path, file]) =>
+    file.mutants.map((m) => ({ path, ...m })),
+  );
+  const alive = mutants
+    .filter((m) => m.status === "Survived" || m.status === "NoCoverage")
+    .map(described);
+  return { total: mutants.length, alive };
+}
+
+function failed(status, stderr) {
+  // why: last, so a caller that keeps only the tail of the output still sees the cause.
+  const tail = stderr.trimEnd().split("\n").slice(-15).join("\n");
+  console.error(`\nStryker exited ${status} without a report: no mutant was tested.\n${tail}`);
+  process.exit(2);
+}
+
+function described({ path, location: { start, end }, mutatorName, replacement, status }) {
+  const shown = (replacement ?? "").replace(/\s+/g, " ").slice(0, 80);
+  return {
+    // why: the report counts columns from 1 and a --mutate range from 0; keeping the end
+    // as reported widens the range by one column, which can only take this mutant in.
+    range: `${path}:${start.line}:${start.column - 1}-${end.line}:${end.column}`,
+    key: `${path}:${start.line}:${start.column}-${end.line}:${end.column} ${mutatorName} ${replacement}`,
+    text: `${path}:${start.line} ${status} ${mutatorName}: ${shown}`,
+  };
 }
 
 // why: a module's own tests reach it through its index.ts (architecture rule 14), so a test
@@ -215,16 +215,15 @@ function nearTests(files) {
   // why: a barrel may re-export another barrel, so a chain is followed to its files.
   const exposed = new Map();
   const exposes = (file) => {
-    if (!exposed.has(file)) {
-      exposed.set(file, new Set());
-      for (const [, s] of source(file).matchAll(reExport)) {
-        const target = resolve(file, s);
-        if (target === undefined) continue;
-        exposed.get(file).add(target);
-        for (const t of exposes(target)) exposed.get(file).add(t);
-      }
+    if (exposed.has(file)) return exposed.get(file);
+    const found = new Set();
+    exposed.set(file, found);
+    const targets = [...source(file).matchAll(reExport)].map(([, s]) => resolve(file, s));
+    for (const target of targets.filter((t) => t !== undefined)) {
+      found.add(target);
+      exposes(target).forEach((t) => found.add(t));
     }
-    return exposed.get(file);
+    return found;
   };
   const reaches = (test, imported) =>
     targets.has(imported) ||
