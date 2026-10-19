@@ -1,6 +1,13 @@
 import { join } from "node:path";
 
-import type { Clock, Filesystem, IdGenerator, Logger, TokenSecrets } from "../ports/index.js";
+import type {
+  Clock,
+  Filesystem,
+  IdGenerator,
+  KeySetFetcher,
+  Logger,
+  TokenSecrets,
+} from "../ports/index.js";
 import type { Role } from "../contract/index.js";
 import type { Identity } from "./identity.js";
 import { AuthError, type AuthConfig, type AuthStrategyDefinition } from "./strategy.js";
@@ -26,6 +33,7 @@ export interface AuthOptions {
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
+  readonly keySetFetcher: KeySetFetcher;
 }
 
 export type UplinkAnswer =
@@ -68,6 +76,7 @@ export function createAuthFrom(
         tokens: store,
         clock: options.clock,
         logger: options.logger,
+        keySetFetcher: options.keySetFetcher,
       }),
     );
 

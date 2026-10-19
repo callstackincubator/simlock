@@ -49,6 +49,7 @@ import {
   FakeSystemStats,
   MemoryFilesystem,
   NodeProcessRunner,
+  FakeKeySetFetcher,
   NoopLogger,
   ScriptedProcessRunner,
   type ProcessRunner,
@@ -344,6 +345,7 @@ async function buildDispatcher(
     dataDirectory: "/",
     filesystem,
     idGenerator: sequence(),
+    keySetFetcher: new FakeKeySetFetcher(),
     logger: new NoopLogger(),
     secrets: new CryptoTokenSecrets(),
   });

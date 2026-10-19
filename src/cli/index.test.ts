@@ -18,6 +18,7 @@ import {
   FakeParentWatch,
   MemoryFilesystem,
   MemoryIpcTransport,
+  FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -6474,6 +6475,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     filesystem,
     idGenerator: sequence(),
     logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
     secrets: new CryptoTokenSecrets(),
   });
   const daemon = new DaemonServer({
@@ -6586,6 +6588,7 @@ async function startInMemoryDaemon(options: {
     filesystem,
     idGenerator: sequence(),
     logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
     secrets: new CryptoTokenSecrets(),
   });
   const daemon = new DaemonServer({

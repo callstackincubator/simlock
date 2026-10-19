@@ -12,9 +12,28 @@ import { identityGet, runDispatch } from "../daemon/dispatch.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  CryptoTokenSecrets,
+  FakeClock,
+  FakeKeySetFetcher,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NoopLogger,
+} from "../ports/index.js";
 import type { Identity } from "../auth/index.js";
-import { fakeAuth, tokenIdentity } from "../auth/testing.js";
+import { createAuth } from "../auth/index.js";
+import type { Auth } from "../auth/index.js";
+import {
+  fakeAuth,
+  tokenIdentity,
+  authConfigWith,
+  createTestKey,
+  keySetBody,
+  personClaims,
+  PROXY_NOW,
+  proxyAuthConfig,
+} from "../auth/testing.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
   FakeDispatcher,
@@ -34,6 +53,8 @@ function buildHarness(
     /** A gateway's device reader, in place of the fake worker registry. */
     readonly registry?: HttpGatewayDeps["registry"];
     readonly answerDownloadsEarly?: boolean;
+    readonly identities?: Readonly<Record<string, Identity>>;
+    readonly auth?: Auth;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -41,17 +62,20 @@ function buildHarness(
   const dispatcher = new FakeDispatcher(clock);
   const registry = new FakeRegistry();
   const ownerRoutedFacts = new OwnerRoutedFactBus(eventBus, registry);
-  const auth = fakeAuth(
-    new Map<string, Identity>([
-      ["slk_agent", tokenIdentity("tok_agent", "agent")],
-      ["slk_other", tokenIdentity("tok_other", "agent")],
-      ["slk_operator", tokenIdentity("tok_operator", "operator")],
-      [
-        "slk_labelled",
-        { ambient: false, name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" },
-      ],
-    ]),
-  );
+  const auth =
+    overrides.auth ??
+    fakeAuth(
+      new Map<string, Identity>([
+        ["slk_agent", tokenIdentity("tok_agent", "agent")],
+        ["slk_other", tokenIdentity("tok_other", "agent")],
+        ["slk_operator", tokenIdentity("tok_operator", "operator")],
+        [
+          "slk_labelled",
+          { ambient: false, name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" },
+        ],
+        ...Object.entries(overrides.identities ?? {}),
+      ]),
+    );
   const logSink = new MemoryLogSink();
   const logger = new JsonLinesLogger({ clock, sink: logSink });
   const config = overrides.config ?? testConfig();
@@ -2390,6 +2414,220 @@ describe("worker routes", () => {
     expect(response.status).toBe(501);
     expect(await response.json()).toMatchObject({
       error: { code: "UNSUPPORTED_IN_GATEWAY_MODE", operation: "lease.request" },
+    });
+  });
+});
+
+describe("a person the sign-in proxy signed in", () => {
+  const signedInAt = 1_000;
+  const SIGN_OUT_URL = "https://team.example/cdn-cgi/access/logout";
+  const proxyHeaders = { authorization: "Bearer slk_proxy" };
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  function proxyPerson(expiresAt: number, signOutUrl?: string): Identity {
+    return {
+      principal: "proxy:iss1#u1",
+      name: "a@x",
+      role: "operator",
+      via: "proxy",
+      ambient: true,
+      expiresAt,
+      ...(signOutUrl === undefined ? {} : { signOutUrl }),
+    };
+  }
+
+  function harnessFor(identity: Identity) {
+    return buildHarness({ identities: { slk_proxy: identity } });
+  }
+
+  function watchEnd(response: Response): { ended(): boolean } {
+    let ended = false;
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("response has no body");
+    void (async () => {
+      while (!(await reader.read()).done);
+      ended = true;
+    })();
+    return { ended: () => ended };
+  }
+
+  it("is an admin over HTTP with via proxy, their name and the configured sign-out URL", async () => {
+    const { app, dispatcher } = harnessFor(proxyPerson(signedInAt + 120_000, SIGN_OUT_URL));
+    dispatcher.handlers["identity.get"] = identityGet;
+
+    const response = await app.request("/v1/identity", { headers: proxyHeaders });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      principal: "proxy:iss1#u1",
+      name: "a@x",
+      role: "admin",
+      via: "proxy",
+      signOutUrl: SIGN_OUT_URL,
+    });
+    expect(dispatcher.calls[0]?.session).toMatchObject({
+      role: "admin",
+      via: "proxy",
+      name: "a@x",
+      signOutUrl: SIGN_OUT_URL,
+    });
+  });
+
+  it("answers a refused JWT with 401 UNAUTHENTICATED, the refusal's message and its reason in the body", async () => {
+    const key = await createTestKey("ES256", "k1");
+    const keySetFetcher = new FakeKeySetFetcher();
+    keySetFetcher.answer({ status: 200, body: keySetBody(key) });
+    const clock = new FakeClock(PROXY_NOW);
+    const auth = createAuth({
+      config: authConfigWith(),
+      dataDirectory: "/home/agent/.simlock",
+      filesystem: new MemoryFilesystem(),
+      secrets: new CryptoTokenSecrets(),
+      idGenerator: { generate: () => "id" },
+      clock,
+      logger: new NoopLogger(),
+      keySetFetcher,
+    });
+    const { app, dispatcher } = buildHarness({ auth });
+    dispatcher.handlers["identity.get"] = identityGet;
+    const header = proxyAuthConfig.header;
+    const good = await app.request("/v1/identity", {
+      headers: { [header]: await key.sign(personClaims()) },
+    });
+    expect(good.status).toBe(200);
+
+    const expired = await key.sign(personClaims({ exp: Math.floor(PROXY_NOW / 1000) - 120 }));
+    const response = await app.request("/v1/identity", { headers: { [header]: expired } });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "UNAUTHENTICATED",
+        message: "Sign-in proxy identity refused: expired",
+        reason: "expired",
+      },
+    });
+  });
+
+  describe("follow streams", () => {
+    const openers: ReadonlyArray<
+      readonly [string, (harness: ReturnType<typeof harnessFor>) => Promise<Response>]
+    > = [
+      [
+        "GET /v1/events/stream",
+        async ({ app, dispatcher }) => {
+          dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+            subscribed: true,
+            subscriptionId: session.manageEventSubscription(true),
+          });
+          return app.request("/v1/events/stream", { headers: proxyHeaders });
+        },
+      ],
+      [
+        "GET /v1/leases/{id}/events",
+        async ({ app, registry }) => {
+          registry.devices = [makeDevice({ id: "dev_1" })];
+          registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" })];
+          return app.request("/v1/leases/lse_1/events", { headers: proxyHeaders });
+        },
+      ],
+      [
+        "GET /v1/lease-requests/{id}/events",
+        async ({ app, dispatcher }) => {
+          const { id } = await createLeaseRequest(app, dispatcher, defaultBody, proxyHeaders);
+          return app.request(`/v1/lease-requests/${id}/events`, { headers: proxyHeaders });
+        },
+      ],
+    ];
+
+    it.each(openers)("%s ends at the person's expiresAt, not before", async (_route, open) => {
+      const harness = harnessFor(proxyPerson(signedInAt + 2 * 60_000));
+      const stream = watchEnd(await open(harness));
+      await flush();
+      expect(stream.ended()).toBe(false);
+
+      harness.clock.advance(2 * 60_000 - 1);
+      await flush();
+      expect(stream.ended()).toBe(false);
+      harness.clock.advance(1);
+      await flush();
+
+      expect(stream.ended()).toBe(true);
+    });
+
+    it("does not end a stream opened with a token", async () => {
+      const harness = buildHarness();
+      harness.registry.devices = [makeDevice({ id: "dev_1" })];
+      harness.registry.leases = [
+        makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" }),
+      ];
+      const stream = watchEnd(
+        await harness.app.request("/v1/leases/lse_1/events", { headers: agentAuth }),
+      );
+
+      harness.clock.advance(60 * 60_000);
+      await flush();
+
+      expect(stream.ended()).toBe(false);
+    });
+
+    it("ends a stream whose expiresAt is 40 days away at the 2^31-1 ms cap", async () => {
+      const cap = 2 ** 31 - 1;
+      const harness = harnessFor(proxyPerson(signedInAt + 40 * 24 * 60 * 60_000));
+      const [, open] = openers[1]!;
+      const stream = watchEnd(await open(harness));
+
+      harness.clock.advance(cap - 1);
+      await flush();
+      expect(stream.ended()).toBe(false);
+      harness.clock.advance(1);
+      await flush();
+
+      expect(stream.ended()).toBe(true);
+    });
+  });
+
+  describe("command streams", () => {
+    it("keeps an exec stream running past expiresAt", async () => {
+      const harness = harnessFor(proxyPerson(signedInAt + 2 * 60_000));
+      const responsePromise = harness.app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], tool: "simctl" }),
+        headers: { ...proxyHeaders, "content-type": "application/json" },
+        method: "POST",
+      });
+      const call = await waitForDispatch(harness.dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      const framesPromise = readSseFrames(response, 2);
+
+      harness.clock.advance(10 * 60_000);
+      call.session.onOutput?.("stdout", "late");
+      call.resolve({ exitCode: 0 });
+
+      const frames = await framesPromise;
+      expect(frames.map((frame) => frame.event)).toEqual(["output", "exit"]);
+    });
+
+    it("keeps a component install stream running past expiresAt", async () => {
+      const harness = harnessFor(proxyPerson(signedInAt + 2 * 60_000));
+      const responsePromise = harness.app.request("/v1/components/install", {
+        body: JSON.stringify({ platform: "android", version: "35" }),
+        headers: { ...proxyHeaders, "content-type": "application/json" },
+        method: "POST",
+      });
+      const call = await waitForDispatch(harness.dispatcher, "component.install");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      const framesPromise = readSseFrames(response, 2);
+
+      harness.clock.advance(10 * 60_000);
+      call.session.onComponentProgress?.({ stage: "waiting" });
+      call.resolve({ component: "35", outcome: "installed", platform: "android", version: "35" });
+
+      const frames = await framesPromise;
+      expect(frames.map((frame) => frame.event)).toEqual(["progress", "result"]);
     });
   });
 });

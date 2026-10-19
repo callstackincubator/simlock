@@ -9,7 +9,13 @@ import {
   type StrategyAnswer,
 } from "../auth/index.js";
 import { createAuthWith, fakeAuth, tokenIdentity } from "../auth/testing.js";
-import { CryptoTokenSecrets, FakeClock, MemoryFilesystem, NoopLogger } from "../ports/index.js";
+import {
+  CryptoTokenSecrets,
+  FakeClock,
+  FakeKeySetFetcher,
+  MemoryFilesystem,
+  NoopLogger,
+} from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
 import { errorResponse } from "./errors.js";
 
@@ -73,6 +79,7 @@ describe("requireAuth over src/auth", () => {
     idGenerator: { generate: () => "id" },
     clock: new FakeClock(1_000),
     logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
   };
 
   function refusing(answer: StrategyAnswer): AuthStrategyDefinition {

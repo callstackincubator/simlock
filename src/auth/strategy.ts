@@ -1,7 +1,7 @@
 import type { z } from "zod";
 
 import type { OPERATIONS } from "../contract/index.js";
-import type { Clock, Logger } from "../ports/index.js";
+import type { Clock, KeySetFetcher, Logger } from "../ports/index.js";
 import type { Identity } from "./identity.js";
 import type { TokenRecord } from "./tokens.js";
 
@@ -26,6 +26,7 @@ export interface AuthDeps {
   readonly tokens: { verify(secret: string): Promise<TokenRecord | undefined> };
   readonly clock: Clock;
   readonly logger: Logger;
+  readonly keySetFetcher: KeySetFetcher;
 }
 
 export interface AuthStrategyDefinition {

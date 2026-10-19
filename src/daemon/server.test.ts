@@ -25,6 +25,7 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -3780,5 +3781,6 @@ function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): A
     idGenerator: { generate: () => "id" },
     clock: new FakeClock(1_000),
     logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
   });
 }

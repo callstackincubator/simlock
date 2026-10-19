@@ -86,6 +86,7 @@ import {
   resolveDaemonSocketPath,
   readPackageVersion,
   resolveSimlockHome,
+  NodeKeySetFetcher,
   SystemClock,
   type SystemStats,
   type ProcessRunner,
@@ -213,6 +214,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     dataDirectory,
     filesystem,
     idGenerator,
+    keySetFetcher: new NodeKeySetFetcher(),
     logger: logger.child("auth"),
     secrets: new CryptoTokenSecrets(),
   });

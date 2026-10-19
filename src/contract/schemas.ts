@@ -981,6 +981,14 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 /** ADR 0015 §4: `ios.defaultModels` and `android.defaultModels`, a list of model names per class. */
 const defaultModelsSchema = z.record(deviceClassSchema, z.array(z.string().min(1)).min(1));
 
+const proxyAuthSchema = z.object({
+  header: z.string(),
+  jwksUrl: z.string(),
+  issuer: z.string(),
+  audience: z.string(),
+  signOutUrl: z.string().optional(),
+});
+
 export const configSchema = z.object({
   /** ADR 0005 §1. `config.get` is how a caller learns which mode the daemon it is talking to
    * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
@@ -1051,6 +1059,7 @@ export const configSchema = z.object({
     enabled: z.boolean(),
     host: z.string(),
     port: z.number(),
+    proxyAuth: proxyAuthSchema.optional(),
   }),
   health: z.object({
     enabled: z.boolean(),

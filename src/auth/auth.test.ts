@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { OPERATIONS } from "../contract/index.js";
-import { FakeClock, MemoryFilesystem, NoopLogger, type TokenSecrets } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeKeySetFetcher,
+  MemoryFilesystem,
+  NoopLogger,
+  type TokenSecrets,
+} from "../ports/index.js";
 import { AdminAuthenticationFailedError, AuthError, createAuth, type TokenRole } from "./index.js";
 import { TokenStoreError } from "./token-store.js";
 import { authStrategies } from "./strategies/index.js";
 import type { AuthConfig, AuthStrategyDefinition, StrategyAnswer } from "./strategy.js";
-import { createAuthWith } from "./testing.js";
+import { createAuthWith, proxyAuthConfig } from "./testing.js";
 
 const dataDirectory = "/home/agent/.simlock";
 const config: AuthConfig = { enabled: true, host: "127.0.0.1", port: 4700 };
@@ -63,6 +69,7 @@ async function options() {
     idGenerator: { generate: () => "id" },
     clock: new FakeClock(1_000),
     logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
   };
 }
 
@@ -234,12 +241,33 @@ describe("the registry", () => {
       definition.config === undefined ? [] : [definition.config],
     );
 
-    expect(authStrategies.map((definition) => definition.name)).toEqual(["token"]);
+    const samples: Record<string, readonly unknown[]> = {
+      proxyAuth: [
+        proxyAuthConfig,
+        { ...proxyAuthConfig, signOutUrl: "https://team.example/logout" },
+        { ...proxyAuthConfig, audience: undefined },
+        { ...proxyAuthConfig, issuer: 7 },
+        "x",
+      ],
+    };
+
+    expect(authStrategies.map((definition) => definition.name)).toEqual(["token", "proxy"]);
+    expect(owning.map(({ key }) => key)).toContain("proxyAuth");
     for (const { key, schema, defaults } of owning) {
       const mirrored = contractHttp[key];
       expect(mirrored, key).toBeDefined();
-      expect(mirrored?.safeParse(defaults)).toEqual(schema.safeParse(defaults));
+      if (defaults !== undefined) {
+        expect(mirrored?.safeParse(defaults)).toEqual(schema.safeParse(defaults));
+      }
+      for (const sample of samples[key] ?? []) {
+        expect(mirrored?.safeParse(sample).success, `${key} ${JSON.stringify(sample)}`).toBe(
+          schema.safeParse(sample).success,
+        );
+      }
     }
+    expect(
+      owning.find(({ key }) => key === "proxyAuth")?.schema.safeParse(proxyAuthConfig).success,
+    ).toBe(true);
   });
 });
 

@@ -210,6 +210,13 @@ export interface Config {
     readonly enabled: boolean;
     readonly host: string;
     readonly port: number;
+    readonly proxyAuth?: {
+      readonly header: string;
+      readonly jwksUrl: string;
+      readonly issuer: string;
+      readonly audience: string;
+      readonly signOutUrl?: string;
+    };
   };
   readonly health: {
     readonly enabled: boolean;

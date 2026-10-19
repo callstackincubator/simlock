@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { OPERATIONS } from "../../contract/index.js";
+import { FakeClock, FakeKeySetFetcher, NoopLogger } from "../../ports/index.js";
+import type { AuthDeps } from "../strategy.js";
+import {
+  authConfigWith,
+  createTestKey,
+  keySetBody,
+  personClaims,
+  PROXY_NOW,
+  proxyRequest,
+} from "../testing.js";
 import { authStrategies } from "./index.js";
 import { tokenFixture } from "./token/testing.js";
 
@@ -9,7 +19,25 @@ interface Fixture {
   readonly goodRequest: typeof tokenFixture.goodRequest;
 }
 
-const fixtures: Record<string, Fixture> = { token: tokenFixture };
+const proxyKey = await createTestKey("ES256", "k1");
+const proxyJwt = await proxyKey.sign(personClaims());
+
+const proxyFixture: Fixture = {
+  deps(): AuthDeps {
+    const keySetFetcher = new FakeKeySetFetcher();
+    keySetFetcher.answer({ status: 200, body: keySetBody(proxyKey) });
+    return {
+      config: authConfigWith(),
+      tokens: { verify: async () => undefined },
+      clock: new FakeClock(PROXY_NOW),
+      logger: new NoopLogger(),
+      keySetFetcher,
+    };
+  },
+  goodRequest: () => ({ headers: proxyRequest(proxyJwt) }),
+};
+
+const fixtures: Record<string, Fixture> = { token: tokenFixture, proxy: proxyFixture };
 
 describe.each(authStrategies.map((definition) => ({ definition })))(
   "the $definition.name strategy",

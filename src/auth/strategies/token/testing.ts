@@ -1,4 +1,4 @@
-import { FakeClock, NoopLogger } from "../../../ports/index.js";
+import { FakeClock, FakeKeySetFetcher, NoopLogger } from "../../../ports/index.js";
 import type { AuthConfig, AuthDeps } from "../../strategy.js";
 import type { TokenRecord } from "../../tokens.js";
 
@@ -20,6 +20,7 @@ export const tokenFixture = {
       tokens: { verify: async (secret) => (secret === "slk_good" ? record : undefined) },
       clock: new FakeClock(1_000),
       logger: new NoopLogger(),
+      keySetFetcher: new FakeKeySetFetcher(),
     };
   },
   goodRequest(): { headers: Headers } {
