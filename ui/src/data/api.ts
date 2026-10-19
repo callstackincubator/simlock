@@ -85,10 +85,13 @@ export interface ApiClient {
   healthz(): Promise<ApiResponse<boolean>>;
 }
 
+export type ApiFailure = "unauthorized" | "not-simlock";
+
 export interface ApiClientOptions {
   readonly fetch: Fetch;
   readonly token: () => string | undefined;
   readonly signOut: () => void;
+  readonly onRefused?: (failure: ApiFailure) => void;
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
