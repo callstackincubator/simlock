@@ -167,8 +167,8 @@ sequenceDiagram
 ### 4. `identity.get` says who the caller is
 
 A contract operation any role may call. Output:
-`{ principal, name, role, via, signOutUrl? }`. `via` is `token`, `proxy` or
-`socket`. Over the socket the principal is the one the hello declared, and
+`{ principal, name, role, via, signOutUrl? }`. `via` is `token`, `proxy`,
+`socket` or `uplink` (a gateway's session on a worker). Over the socket the principal is the one the hello declared, and
 `name` is that principal. A token's `name` is its label, else its id.
 `signOutUrl` is present only for `via: "proxy"` when configured. HTTP serves
 it as `GET /v1/identity`, the CLI as `simlock whoami`. The protocol moves up
@@ -183,8 +183,10 @@ agents and scripts are not affected.
 
 ### 6. A stream ends when its identity expires
 
-An event stream (`text/event-stream`) opened with an identity that has
-`expiresAt` ends at that time. The console reconnects, and the proxy sends a
+A follow stream (the event stream, a lease's events, a lease request's
+events) opened with an identity that has `expiresAt` ends at that time. A
+command's stream (`exec`, a component install) runs to its own end and
+limit. The console reconnects, and the proxy sends a
 fresh JWT. Without this a person whose access was removed keeps watching an
 open stream.
 
