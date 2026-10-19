@@ -100,14 +100,22 @@ the CLI and `simlock mcp` choose:
 flowchart TD
   A["simlock &lt;command&gt;"] --> B{--gateway?}
   B -- yes --> G[gateway folder]
-  B -- no --> C{"gateway/config.json exists<br/>and ~/.simlock/instance.json does not?"}
+  B -- no --> C{"a gateway is present<br/>and ~/.simlock/instance.json does not exist?"}
   C -- yes --> G
   C -- no --> W["~/.simlock worker<br/>(auto-start as today)"]
-  W --> D{"worker replies UNSUPPORTED_IN_WORKER_MODE<br/>and gateway/config.json exists?"}
+  W --> D{"worker replies UNSUPPORTED_IN_WORKER_MODE<br/>and a gateway is present?"}
   D -- yes --> E["same error, plus: add --gateway"]
 ```
 
 - A machine with one daemon never needs the flag.
+- "A gateway is present" means `~/.simlock/gateway/instance.json` or
+  `~/.simlock/gateway/config.json` exists. The gateway writes the first on
+  its first start; `simlock --gateway config set` writes the second before
+  that. An empty `gateway` folder is not a gateway.
+- Only `simlock --gateway daemon start` creates a gateway. Any other command
+  with `--gateway`, on a machine where no gateway is present, fails before
+  it launches anything, and says to run `simlock --gateway daemon start`. A
+  present gateway that is not running is auto-started like a worker.
 - "The root holds a worker" means `~/.simlock/instance.json` exists. A worker
   writes it on its first start, before anything else. `config set` alone
   never writes it, so a stray plain `config set` on a gateway-only machine
