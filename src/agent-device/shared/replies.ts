@@ -39,7 +39,6 @@ export function workerUnreachable(): FrontReply {
 
 const unreachableAnswers = new WeakSet<Response>();
 
-// why: a command answered "try again" may still run on its worker, so the front keeps renewing its lease until the run limit; this tells that answer from any other.
 export function markUnreachableAnswer(response: Response): Response {
   unreachableAnswers.add(response);
   return response;

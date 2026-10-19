@@ -1670,7 +1670,12 @@ agent-device session with an agent on a worker's own tokens. Through a gateway:
   `/rpc` answer carries `details.reason` `WORKER_UNREACHABLE`. Nothing is sent
   to the worker and the Simlock lease is untouched; once the worker is back and
   read, before the lease ran out, the next request works. A command running
-  when the connection drops answers the same. The same answer covers a lease
+  when the connection drops answers the same and stops its periodic lease
+  renewals, with one final renewal attempt when no other command is awaiting
+  a reply. This does not release the lease
+  or end the command on the worker. Other commands still awaiting replies
+  keep renewing; a later heartbeat can renew before the lease expires.
+  The same answer covers a lease
   the gateway does not know yet in the first 60 seconds after it starts.
 - **A gateway restart keeps the agent's device.** Once the worker reconnects,
   the agent's next request of any kind works on the same device, with no

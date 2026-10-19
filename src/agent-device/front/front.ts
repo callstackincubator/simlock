@@ -167,7 +167,10 @@ async function runCommand(
     end();
     throw error;
   }
-  if (isUnreachableAnswer(response)) return response;
+  if (isUnreachableAnswer(response)) {
+    end();
+    return response;
+  }
   releaseEndedLeases(context, identity, response);
   return untilBodyEnds(response, end);
 }

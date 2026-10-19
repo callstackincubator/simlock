@@ -108,8 +108,10 @@ under leasing's signal (`lease.endWaitMs`).
    chars with a hash. A lease not the token's → 403. No lease: only `GET /health`.
 4. Worker: `agentDeviceRelayTarget` → `InProcessHostLink` → host, requester = tenant.
    No front rules run on the worker.
-5. Worker unreachable → "try again" reply; a command so answered keeps its renewals
-   to the run cap. A dropped lease is still routed for the gateway's `lease.maxTtlMs`;
+5. Worker unreachable → "try again" reply; a command so answered ends its renewal
+   reference without releasing the lease or ending worker work. Other live commands
+   keep their references; the last reference ends with one final renewal attempt.
+   A dropped lease is still routed for the gateway's `lease.maxTtlMs`;
    for 60 s after gateway start an unknown lease is unreachable.
 
 ## State and timers

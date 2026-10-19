@@ -1967,16 +1967,18 @@ describe(
       expectUnreachable(await envelopeOf(await heartbeat(rig, 1)));
     });
 
-    it("a running command's renewal tick while the worker is disconnected fails, and the entry and its timer stay; after the reconnect the next tick renews", async () => {
+    it("an unreachable command's final renewal fails while disconnected; after reconnect only a new heartbeat renews the retained lease", async () => {
       // why: a worker clock of its own, so moving the gateway's clock does not make the worker redial.
       const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
       const member = first(rig);
       await granted(rig, 1, { ttlMs: 30_000 });
       await listedByGateway(rig, 1);
-      await runningCommand(rig, member, 1);
+      const running = await runningCommand(rig, member, 1);
       const tap = tapDispatch(rig.gateway);
       const before = await deadlineOf(member, 1);
+      rig.clock.advance(1_000);
       await dropUplink(rig, member);
+      expectUnreachable(await envelopeOf(await running.promise));
 
       rig.clock.advance(10_000);
       await sleep(50);
@@ -1987,8 +1989,10 @@ describe(
       await untilConnected(rig, member);
       await advance(rig, 10_000, 5_000);
       await sleep(50);
-      expect(await deadlineOf(member, 1)).toBeGreaterThan(before ?? 0);
+      expect(before).toBe(31_000);
+      expect(await deadlineOf(member, 1)).toBe(before);
       expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
+      expect(await deadlineOf(member, 1)).toBe(member.clock.now() + 30_000);
       member.fake.releaseCommand();
     });
 
