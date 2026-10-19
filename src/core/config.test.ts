@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { z } from "zod";
+
+import type { AuthStrategyDefinition } from "../auth/index.js";
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { configSchema } from "../contract/schemas.js";
@@ -2002,5 +2005,36 @@ describe("configSchema agrees with the config the daemon actually loads", () => 
     expect(dottedValue(parsed, "gateway.leaseRequestTimeoutMs")).toBe(
       config.gateway.leaseRequestTimeoutMs,
     );
+  });
+});
+
+describe("loadConfig over the auth strategies' config keys", () => {
+  const fake: AuthStrategyDefinition = {
+    name: "fake",
+    config: {
+      key: "fake",
+      schema: z.object({ limit: z.number().int().positive() }),
+      defaults: { limit: 5 },
+    },
+    enabled: () => true,
+    create: () => ({ authenticate: async () => ({ kind: "not-mine", sawCredential: false }) }),
+  };
+
+  async function load(http: unknown) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http }));
+    return loadConfig({
+      authStrategies: [fake],
+      configPath,
+      filesystem,
+      systemStats: createStats(),
+    });
+  }
+
+  it("fills a registered strategy's defaults and validates the key it owns", async () => {
+    expect(dottedValue(await load({}), "http.fake.limit")).toBe(5);
+    expect(dottedValue(await load({ fake: { limit: 9 } }), "http.fake.limit")).toBe(9);
+    await expect(load({ fake: { limit: "many" } })).rejects.toThrow("http.fake");
   });
 });

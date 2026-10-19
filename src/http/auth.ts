@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler, Next } from "hono";
 
+import type { Auth } from "../auth/index.js";
 import { forbidden, unauthenticated } from "./errors.js";
 import type { TokenIdentity } from "./token-store.js";
 
@@ -40,8 +41,11 @@ function extractSecret(header: string | undefined): string | undefined {
  * Refusing it here, before a `DispatchSession` exists, is what makes "it can open an uplink and
  * nothing else" true rather than aspirational.
  */
-export function requireAuth(tokens: TokenVerifier): MiddlewareHandler<AuthEnv> {
+export function requireAuth(
+  tokens: TokenVerifier | Pick<Auth, "authenticateRequest">,
+): MiddlewareHandler<AuthEnv> {
   return async (c: Context<AuthEnv>, next: Next) => {
+    if (!("verify" in tokens)) throw unauthenticated("not implemented");
     const secret = extractSecret(c.req.header("authorization"));
     if (secret === undefined) throw unauthenticated("Missing bearer token");
 

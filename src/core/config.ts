@@ -1,4 +1,5 @@
 import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
+import type { AuthStrategyDefinition } from "../auth/index.js";
 import {
   capacityStrategyNames,
   capacityStrategyValidator,
@@ -355,6 +356,7 @@ export interface ModuleConfigEntry {
 }
 
 export interface LoadConfigOptions {
+  readonly authStrategies?: readonly AuthStrategyDefinition[];
   readonly modules?: readonly ModuleConfigEntry[];
   readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
