@@ -178,6 +178,34 @@ async function countRows(path: string, table: string): Promise<number> {
 const INSERTS_EVENT = /INSERT\s+(OR\s+IGNORE\s+)?INTO\s+events/i;
 
 describe("createEventHistory", () => {
+  it("creates history.db and its -wal and -shm files owner-only, mode 0o600", async () => {
+    // why: #685 made the event store owner-only; a 022 umask would hide a 0644 default.
+    const previousUmask = process.umask(0o022);
+    try {
+      const rigged = await rig();
+      const history = rigged.history();
+      await history.start();
+      stopping(rigged.bus, "mode");
+      await history.replay({ sinceTs: 0 });
+      const modes = Object.fromEntries(
+        await Promise.all(
+          ["", "-wal", "-shm"].map(
+            async (suffix) =>
+              [`history.db${suffix}`, (await stat(rigged.dbPath + suffix)).mode & 0o777] as const,
+          ),
+        ),
+      );
+      await history.stop();
+      expect(modes).toEqual({
+        "history.db": 0o600,
+        "history.db-shm": 0o600,
+        "history.db-wal": 0o600,
+      });
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
   it("writes every emitted and every republished event as one row equal to its envelope, read back in timestamp, then seq order", async () => {
     const rigged = await rig({ capacity: 2 });
     const history = rigged.history();

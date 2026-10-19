@@ -1,3 +1,5 @@
+import { closeSync, openSync } from "node:fs";
+
 export interface SqliteRunResult {
   readonly changes: number | bigint;
   readonly lastInsertRowid: number | bigint;
@@ -31,6 +33,9 @@ export class NodeSqliteOpener implements SqliteOpener {
     } catch (error: unknown) {
       throw new SqliteUnavailableError(error instanceof Error ? error.message : String(error));
     }
+    // why: SQLite creates a missing file 0644 (less the umask) and gives -wal and -shm the main
+    // file's mode, so creating it 0600 first keeps all three owner-only, like the other local state.
+    if (!options.readOnly) closeSync(openSync(path, "a", 0o600));
     return new engine.DatabaseSync(path, { readOnly: options.readOnly });
   }
 }

@@ -32,7 +32,7 @@ Uses: nothing from other components. Imported by: every component that touches t
 
 `productionHostLoadProbe` picks the Darwin or Linux probe. `NodeFileLogSink` rotates to
 `<path>.1` and keeps that one generation; the files it opens, and the log `NodeDaemonLauncher`
-pre-creates, are opened mode `0600`. `sqlite.ts` is the only file that names `node:sqlite`,
+pre-creates, are opened mode `0600`; so is a database file `NodeSqliteOpener` opens for writing (SQLite gives `-wal` and `-shm` its mode). `sqlite.ts` is the only file that names `node:sqlite`,
 loaded with a dynamic `import()` on first open (Node 22.13 or later; below it `open` throws
 `SqliteUnavailableError`). `filterSqliteExperimentalWarning` drops Node's one SQLite
 `ExperimentalWarning` and no other; the daemon's entry calls it first, and the CLI calls it just before it reads the history.
