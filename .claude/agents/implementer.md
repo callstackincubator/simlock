@@ -122,7 +122,7 @@ failing:
   <test file:line>
 map:
   <test file:line> -> <source paths>
-audit: stale <n>  replaced <n>  donewhen <k>/<n>  mutants <total> alive <a> explained <e> | mutants none
+audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>  mutants <total> alive <a> explained <e> | mutants none
 fixes:
   <finding path:line> -> found <n> fixed <n>
 run: pass | fail <test file:line>  ci: pass | fail | running | unchecked

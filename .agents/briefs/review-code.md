@@ -25,9 +25,8 @@ under "Checks agents never run", and never the slow lane. You may break
 code to see what a test catches: one edit, one run of its test file, then
 `git checkout .`. You may also write one new test file in the worktree to
 prove an interleaving or an input the suite does not cover, run it, and
-delete it. Probe budget: four, for behaviour; the tests lens gets four
-more only when there is no `mutants.md` (a tests-only diff). Restore the
-tree before you report.
+delete it. Probe budget: `lens: behaviour` four probes, `lens: tests` six,
+`lens: both` nine. Restore the tree before you report.
 
 ## Lens: behaviour (`lens: behaviour` or `both`)
 
@@ -51,8 +50,8 @@ ask "what breaks, and for whom?"; no answer means drop it.
 ## Lens: tests and rules (`lens: tests` or `both`)
 
 First list every test the diff adds or changes by line, never by title,
-one line per file: `file: 12 read ok, 40 F3`. A file whose tests only
-gained a fixture field: `file: fixture only`.
+one line per file: `file: 12 read ok, 40 probed ok, 88 probed F3`. A file
+whose tests only gained a fixture field: `file: fixture only`.
 
 Then answer:
 
@@ -61,8 +60,11 @@ Then answer:
    see is untested behaviour (testing rule 3). No `mutants.md` on a diff
    that changes source: `Assessment: incomplete`.
 2. For each test: can it fail for the reason its title gives? Read it
-   against testing rule 10's list. With no `mutants.md`, spend your probes
-   on the tests most likely to be wired to nothing.
+   against testing rule 10's list first; those shapes need no probe to
+   prove. Spend your probes on the tests most likely to be wired to
+   nothing, on what `pnpm mutate` never tries: delete a call that takes
+   arguments or is awaited, move a constant to its edge, loosen what the
+   test compares. A test that stays green is a finding.
 3. Does the diff break any rule in `rules/`? Cite the file and the rule
    number.
 

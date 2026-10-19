@@ -7,10 +7,11 @@
 //   hardware-verifier   PR: #<M>  Hardware: ...
 //
 // An implementer's `mode: audit` report must also hold its `audit:` line: an audit given fixes
-// as well once did the fixes and skipped the audit. That line's `mutants <total> alive <a>
-// explained <e>` (or `mutants none` when no source line changed) must explain every mutant
-// `pnpm mutate` left alive: a test that cannot fail is the most repeated review finding. Other
-// agents stop freely. Claude Code ends the turn anyway after eight blocks in a row.
+// as well once did the fixes and skipped the audit. That line's `probed <p>/<t>` must show every
+// test it added or changed probed, and its `mutants <total> alive <a> explained <e>` (or
+// `mutants none` when no source line changed) must explain every mutant `pnpm mutate` left
+// alive: a test that cannot fail is the most repeated review finding. Other agents stop freely.
+// Claude Code ends the turn anyway after eight blocks in a row.
 import fs from "node:fs";
 
 const REPORT = {
@@ -39,12 +40,23 @@ if (!shape.test(message)) {
   );
 } else if (/\bmode: audit\b/.test(message) && !/^Assessment: incomplete\b/m.test(message)) {
   const audit = /^audit: .*$/m.exec(message);
+  const probed = audit === null ? null : /\bprobed (\d+)\/(\d+)/.exec(audit[0]);
   const mutants =
     audit === null ? null : /\bmutants (?:none|\d+ alive (\d+) explained (\d+))\b/.exec(audit[0]);
   if (audit === null) {
     block(
       "Your report is an audit's but has no `audit:` line, so the audit did not run. Do the " +
         "audit in implement-audit.md on the whole diff, then report again with its `audit:` line.",
+    );
+  } else if (probed === null) {
+    block(
+      "Your `audit:` line has no `probed` count. Probe every test you added or changed as " +
+        "implement-audit.md says, then report again with `probed <probed>/<tests>`.",
+    );
+  } else if (Number(probed[1]) < Number(probed[2])) {
+    block(
+      `You probed ${probed[1]} of ${probed[2]} tests. Probe the rest as implement-audit.md ` +
+        "says: break the code each covers, run its file, see it fail on its assertion, restore.",
     );
   } else if (mutants === null) {
     block(
