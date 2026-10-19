@@ -4,7 +4,7 @@ Does: turns a credential into an identity. The token store, the per-start admin 
 Entry: `index.ts` → `createAuth(options)` → `Auth`; `testing.ts` (`createAuthWith`, `fakeAuth`, `tokenIdentity`).
 Uses: ports, contract only (`auth-imports-little`).
 Never imports: any other component.
-Imported by: daemon (`main.ts`, `server.ts`, `dispatcher.ts`, `error-code.ts`), http, gateway (types), core (`config.ts` reads the strategy registry), agent-device (`Identity`).
+Imported by: daemon (`src/daemon/main.ts`, `src/daemon/server.ts`, `src/daemon/dispatcher.ts`, `src/daemon/error-code.ts`), http, gateway (types), core (`src/core/config.ts` reads the strategy registry), agent-device (`Identity`).
 Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md).
 
 ## Files
