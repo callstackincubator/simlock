@@ -7,6 +7,9 @@ The inputs record `base` (base tip), `merge-base`, `commit` and `previous`.
 Never substitute `origin/main` for a stacked PR's base. Missing or
 non-ancestor previous commits make assessment incomplete: reconcile the
 history and rebuild inputs, do not silently perform a full review.
+Rules, briefs and this protocol come from the pinned PR base, not a moving
+`main`. No reviewer sees author narration (PR body, commit messages) or
+another lens's findings before synthesis.
 
 ## Precedence and scope
 
@@ -83,7 +86,7 @@ fix-check. Count every invocation, including that fix-check. After the cap,
 any unresolved blocking finding or unchecked semantic fix parks the PR in
 draft with the ledger; a maintainer decides the next action. Pure mechanical
 edits may be verified by the coordinator without another lens invocation.
-No note starts a round unless evidence establishes a blocking defect.
+No note starts a round unless evidence establishes a blocking defect. Notes go out once, after the last check.
 
 Every reviewer reports `Assessment: complete` or `Assessment: incomplete`
 with the missing scope/reason. Budget exhaustion is incomplete coverage,

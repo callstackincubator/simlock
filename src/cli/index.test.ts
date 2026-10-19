@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -7,7 +7,8 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testComponentWiring } from "../core/testing.js";
 
-import { EventBus, EventHistory } from "../bus/index.js";
+import { EventBus } from "../bus/index.js";
+import { ringEventHistory, seedHistory } from "../history/testing.js";
 import { CleanupReaper, type Config, Registry } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import {
@@ -20,7 +21,6 @@ import {
   MemoryIpcTransport,
   NodeFilesystem,
   NodeIpcTransport,
-  NoopLogger,
   type Filesystem,
   type IdGenerator,
   type IpcConnection,
@@ -36,7 +36,9 @@ import {
   PROTOCOL_VERSION_RANGE,
   fromWireError,
   SimlockError,
+  waitingRequestSchema,
   type AnySimlockError,
+  type UsageOutput,
 } from "../contract/index.js";
 import type {
   CatalogGetOutput,
@@ -2494,6 +2496,50 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   });
 });
 
+describe("CLI: config set and the retired eventLog.rotateBytes", () => {
+  const configSet = async (file: Record<string, unknown>) => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let written: Record<string, unknown> | undefined;
+    const environment = output.environmentWith({
+      readConfigFile: async () => structuredClone(file),
+      writeConfigFile: async (contents) => {
+        written = contents;
+      },
+    });
+    const exitCode = await runCli(["config", "set", "log.level", "debug"], environment);
+    return { configPath: environment.configPath, exitCode, output, written };
+  };
+
+  it("simlock config set on a file holding eventLog.rotateBytes writes it without that key and prints the Removed line once; on a file without it, no such line", async () => {
+    const holding = await configSet({
+      eventLog: { retention: 86_400_000, rotateBytes: 1_048_576 },
+      log: { level: "info" },
+    });
+    const without = await configSet({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "info" },
+    });
+
+    expect(holding.exitCode).toBe(0);
+    expect(holding.written).toEqual({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "debug" },
+    });
+    expect(holding.output.stderr).toBe(
+      `Removed eventLog.rotateBytes from ${holding.configPath}: it is no longer used.\n`,
+    );
+    expect(holding.output.stdout).toBe(
+      `Updated log.level in ${holding.configPath}; takes effect on daemon restart.\n`,
+    );
+    expect(without.exitCode).toBe(0);
+    expect(without.written).toEqual({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "debug" },
+    });
+    expect(without.output.stderr).toBe("");
+  });
+});
+
 describe("CLI: config set and the file mode of config.json (#252)", () => {
   it("writes the config.json holding gateway.token owner-only, whether it creates the file or replaces an owner-only one", async () => {
     // why: Two homes, one per way `config set` comes to write the join token. `MemoryFilesystem`
@@ -3228,6 +3274,7 @@ describe("CLI: component install on a gateway's workers (ADR 0010 §7)", () => {
     const output = outputCapture();
     await runCli(["--help"], output.environmentWith({}));
     expect(output.stdout).toContain("component install <ios|android> <version>");
+    expect(output.stdout).toContain("events, stats,");
   });
 });
 
@@ -4303,6 +4350,58 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(await start(EMPTY_STATUS)).toBe("Daemon running\n");
   });
 
+  describe("the history lines of simlock status", () => {
+    const NOT_WRITTEN = "History: the event history is not being written; see daemon.log.";
+    const SET_ASIDE_AT = Date.UTC(2026, 9, 16, 9, 12, 30);
+    const pad = (value: number): string => String(value).padStart(2, "0");
+    const local = new Date(SET_ASIDE_AT);
+    const setAside = `History: the event history was damaged and set aside at ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}; a fresh one was started.`;
+
+    const statusLines = async (history: StatusGetOutput["history"]): Promise<string[]> => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({
+                  ...EMPTY_STATUS,
+                  ...(history === undefined ? {} : { history }),
+                } as StatusGetOutput),
+            }),
+        }),
+      );
+      return output.stdout.trimEnd().split("\n");
+    };
+
+    it("prints the not-written line when writing is false, the set-aside line with the local time when setAsideAt is set, both when both hold, and neither otherwise", async () => {
+      const healthy = await statusLines({ opened: true, writing: true });
+      const notWritten = await statusLines({ opened: false, writing: false });
+      const aside = await statusLines({ opened: true, setAsideAt: SET_ASIDE_AT, writing: true });
+      const both = await statusLines({ opened: true, setAsideAt: SET_ASIDE_AT, writing: false });
+
+      expect(healthy.filter((line) => line.startsWith("History:"))).toEqual([]);
+      expect(notWritten.filter((line) => line.startsWith("History:"))).toEqual([NOT_WRITTEN]);
+      expect(aside.filter((line) => line.startsWith("History:"))).toEqual([setAside]);
+      expect(both.filter((line) => line.startsWith("History:")).sort()).toEqual(
+        [NOT_WRITTEN, setAside].sort(),
+      );
+    });
+
+    it("prints the rebuilt line with the local time when rebuiltAt is set and the could-not-rebuild line when rebuildFailed is set, and neither otherwise", async () => {
+      const rebuiltLine = `History: figures were rebuilt from the event history at ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}.`;
+      const failedLine = "History: figures could not be rebuilt; see daemon.log.";
+      const plain = await statusLines({ opened: true, writing: true });
+      const rebuilt = await statusLines({ opened: true, rebuiltAt: SET_ASIDE_AT, writing: true });
+      const failed = await statusLines({ opened: true, rebuildFailed: true, writing: true });
+
+      expect(plain.filter((line) => line.startsWith("History:"))).toEqual([]);
+      expect(rebuilt.filter((line) => line.startsWith("History:"))).toEqual([rebuiltLine]);
+      expect(failed.filter((line) => line.startsWith("History:"))).toEqual([failedLine]);
+    });
+  });
+
   it("prints an install line while one runs and none after", async () => {
     const install = {
       component: "26.4",
@@ -4538,6 +4637,62 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(lines).toContain("Device dev_p1: ready, physical phone");
     expect(lines).toContain("Device dev_p2 on wrk_1: quarantined, physical tablet (purge retry 1)");
     expect(lines).toContain("Device dev_v1: ready, mode full, serves default mode: yes");
+  });
+
+  it("status ends a quarantined device's marker with ; and the cause for each kind, and prints today's marker when there is no cause", async () => {
+    const quarantined = (
+      id: string,
+      quarantineCause?: Record<string, unknown>,
+    ): Record<string, unknown> => ({
+      id,
+      mode: "full",
+      physical: false,
+      quarantineAttempts: 1,
+      quarantineNextRetryAt: 1_760_619_150_000,
+      servesDefaultMode: true,
+      spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+      state: "quarantined",
+      ...(quarantineCause === undefined ? {} : { quarantineCause }),
+    });
+    const status = {
+      ...EMPTY_STATUS,
+      devices: [
+        quarantined("dev_purge", {
+          kind: "purge-failed",
+          message: "DriverCrashError: simctl erase exited 164, then stalled",
+        }),
+        quarantined("dev_shutdown", {
+          kind: "shutdown-failed",
+          message: "Error: shutdown exploded",
+        }),
+        quarantined("dev_delete", { kind: "delete-failed", message: "Error: delete exploded" }),
+        quarantined("dev_prov", { kind: "stalled", stalledState: "provisioning" }),
+        quarantined("dev_recl", { kind: "stalled", stalledState: "reclaiming" }),
+        quarantined("dev_none"),
+      ],
+    } as unknown as StatusGetOutput;
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    const head =
+      "quarantined, mode full, serves default mode: yes (purge retry 1, next retry at 1760619150000";
+    expect(lines).toContain(
+      `Device dev_purge: ${head}; purge failed: DriverCrashError: simctl erase exited 164, then stalled)`,
+    );
+    expect(lines).toContain(
+      `Device dev_shutdown: ${head}; shutdown failed: Error: shutdown exploded)`,
+    );
+    expect(lines).toContain(`Device dev_delete: ${head}; delete failed: Error: delete exploded)`);
+    expect(lines).toContain(`Device dev_prov: ${head}; stalled while provisioning)`);
+    expect(lines).toContain(`Device dev_recl: ${head}; stalled while reclaiming)`);
+    expect(lines).toContain(`Device dev_none: ${head})`);
   });
 
   it("status prints absent (<reason>) as the state of an absent device", async () => {
@@ -5678,33 +5833,81 @@ describe("CLI: events history", () => {
   }
 
   function printed(stdout: string): unknown[] {
+    if (stdout.trim() === "") return [];
     return stdout
       .trimEnd()
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
   }
 
-  it("events --since with nothing listening prints the file's events and launches no daemon", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/simlock");
-    await filesystem.writeFileAtomic(
-      "/simlock/events.jsonl",
-      [envelope(1, 500), envelope(2, hour + 500)].map((entry) => JSON.stringify(entry)).join("\n"),
-    );
+  async function historyDirectory(
+    prepare: (directory: string) => Promise<void>,
+  ): Promise<CliEnvironmentPorts> {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-cli-history-"));
+    temporaryDirectories.push(directory);
+    await prepare(directory);
+    return {
+      ...realCliEnvironmentPorts(new NodeFilesystem()),
+      clock: new FakeClock(2 * hour),
+      dataDirectory: directory,
+    };
+  }
+
+  const stopped = (seq: number, timestamp: number) => ({
+    event: "daemon.stopping",
+    id: `evt_${seq}`,
+    module: "daemon",
+    payload: { reason: `r${seq}` },
+    seq,
+    timestamp,
+  });
+
+  it("events --since with nothing listening reads history.db and launches no daemon", async () => {
+    const ports = await historyDirectory((directory) => seedHistory(directory, [500, hour + 500]));
     const launcher = new FakeDaemonLauncher(() => {
       throw new Error("a daemon was launched");
     });
-    const output = outputCapture({
-      ...realCliEnvironmentPorts(filesystem),
-      clock: new FakeClock(2 * hour),
-      launcher,
-    });
+    const output = outputCapture({ ...ports, launcher });
 
     const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
 
     expect(launcher.launches).toBe(0);
     expect(exitCode).toBe(0);
-    expect(printed(output.stdout)).toEqual([envelope(2, hour + 500)]);
+    expect(printed(output.stdout)).toEqual([stopped(2, hour + 500)]);
+  });
+
+  it("events --since with nothing listening and no history.db prints nothing, exit 0, even beside an old events.jsonl", async () => {
+    const bare = outputCapture(await historyDirectory(async () => {}));
+    const withOldFile = outputCapture(
+      await historyDirectory((directory) =>
+        writeFile(join(directory, "events.jsonl"), `${JSON.stringify(envelope(1, hour + 500))}\n`),
+      ),
+    );
+
+    const codes = [
+      await runCli(["events", "--since", "1h"], bare.environmentWith()),
+      await runCli(["events", "--since", "1h"], withOldFile.environmentWith()),
+    ];
+
+    expect(codes).toEqual([0, 0]);
+    expect([bare.stdout, withOldFile.stdout]).toEqual(["", ""]);
+  });
+
+  it("events --since with nothing listening and an unreadable history.db prints one JSON error and exits 1", async () => {
+    const output = outputCapture(
+      await historyDirectory((directory) =>
+        writeFile(join(directory, "history.db"), "this is not a sqlite database ".repeat(20)),
+      ),
+    );
+
+    const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
+
+    expect(exitCode).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(output.stderr.trimEnd().split("\n")).toHaveLength(1);
+    const printedError = JSON.parse(output.stderr) as { error: { code: string; message: string } };
+    expect(printedError.error.code).toBe("INTERNAL");
+    expect(printedError.error.message).toMatch(/not a database/);
   });
 
   it("events --since reports a daemon that refuses the handshake rather than reading the file", async () => {
@@ -5720,7 +5923,7 @@ describe("CLI: events history", () => {
             daemonVersion: "0.9.0",
           });
         },
-        readEventFile: async () => {
+        readEventHistory: async () => {
           fileRead = true;
           return [];
         },
@@ -5747,7 +5950,7 @@ describe("CLI: events history", () => {
               return [envelope(7, hour + 1)];
             },
           }),
-        readEventFile: async () => {
+        readEventHistory: async () => {
           fileRead = true;
           return [];
         },
@@ -6371,6 +6574,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
     replayEvents: () => Promise.resolve([]),
+    usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
     createToken: (input) =>
       Promise.resolve({
@@ -6441,7 +6645,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           writeConfigFile: async () => {},
           validateConfig: async () => {},
           readLogFile: async () => "",
-          readEventFile: async () => [],
+          readEventHistory: async () => [],
           signals: new EventEmitter() as unknown as CliEnvironment["signals"],
           parentWatch: new FakeParentWatch(),
           stderr: stderrOut,
@@ -6667,12 +6871,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: ringEventHistory(eventBus),
     host: new DaemonEndpointHost({
       connector: new NodeIpcTransport(),
       endpoint: socketPath,
@@ -6792,12 +6991,7 @@ async function startInMemoryDaemon(options: {
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: ringEventHistory(eventBus),
     host: new DaemonEndpointHost({
       connector: ipcTransport,
       endpoint: socketPath,
@@ -6871,10 +7065,10 @@ function testConfig(): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -6938,6 +7132,218 @@ describe("simlock list --requests", () => {
         "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
         "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
     );
+  });
+
+  describe("the reason a queued request waits", () => {
+    const queued = (
+      reason: string | undefined,
+      platform: "ios" | "android" = "ios",
+    ): Record<string, unknown> => ({
+      createdAt: 0,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent",
+      spec: { model: "Device", platform },
+      stage: "queued",
+      ...(reason === undefined ? {} : { reason }),
+    });
+
+    async function printed(entry: Record<string, unknown>): Promise<string> {
+      const output = outputCapture();
+      const client = fakeClient({ list: async () => [entry] as never });
+      await runCli(
+        ["list", "--requests"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      );
+      return output.stdout.trimEnd();
+    }
+
+    it.each([
+      ["behind-earlier-request", "ios", "behind an earlier request"],
+      ["device-limit", "ios", "full: device limit"],
+      ["ram-budget", "ios", "full: RAM budget"],
+      ["global-running-limit", "ios", "full: running limit"],
+      ["platform-running-limit", "ios", "full: running limit for iOS"],
+      ["platform-running-limit", "android", "full: running limit for Android"],
+      ["waiting-for-device", "ios", "a matching device is starting"],
+      ["no-free-physical", "ios", "every matching device is leased or absent"],
+    ] as const)(
+      "ends the line of a queued request with %s on %s as ' — %s'",
+      async (reason, platform, text) => {
+        expect(await printed(queued(reason, platform))).toBe(
+          `Request req_1: agent, ${platform} Device, queued at 1, waiting 0s — ${text}`,
+        );
+      },
+    );
+
+    it("ends the line of a queued request with no reason as it ended before", async () => {
+      expect(await printed(queued(undefined))).toBe(
+        "Request req_1: agent, ios Device, queued at 1, waiting 0s",
+      );
+    });
+
+    it("has a text for every reason the contract's enum lists", async () => {
+      const field = (waitingRequestSchema.shape as Record<string, unknown>)["reason"];
+      expect(field).toBeDefined();
+      const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
+
+      expect(listed).toHaveLength(7);
+      for (const reason of listed) {
+        const line = await printed(queued(reason));
+        expect(line).toMatch(/ — [a-z]/);
+        expect(line).not.toContain(reason);
+      }
+    });
+  });
+
+  describe("the reason each worker cannot take a request on a gateway", () => {
+    const gatewayEntry = (
+      workers: readonly Record<string, unknown>[],
+      platform: "ios" | "android" = "ios",
+    ): Record<string, unknown> => ({
+      createdAt: 0,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "ci",
+      spec: { model: "Device", platform },
+      stage: "queued",
+      workers,
+    });
+
+    async function printedGateway(
+      entries: readonly Record<string, unknown>[],
+      known: readonly { id: string; label?: string }[] = [],
+    ): Promise<{ stdout: string; listed: number }> {
+      const output = outputCapture();
+      let listed = 0;
+      const client = fakeClient({
+        list: async () => entries as never,
+        listWorkers: () => {
+          listed += 1;
+          return Promise.resolve({
+            workers: known.map((worker) => ({
+              catalog: [],
+              connection: "connected" as const,
+              devices: [],
+              drained: false,
+              lastSeenAt: 1,
+              leases: [],
+              ...worker,
+            })),
+          } as never);
+        },
+      });
+      await runCli(
+        ["list", "--requests"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      );
+      return { listed, stdout: output.stdout };
+    }
+
+    it("prints one indented line per worker under the request, named by its label, else its id", async () => {
+      const { stdout } = await printedGateway(
+        [
+          gatewayEntry([
+            { reason: "drained", workerId: "wrk_a" },
+            { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_b" },
+            { reason: "runtime-missing", workerId: "wrk_c" },
+            { reason: "busy", workerId: "wrk_d" },
+          ]),
+        ],
+        [{ id: "wrk_a", label: "mac-mini-1" }, { id: "wrk_b" }, { id: "wrk_c", label: "lab" }],
+      );
+
+      expect(stdout).toBe(
+        "Request req_1: ci, ios Device, queued at 1, waiting 0s\n" +
+          "  mac-mini-1: drained\n" +
+          "  wrk_b: full: running limit for iOS\n" +
+          "  lab: oS not installed\n" +
+          "  wrk_d: busy with its own queue\n",
+      );
+    });
+
+    it.each([
+      ["disconnected", "ios", undefined, "not connected"],
+      ["incompatible", "ios", undefined, "protocol mismatch"],
+      ["not-ready", "ios", undefined, "not ready yet"],
+      ["unhealthy", "ios", undefined, "not running"],
+      ["drained", "ios", undefined, "drained"],
+      ["busy", "ios", undefined, "busy with its own queue"],
+      ["no-driver", "ios", undefined, "no iOS support"],
+      ["no-driver", "android", undefined, "no Android support"],
+      ["unknown-model", "ios", undefined, "model not offered"],
+      ["runtime-missing", "ios", undefined, "oS not installed"],
+      ["capability-missing", "ios", undefined, "missing capability"],
+      ["full", "ios", undefined, "full"],
+      ["full", "ios", "device-limit", "full: device limit"],
+      ["full", "ios", "ram-budget", "full: RAM budget"],
+      ["full", "ios", "global-running-limit", "full: running limit"],
+      ["full", "ios", "platform-running-limit", "full: running limit for iOS"],
+      ["full", "android", "platform-running-limit", "full: running limit for Android"],
+      ["no-free-physical", "ios", undefined, "every matching device is leased or absent"],
+      ["not-chosen", "ios", undefined, "not chosen this time"],
+    ] as const)(
+      "prints %s on %s with capacity reason %s as '  wrk_a: %s'",
+      async (reason, platform, capacityReason, text) => {
+        const { stdout } = await printedGateway([
+          gatewayEntry(
+            [
+              {
+                ...(capacityReason === undefined ? {} : { capacityReason }),
+                reason,
+                workerId: "wrk_a",
+              },
+            ],
+            platform,
+          ),
+        ]);
+
+        expect(stdout.split("\n")[1]).toBe(`  wrk_a: ${text}`);
+      },
+    );
+
+    it("asks worker.list once for names, and not at all when no entry has workers", async () => {
+      const gateway = await printedGateway([
+        gatewayEntry([{ reason: "drained", workerId: "wrk_a" }]),
+        { ...gatewayEntry([{ reason: "busy", workerId: "wrk_a" }]), id: "req_2" },
+      ]);
+      const plain = await printedGateway([{ ...gatewayEntry([]), workers: undefined }]);
+
+      expect(gateway.listed).toBe(1);
+      expect(plain.listed).toBe(0);
+    });
+
+    it("prints a worker's own entry with its reason after ' — ' and no indented lines", async () => {
+      const { stdout } = await printedGateway([
+        {
+          ...gatewayEntry([]),
+          reason: "ram-budget",
+          workers: undefined,
+          workerId: "wrk_1",
+        },
+      ]);
+
+      expect(stdout).toBe(
+        "Request req_1: ci on wrk_1, ios Device, queued at 1, waiting 0s — full: RAM budget\n",
+      );
+    });
+
+    it("has a text for every gateway reason the contract's enum lists", async () => {
+      const field = (waitingRequestSchema.shape as Record<string, unknown>)["workers"];
+      expect(field).toBeDefined();
+      const element = (
+        field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
+      ).unwrap().element;
+      const listed = element.shape.reason.options;
+
+      expect(listed).toHaveLength(13);
+      for (const reason of listed) {
+        const { stdout } = await printedGateway([gatewayEntry([{ reason, workerId: "wrk_a" }])]);
+        const line = stdout.split("\n")[1] ?? "";
+        expect(line).toMatch(/^ {2}wrk_a: [a-zA-Z]/);
+        expect(line).not.toContain("-");
+      }
+    });
   });
 
   it.each([["--devices"], ["--leases"], ["--rules"]])(
@@ -7293,5 +7699,321 @@ describe("CLI: a worker's capabilities", () => {
     await runCli(["status"], environment);
 
     expect(output.stdout).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+  });
+});
+
+function usageAnswer(
+  window: { readonly from: number; readonly to: number },
+  overrides: Partial<UsageOutput> = {},
+): UsageOutput {
+  const samples = { count: 0, max: null, p50: null, p95: null };
+  const figures = {
+    boot: samples,
+    bySource: { booted: 0, provisioned: 0, warm: 0 },
+    declined: 0,
+    failures: { byEvent: {} },
+    granted: 0,
+    held: samples,
+    incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+    provisioning: samples,
+    queue: { meanDepth: null, peakDepth: null },
+    rejected: { byReason: {}, total: 0 },
+    requests: 0,
+    turnaround: samples,
+    utilisation: { slots: { max: null, mean: null, peak: null } },
+    wait: samples,
+  };
+  return {
+    bucketMs: 60_000,
+    coversFrom: window.from,
+    partial: false,
+    platforms: { android: figures, ios: figures },
+    requesters: [],
+    series: [],
+    totals: figures,
+    window,
+    workers: [],
+    ...overrides,
+  };
+}
+
+describe("CLI: stats", () => {
+  const NOW = Date.parse("2026-10-05T12:00:00.000Z");
+  const HOUR = 3_600_000;
+
+  function statsRun(argv: readonly string[], usage: SimlockAdminClient["usage"]) {
+    const output = outputCapture();
+    const asked: { from: number; to: number; includeLedger?: boolean | undefined }[] = [];
+    const run = runCli(
+      ["stats", ...argv],
+      output.environmentWith({
+        adminTokenFromEnv: "admin-token",
+        clock: new FakeClock(NOW),
+        connectAdmin: async (resolveCredential) => {
+          await resolveCredential();
+          return fakeClient({
+            usage: async (window) => {
+              asked.push(window);
+              return usage(window);
+            },
+          });
+        },
+      }),
+    );
+    return { asked, output, run };
+  }
+
+  it("simlock stats words each refusal as the Inputs table says, exits 2, and asks nothing of the daemon", async () => {
+    for (const argv of [["--since", "1h"], ["--from", "2026-10-05T10:00:00Z"], ["--json"]]) {
+      const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
+      await expect(run, argv.join(" ")).resolves.toBe(0);
+      expect(output.stderr, argv.join(" ")).not.toContain("USAGE");
+    }
+    for (const [argv, message] of [
+      [
+        ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],
+        "stats takes --since or --from, not both",
+      ],
+      [["--to", "2026-10-04T10:00:00Z"], "--to needs --from"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-03T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [
+        ["--from", "2026-10-05T13:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [["--since", "soon"], "Invalid duration: soon"],
+      [["--from", "2026-10-15"], "Invalid time: 2026-10-15 (use ISO 8601 with Z or an offset)"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "10/15/2026"],
+        "Invalid time: 10/15/2026 (use ISO 8601 with Z or an offset)",
+      ],
+    ] as const) {
+      const { asked, output, run } = statsRun(argv, async (window) => usageAnswer(window));
+
+      await expect(run, argv.join(" ")).resolves.toBe(2);
+      expect(output.stderr, argv.join(" ")).toContain('"code":"USAGE"');
+      expect(output.stderr, argv.join(" ")).toContain(`"message":"${message}"`);
+      expect(asked, argv.join(" ")).toEqual([]);
+      expect(output.stdout).toBe("");
+    }
+  });
+
+  it("simlock stats --json prints the operation's output unchanged", async () => {
+    const answer = usageAnswer(
+      { from: NOW - HOUR, to: NOW },
+      {
+        partial: true,
+        requesters: [
+          { granted: 1, heldTotalMs: 5, id: "tok_a", label: "ci", rejected: 0, requests: 1 },
+        ],
+      },
+    );
+    const { output, run } = statsRun(["--since", "1h", "--json"], async () => answer);
+
+    await expect(run).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual(answer);
+    expect(output.stdout.endsWith("\n")).toBe(true);
+  });
+
+  it("asks for the last 24 hours by default, and for --since up to now", async () => {
+    const byDefault = statsRun([], async (window) => usageAnswer(window));
+    const since = statsRun(["--since", "90m"], async (window) => usageAnswer(window));
+
+    await byDefault.run;
+    await since.run;
+
+    expect(byDefault.asked).toEqual([{ from: NOW - 24 * HOUR, to: NOW }]);
+    expect(since.asked).toEqual([{ from: NOW - 90 * 60_000, to: NOW }]);
+  });
+
+  it("asks for the ISO window --from and --to name, and for --from up to now", async () => {
+    const both = statsRun(
+      ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T12:00:00Z"],
+      async (window) => usageAnswer(window),
+    );
+    const open = statsRun(["--from", "2026-10-05T10:00:00Z"], async (window) =>
+      usageAnswer(window),
+    );
+
+    await both.run;
+    await open.run;
+
+    expect(both.asked).toEqual([
+      { from: Date.parse("2026-10-04T10:00:00Z"), to: Date.parse("2026-10-04T12:00:00Z") },
+    ]);
+    expect(open.asked).toEqual([{ from: Date.parse("2026-10-05T10:00:00Z"), to: NOW }]);
+  });
+
+  it("prints the figures as a table, with the partial note above them", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async (window) =>
+      usageAnswer(window, { coversFrom: NOW - 60_000, partial: true }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    const lines = output.stdout.split("\n");
+    expect(lines[0]).toBe("Usage from 2026-09-05T12:00:00.000Z to 2026-10-05T12:00:00.000Z");
+    expect(lines[1]).toContain("Figures cover from 2026-10-05T11:59:00.000Z");
+    expect(lines).toContain("Totals");
+  });
+
+  it("prints the HISTORY_NOT_KEPT message and exits with its code when the window ends before the history", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async () => {
+      throw fromWireError(
+        "HISTORY_NOT_KEPT",
+        "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
+        { oldestTs: NOW - 60_000 },
+      );
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+    expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
+  });
+
+  const LEDGER_HEADER =
+    "requestId,requester,label,platform,model,workerId,source,requestedAt,grantedAt,rejectedAt,endedAt,waitMs,heldMs,turnaroundMs,outcome,probe,reason,endReason";
+  const TRUNCATION_NOTICE =
+    "The ledger holds the newest 100000 requests of the window; ask for a shorter window for the rest.";
+
+  it("simlock stats --csv prints the header row and one row per ledger entry with times as ISO 8601, durations as whole milliseconds (400, not 400.0), probe as true or false, and asks usage.get with includeLedger: true", async () => {
+    const requests = [
+      {
+        endReason: "explicit",
+        endedAt: Date.parse("2026-10-05T11:09:30.000Z"),
+        grantedAt: Date.parse("2026-10-05T11:01:02.400Z"),
+        heldMs: 507_600.4,
+        label: "ci-runner",
+        model: "iPhone 16",
+        outcome: "granted" as const,
+        platform: "ios",
+        probe: false,
+        requestId: "req_8f2",
+        requestedAt: Date.parse("2026-10-05T11:01:02.000Z"),
+        requester: "tok_ci",
+        source: "warm",
+        turnaroundMs: 508_000,
+        waitMs: 400,
+      },
+      {
+        outcome: "open" as const,
+        platform: "android",
+        probe: true,
+        requestId: "req_9",
+        requestedAt: Date.parse("2026-10-05T11:02:00.000Z"),
+        requester: "gw:gw-1:tok_a",
+      },
+    ];
+    const { asked, output, run } = statsRun(["--since", "1h", "--csv"], async (window) =>
+      usageAnswer(window, { requests }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    expect(asked[0]?.includeLedger).toBe(true);
+    expect(output.stdout.split("\r\n")).toEqual([
+      LEDGER_HEADER,
+      "req_8f2,tok_ci,ci-runner,ios,iPhone 16,,warm,2026-10-05T11:01:02.000Z,2026-10-05T11:01:02.400Z,,2026-10-05T11:09:30.000Z,400,507600,508000,granted,false,,explicit",
+      "req_9,gw:gw-1:tok_a,,android,,,,2026-10-05T11:02:00.000Z,,,,,,,open,true,,",
+      "",
+    ]);
+  });
+
+  it("simlock stats --csv writes the truncation notice on stderr and exits 0 when ledgerTruncated, and writes no notice otherwise", async () => {
+    const truncated = statsRun(["--csv"], async (window) =>
+      usageAnswer(window, { ledgerTruncated: true, requests: [] }),
+    );
+    const whole = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
+
+    await expect(truncated.run).resolves.toBe(0);
+    await expect(whole.run).resolves.toBe(0);
+
+    expect(truncated.output.stderr).toBe(`${JSON.stringify({ notice: TRUNCATION_NOTICE })}\n`);
+    expect(truncated.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
+    expect(whole.output.stderr).toBe("");
+    expect(whole.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
+  });
+
+  it("simlock stats --csv on an error (HISTORY_NOT_KEPT) writes the error line on stderr, nothing on stdout, and exits 12", async () => {
+    const { output, run } = statsRun(["--since", "30d", "--csv"], async () => {
+      throw fromWireError("HISTORY_NOT_KEPT", "The history does not reach back.", {
+        oldestTs: NOW - 60_000,
+      });
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+  });
+
+  it("simlock stats refuses --csv with --json as a usage error, exit 2", async () => {
+    const accepted = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
+    const both = statsRun(["--csv", "--json"], async (window) => usageAnswer(window));
+
+    await expect(accepted.run).resolves.toBe(0);
+    await expect(both.run).resolves.toBe(2);
+
+    expect(both.output.stderr).toContain('"code":"USAGE"');
+    expect(both.output.stderr).toContain('"message":"stats takes --csv or --json, not both"');
+    expect(both.asked).toEqual([]);
+    expect(both.output.stdout).toBe("");
+  });
+
+  it("closes the connection after the answer, and after a failure", async () => {
+    let closed = 0;
+    const output = outputCapture();
+    const connect = (usage: SimlockAdminClient["usage"]) => async () =>
+      fakeClient({
+        close: async () => {
+          closed += 1;
+        },
+        usage,
+      });
+
+    await runCli(
+      ["stats"],
+      output.environmentWith({ connectAdmin: connect(async (window) => usageAnswer(window)) }),
+    );
+    await runCli(
+      ["stats"],
+      output.environmentWith({
+        connectAdmin: connect(async () => {
+          throw new Error("boom");
+        }),
+      }),
+    );
+
+    expect(closed).toBe(2);
+  });
+
+  it("prints its usage on --help without connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+
+    const exitCode = await runCli(
+      ["stats", "--help"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(output.stdout).toBe(
+      "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]\n",
+    );
   });
 });

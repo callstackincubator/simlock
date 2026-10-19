@@ -5,7 +5,8 @@ import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeDriver, testComponentWiring } from "../core/testing.js";
 
-import { EventBus, EventHistory } from "../bus/index.js";
+import { EventBus } from "../bus/index.js";
+import { removeUsageRigs, ringEventHistory, usageRig, type UsageRig } from "../history/testing.js";
 import {
   CleanupReaper,
   type Config,
@@ -26,7 +27,6 @@ import {
   MemoryLogSink,
   NodeFilesystem,
   NodeIpcTransport,
-  NoopLogger,
   ScriptedProcessRunner,
   type IpcConnection,
   type Logger,
@@ -81,12 +81,15 @@ interface ServerFrame {
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
+const usageRigs: UsageRig[] = [];
 
 afterEach(async () => {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
   );
+  await Promise.all(usageRigs.splice(0).map((rig) => rig.close()));
+  await removeUsageRigs();
 });
 
 describe("DaemonServer", () => {
@@ -209,7 +212,7 @@ describe("DaemonServer", () => {
     [37, "cannot read config.get's capabilities"],
     [38, "cannot read agent-device's section under config.get's capabilities"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 39, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 46, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -219,7 +222,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 39, max: 39 } },
+          details: { client: { min: version, max: version }, daemon: { min: 46, max: 46 } },
         },
         ok: false,
       });
@@ -454,6 +457,19 @@ describe("DaemonServer", () => {
     );
     await expect(client.request("lease.release", { leaseId })).resolves.toMatchObject({ ok: true });
     expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+
+  it("routes usage.get to the dispatcher with the window the frame carries", async () => {
+    const harness = await createHarness({ withHistory: true });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const answer = await client.request("usage.get", { from: 0, to: 3_600_000 });
+
+    expect(answer).toMatchObject({
+      ok: true,
+      payload: { totals: { requests: 0 }, window: { from: 0, to: 3_600_000 } },
+    });
   });
 
   it("serves the device catalog, omitting platforms with no registered driver", async () => {
@@ -1202,7 +1218,13 @@ describe("DaemonServer", () => {
 
     harness.eventBus.emit(
       "device.recovered",
-      { attempts: 2, deviceId: deviceId as string, duration: 30_000, leaseId },
+      {
+        attempts: 2,
+        deviceId: deviceId as string,
+        duration: 30_000,
+        leaseId,
+        platform: "ios",
+      },
       "test",
     );
     await expect(
@@ -1228,7 +1250,13 @@ describe("DaemonServer", () => {
     );
     harness.eventBus.emit(
       "device.recovered",
-      { attempts: 1, deviceId: "device-x", duration: 1_000, leaseId: "lease-x" },
+      {
+        attempts: 1,
+        deviceId: "device-x",
+        duration: 1_000,
+        leaseId: "lease-x",
+        platform: "ios",
+      },
       "test",
     );
 
@@ -1295,7 +1323,11 @@ describe("DaemonServer startup readiness", () => {
       ok: true,
       payload: { daemon: { health: "starting", mode: "worker" } },
     });
-    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual(["daemon", "host"]);
+    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual([
+      "daemon",
+      "history",
+      "host",
+    ]);
 
     converge.resolve();
     await startPromise;
@@ -3207,6 +3239,7 @@ async function helloAs(
 async function createHarness(
   options: {
     readonly estimateMs?: Partial<Record<"boot" | "provision", number>>;
+    readonly withHistory?: boolean;
     readonly latencyMs?: Partial<Record<"makeReady" | "provision", number>>;
     readonly lease?: Partial<Config["lease"]>;
     readonly socketPath?: string;
@@ -3243,6 +3276,8 @@ async function createHarness(
   const clock = options.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const stateFilesystem = options.stateFilesystem ?? new MemoryFilesystem();
+  const history = options.withHistory === true ? await usageRig() : undefined;
+  if (history !== undefined) usageRigs.push(history);
   const registry = await Registry.load({
     clock,
     eventBus,
@@ -3309,12 +3344,8 @@ async function createHarness(
       : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: history?.history ?? ringEventHistory(eventBus),
+    ...(history === undefined ? {} : { historyPath: history.historyPath }),
     host:
       options.host ??
       new DaemonEndpointHost({
@@ -3687,10 +3718,10 @@ function testConfig(
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,

@@ -40,14 +40,15 @@ Each layer imports only the layers below it. `.dependency-cruiser.mjs` enforces 
 
 ## Pages
 
-| Path                | Screen    | Layout                                                                |
-| ------------------- | --------- | --------------------------------------------------------------------- |
-| `/`                 | Overview  | stat tiles, lease chart, capacity, workers table, attention, activity |
-| `/workers[/<id>]`   | Workers   | list + inspector (`MasterDetail`)                                     |
-| `/leases[/<id>]`    | Leases    | list + inspector; the inspector holds the live screen                 |
-| `/waiting[/<id>]`   | Waiting   | list + inspector                                                      |
-| `/attention[/<id>]` | Attention | list + inspector                                                      |
-| `/events[/<id>]`    | Events    | list + inspector with the payload                                     |
+| Path                | Screen    | Layout                                                                               |
+| ------------------- | --------- | ------------------------------------------------------------------------------------ |
+| `/`                 | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity |
+| `/workers[/<id>]`   | Workers   | list + inspector (`MasterDetail`)                                                    |
+| `/leases[/<id>]`    | Leases    | list + inspector; the inspector holds the live screen                                |
+| `/waiting[/<id>]`   | Waiting   | Wait p95 tile, list + inspector                                                      |
+| `/attention[/<id>]` | Attention | list + inspector                                                                     |
+| `/events[/<id>]`    | Events    | list + inspector with the payload                                                    |
+| `/usage`            | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)     |
 
 On a list page the URL names the chosen item; with none, the first item shows on a wide screen
 and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
@@ -78,5 +79,5 @@ and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/
 
 ## Known gaps
 
-- **No history beyond the last hour.** Charts are counted back from the events the console
-  holds; the daemon keeps no longer series.
+- **The Events chart counts from the events held.** It reaches back one hour only; the Overview's
+  figures come from `GET /v1/stats` for the range in `?range=`.

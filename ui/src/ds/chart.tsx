@@ -19,7 +19,7 @@ import type { NameType, ValueType } from "recharts/types/component/DefaultToolti
 export interface MinuteCount {
   readonly at: number;
   readonly label: string;
-  readonly count: number;
+  readonly count: number | null;
 }
 
 const HEIGHT = 240;
@@ -42,6 +42,7 @@ export function MinuteChart(props: {
       <Tooltip
         cursor={kind === "area" ? true : { className: "chart-cursor" }}
         isAnimationActive={false}
+        filterNull={false}
         content={(content) => <MinuteTip content={content} unit={unit} />}
       />
     </>
@@ -81,26 +82,39 @@ function MinuteTip({
 }) {
   const { active, label, payload } = content;
   const value = payload[0]?.value;
-  if (active !== true || value === undefined) return null;
+  if (active !== true) return null;
   return (
     <div className="chart-tip">
-      <span className="chart-tip-label">{label}</span> {value} {unit}
+      <span className="chart-tip-label">{label}</span>{" "}
+      {value === null || value === undefined ? `${unit}: no data` : `${value} ${unit}`}
     </div>
   );
+}
+
+function columnOf(bucketMs: number): string {
+  if (bucketMs >= 3_600_000) return "Hour";
+  return bucketMs <= 60_000 ? "Minute" : "Time";
+}
+
+function disclosureOf(bucketMs: number): string {
+  if (bucketMs >= 3_600_000) return "Hour by hour";
+  if (bucketMs <= 60_000) return "Minute by minute";
+  return `Every ${bucketMs / 60_000} minutes`;
 }
 
 export function MinuteTable(props: {
   readonly minutes: readonly MinuteCount[];
   readonly heading: string;
+  readonly bucketMs?: number;
 }) {
-  const { heading, minutes } = props;
+  const { bucketMs = 60_000, heading, minutes } = props;
   return (
     <details className="chart-data">
-      <summary>Minute by minute</summary>
+      <summary>{disclosureOf(bucketMs)}</summary>
       <table className="table">
         <thead>
           <tr>
-            <th scope="col">Minute</th>
+            <th scope="col">{columnOf(bucketMs)}</th>
             <th scope="col" className="num">
               {heading}
             </th>
@@ -109,11 +123,11 @@ export function MinuteTable(props: {
         <tbody>
           {[...minutes].reverse().map((minute) => (
             <tr key={minute.at}>
-              <td data-label="Minute" className="mono">
+              <td data-label={columnOf(bucketMs)} className="mono">
                 {minute.label}
               </td>
               <td data-label={heading} className="num">
-                {minute.count}
+                {minute.count ?? "—"}
               </td>
             </tr>
           ))}

@@ -15,7 +15,7 @@ import { connectSimlockAdmin } from "simlock/admin"; // agent + admin role
 
 `connectSimlockAdmin` returns a superset of `connectSimlock`'s client — every
 agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
-`getConfig` (its `capabilities` block holds each optional module's section), `stopDaemon`, `replayEvents`/`subscribeEvents` (each event carries an `id`),
+`getConfig` (its `capabilities` block holds each optional module's section), `stopDaemon`, `replayEvents`/`subscribeEvents` (each event carries an `id`), `usage`,
 `createToken`/`listTokens`/`revokeToken`, `installComponent`, `removeComponent`,
 `addDevice`, `removeDevice`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
@@ -238,6 +238,36 @@ Every exported type — `LeaseRequestInput`, `LeaseGrant`, `LeaseRecord`,
 and MCP's tool schemas now share. Nothing core-private
 (`DeviceRecord`/`LeaseRecord`-the-core-type) ever appears on this surface;
 see `src/simlock-client/no-core-leak.test.ts`.
+
+## How the fleet was used: `usage`
+
+```ts
+const usage = await admin.usage({ from: Date.now() - 24 * 3_600_000, to: Date.now() });
+usage.totals.requests;                 // requests in the window
+usage.totals.wait.p95;                 // milliseconds, null with no samples
+usage.workers.map((worker) => worker.id);
+```
+
+`usage({ from, to })` takes two epoch-millisecond times, `from` before `to`
+and at most 90 days apart; anything else rejects with `BAD_REQUEST` before
+anything is sent. It answers the figures `simlock stats --json` prints:
+`window` (`from` moved down to the start of its bucket), `bucketMs`,
+`coversFrom` and `partial` (true when the history holds figures for only the
+later part of the window), `totals`, `platforms.ios` and `platforms.android`,
+`workers`, `requesters` and a `series` of up to 200 points. Figures are read from
+the rows of `history.db`, so they reach back as far as `metrics.retention`.
+It rejects with `HISTORY_NOT_KEPT` (`details.oldestTs`) when the window ends
+before the oldest figure, and with `HISTORY_UNAVAILABLE` when the daemon could
+not open `history.db`.
+
+`usage({ from, to, includeLedger: true })` adds `requests`, one entry per lease
+request in the window by request time then request id (`requestId`,
+`requester`, `label`, `platform`, `model`, `workerId`, `source`, `requestedAt`,
+`grantedAt`, `rejectedAt`, `endedAt`, `waitMs`, `heldMs`, `turnaroundMs`,
+`outcome` of `granted`, `rejected`, `declined` or `open`, `probe`, `reason`,
+`endReason`; a field with no value is absent). It holds the newest 100,000
+requests; when the window has more, `ledgerTruncated` is `true`. A
+non-boolean `includeLedger` rejects with `BAD_REQUEST`.
 
 ## Running a command on the leased device: `exec`
 
@@ -575,7 +605,7 @@ const { host } = await client.getStatus();
 ## A daemon that is still starting: `getStatus()`
 
 While a daemon is starting (`daemon.health` is `"starting"`), `getStatus()`
-returns `daemon` and `host` and nothing else. `devices`, `leases`, `capacity`,
+returns `daemon`, `history` (whether the event history is open and being written; `setAsideAt` after a damaged file was renamed aside, `rebuiltAt` after the usage figures were rebuilt, `rebuildFailed` after a rebuild failed), `host` and, once read, `load`, and nothing else. `devices`, `leases`, `capacity`,
 `warmPool`, `queueDepth`, `physicalQueueDepth`, `installs`, `waiting` and `workers` are `undefined`, not empty,
 because the daemon has not yet checked what it holds. The same is true of a
 worker's entry in `workers` and in `listWorkers()`: a worker that is starting has
@@ -620,7 +650,7 @@ queue, oldest first:
 ```ts
 const { waiting = [] } = await client.getStatus();
 // [{ id: "req_7", requesterId: "agent-b", spec: { platform: "ios", model: "iPhone 16" },
-//    createdAt: 1790864071200, stage: "queued", queuePosition: 1 }]
+//    createdAt: 1790864071200, stage: "queued", queuePosition: 1, reason: "platform-running-limit" }]
 ```
 
 - `stage` is `queued` while the request holds a place in the queue, with
@@ -630,6 +660,16 @@ const { waiting = [] } = await client.getStatus();
   working on it: placing it as it arrives, or finding, creating, booting or
   downloading a device for it. `spec` has only the fields the
   request named.
+- `reason` is set only on a `queued` entry that the daemon has tried to place: why its
+  latest attempt stopped (`behind-earlier-request`, `device-limit`, `ram-budget`,
+  `global-running-limit`, `platform-running-limit`,
+  `waiting-for-device` or `no-free-physical`). Each new attempt replaces it.
+- A `lease.request` with `noWait` that a capacity check refused fails with `NO_CAPACITY`
+  and `details.capacityReason` set to `device-limit`, `ram-budget`, `global-running-limit`
+  or `platform-running-limit`. A refusal for another cause has no `details`.
+- A request whose new device could not be created twice fails with `PROVISION_FAILED`
+  (exit code 1 on the CLI, HTTP 500); its message is the driver's error. It never waits in
+  the list.
 - A request leaves the list as soon as it is granted, fails or is cancelled.
   The field is absent only from an older daemon.
 - On a gateway the list is the gateway's own queue. Each worker's own is on

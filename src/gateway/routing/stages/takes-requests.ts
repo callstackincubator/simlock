@@ -10,10 +10,14 @@ import type { FilterStage } from "../pipeline.js";
  * (ADR 0009 §2, stage 3). One never read at all has no catalog, and fails here as before.
  */
 export const takesRequests: FilterStage = {
-  keeps(worker) {
-    if (worker.connection !== "connected" || worker.drained) return false;
-    if (worker.health === "starting") return worker.catalog !== undefined;
-    return worker.capacity !== undefined && worker.catalogReadAt !== undefined;
+  check(worker) {
+    if (worker.connection !== "connected") return { reason: worker.connection };
+    if (worker.drained) return { reason: "drained" };
+    const ready =
+      worker.health === "starting"
+        ? worker.catalog !== undefined
+        : worker.capacity !== undefined && worker.catalogReadAt !== undefined;
+    return ready ? undefined : { reason: "not-ready" };
   },
   appliesToPhysical: true,
   kind: "filter",

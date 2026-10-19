@@ -522,7 +522,7 @@ describe("createCore", () => {
       }
       // A device whose release-time purge failed in a previous process, its retry already due.
       const { released } = await releasedLease(harness);
-      await harness.registry.enterQuarantine(released.device.id, 0);
+      await harness.registry.enterQuarantine(released.device.id, 0, { kind: "purge-failed" });
       harness.core.connect(ports());
       await harness.core.converge(await harness.core.readStartup());
       // Lets a retry timer that converge armed fire.

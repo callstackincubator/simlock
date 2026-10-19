@@ -61,6 +61,7 @@ agent-device front and the stream (`/v1/stream`).
 - `pipeSse` writes events in order, `: keepalive` every 15 s, unsubscribes on abort.
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.
+- `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).
 - `GET /v1/leases/{id}/events` — the lease's notices; ends on `lease_lost`.
 - `POST /v1/leases/{id}/exec` → `device.exec`. The stream opens on `onStarted`; a failure
   before that is a plain error response. Events: `output`, then `exit` or `error`.

@@ -5,6 +5,7 @@ import { AttentionScreen } from "../screens/attention";
 import { EventsScreen } from "../screens/events";
 import { LeasesScreen } from "../screens/leases";
 import { OverviewScreen } from "../screens/overview";
+import { UsageScreen } from "../screens/usage";
 import { WaitingScreen } from "../screens/waiting";
 import { WorkersScreen } from "../screens/workers";
 
@@ -22,6 +23,7 @@ export const ROUTES: readonly Route[] = [
   { Screen: WaitingScreen, icon: "waiting", label: "Waiting", path: "/waiting" },
   { Screen: AttentionScreen, icon: "attention", label: "Attention", path: "/attention" },
   { Screen: EventsScreen, icon: "events", label: "Events", path: "/events" },
+  { Screen: UsageScreen, icon: "usage", label: "Usage", path: "/usage" },
 ];
 
 // why: a section's own pages live under its path (`/workers/<id>`), so a path belongs to the route

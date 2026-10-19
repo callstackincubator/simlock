@@ -2,7 +2,7 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, link, core, leasing, drivers, http, host-load, modules, module-registry; gateway from `main.ts` only.
+Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry; gateway from `main.ts` only.
 Never imports: gateway outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
@@ -28,7 +28,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Composition (`main.ts`)
 
-Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → `EventHistory`.
+Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started).
 `config.mode` then picks one branch; a gateway builds none of the worker's parts.
 
 - **Worker** — `Registry` (`state.json`) → instance id (`instance.json`) →
@@ -53,7 +53,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
    Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
    Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 39, max: 39 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 46, max: 46 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
@@ -131,9 +131,10 @@ Security model: cooperative identity, not a hostile-process boundary.
 - `daemon.log`: `JsonLinesLogger` over `NodeFileLogSink`; `log.level` (`info`),
   rotates to `daemon.log.1` past `log.rotateBytes` (5 MiB).
 - At `log.level: debug`, `LoggingProcessRunner` logs one `process` line per command.
-- Events: ring of `eventBuffer.capacity` (1000) in memory; `events.jsonl` via
-  `EventHistory`, rotated at `eventLog.rotateBytes` (5 MiB), kept `eventLog.retention`
-  (7 days), total `eventLog.maxBytes` (256 MiB). A file that fails costs only history.
+- Events: ring of `eventBuffer.capacity` (1000) in memory; `history.db` via the [history](../history/AGENTS.md), kept `eventLog.retention` (7 days), event rows capped at
+  `eventLog.maxBytes` (256 MiB); usage rows are kept `metrics.retention` (90 days). `onSocketClaimed`
+  starts it in both modes with `config.mode` and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
+  failed migration) stops the daemon with reason `history-refused` and exit 1. `status.get` carries its `history`, also while starting. `usage.get` (both dispatchers, `usageAnswer` in `dispatch.ts`) reads the same file's usage rows through `core/usage` on a read thread; `main.ts` passes `historyPath` in both modes, and `dispose` stops the thread. `history.status().opened` false → `HISTORY_UNAVAILABLE`; a window ending before the oldest row → `HISTORY_NOT_KEPT`.
 - A start that throws is logged by a fallback logger to the default `daemon.log`; exit 1.
 
 ## Rules

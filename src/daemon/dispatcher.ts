@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import type { EventBus, EventHistory } from "../bus/index.js";
+import type { EventBus } from "../bus/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
 import {
   buildCapacityFigures,
   type CleanupReaper,
@@ -32,11 +33,15 @@ import {
   type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
+  createUsageReader,
+  type UsageReader,
 } from "../core/index.js";
 import {
   type DeviceModeReader,
   LeaseIdTakenError,
   type LeaseCommands,
+  capacityReasonOf,
+  NoCapacityError,
   type QueueControl,
 } from "../leasing/index.js";
 import type {
@@ -60,11 +65,13 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
   workerViewFields,
+  withoutQuarantineMessages,
 } from "../contract/index.js";
 import type { TokenStore } from "../http/token-store.js";
 import {
   DispatchError,
   runDispatch,
+  usageAnswer,
   type DispatchSession,
   type ErasedHandler,
 } from "./dispatch.js";
@@ -114,6 +121,7 @@ export interface CapabilitySource {
 }
 
 export interface DispatcherOptions {
+  readonly historyPath?: string;
   readonly capabilitySources?: readonly CapabilitySource[];
   readonly capacity: CapacityReader;
   /** The warm pool as its last pass left it, for `status.get`. */
@@ -128,7 +136,7 @@ export interface DispatcherOptions {
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly config: Config;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
   readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
@@ -258,8 +266,28 @@ export class Dispatcher {
   /** Ends the bus subscriptions that drop `#viewCatalog`; see `dispose`. */
   readonly #unsubscribe: (() => void)[] = [];
 
+  readonly #usage: UsageReader;
+
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#usage = createUsageReader({
+      historyPath: options.historyPath ?? "",
+      opened: () => options.historyPath !== undefined && options.eventHistory.status().opened,
+      tokenLabels: async () =>
+        new Map(
+          ((await options.tokens?.list()) ?? []).flatMap((token) =>
+            token.label === undefined ? [] : [[token.id, token.label] as const],
+          ),
+        ),
+      workers: () => [
+        {
+          id: options.instanceId,
+          ...(options.config.gateway.label === undefined
+            ? {}
+            : { label: options.config.gateway.label }),
+        },
+      ],
+    });
     // Observers only (architecture rule 5): dropping a kept read decides nothing.
     for (const event of WORKER_VIEW_CATALOG_EVENTS) {
       const unsubscribe = options.eventBus?.subscribe(event, () => {
@@ -287,6 +315,7 @@ export class Dispatcher {
       "nuke.run": this.#nukeRun,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
+      "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
@@ -311,6 +340,7 @@ export class Dispatcher {
   dispose(): void {
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
     this.#viewCatalog = undefined;
+    void this.#usage.stop();
   }
 
   dispatch<Op extends OperationName>(
@@ -352,7 +382,7 @@ export class Dispatcher {
     platforms: (await this.options.catalog.listCatalog(input.platform)).map(fitPlatformCatalog),
   });
 
-  #statusGet: Handler<"status.get"> = async () => {
+  #statusGet: Handler<"status.get"> = async (_input, session) => {
     const daemon = {
       health: this.options.health(),
       mode: this.options.config.mode,
@@ -363,14 +393,16 @@ export class Dispatcher {
     const loadField = load === undefined ? {} : { load };
     // why: while starting, the registry has not been checked against the machine, so what it holds
     // is a claim nobody has looked at; the answer is the daemon, its host and the load reading.
-    if (daemon.health === "starting") return { daemon, host, ...loadField };
+    const history = this.options.eventHistory.status();
+    if (daemon.health === "starting") return { daemon, history, host, ...loadField };
     const capabilities = await this.#readCapabilities();
     const snapshot = this.options.registry.snapshot;
-    return {
+    const answer = {
       ...(capabilities === undefined ? {} : { capabilities }),
       capacity: buildCapacityFigures(snapshot.virtualDevices, this.options.capacity),
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       daemon,
+      history,
       host,
       ...loadField,
       installs: [...this.options.components.inProgress()],
@@ -380,6 +412,7 @@ export class Dispatcher {
       waiting: [...this.options.queue.waitingRequests()],
       warmPool: this.options.warmPool.figures(),
     };
+    return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
   };
 
   // why: a module can never make status.get fail or hang, which would cut the worker off from its gateway.
@@ -493,6 +526,12 @@ export class Dispatcher {
     } catch (error: unknown) {
       if (error instanceof LeaseIdTakenError) {
         throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+      }
+      if (error instanceof NoCapacityError) {
+        const capacityReason = capacityReasonOf(error.reason);
+        if (capacityReason !== undefined) {
+          throw new DispatchError("NO_CAPACITY", error.message, { capacityReason });
+        }
       }
       // The lease path sees only the clamped-to-false permission, so this is the one place that can
       // tell the caller that config, not missing consent, blocked the download.
@@ -768,6 +807,8 @@ export class Dispatcher {
     if (this.options.nuke === undefined) throw new NukeUnavailableError();
     return this.options.nuke.run({ deleteDevices: input.deleteDevices ?? false });
   };
+
+  #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });

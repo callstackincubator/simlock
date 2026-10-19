@@ -28,6 +28,7 @@ import {
   type OperationDefinition,
   type OperationName,
   type Role,
+  type UsageOutput,
   type leaseProgressSchema,
 } from "../contract/index.js";
 
@@ -398,5 +399,35 @@ function parseDispatchOutput<Output>(
   onMismatch?.(operationName, result.error.issues);
   throw new Error(
     `Internal: ${operationName} produced a response that does not match its contract output schema`,
+  );
+}
+
+export async function usageAnswer(
+  read: Promise<
+    | { readonly kind: "figures"; readonly usage: UsageOutput }
+    | { readonly kind: "not-kept"; readonly oldestTs: number }
+    | { readonly kind: "unavailable" }
+  >,
+): Promise<UsageOutput> {
+  let result: Awaited<typeof read>;
+  try {
+    result = await read;
+  } catch (error) {
+    throw new DispatchError(
+      "INTERNAL",
+      `The usage figures could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (result.kind === "figures") return result.usage;
+  if (result.kind === "unavailable") {
+    throw new DispatchError(
+      "HISTORY_UNAVAILABLE",
+      "The history could not be opened, so no figures can be read; see daemon.log.",
+    );
+  }
+  throw new DispatchError(
+    "HISTORY_NOT_KEPT",
+    `The history does not reach back to the end of that window; its figures start at ${new Date(result.oldestTs).toISOString()}.`,
+    { oldestTs: result.oldestTs },
   );
 }

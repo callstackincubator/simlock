@@ -54,6 +54,8 @@ import type {
   ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
+  UsageGetInput,
+  UsageGetOutput,
   InstallComponentOnWorkersOptions,
   InstallComponentOptions,
   LeaseCancelInput,
@@ -118,6 +120,8 @@ export type {
   ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
+  UsageGetInput,
+  UsageGetOutput,
   EventsSubscribeOutput,
   EventsUnsubscribeOutput,
   InstallComponentOnWorkersOptions,
@@ -246,6 +250,7 @@ export interface SimlockAdminClient extends SimlockClient {
    * does not gate this operation by role at all -- see the caveat in the PR report). */
   stopDaemon(): Promise<DaemonStopOutput>;
   replayEvents(input?: EventsReplayInput): Promise<EventsReplayOutput>;
+  usage(window: UsageGetInput): Promise<UsageGetOutput>;
   subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>>;
   createToken(input: TokenCreateInput): Promise<TokenCreateOutput>;
   listTokens(): Promise<TokenListOutput>;
@@ -438,6 +443,7 @@ function buildDegradedClient(
         },
       ),
     replayEvents: () => rejected(),
+    usage: () => rejected(),
     subscribeEvents: () => rejected(),
     createToken: () => rejected(),
     listTokens: () => rejected(),
@@ -637,6 +643,10 @@ class SimlockClientImpl {
 
   replayEvents(input: EventsReplayInput = {}): Promise<EventsReplayOutput> {
     return this.#call("events.replay", input);
+  }
+
+  usage(window: UsageGetInput): Promise<UsageGetOutput> {
+    return this.#call("usage.get", window);
   }
 
   async subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>> {

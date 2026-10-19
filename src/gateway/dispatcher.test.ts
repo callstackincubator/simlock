@@ -1,15 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
+import { EventBus, type EventEnvelope } from "../bus/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
+import {
+  fixedEventHistory,
+  granted,
+  HOUR,
+  removeUsageRigs,
+  requested,
+  ringEventHistory,
+  T0,
+  usageRig,
+} from "../history/testing.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
-import {
-  FakeClock,
-  JsonLinesLogger,
-  MemoryFilesystem,
-  MemoryLogSink,
-  NoopLogger,
-} from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
@@ -83,6 +89,8 @@ const gatewayConfig = {
 };
 
 class FakeTokens implements GatewayTokenStore {
+  constructor(private readonly records: readonly { id: string; label?: string }[] = []) {}
+
   readonly created: string[] = [];
   readonly revoked: string[] = [];
 
@@ -95,7 +103,10 @@ class FakeTokens implements GatewayTokenStore {
   }
 
   async list() {
-    return [{ createdAt: 1, id: "tok_1", role: "worker" as const }];
+    return [
+      { createdAt: 1, id: "tok_1", role: "worker" as const },
+      ...this.records.map((record) => ({ createdAt: 1, role: "agent" as const, ...record })),
+    ];
   }
 
   async revoke(id: string) {
@@ -131,7 +142,10 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(
   options: {
-    readonly eventHistory?: Pick<EventHistory, "replay">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly historyPath?: string;
+    readonly tokenRecords?: readonly { id: string; label?: string }[];
+    readonly withoutTokens?: boolean;
     /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
     /** The gateway's own health; `running` by default. */
@@ -149,7 +163,7 @@ function harness(
     leaseMaxTtlMs: gatewayConfig.lease.maxTtlMs,
     retentionMs: 24 * 60 * 60_000,
   });
-  const tokens = new FakeTokens();
+  const tokens = new FakeTokens(options.tokenRecords);
   /** C-2: every id `closeUplinksForToken` was actually called with, in call order. */
   const closedUplinkTokens: string[] = [];
   const directory = new FakeDirectory();
@@ -184,14 +198,8 @@ function harness(
     config: options.http === undefined ? gatewayConfig : { ...gatewayConfig, http: options.http },
     coordinator,
     directory,
-    eventHistory:
-      options.eventHistory ??
-      new EventHistory({
-        bus: eventBus,
-        filesystem: new MemoryFilesystem(),
-        logger: new NoopLogger(),
-        path: "/events.jsonl",
-      }),
+    eventHistory: options.eventHistory ?? ringEventHistory(eventBus),
+    ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: () => options.health ?? "running",
     host: GATEWAY_HOST,
     ...(options.load === undefined ? {} : { load: options.load }),
@@ -199,7 +207,7 @@ function harness(
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
     logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
-    tokens,
+    ...(options.withoutTokens === true ? {} : { tokens }),
     workers,
   });
   return {
@@ -322,7 +330,7 @@ describe("GatewayDispatcher", () => {
     expect(status.workers?.find((worker) => worker.id === "wrk_2")).not.toHaveProperty("warmPool");
   });
 
-  it("status.get on a gateway whose health is starting returns daemon and host and no other field", async () => {
+  it("status.get on a gateway whose health is starting returns daemon, history and host and no other field", async () => {
     const { dispatcher, workers } = harness({ health: "starting" });
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
     workers.refresh("wrk_1", {
@@ -335,7 +343,7 @@ describe("GatewayDispatcher", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
     expect(status.daemon).toEqual({
       consoleUrl: "http://127.0.0.1:4700/",
       health: "starting",
@@ -431,6 +439,37 @@ describe("GatewayDispatcher", () => {
     expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect(status.workers?.[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect(list.workers[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+  });
+
+  it("a gateway's status.get gives an agent session a worker's quarantined device with kind and no message, in devices and in workers[].devices, and an admin session the message", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", undefined, "0.3.0");
+    const quarantineCause = { kind: "purge-failed", message: "Error: erase failed" };
+    workers.refresh("wrk_1", {
+      capacity: statusFixture().capacity,
+      devices: [
+        Object.assign(deviceFixture("dev_q"), { quarantineCause, state: "quarantined" as const }),
+      ],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+
+    const forAdmin = await dispatcher.dispatch("status.get", {}, session());
+    const forAgent = await dispatcher.dispatch("status.get", {}, session({ role: "agent" }));
+
+    expect(forAdmin.devices?.[0]).toMatchObject({ quarantineCause });
+    expect(forAdmin.workers?.[0]?.devices?.[0]).toMatchObject({ quarantineCause });
+    expect(forAgent.devices?.[0]).toMatchObject({
+      id: "dev_q",
+      quarantineCause: { kind: "purge-failed" },
+      state: "quarantined",
+    });
+    expect(forAgent.devices?.[0]).not.toHaveProperty("quarantineCause.message");
+    expect(forAgent.workers?.[0]?.devices?.[0]).toMatchObject({
+      quarantineCause: { kind: "purge-failed" },
+    });
+    expect(forAgent.workers?.[0]?.devices?.[0]).not.toHaveProperty("quarantineCause.message");
   });
 
   it("answers catalog.get as the union of the fleet's catalogs", async () => {
@@ -682,7 +721,14 @@ describe("GatewayDispatcher", () => {
     const { dispatcher, eventBus } = harness();
     eventBus.emit(
       "lease.granted",
-      { deviceId: "dev_1", leaseId: "l1", requester: "a", requestId: "req_1", source: "warm" },
+      {
+        deviceId: "dev_1",
+        leaseId: "l1",
+        platform: "ios",
+        requester: "a",
+        requestId: "req_1",
+        source: "warm",
+      },
       "worker",
     );
 
@@ -713,6 +759,7 @@ describe("GatewayDispatcher", () => {
           asked.push(input);
           return fromHistory;
         },
+        status: () => ({ opened: true, writing: true }),
       },
     });
 
@@ -721,6 +768,32 @@ describe("GatewayDispatcher", () => {
     );
     expect(asked).toEqual([{ sinceTs: 10 }]);
   });
+
+  it.each([
+    {
+      health: "running" as const,
+      history: { opened: true, setAsideAt: 1_760_605_920_000, writing: false },
+    },
+    { health: "starting" as const, history: { opened: false, writing: false } },
+    { health: "running" as const, history: { opened: true, writing: true } },
+    {
+      health: "running" as const,
+      history: { opened: true, rebuiltAt: 1_760_605_920_000, writing: true },
+    },
+    {
+      health: "running" as const,
+      history: { opened: true, rebuildFailed: true as const, writing: true },
+    },
+  ])(
+    "status.get carries the gateway's own history opened, writing, setAsideAt, rebuiltAt and rebuildFailed, in the starting answer too ($health, $history)",
+    async ({ health, history }) => {
+      const { dispatcher } = harness({ eventHistory: fixedEventHistory(history), health });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect((status as { history?: unknown }).history).toStrictEqual(history);
+    },
+  );
 
   it("mints and revokes its own tokens, worker join tokens included", async () => {
     const { dispatcher, tokens } = harness();
@@ -1413,7 +1486,13 @@ describe("GatewayDispatcher: waiting requests", () => {
   const SPEC = { model: "iPhone 17", platform: "ios" as const };
 
   /** A request a worker lists in its own `status.get`'s `waiting`. */
-  function onWorker(id: string, requesterId: string, queuePosition?: number) {
+  function onWorker(
+    id: string,
+    requesterId: string,
+    queuePosition?: number,
+    reason?: "platform-running-limit",
+    workers?: { reason: "drained"; workerId: string }[],
+  ) {
     return {
       createdAt: 500,
       id,
@@ -1422,6 +1501,8 @@ describe("GatewayDispatcher: waiting requests", () => {
       ...(queuePosition === undefined
         ? { stage: "starting" as const }
         : { queuePosition, stage: "queued" as const }),
+      ...(reason === undefined ? {} : { reason }),
+      ...(workers === undefined ? {} : { workers }),
     };
   }
 
@@ -1433,7 +1514,7 @@ describe("GatewayDispatcher: waiting requests", () => {
   const listRequests = (dispatcher: GatewayDispatcher) =>
     dispatcher.dispatch("list.get", { kind: "requests" }, session());
 
-  it("list.get requests on a gateway returns the fleet queue and each worker's waiting requests with their workerId", async () => {
+  it("list.get requests and status.get waiting on a gateway return the fleet queue with each worker's reason in workers, and each worker's waiting requests with their workerId and reason, a workers field a worker sends on its own entry dropped", async () => {
     const { coordinator, dispatcher, workers } = harness();
     // Two workers that can serve the request and have no free slot, whose own queues hold their
     // local agents' requests.
@@ -1447,7 +1528,17 @@ describe("GatewayDispatcher: waiting requests", () => {
         capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } },
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
-        waiting: [onWorker(requestId, `local-${workerId}`, 1)],
+        health: "running",
+        queueDepth: 0,
+        waiting: [
+          onWorker(
+            requestId,
+            `local-${workerId}`,
+            1,
+            workerId === "wrk_1" ? "platform-running-limit" : undefined,
+            workerId === "wrk_2" ? [{ reason: "drained", workerId: "wrk_x" }] : undefined,
+          ),
+        ],
       });
     }
     // Both are busy, so the fleet request waits in the gateway's own queue.
@@ -1469,8 +1560,12 @@ describe("GatewayDispatcher: waiting requests", () => {
         requesterId: "fleet-agent",
         spec: SPEC,
         stage: "queued",
+        workers: [
+          { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_1" },
+          { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_2" },
+        ],
       },
-      { ...onWorker("req_w1", "local-wrk_1", 1), workerId: "wrk_1" },
+      { ...onWorker("req_w1", "local-wrk_1", 1, "platform-running-limit"), workerId: "wrk_1" },
       { ...onWorker("req_w2", "local-wrk_2", 1), workerId: "wrk_2" },
     ]);
     expect(JSON.stringify(listed)).not.toContain("key-1");
@@ -1573,5 +1668,137 @@ describe("GatewayDispatcher: the fleet queue's physical line", () => {
       queuePosition: 1,
     });
     expect(changed).toContainEqual(expect.objectContaining({ depth: 1, physical: true }));
+  });
+});
+
+describe("GatewayDispatcher: usage.get", () => {
+  afterEach(removeUsageRigs);
+
+  const window = { from: T0, to: T0 + HOUR };
+
+  async function fleetHistory() {
+    const rig = await usageRig({ fleet: true });
+    const gate = { open: true };
+    const eventHistory = {
+      replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
+    };
+    return { eventHistory, gate, rig };
+  }
+
+  it("the gateway handler answers HISTORY_UNAVAILABLE with the message naming daemon.log while history.status().opened is false, after answering figures while it was true", async () => {
+    const { eventHistory, gate, rig } = await fleetHistory();
+    rig.emit("lease.requested", requested("G1"));
+    const { dispatcher } = harness({ eventHistory, historyPath: rig.historyPath });
+
+    await expect(dispatcher.dispatch("usage.get", window, session())).resolves.toMatchObject({
+      totals: { requests: 1 },
+    });
+    gate.open = false;
+    const posted = vi.spyOn(Worker.prototype, "postMessage");
+
+    await expect(dispatcher.dispatch("usage.get", window, session())).rejects.toMatchObject({
+      code: "HISTORY_UNAVAILABLE",
+      message: "The history could not be opened, so no figures can be read; see daemon.log.",
+    });
+    expect(posted).not.toHaveBeenCalled();
+    posted.mockRestore();
+  });
+
+  it("the gateway handler strips its own gw: prefix before the label lookup and leaves another prefix alone, and labels nothing when it has no token store", async () => {
+    const { eventHistory, rig } = await fleetHistory();
+    for (const [index, requester] of [
+      `${GATEWAY_REQUESTER_PREFIX}tok_a`,
+      "gw:other-instance:tok_a",
+      "tok_a",
+    ].entries()) {
+      rig.emit("lease.requested", requested(`R${index}`, { requester }));
+    }
+    const labelled = harness({
+      eventHistory,
+      historyPath: rig.historyPath,
+      tokenRecords: [{ id: "tok_a", label: "ci-bot" }],
+    });
+    const unlabelled = harness({
+      eventHistory,
+      historyPath: rig.historyPath,
+      withoutTokens: true,
+    });
+
+    const answer = await labelled.dispatcher.dispatch("usage.get", window, session());
+    const bare = await unlabelled.dispatcher.dispatch("usage.get", window, session());
+
+    expect(
+      Object.fromEntries(answer.requesters.map((requester) => [requester.id, requester.label])),
+    ).toEqual({
+      "gw:instance-1:tok_a": "ci-bot",
+      "gw:other-instance:tok_a": undefined,
+      tok_a: "ci-bot",
+    });
+    expect(bare.requesters).toHaveLength(3);
+    expect(bare.requesters.every((requester) => !("label" in requester))).toBe(true);
+  });
+
+  it("the gateway handler with includeLedger lists the fleet's request rows as entries, labelled after stripping its own gw: prefix", async () => {
+    const { eventHistory, rig } = await fleetHistory();
+    for (const [index, requester] of [
+      `${GATEWAY_REQUESTER_PREFIX}tok_a`,
+      "gw:other-instance:tok_a",
+      "tok_a",
+    ].entries()) {
+      rig.emit("lease.requested", requested(`R${index}`, { requester }));
+    }
+    const { dispatcher } = harness({
+      eventHistory,
+      historyPath: rig.historyPath,
+      tokenRecords: [{ id: "tok_a", label: "ci-bot" }],
+    });
+
+    const answer = await dispatcher.dispatch(
+      "usage.get",
+      { ...window, includeLedger: true },
+      session(),
+    );
+    const plain = await dispatcher.dispatch("usage.get", window, session());
+
+    expect(
+      Object.fromEntries((answer.requests ?? []).map((entry) => [entry.requestId, entry.label])),
+    ).toEqual({ R0: "ci-bot", R1: undefined, R2: "ci-bot" });
+    expect(plain).not.toHaveProperty("requests");
+  });
+
+  it("the gateway handler lists every registry worker with its label and a worker id the rows name that the registry lacks, and counts a fleet request with no worker in totals and its platform only", async () => {
+    const { eventHistory, rig } = await fleetHistory();
+    rig.emit("lease.requested", requested("G1"));
+    rig.emit("lease.requested", requested("G2"));
+    rig.emit("lease.requested", requested("G3"));
+    rig.relay("wrk_1", "lease.granted", granted("WL1", "G1"), T0 + 1_000);
+    rig.relay("wrk_9", "lease.granted", granted("WL9", "G3"), T0 + 1_000);
+    rig.at(T0 + 2_000);
+    rig.emit("request.granted", {
+      leaseId: "GL1",
+      requestId: "G1",
+      worker: "wrk_1",
+      workerLeaseId: "WL1",
+    });
+    rig.emit("request.granted", {
+      leaseId: "GL3",
+      requestId: "G3",
+      worker: "wrk_9",
+      workerLeaseId: "WL9",
+    });
+    const { dispatcher, workers } = harness({ eventHistory, historyPath: rig.historyPath });
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.connected("wrk_2", undefined, "0.3.0");
+
+    const answer = await dispatcher.dispatch("usage.get", window, session());
+
+    expect(answer.workers.map((entry) => [entry.id, entry.label, entry.requests])).toEqual([
+      ["wrk_1", "mac-mini-1", 1],
+      ["wrk_2", undefined, 0],
+      ["wrk_9", undefined, 1],
+    ]);
+    expect(answer.totals.requests).toBe(3);
+    expect(answer.platforms.ios.requests).toBe(3);
   });
 });

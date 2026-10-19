@@ -114,10 +114,10 @@ function config(maxDevices = 1, maxRunning = 1): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -1300,6 +1300,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       leaseRequesters: harness.registry.snapshot.leases.map((lease) => lease.requesterId),
       outcome: outcome.state,
       queueDepth: harness.coordinator.queueDepth,
+      queuedReasons: harness.queue.places().map((place) => place.reason),
       storedRequestStates: harness.registry
         .leaseRequests()
         .map((record) => [record.requesterId, record.state]),
@@ -1308,6 +1309,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       leaseRequesters: [],
       outcome: "pending",
       queueDepth: 1,
+      queuedReasons: ["waiting-for-device"],
       storedRequestStates: [["retrying", "open"]],
     });
 
@@ -1366,6 +1368,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         leaseRequesters: harness.registry.snapshot.leases.map((lease) => lease.requesterId),
         outcome: outcome.state,
         queueDepth: harness.coordinator.queueDepth,
+        queuedReasons: harness.queue.places().map((place) => place.reason),
         storedRequestStates: harness.registry
           .leaseRequests()
           .map((record) => [record.requesterId, record.state]),
@@ -1374,6 +1377,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         leaseRequesters: [],
         outcome: "pending",
         queueDepth: 1,
+        queuedReasons: ["waiting-for-device"],
         storedRequestStates: [["orphaned", "open"]],
       });
 
@@ -3209,7 +3213,7 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
     seed: (harness: Awaited<ReturnType<typeof createHarness>>) => Promise<{ id: string } | void>;
     evictedLeavesReady?: boolean;
   }>)(
-    "emits lease.granted with exactly the grant's device, lease, requester and request, and source $name",
+    "emits lease.granted with exactly the grant's device, lease, requester, request and platform, and source $name",
     async ({ source, limits, seed, evictedLeavesReady }) => {
       const harness = await createHarness(limits);
       const evicted = await seed(harness);
@@ -3222,6 +3226,7 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
         {
           deviceId: grant.device.id,
           leaseId: grant.lease.id,
+          platform: grant.device.spec.platform,
           requester: "agent",
           requestId: requested[0],
           source,

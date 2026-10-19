@@ -110,7 +110,6 @@ describe("loadConfig", () => {
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
       eventLog: {
-        rotateBytes: 5 * 1024 * 1024,
         retention: 7 * 24 * 60 * 60 * 1000,
         maxBytes: 256 * 1024 * 1024,
       },
@@ -186,19 +185,22 @@ describe("loadConfig", () => {
     ).rejects.toThrow("log.rotateBytes");
   });
 
-  it("defaults eventLog.rotateBytes to 5 MiB and rejects zero and negative values", async () => {
+  it("loads a config with eventLog.rotateBytes with the unknown-key warning, and drops the key", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ eventLog: { rotateBytes: 1_048_576 } }),
+    );
+    const warn = vi.fn();
 
-    const defaults = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(defaults.eventLog.rotateBytes).toBe(5 * 1024 * 1024);
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
 
-    for (const rotateBytes of [0, -1]) {
-      await filesystem.writeFileAtomic(configPath, JSON.stringify({ eventLog: { rotateBytes } }));
-      await expect(
-        loadConfig({ configPath, filesystem, systemStats: createStats() }),
-      ).rejects.toThrow("eventLog.rotateBytes");
-    }
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
+    expect(config.eventLog).toEqual({
+      maxBytes: 256 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+    });
   });
 
   it("reports eventLog.retention and eventLog.maxBytes at their defaults", async () => {
@@ -208,7 +210,6 @@ describe("loadConfig", () => {
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
     expect(config.eventLog).toEqual({
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     });
@@ -232,25 +233,78 @@ describe("loadConfig", () => {
     }
   });
 
-  it("rejects a config with eventLog.maxBytes below twice eventLog.rotateBytes, naming the key", async () => {
+  it("accepts eventLog.maxBytes of 16 MiB and rejects one byte less, naming the key", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
+    const sixteenMiB = 16 * 1024 * 1024;
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 1_999 } }),
+      JSON.stringify({ eventLog: { maxBytes: sixteenMiB } }),
     );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('"eventLog.maxBytes": expected at least twice eventLog.rotateBytes');
+    const accepted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 2_000 } }),
+      JSON.stringify({ eventLog: { maxBytes: sixteenMiB - 1 } }),
     );
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/"eventLog\.maxBytes".*at least 16 MiB/);
+
+    expect(accepted.eventLog.maxBytes).toBe(sixteenMiB);
+  });
+
+  it("metrics.retention defaults to the larger of 90 days and eventLog.retention, and is accepted as written", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const DAY = 24 * 60 * 60 * 1000;
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const defaulted = await loadWith({});
+    const longer = await loadWith({ eventLog: { retention: 100 * DAY } });
+    const shorter = await loadWith({ eventLog: { retention: 30 * DAY } });
+    const written = await loadWith({ metrics: { retention: 120 * DAY } });
+    const empty = await loadWith({ eventLog: { retention: 100 * DAY }, metrics: {} });
+    const mistyped = await loadWith({ metrics: { retenton: 5 } });
+
+    expect(empty.metrics).toEqual({ retention: 100 * DAY });
+    expect(mistyped.metrics).toEqual({ retention: 90 * DAY });
+    expect(defaulted.metrics).toEqual({ retention: 90 * DAY });
+    expect(longer.metrics).toEqual({ retention: 100 * DAY });
+    expect(shorter.metrics).toEqual({ retention: 90 * DAY });
+    expect(written.metrics).toEqual({ retention: 120 * DAY });
+  });
+
+  it("rejects a metrics.retention shorter than eventLog.retention, or not a positive integer, naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const DAY = 24 * 60 * 60 * 1000;
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const equal = await loadWith({
+      eventLog: { retention: 7 * DAY },
+      metrics: { retention: 7 * DAY },
+    });
+    await expect(
+      loadWith({ eventLog: { retention: 7 * DAY }, metrics: { retention: 7 * DAY - 1 } }),
+    ).rejects.toThrow("metrics.retention");
+    for (const value of [0, -1, 1.5]) {
+      await expect(loadWith({ metrics: { retention: value } })).rejects.toThrow(
+        "metrics.retention",
+      );
+    }
+
+    await expect(
+      loadWith({ eventLog: { retention: 1 }, metrics: { retention: 1.5 } }),
+    ).rejects.toThrow("metrics.retention");
+
+    expect(equal.metrics).toEqual({ retention: 7 * DAY });
   });
 
   it("applies a file-level warm-pool quarantine override", async () => {
@@ -1726,12 +1780,23 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("raises no unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+  it("reads metrics.retention in a gateway config without a warning", async () => {
     const warn = vi.fn();
-    const config = await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
 
+    const config = await load(
+      { mode: "gateway", metrics: { retention: 120 * 24 * 3_600_000 } },
+      { warn },
+    );
+
+    expect(config.metrics).toEqual({ retention: 120 * 24 * 3_600_000 });
     expect(warn).not.toHaveBeenCalled();
-    expect(config.eventLog.rotateBytes).toBe(1024);
+  });
+
+  it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+    const warn = vi.fn();
+    await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
+
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
   });
 
   it("warns about android.emulator on a gateway without refusing the config", async () => {

@@ -31,6 +31,7 @@ export {
 export {
   buildCapacityFigures,
   CapacityCoordinator,
+  type CapacityRefusalReason,
   capacityDevice,
   capacityDevices,
   type CapacityReservation,
@@ -208,3 +209,4 @@ export {
   type IdleVictimScope,
 } from "./idle-order.js";
 export { ReclaimCoordinator } from "./reclaim-coordinator.js";
+export { createUsageReader, type UsageReader } from "./usage/index.js";

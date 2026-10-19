@@ -11,6 +11,8 @@ import {
   leaseIdSchema,
   imageTagSchema,
   parseDurationMs,
+  usageWindow,
+  type UsageWindowRefusal,
 } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
@@ -687,6 +689,27 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json({ events });
   });
 
+  app.get("/v1/stats", agentAuth, async (c) => {
+    const ledger = c.req.query("ledger");
+    if (ledger !== undefined && ledger !== "1") throw badRequest("ledger must be 1");
+    const asked = usageWindow(
+      {
+        ...optionalQuery(c.req.query("from"), "from"),
+        ...optionalQuery(c.req.query("since"), "since"),
+        ...optionalQuery(c.req.query("to"), "to"),
+      },
+      deps.clock.now(),
+    );
+    if ("refused" in asked) throw badRequest(statsRefusal(asked.refused));
+    return c.json(
+      await deps.dispatch(
+        "usage.get",
+        ledger === undefined ? asked.window : { ...asked.window, includeLedger: true },
+        buildHttpSession(c.get("identity")),
+      ),
+    );
+  });
+
   app.get("/v1/events/stream", agentAuth, async (c) => {
     const identity = c.get("identity");
     let unsubscribeBus: (() => void) | undefined;
@@ -839,6 +862,28 @@ function parseDuration(value: string): number {
   const milliseconds = parseDurationMs(value);
   if (milliseconds === undefined) throw badRequest(`Invalid duration: ${value}`);
   return milliseconds;
+}
+
+function optionalQuery<Name extends string>(
+  value: string | undefined,
+  name: Name,
+): { [Key in Name]?: string } {
+  return value === undefined ? {} : ({ [name]: value } as { [Key in Name]?: string });
+}
+
+function statsRefusal(refusal: UsageWindowRefusal): string {
+  switch (refusal.problem) {
+    case "since-and-from":
+      return "stats takes since or from, not both";
+    case "to-without-from":
+      return "to needs from";
+    case "not-before-to":
+      return "from must be earlier than to, or than now when to is left out";
+    case "bad-duration":
+      return `Invalid duration: ${refusal.value}`;
+    case "bad-time":
+      return `Invalid time: ${refusal.value} (use ISO 8601 with Z or an offset)`;
+  }
 }
 
 function errorMessage(error: unknown): string {

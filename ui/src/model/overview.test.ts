@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConsoleEvent } from "./events";
+import { figuresOf } from "./figures";
 import { overviewOf } from "./overview";
+import { statsOf } from "./test-support";
 import type { WaitingRequest } from "./waiting";
 import type { WorkerDevice, WorkerView } from "./workers";
 
@@ -77,22 +79,68 @@ function unread(id: string): WorkerView {
 }
 
 describe("the overview", () => {
-  it("counts the fleet's headline figures from what the workers, the queue and the events say", () => {
+  it("counts the fleet's headline figures from what the workers, the queue and the daemon's figures say", () => {
     const requests = [{ createdAt: NOW - 74_000, id: "r1" }] as unknown as WaitingRequest[];
     const events = [
       event(1, "lease.granted", NOW - 2 * 60 * 60 * 1_000),
       event(2, "lease.granted", NOW - 10 * 60 * 1_000),
       event(3, "lease.released", NOW - 5 * 60 * 1_000),
     ];
+    const stats = statsOf({
+      bucketMs: 60_000,
+      from: NOW - 60 * 60_000,
+      granted: 3,
+      to: NOW,
+      waitP95: 38_000,
+    });
 
-    const { tiles } = overviewOf({ events, now: NOW, requests, workers: fleet });
+    const { tiles } = overviewOf({
+      events,
+      figures: { data: figuresOf(stats, "1h", NOW), kind: "ready" },
+      now: NOW,
+      requests,
+      workers: fleet,
+    });
 
     expect(tiles.map((tile) => [tile.label, tile.value, tile.unit])).toEqual([
       ["Utilisation", "17", "%"],
       ["Leases", "2", "of 12"],
       ["Waiting", "1", "longest 1 min 14 s"],
       ["Workers", "2", "of 3 up"],
-      ["Granted", "1", "last hour"],
+      ["Granted", "3", "last hour"],
+      ["Wait p95", "38 s", "last hour"],
+    ]);
+    expect(tiles.find((tile) => tile.label === "Granted")?.to).toBe("/usage");
+  });
+
+  it("links the Granted tile to /usage from 1h and to /usage?range=6h, 24h and 7d from the others", () => {
+    const links = (["1h", "6h", "24h", "7d"] as const).map((range) => {
+      const stats = statsOf({ bucketMs: 60_000, from: NOW - 60 * 60_000, granted: 3, to: NOW });
+      const { tiles } = overviewOf({
+        events: [],
+        figures: { data: figuresOf(stats, range, NOW), kind: "ready" },
+        now: NOW,
+        requests: [],
+        workers: fleet,
+      });
+      return tiles.find((tile) => tile.label === "Granted")?.to;
+    });
+
+    expect(links).toEqual(["/usage", "/usage?range=6h", "/usage?range=24h", "/usage?range=7d"]);
+  });
+
+  it("shows only the fleet's four tiles while the daemon's figures are loading or refused", () => {
+    const shown = [{ kind: "loading" }, { kind: "refused", message: "no" }] as const;
+
+    const labels = shown.map((figures) =>
+      overviewOf({ events: [], figures, now: NOW, requests: [], workers: fleet }).tiles.map(
+        (tile) => tile.label,
+      ),
+    );
+
+    expect(labels).toEqual([
+      ["Utilisation", "Leases", "Waiting", "Workers"],
+      ["Utilisation", "Leases", "Waiting", "Workers"],
     ]);
   });
 
@@ -201,7 +249,7 @@ describe("the overview", () => {
     expect(workers[2]).not.toHaveProperty("cpu");
   });
 
-  it("leaves the fleet's lease and device figures and the lease chart unknown, not zero, while a connected worker is starting", () => {
+  it("leaves the fleet's lease and device figures unknown, not zero, while a connected worker is starting", () => {
     const events = [
       event(1, "lease.granted", NOW - 10 * 60 * 1_000),
       event(2, "lease.granted", NOW - 9 * 60 * 1_000),
@@ -215,11 +263,7 @@ describe("the overview", () => {
       ["Leases", "—"],
       ["Waiting", "0"],
       ["Workers", "1"],
-      ["Granted", "3"],
     ]);
-
-    expect(alone.minutes).toEqual([]);
-    expect(alone.chartSummary).toBe("");
 
     expect(alone.platforms.map((p) => [p.name, p.running, p.limit])).toEqual([
       ["iOS", undefined, undefined],
@@ -244,10 +288,7 @@ describe("the overview", () => {
       ["Leases", "—"],
       ["Waiting", "0"],
       ["Workers", "2"],
-      ["Granted", "3"],
     ]);
-    expect(mixed.minutes).toEqual([]);
-    expect(mixed.chartSummary).toBe("");
 
     expect(mixed.workers.map((r) => [r.name, r.leases, r.slotsLabel])).toEqual([
       ["mini-1", 1, "1 leased, 1 ready, 4 free"],

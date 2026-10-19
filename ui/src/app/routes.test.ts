@@ -8,6 +8,7 @@ describe("the console's routes", () => {
     expect(routeFor("/workers")?.label).toBe("Workers");
     expect(routeFor("/workers/wrk_1")?.label).toBe("Workers");
     expect(routeFor("/events/e1")?.label).toBe("Events");
+    expect(routeFor("/usage")?.label).toBe("Usage");
   });
 
   it("has no route for a path no section owns, one that only shares a prefix included", () => {
@@ -23,6 +24,7 @@ describe("the console's routes", () => {
       "/waiting",
       "/attention",
       "/events",
+      "/usage",
     ]);
   });
 });

@@ -40,9 +40,17 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    `allowDownload`. Physical requests skip this. See device selection.
 3. **Plan** (lock) — `AcquisitionPlanner.plan`; first that applies wins:
    grant a ready fitting device → wait for one the warm pool is booting →
-   boot a shut-down one → provision (while fewer than 2 failures) → evict an
+   boot a shut-down one → provision → evict an
    idle device (device or running limit) → wait, or `NO_CAPACITY` under `noWait`.
    Only the head of the virtual line plans; every physical waiter plans.
+   A blocked plan carries a reason (a capacity refusal, `behind-earlier-request`,
+   `waiting-for-device` or `no-free-physical`). The waiter keeps it,
+   in memory only, from its latest enqueue; `waitingRequests()` lists it on a `queued`
+   entry, never on a `starting` one. `NoCapacityError` carries it too. Cancelling a queued
+   waiter (a physical one mid presence read wakes it after its claim is released) wakes
+   the queue. A first provisioning failure plans again at once; a second rejects the
+   waiter with `ProvisionFailedError` (the driver's message; `PROVISION_FAILED`), a probe
+   included, and wakes the queue.
 4. **Perform** (no lock) — provision, boot or evict through core, then plan again.
    A boot failure destroys the device and rejects `boot-timeout`; a destroy
    that fails hands the device to core's quarantine through a port leasing
@@ -95,6 +103,7 @@ Writes go through core's `Registry` (`state.json`). Request states: `open` →
   `createLeasing` builds.
 - A daemon start fails every request the previous process left open,
   as `daemon-restarted`.
+- A waiting reason is never stored: not in `state.json`, not in an event.
 
 ## Known gaps
 

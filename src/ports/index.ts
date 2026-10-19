@@ -57,7 +57,6 @@ export {
   NodeFileLogSink,
   NoopLogger,
 } from "./logger.js";
-export type { LogSink } from "./logger.js";
 // fallow-ignore-next-line unused-type -- public shape of a parsed log line, for consumers of MemoryLogSink.records.
 export type { LogRecord } from "./logger.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
@@ -114,3 +113,9 @@ export {
   type MemoryCounters,
   productionHostLoadProbe,
 } from "./host-load.js";
+export {
+  filterSqliteExperimentalWarning,
+  NodeSqliteOpener,
+  SqliteUnavailableError,
+} from "./sqlite.js";
+export type { SqliteDatabase, SqliteOpener, SqliteStatement } from "./sqlite.js";

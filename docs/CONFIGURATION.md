@@ -63,9 +63,9 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `downloads.timeoutMs`             | How long one request for a missing runtime / system image may take, counted from the moment it arrives. Waiting behind another download on the same platform counts too, and the clock never restarts; a request that runs out fails with `DOWNLOAD_TIMEOUT`. A running download is stopped when the oldest request sharing it runs out, and every request sharing it fails then. On a busy machine, raise it. | `20 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of recent business events kept in memory, which `simlock events` without `--since` replays.                                                                                                                                          | `1000`                                                           |
-| `eventLog.rotateBytes` | Size of one generation of the event file, `~/.simlock/events.jsonl`, before it rotates. Every business event is written there and survives a daemon restart. A rotation renames the file to `events.jsonl.1` and shifts older generations up by one (`.2`, `.3`, …). | `5 MiB` |
-| `eventLog.retention` | How long the event history is kept, in milliseconds. Retention is judged per generation by its newest line: a generation is deleted once its newest line is older than this, so a generation that mixes old and new lines stays until its newest line ages out. The sweep runs after every rotation and once when the daemon starts. The current file is never deleted. | `604800000` (7 days) |
-| `eventLog.maxBytes` | Total size of the event file and all its generations, the backstop for when events arrive faster than `eventLog.retention` ages them out. When the generations exceed it, the oldest are deleted first, whatever their age. Must be at least twice `eventLog.rotateBytes`; a smaller value is refused when the config loads. | `256 MiB` |
+| `eventLog.retention` | How long the event history is kept, in milliseconds, counted back from the moment of the prune and compared with each event's own time. Every business event is written to `~/.simlock/history.db` and survives a daemon restart. Older events are deleted once the daemon holds its socket and every hour after; the freed space goes back to the disk. | `604800000` (7 days) |
+| `eventLog.maxBytes` | Cap on the stored size of the events in `history.db` (the size of each event as written, not the file), the backstop for when events arrive faster than `eventLog.retention` ages them out. When they exceed it, the oldest events are deleted first, whatever their age. At least `16 MiB`; a smaller value is refused when the config loads. | `256 MiB` |
+| `metrics.retention` | How long the usage figures in `history.db` are kept, in milliseconds, counted back from the moment of the prune: one row per lease request (by when it was requested), per-minute levels (by the minute) and one row per device boot, provision, recovery or quarantine event and per declined lease request (by when it happened). They outlive the events behind them. It may not be shorter than `eventLog.retention`, and must be a positive whole number of milliseconds; either is refused when the config loads. | the larger of `7776000000` (90 days) and `eventLog.retention` |
 | `log.level`                       | Lowest level written to `daemon.log`: `debug`, `info`, `warn`, or `error`. `debug` adds a line for every request that only reads (such as `simlock status`) and for every device command Simlock runs (`simctl`, `adb`, …) with its arguments and exit code. | `info`                                                           |
 | `log.rotateBytes`                 | Size at which `daemon.log` is rotated to `daemon.log.1`. One rotated file is kept.                                                                                                                                          | `5 MiB`                                                          |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery. Physical devices are watched whatever it says.                                                                                                                                                                | `true`                                                           |
@@ -167,7 +167,7 @@ local agents whether or not its gateway is reachable, and `http.enabled` stays
 off by default.
 
 **A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
-`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `gateway.*` and
+`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*`, `gateway.*` and
 `capabilities.*` (`enabled`, and `leaseTtlCapMs` for agent-device). Every other key —
 capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
 configures devices, which a gateway does not have; each one present in a
@@ -235,7 +235,7 @@ does not apply to it. It reads:
 | `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
-| `log.*`, `eventBuffer.*`, `eventLog.*` | logging and the event history, as anywhere |
+| `log.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*` | logging, the event history and the usage figures kept beside it, as anywhere |
 
 **A worker's `downloads.policy` does not apply to requests through a
 gateway.** The gateway sends a request only to a worker whose catalog already

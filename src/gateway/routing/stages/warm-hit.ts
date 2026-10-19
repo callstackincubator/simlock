@@ -21,6 +21,10 @@ export const warmHit: RankStage = {
     return warm ? 1 : 0;
   },
   settles: true,
+  zeroReason(worker, request) {
+    if (request.physical !== true) return undefined;
+    return physicalMatch(worker, request, "pickable") ? undefined : { reason: "no-free-physical" };
+  },
 };
 
 /** The view's device spec in the core's shape, which leaves an absent image tag out. */

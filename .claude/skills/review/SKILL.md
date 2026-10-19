@@ -1,6 +1,6 @@
 ---
 name: review
-description: Run the blind pre-merge reviews from delivery rule 14 on a PR or branch — a source-aware spec review, a code review that sees the spec and the rules, and a claims review blind to the issue, each by a fresh sub-agent reading a brief from .agents/briefs/; round 2 and the fix check review only the fix — verify every blocking finding, pass the notes through, and hand back a fixed report block. Does not edit code. Use when the user says "review #N", "review this branch", "review PR N", or when the deliver orchestrator delegates review.
+description: Run the blind pre-merge spec, code and claims reviews on a PR or branch through the reviewer agent, and hand back its report. Does not edit code. Use when the user says "review #N", "review this branch" or "review PR N".
 ---
 
 Arguments: $ARGUMENTS

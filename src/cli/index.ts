@@ -14,7 +14,7 @@ export { buildCliEnvironment } from "./environment.js";
 const USAGE = `Usage: simlock <command> [options]
 
 Commands:
-  lease, release, status, list, catalog, cleanup, doctor, nuke, events,
+  lease, release, status, list, catalog, cleanup, doctor, nuke, events, stats,
   daemon, config, token
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway; on a

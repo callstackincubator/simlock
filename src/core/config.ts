@@ -195,17 +195,11 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
-  /**
-   * The event file (`events.jsonl`): `rotateBytes` is one generation's size before it rotates,
-   * `retention` how long (milliseconds) a generation is kept after its newest line, and
-   * `maxBytes` the total size of every generation, the backstop when events arrive faster than
-   * `retention` ages them out.
-   */
   readonly eventLog: {
-    readonly rotateBytes: number;
     readonly retention: number;
     readonly maxBytes: number;
   };
+  readonly metrics: { readonly retention: number };
   readonly http: {
     readonly enabled: boolean;
     readonly host: string;
@@ -334,14 +328,7 @@ export interface Config {
 /** What `redactConfig` puts in place of a secret's value. */
 export const REDACTED_VALUE = "[redacted]";
 
-/**
- * The config with its secrets masked, for every place that writes the config somewhere other
- * than `config.json` and `config.get`: the `Daemon started` log line and the `daemon.started`
- * payload, which land in `daemon.log`, the event ring and `events.jsonl`. Masked rather than
- * deleted so the copy keeps `Config`'s keys and a reader can still tell "set" from "unset".
- * Returns a copy and never touches its input: the live config is what `config.get` answers
- * and what the uplink presents, so the masked copy must never be handed to either.
- */
+// why: masked rather than deleted, so the copy keeps `Config`'s keys and a reader can tell "set" from "unset"; a copy, because the live config is what `config.get` answers and the uplink presents.
 export function redactConfig(config: Config): Config {
   if (config.gateway.token === undefined) return config;
   return { ...config, gateway: { ...config.gateway, token: REDACTED_VALUE } };
@@ -410,12 +397,21 @@ export async function loadConfig({
     warn,
   );
 
-  const merged = mergeConfig(
+  const mergedWithoutMetrics = mergeConfig(
     mergeConfig(defaultConfig(systemStats, strategy, mode, modules), fileConfig),
     overrideConfig,
-  ) as unknown as Config;
+  ) as unknown as Omit<Config, "metrics"> & { readonly metrics?: Config["metrics"] };
+  const merged: Config = {
+    ...mergedWithoutMetrics,
+    metrics: {
+      retention:
+        mergedWithoutMetrics.metrics?.retention ??
+        Math.max(DEFAULT_METRICS_RETENTION_MS, mergedWithoutMetrics.eventLog.retention),
+    },
+  };
   validateLeaseTtls(merged);
   validateEventLogBounds(merged);
+  validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
   runModuleChecks(merged, modules);
   if (mode === "gateway") {
@@ -457,13 +453,19 @@ function validateLeaseTtls(config: Config): void {
   }
 }
 
-/**
- * Cross-field check: the size cap has to hold the current file and at least one full rotated
- * generation, or the sweep would delete the history the moment it rotates.
- */
+const DEFAULT_METRICS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+const MIN_EVENT_LOG_MAX_BYTES = 16 * 1024 * 1024;
+
 function validateEventLogBounds(config: Config): void {
-  if (config.eventLog.maxBytes < 2 * config.eventLog.rotateBytes) {
-    throw invalidValue("eventLog.maxBytes", "at least twice eventLog.rotateBytes");
+  if (config.eventLog.maxBytes < MIN_EVENT_LOG_MAX_BYTES) {
+    throw invalidValue("eventLog.maxBytes", "at least 16 MiB");
+  }
+}
+
+function validateMetricsRetention(config: Config): void {
+  if (config.metrics.retention < config.eventLog.retention) {
+    throw invalidValue("metrics.retention", "at least eventLog.retention");
   }
 }
 
@@ -480,6 +482,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "lease",
   "eventBuffer",
   "eventLog",
+  "metrics",
   "gateway",
   "capabilities",
 ];
@@ -708,7 +711,7 @@ function defaultConfig(
   strategy: CapacityStrategyName,
   mode: DaemonMode,
   modules: readonly ModuleConfigEntry[],
-): Config {
+): Omit<Config, "metrics"> {
   return {
     mode,
     capabilities: Object.fromEntries(
@@ -754,7 +757,6 @@ function defaultConfig(
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
@@ -908,10 +910,10 @@ function configValidators(
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
     eventLog: objectValidator({
-      rotateBytes: positiveInteger,
       retention: positiveInteger,
       maxBytes: positiveInteger,
     }),
+    metrics: objectValidator({ retention: positiveInteger }),
     http: objectValidator({
       enabled: booleanValue,
       host: stringValue,

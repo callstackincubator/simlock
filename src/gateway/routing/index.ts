@@ -1,4 +1,11 @@
-export { type RoutableRequest, type RoutingStage, runStages } from "./pipeline.js";
+export {
+  type CapacityReason,
+  explainStages,
+  type RoutableRequest,
+  type RoutingStage,
+  runStages,
+  type WorkerReason,
+} from "./pipeline.js";
 export { matchRequest } from "./request-match.js";
 export { type Assessment, assess, type Rejection } from "./serviceability.js";
 export { canServe } from "./stages/can-serve.js";

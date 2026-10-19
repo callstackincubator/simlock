@@ -14,9 +14,12 @@
   // with it (ADR 0027).
   // vendor/screen-capture/scripts/unframe.mjs is a diagnostic a person runs by hand against a
   // captured file, the way the .agents scripts are.
+  // src/core/usage/read-thread.ts is the entry of the usage read thread, loaded by path from
+  // src/core/usage/index.ts (a worker thread, not an import).
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
+    "src/core/usage/read-thread.ts",
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
     "e2e/console/*.spec.ts",

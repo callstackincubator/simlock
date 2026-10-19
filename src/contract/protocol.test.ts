@@ -47,7 +47,7 @@ describe("helloRequestSchema", () => {
 });
 
 describe("PROTOCOL_VERSION_RANGE", () => {
-  it("is one above the base branch's, for agent-device's section moving into config.get's capabilities", () => {
-    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 39, min: 39 });
+  it("is 46, for usage.get and its ledger", () => {
+    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 46, min: 46 });
   });
 });

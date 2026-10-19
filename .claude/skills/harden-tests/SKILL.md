@@ -1,6 +1,6 @@
 ---
 name: harden-tests
-description: Weekly routine — mutation-test the newest source lines main changed since the last run, kill with tests only the survivors that change what a caller or user can see, and land one tests-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "harden tests".
+description: Weekly routine — mutation-test the source lines main changed, kill the survivors a caller or user can see with tests, and land one tests-only PR. Use when a routine or the user says "harden tests".
 model: sonnet
 effort: medium
 ---
@@ -81,18 +81,9 @@ its reason, the dead-code issue's link, and `*Written by an agent.*`.
 
 ## 4. Review and merge
 
-`reviewer` with the PR number, round 1. Fix each Fix line yourself, tests
-only, then the check its Rerun names, as rule 14 says: `reviewer` with
-that name, `previous <Commit>` and the complete resolution ledger. `Rerun: none` with
-findings open: leave the PR in draft and report them.
-
-Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
-with `Spec review: skipped.` (edit the body with
-`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`; `gh pr edit`
-is GraphQL, which a cloud session refuses). Then `gh pr ready <M>` (in a cloud session it
-fails with a 403 naming the proxy's ready-for-review route: call that route)
-and `.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
-it once, run the applicable targeted fix-check, then the gate again. Anything else: leave the PR open and report.
+As `toolchain.md` "Routines" says, tests only. Red CI from a test this PR
+changed: fix it once, run the applicable targeted fix-check, then the gate
+again.
 
 ## Report
 

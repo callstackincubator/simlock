@@ -44,6 +44,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     if (key === undefined || rawValue === undefined || extra.length > 0)
       throw new UsageError("Usage: simlock config set <key> <value>");
     const config = await environment.readConfigFile();
+    const removedRetiredKey = dropRetiredEventLogKey(config);
     writeConfigValue(config, key, parseConfigValue(rawValue));
     try {
       await environment.validateConfig(config);
@@ -51,6 +52,11 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
       throw new UsageError(`Invalid config after setting ${key}: ${errorMessage(error)}`);
     }
     await environment.writeConfigFile(config);
+    if (removedRetiredKey) {
+      environment.stderr.write(
+        `Removed eventLog.rotateBytes from ${environment.configPath}: it is no longer used.\n`,
+      );
+    }
     environment.stdout.write(
       `Updated ${key} in ${environment.configPath}; takes effect on daemon restart.\n`,
     );
@@ -61,6 +67,15 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   throw new UsageError(`Unknown config command: ${String(command)}`);
+}
+
+function dropRetiredEventLogKey(config: Record<string, unknown>): boolean {
+  const eventLog = config.eventLog;
+  if (typeof eventLog !== "object" || eventLog === null || !("rotateBytes" in eventLog)) {
+    return false;
+  }
+  delete (eventLog as Record<string, unknown>).rotateBytes;
+  return true;
 }
 
 function readConfigValue(value: Record<string, unknown>, key: string): unknown {

@@ -7,31 +7,35 @@ Uses: nothing from other components. Imported by: every component that touches t
 
 ## Ports
 
-| Port                                       | File                        | Node adapter                                                 | Fake                          | What it covers                                            |
-| ------------------------------------------ | --------------------------- | ------------------------------------------------------------ | ----------------------------- | --------------------------------------------------------- |
-| `Clock`                                    | `clock.ts`                  | `SystemClock`                                                | `FakeClock`                   | `now`, `setTimer`, `cancel`                               |
-| `Filesystem`                               | `filesystem.ts`             | `NodeFilesystem`                                             | `MemoryFilesystem`            | Read, atomic write, stat, delete, disk free               |
-| `ProcessRunner`                            | `process-runner.ts`         | `NodeProcessRunner`                                          | `ScriptedProcessRunner`       | Run or stream a command, capture output                   |
-| (wrapper)                                  | `logging-process-runner.ts` | `LoggingProcessRunner`                                       | —                             | One `process` log line per command, at `debug` only       |
-| `ProcessSupervisor`                        | `process-supervisor.ts`     | `NodeProcessSupervisor`                                      | `FakeProcessSupervisor`       | Is a pid alive; signal it                                 |
-| `ParentWatch`                              | `parent-watch.ts`           | `NodeParentWatch`                                            | `FakeParentWatch`             | Call once when a pid exits (polls)                        |
-| `DaemonLauncher`                           | `daemon-launcher.ts`        | `NodeDaemonLauncher`                                         | `FakeDaemonLauncher`          | Detached daemon, its log, `DAEMON_STARTUP_TIMEOUT_MS`     |
-| `IpcConnector`, `IpcListenerFactory`       | `ipc.ts`                    | `NodeIpcTransport`                                           | `MemoryIpcTransport`          | The daemon's unix socket                                  |
-| `UplinkConnector`, `UplinkListenerFactory` | `uplink.ts`                 | `WebSocketUplinkConnector`, `WebSocketUplinkListenerFactory` | `MemoryUplinkTransport`       | A worker's uplink to its gateway                          |
-| `Logger`, `LogSink`                        | `logger.ts`                 | `JsonLinesLogger`, `NodeFileLogSink`                         | `NoopLogger`, `MemoryLogSink` | JSON-line logs, `child(module)`, rotation                 |
-| `SystemStats`                              | `system-stats.ts`           | `NodeSystemStats`                                            | `FakeSystemStats`             | CPU count, total RAM                                      |
-| `HostInfo`                                 | `host-info.ts`              | `NodeHostInfo`                                               | `FakeHostInfo`                | OS, version (`sw_vers` on macOS), arch                    |
-| `HostLoadProbe`                            | `host-load.ts`              | `DarwinHostLoadProbe`, `LinuxHostLoadProbe`                  | `FakeHostLoadProbe`           | CPU, memory, disk counters                                |
-| `TcpProbe`                                 | `tcp-probe.ts`              | `NodeTcpProbe`                                               | `FakeTcpProbe`                | Is a loopback port listening; send bytes                  |
-| `TcpStreamConnector`                       | `tcp-stream.ts`             | `NodeTcpStreamConnector`                                     | `FakeTcpStreamConnector`      | A long-lived loopback connection, bytes both ways         |
-| `BytePipeLauncher`                         | `byte-pipe.ts`              | `NodeBytePipeLauncher`                                       | `FakeBytePipeLauncher`        | A child with binary stdout and stdin as its liveness      |
-| `IdGenerator`                              | `id-generator.ts`           | `CryptoIdGenerator`                                          | none; tests inline one        | Random ids                                                |
-| `TokenSecrets`                             | `token-secrets.ts`          | `CryptoTokenSecrets`                                         | none; tests inline one        | New secret, its hash                                      |
-| Paths                                      | `paths.ts`                  | `resolveSimlockHome`, `resolveDaemonSocketPath`              | —                             | `SIMLOCK_HOME` (default `~/.simlock`), socket path length |
+| Port                                       | File                        | Node adapter                                                 | Fake                                       | What it covers                                            |
+| ------------------------------------------ | --------------------------- | ------------------------------------------------------------ | ------------------------------------------ | --------------------------------------------------------- |
+| `Clock`                                    | `clock.ts`                  | `SystemClock`                                                | `FakeClock`                                | `now`, `setTimer`, `cancel`                               |
+| `Filesystem`                               | `filesystem.ts`             | `NodeFilesystem`                                             | `MemoryFilesystem`                         | Read, atomic write, stat, delete, disk free               |
+| `ProcessRunner`                            | `process-runner.ts`         | `NodeProcessRunner`                                          | `ScriptedProcessRunner`                    | Run or stream a command, capture output                   |
+| (wrapper)                                  | `logging-process-runner.ts` | `LoggingProcessRunner`                                       | —                                          | One `process` log line per command, at `debug` only       |
+| `ProcessSupervisor`                        | `process-supervisor.ts`     | `NodeProcessSupervisor`                                      | `FakeProcessSupervisor`                    | Is a pid alive; signal it                                 |
+| `ParentWatch`                              | `parent-watch.ts`           | `NodeParentWatch`                                            | `FakeParentWatch`                          | Call once when a pid exits (polls)                        |
+| `DaemonLauncher`                           | `daemon-launcher.ts`        | `NodeDaemonLauncher`                                         | `FakeDaemonLauncher`                       | Detached daemon, its log, `DAEMON_STARTUP_TIMEOUT_MS`     |
+| `IpcConnector`, `IpcListenerFactory`       | `ipc.ts`                    | `NodeIpcTransport`                                           | `MemoryIpcTransport`                       | The daemon's unix socket                                  |
+| `UplinkConnector`, `UplinkListenerFactory` | `uplink.ts`                 | `WebSocketUplinkConnector`, `WebSocketUplinkListenerFactory` | `MemoryUplinkTransport`                    | A worker's uplink to its gateway                          |
+| `Logger`, `LogSink`                        | `logger.ts`                 | `JsonLinesLogger`, `NodeFileLogSink`                         | `NoopLogger`, `MemoryLogSink`              | JSON-line logs, `child(module)`, rotation                 |
+| `SystemStats`                              | `system-stats.ts`           | `NodeSystemStats`                                            | `FakeSystemStats`                          | CPU count, total RAM                                      |
+| `HostInfo`                                 | `host-info.ts`              | `NodeHostInfo`                                               | `FakeHostInfo`                             | OS, version (`sw_vers` on macOS), arch                    |
+| `HostLoadProbe`                            | `host-load.ts`              | `DarwinHostLoadProbe`, `LinuxHostLoadProbe`                  | `FakeHostLoadProbe`                        | CPU, memory, disk counters                                |
+| `TcpProbe`                                 | `tcp-probe.ts`              | `NodeTcpProbe`                                               | `FakeTcpProbe`                             | Is a loopback port listening; send bytes                  |
+| `TcpStreamConnector`                       | `tcp-stream.ts`             | `NodeTcpStreamConnector`                                     | `FakeTcpStreamConnector`                   | A long-lived loopback connection, bytes both ways         |
+| `BytePipeLauncher`                         | `byte-pipe.ts`              | `NodeBytePipeLauncher`                                       | `FakeBytePipeLauncher`                     | A child with binary stdout and stdin as its liveness      |
+| `SqliteOpener`                             | `sqlite.ts`                 | `NodeSqliteOpener`                                           | none; tests use the adapter on a temp file | Open a SQLite file; `exec`, `prepare`, `close`            |
+| `IdGenerator`                              | `id-generator.ts`           | `CryptoIdGenerator`                                          | none; tests inline one                     | Random ids                                                |
+| `TokenSecrets`                             | `token-secrets.ts`          | `CryptoTokenSecrets`                                         | none; tests inline one                     | New secret, its hash                                      |
+| Paths                                      | `paths.ts`                  | `resolveSimlockHome`, `resolveDaemonSocketPath`              | —                                          | `SIMLOCK_HOME` (default `~/.simlock`), socket path length |
 
 `productionHostLoadProbe` picks the Darwin or Linux probe. `NodeFileLogSink` rotates to
-`<path>.1`, or keeps numbered generations when given `retentionMs` or `totalMaxBytes`. The
-files it opens, and the log `NodeDaemonLauncher` pre-creates, are opened mode `0600`.
+`<path>.1` and keeps that one generation; the files it opens, and the log `NodeDaemonLauncher`
+pre-creates, are opened mode `0600`; so is a database file `NodeSqliteOpener` opens for writing (SQLite gives `-wal` and `-shm` its mode). `sqlite.ts` is the only file that names `node:sqlite`,
+loaded with a dynamic `import()` on first open (Node 22.13 or later; below it `open` throws
+`SqliteUnavailableError`). `filterSqliteExperimentalWarning` drops Node's one SQLite
+`ExperimentalWarning` and no other; the daemon's entry calls it first, and the CLI calls it just before it reads the history.
 
 ## Rules
 

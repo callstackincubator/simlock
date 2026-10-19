@@ -1,6 +1,6 @@
 ---
 name: verify-hardware
-description: Check a PR's slow-lane Done when lines (real devices) on this machine by running the project's slow-lane script — one lane per machine, detached, logged — and hand back pass, fail, busy or unavailable. Use when the deliver orchestrator delegates hardware verification, or when the user says "verify #N on hardware".
+description: Run a PR's slow-lane Done when lines on real devices on this machine and report pass, fail, busy or unavailable. Use when the user says "verify #N on hardware".
 ---
 
 Arguments: $ARGUMENTS

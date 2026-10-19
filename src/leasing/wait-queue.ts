@@ -1,5 +1,6 @@
 import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
 import { type DeviceRequest, type LeaseGrant, type LeaseProgress } from "../core/index.js";
+import { type WaitingReason } from "./acquisition-planner.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
@@ -107,6 +108,7 @@ export type WaiterState = "new" | "queued" | "processing" | "granted" | "rejecte
 export interface QueuePlace {
   readonly id: string;
   readonly queuePosition?: number;
+  readonly reason?: WaitingReason;
 }
 
 export interface Waiter {
@@ -121,6 +123,7 @@ interface MutableWaiter extends Waiter {
   readonly onProgress: ((progress: LeaseProgress) => void) | undefined;
   rejectPromise: (error: Error) => void;
   resolvePromise: (grant: LeaseGrant) => void;
+  reason: WaitingReason | undefined;
   state: WaiterState;
   timer: TimerHandle | undefined;
   /**
@@ -169,7 +172,11 @@ export class WaitQueue {
   places(): readonly QueuePlace[] {
     return [...this.#pendingWaiters].map((waiter) =>
       waiter.state === "queued"
-        ? { id: waiter.id, queuePosition: this.#line(lineOf(waiter.request)).indexOf(waiter) + 1 }
+        ? {
+            id: waiter.id,
+            queuePosition: this.#line(lineOf(waiter.request)).indexOf(waiter) + 1,
+            ...(waiter.reason === undefined ? {} : { reason: waiter.reason }),
+          }
         : { id: waiter.id },
     );
   }
@@ -215,6 +222,7 @@ export class WaitQueue {
       options: requestOptions,
       promise,
       rejectPromise,
+      reason: undefined,
       request,
       resolvePromise,
       state: "new",
@@ -229,11 +237,12 @@ export class WaitQueue {
   /**
    * A re-queue keeps the first deadline (`deadlineAt`) instead of re-arming the full `timeoutMs`.
    */
-  enqueue(waiter: Waiter): boolean {
+  enqueue(waiter: Waiter, reason?: WaitingReason): boolean {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
 
     if (this.#expireIfPastDeadline(mutable)) return false;
+    mutable.reason = reason;
 
     if (!this.#waiters.includes(mutable)) {
       this.#waiters.push(mutable);

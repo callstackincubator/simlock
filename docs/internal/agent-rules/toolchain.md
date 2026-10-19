@@ -61,6 +61,23 @@ that goes through the reviews its diff's kind gets and the merge gate:
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
 
+Every routine ends the same way; its skill adds only what it changes:
+
+1. `reviewer` with the PR number, round 1. Fix each Fix line yourself,
+   within the routine's kind of edit, then the check its `Rerun` names:
+   `reviewer` with that round, `previous <Commit>` and the complete
+   resolution ledger. `Rerun: none` with findings open: leave the PR in
+   draft and report them.
+2. Add the `## Review` section as the `deliver` skill's step 4 shapes it,
+   `skipped` for each review the diff's kind left out.
+3. `gh pr ready <M>`, then `.agents/scripts/merge-pr.sh <M>`. Anything but
+   a merge: leave the PR open and report.
+
+In a cloud session, edit a PR body with
+`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`
+(`gh pr edit` is GraphQL, which the cloud refuses), and when `gh pr ready`
+fails with a 403 naming the proxy's ready-for-review route, call that route.
+
 ## The screen capture programs
 
 `pnpm build` runs `scripts/build-capture.mjs`: it copies the vendored scrcpy

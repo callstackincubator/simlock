@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { type EventBus, type EventEnvelope, type EventHistory } from "../bus/index.js";
+import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
 import {
   type ComponentInstaller,
   type Config,
@@ -142,7 +143,8 @@ export interface DaemonServerEngineOptions {
   readonly catalog: CatalogReader;
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly historyPath?: string;
   readonly leases: LeaseCommands;
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;
@@ -292,6 +294,7 @@ function buildDispatcher(
     errorCode: classifyError,
     eventBus: options.eventBus,
     eventHistory: options.eventHistory,
+    ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: hooks.health,
     hostFacts: options.hostFacts,
     ...(options.load === undefined ? {} : { load: options.load }),
@@ -537,9 +540,7 @@ export class DaemonServer {
       }),
     );
 
-    // why: Redacted: the payload lands in the ring and `events.jsonl`, and the log line in
-    // `daemon.log`, none of which is as guarded as `config.json`. `this.options.config` itself
-    // stays whole -- `config.get` answers from it.
+    // why: redacted because the payload lands in the ring and `history.db`, and the log line in `daemon.log`, none of which is as guarded as `config.json`; `this.options.config` stays whole for `config.get`.
     const configSnapshot = redactConfig(this.options.config);
     this.options.eventBus.emit(
       "daemon.started",
@@ -1075,6 +1076,12 @@ export class DaemonServer {
       case "events.replay":
         return this.#dispatcher.dispatch(
           "events.replay",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "usage.get":
+        return this.#dispatcher.dispatch(
+          "usage.get",
           frame.payload ?? {},
           this.#session(connection),
         );

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver } from "../core/testing.js";
 import type { OptionalModuleDefinition, WorkerHooks } from "../modules/index.js";
+import { readHistoryEvents } from "../history/testing.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
@@ -261,7 +262,7 @@ describe("optional modules: HTTP routes", () => {
   });
 
   it("a module named like a core route's first segment (status) fails the start, with HTTP off too", async () => {
-    const accepted = await start({ modules: definitions(fakeModule({ name: "stats" })) });
+    const accepted = await start({ modules: definitions(fakeModule({ name: "stat" })) });
     expect(accepted.daemon).toBeDefined();
 
     await expect(start({ modules: definitions(fakeModule({ name: "status" })) })).rejects.toThrow(
@@ -843,10 +844,11 @@ describe("optional modules: stop hooks", () => {
     await rig.daemon.stop("test");
     await allocate;
 
-    const history = await readFile(join(directory, "events.jsonl"), "utf8");
-    const cancelled = history
-      .split("\n")
-      .filter((line) => line.includes('"lease.rejected"') && line.includes('"cancelled"'));
+    const history = await readHistoryEvents(directory);
+    const cancelled = history.filter(
+      (event) =>
+        event.event === "lease.rejected" && JSON.stringify(event.payload).includes('"cancelled"'),
+    );
     expect(drainRan).toEqual([true]);
     expect(cancelled).toHaveLength(1);
   });

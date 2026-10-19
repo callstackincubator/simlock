@@ -331,6 +331,7 @@ export const NAV = [
   { label: "Waiting", path: "/waiting" },
   { label: "Attention", path: "/attention" },
   { label: "Events", path: "/events" },
+  { label: "Usage", path: "/usage" },
 ] as const;
 
 export const NAV_LABELS = NAV.map((entry) => entry.label);

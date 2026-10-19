@@ -40,6 +40,7 @@ import {
   LeaseIdTakenError,
   LeaseRequestForbiddenError,
   NoCapacityError,
+  ProvisionFailedError,
   QueueTimeoutError,
   RequesterAlreadyLeasedError,
   ReplayedLeaseRequestError,
@@ -109,6 +110,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   // startup just to recognize it.
   if (error instanceof NoCapacityError) {
     return "NO_CAPACITY";
+  }
+  if (error instanceof ProvisionFailedError) {
+    return "PROVISION_FAILED";
   }
   if (error instanceof QueueTimeoutError) {
     return "QUEUE_TIMEOUT";

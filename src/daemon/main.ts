@@ -2,9 +2,15 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
+import { EventBus, type EventBusLogger } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
+import {
+  createEventHistory,
+  type EventHistoryHandle,
+  HISTORY_DB_NAME,
+  HISTORY_PROJECTIONS,
+} from "../history/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -67,6 +73,8 @@ import {
   type Logger,
   type LogLevel,
   NodeFilesystem,
+  filterSqliteExperimentalWarning,
+  NodeSqliteOpener,
   NodeHostInfo,
   NodeIpcTransport,
   NodeProcessRunner,
@@ -198,7 +206,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     config,
     dataDirectory,
     eventBus,
-    filesystem,
     logger,
   });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
@@ -493,6 +500,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
     eventHistory,
+    historyPath: join(dataDirectory, HISTORY_DB_NAME),
     healthMonitor: leasing.healthMonitor,
     physicalDeviceWatcher: leasing.physicalDeviceWatcher,
     hostFacts: () => fitHostFacts(hostFacts.current()),
@@ -548,6 +556,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           });
         }
       }
+      await eventHistory.stop();
     },
     // Review finding S5: waits for the concurrently-started gateway to either finish binding
     // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
@@ -578,6 +587,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
+      startHistory(
+        eventHistory,
+        logger,
+        stopForRefusedHistory({ stop: (reason) => daemon.stop(reason) }),
+      );
       moduleHost.afterSocketClaimed();
       // why: dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
       // `status.get` never parks (it still answers `starting` during convergence), but its
@@ -669,7 +683,7 @@ interface GatewayDaemonOptions {
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
-  readonly eventHistory: EventHistory;
+  readonly eventHistory: EventHistoryHandle;
   readonly filesystem: Filesystem;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
@@ -834,6 +848,25 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       ? undefined
       : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
 
+  const gatewayDispatcher = new GatewayDispatcher({
+    awaitReady: () => Promise.resolve(),
+    clock,
+    errorCode: classifyError,
+    closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
+    config,
+    coordinator: fleetCoordinator,
+    directory: gatewayService,
+    eventHistory,
+    health: () => daemon.health,
+    host: fitHostFacts({ ...options.hostSystem, tools: [] }),
+    ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
+    leaseIndex,
+    logger: logger.child("gateway"),
+    tokens,
+    workers: gatewayService.workers,
+    historyPath: join(dataDirectory, HISTORY_DB_NAME),
+  });
+
   const daemon = new DaemonServer({
     adminSecret,
     clock,
@@ -841,25 +874,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     defaultRequesterId: process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     ...(hostLoad === undefined ? {} : { hostLoad }),
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
-    dispatcher: new GatewayDispatcher({
-      awaitReady: () => Promise.resolve(),
-      clock,
-      errorCode: classifyError,
-      // C-2: makes `token.revoke` actually close the uplink it names (ADR 0005 §8), rather than
-      // only writing the store and waiting for that worker's next reconnect.
-      closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
-      config,
-      coordinator: fleetCoordinator,
-      directory: gatewayService,
-      eventHistory,
-      health: () => daemon.health,
-      host: fitHostFacts({ ...options.hostSystem, tools: [] }),
-      ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
-      leaseIndex,
-      logger: logger.child("gateway"),
-      tokens,
-      workers: gatewayService.workers,
-    }),
+    dispatcher: gatewayDispatcher,
     eventBus,
     host: new DaemonEndpointHost({
       connector: options.ipc,
@@ -886,9 +901,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       fleetCoordinator.start();
     },
     dispose: async () => {
+      gatewayDispatcher.dispose();
       fleetCoordinator.dispose();
       gatewayOwnerRoutedFacts.dispose();
       await gatewayService.stop();
+      await eventHistory.stop();
     },
     stopAuxiliary: async () => {
       await moduleHost.beforeDrain();
@@ -897,6 +914,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     },
     onSocketClaimed: () => {
       socketClaimed = true;
+      startHistory(
+        eventHistory,
+        logger,
+        stopForRefusedHistory({ stop: (reason) => daemon.stop(reason) }),
+      );
       void startHttpFrontend().then(
         () => resolveHttpStarted?.(),
         (error: unknown) => {
@@ -1330,13 +1352,7 @@ export function modelPreferenceWiring(
   );
 }
 
-/**
- * Turns the iOS driver's `SlimmedFact` into the matching `device.slimmed` bus event. The driver
- * never depends on the event bus directly (architecture rule 5) -- this is the one place, at driver construction, that bridges the
- * driver's `onSlimmed` callback to a post-commit fact for observers (`simlock events`, and the
- * event file behind it). A *skipped* slim is deliberately not bridged here
- * -- see `onSlimSkipped` in `discoverDrivers`, which logs it instead (see `docs/internal/EVENTS.md`).
- */
+// why: the iOS driver never depends on the event bus directly (architecture rule 5); this is the one place that bridges its `onSlimmed` callback to a post-commit fact. A skipped slim is not bridged: `onSlimSkipped` in `discoverDrivers` logs it instead.
 export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: SlimmedFact) => void {
   return (fact) => {
     eventBus.emit(
@@ -1356,43 +1372,44 @@ export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: Sli
   };
 }
 
-/**
- * Every event the daemon emits, also in `events.jsonl` (ADR 0006). An event file that cannot be
- * opened costs the history, never the daemon: one error line, and replay answers from the ring.
- */
 function openEventHistory(options: {
   readonly clock: Clock;
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
-  readonly filesystem: Filesystem;
   readonly logger: Logger;
-}): EventHistory {
-  const path = join(options.dataDirectory, EVENT_FILE_NAME);
-  const logger = options.logger.child("events");
-  let sink: NodeFileLogSink | undefined;
-  try {
-    const { maxBytes, retention, rotateBytes } = options.config.eventLog;
-    sink = new NodeFileLogSink({
-      clock: options.clock,
-      maxBytes: rotateBytes,
-      path,
-      retentionMs: retention,
-      totalMaxBytes: maxBytes,
-    });
-  } catch (error: unknown) {
-    logger.error("Event file could not be opened; events are kept in memory only", {
-      error: error instanceof Error ? error.message : String(error),
-      path,
-    });
-  }
-  return new EventHistory({
+}): EventHistoryHandle {
+  const { maxBytes, retention } = options.config.eventLog;
+  return createEventHistory({
     bus: options.eventBus,
-    filesystem: options.filesystem,
-    logger,
-    path,
-    ...(sink === undefined ? {} : { sink }),
+    clock: options.clock,
+    config: { maxBytes, retention },
+    dataDirectory: options.dataDirectory,
+    // why: node:sqlite writes the real disk, so the history never goes through a daemon's injected filesystem
+    filesystem: new NodeFilesystem(),
+    logger: options.logger.child("events"),
+    projectionOptions: {
+      fleet: options.config.mode === "gateway",
+      metricsRetentionMs: options.config.metrics.retention,
+    },
+    projections: Object.values(HISTORY_PROJECTIONS),
+    sqlite: new NodeSqliteOpener(),
   });
+}
+
+/** why: a history that refuses to start is one a newer simlock wrote or a migration could not fix; the daemon stops rather than run without the figures it promises. */
+function startHistory(history: EventHistoryHandle, logger: Logger, refused: () => void): void {
+  void history.start().catch((error: unknown) => {
+    logger.error("The event history could not start", { message: errorMessage(error) });
+    refused();
+  });
+}
+
+function stopForRefusedHistory(daemon: { stop(reason: string): Promise<void> }): () => void {
+  return () => {
+    process.exitCode = 1;
+    void daemon.stop("history-refused").catch(() => undefined);
+  };
 }
 
 /**
@@ -1440,6 +1457,7 @@ function createFatalLogger(): Logger {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  filterSqliteExperimentalWarning();
   void startDaemon().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;

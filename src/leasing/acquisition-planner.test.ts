@@ -6,6 +6,7 @@ import {
   CapacityCoordinator,
   type Config,
   DeviceOperationClaims,
+  type PhysicalDevice,
   type VirtualDevice,
   type VirtualSpec,
   type LeaseRecord,
@@ -78,10 +79,10 @@ const config: Config = {
   },
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
   eventLog: {
-    rotateBytes: 5 * 1024 * 1024,
     retention: 7 * 24 * 60 * 60 * 1000,
     maxBytes: 256 * 1024 * 1024,
   },
+  metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
 };
 
 function device(
@@ -116,7 +117,6 @@ function plan(
   acquisitionPlanner: AcquisitionPlanner,
   devices: readonly VirtualDevice[],
   options: {
-    failures?: number;
     leases?: readonly LeaseRecord[];
     noWait?: boolean;
     owner?: string;
@@ -124,7 +124,6 @@ function plan(
   } = {},
 ) {
   return acquisitionPlanner.plan({
-    failures: options.failures ?? 0,
     noWait: options.noWait ?? false,
     ...(options.owner === undefined ? {} : { owner: options.owner }),
     snapshot: { devices, leases: options.leases ?? [], virtualDevices: devices },
@@ -165,6 +164,7 @@ describe("AcquisitionPlanner", () => {
     expect(claims.operationFor(shutdown.id)).toBe("boot");
     expect(plan(acquisitionPlanner, [shutdown, other], { noWait: true })).toEqual({
       kind: "no-capacity",
+      reason: "global-running-limit",
     });
     if (result.kind === "boot-shutdown") {
       result.capacityReservation.release();
@@ -203,8 +203,11 @@ describe("AcquisitionPlanner", () => {
     const claim = claims.tryClaim(ready.id, "cleanup");
     if (claim === undefined) throw new Error("expected claim");
 
-    expect(plan(acquisitionPlanner, [ready])).toEqual({ kind: "wait" });
-    expect(plan(acquisitionPlanner, [ready], { noWait: true })).toEqual({ kind: "no-capacity" });
+    expect(plan(acquisitionPlanner, [ready])).toEqual({ kind: "wait", reason: "device-limit" });
+    expect(plan(acquisitionPlanner, [ready], { noWait: true })).toEqual({
+      kind: "no-capacity",
+      reason: "device-limit",
+    });
     claim.release();
   });
 
@@ -225,9 +228,13 @@ describe("AcquisitionPlanner", () => {
       },
     ];
 
-    expect(plan(acquisitionPlanner, [leased], { leases })).toEqual({ kind: "wait" });
+    expect(plan(acquisitionPlanner, [leased], { leases })).toEqual({
+      kind: "wait",
+      reason: "device-limit",
+    });
     expect(plan(acquisitionPlanner, [leased], { leases, noWait: true })).toEqual({
       kind: "no-capacity",
+      reason: "device-limit",
     });
   });
 
@@ -241,9 +248,13 @@ describe("AcquisitionPlanner", () => {
     // exactly the design constraint from issue #21 / #37.
     const quarantined = device("quarantined", "quarantined");
 
-    expect(plan(acquisitionPlanner, [quarantined])).toEqual({ kind: "wait" });
+    expect(plan(acquisitionPlanner, [quarantined])).toEqual({
+      kind: "wait",
+      reason: "device-limit",
+    });
     expect(plan(acquisitionPlanner, [quarantined], { noWait: true })).toEqual({
       kind: "no-capacity",
+      reason: "device-limit",
     });
   });
 
@@ -327,7 +338,7 @@ describe("AcquisitionPlanner", () => {
       for (const requested of [spec, slimSpec]) {
         expect(
           plan(acquisitionPlanner, devices, { leases, noWait: true, spec: requested }),
-        ).toEqual({ kind: "no-capacity" });
+        ).toEqual({ kind: "no-capacity", reason: "ram-budget" });
       }
       const roomy = plan(acquisitionPlanner, [iosSlim], {
         leases: [leaseOn(iosSlim)],
@@ -360,9 +371,11 @@ describe("AcquisitionPlanner", () => {
       const devices = [android, idleOther, shutdownSlim];
       expect(plan(acquisitionPlanner, devices, { leases, spec: slimSpec })).toEqual({
         kind: "wait",
+        reason: "ram-budget",
       });
       expect(plan(acquisitionPlanner, devices, { leases, noWait: true, spec: slimSpec })).toEqual({
         kind: "no-capacity",
+        reason: "ram-budget",
       });
       expect(claims.isClaimed(idleOther.id)).toBe(false);
       expect(claims.isClaimed(shutdownSlim.id)).toBe(false);
@@ -391,7 +404,10 @@ describe("AcquisitionPlanner", () => {
 
       // With the slim device gone, 5 GiB is used of 8: the 3.5 GiB full device still does not fit.
       const afterEviction = [android, leasedSlim, { ...idleSlim, state: "deleted" as const }];
-      expect(plan(acquisitionPlanner, afterEviction, { leases })).toEqual({ kind: "wait" });
+      expect(plan(acquisitionPlanner, afterEviction, { leases })).toEqual({
+        kind: "wait",
+        reason: "ram-budget",
+      });
     });
   });
 
@@ -418,7 +434,10 @@ describe("AcquisitionPlanner", () => {
         const onItsWay = device("on-its-way", state);
         claims.tryClaim(onItsWay.id, "boot");
 
-        expect(plan(acquisitionPlanner, [onItsWay])).toEqual({ kind: "wait" });
+        expect(plan(acquisitionPlanner, [onItsWay])).toEqual({
+          kind: "wait",
+          reason: "waiting-for-device",
+        });
       },
     );
 
@@ -510,6 +529,236 @@ describe("AcquisitionPlanner", () => {
         result.capacityReservation.release();
         result.claim.release();
       }
+    });
+  });
+
+  describe("why a plan is blocked", () => {
+    const other = (id: string, state: VirtualDevice["state"]) =>
+      device(id, state, { ...spec, model: "iPhone SE" });
+    const androidSpec: VirtualSpec = {
+      physical: false,
+      model: "Pixel 9",
+      osVersion: "36",
+      platform: "android",
+    };
+    type Limits = {
+      android: { maxDevices: number; maxRunning: number };
+      ios: { maxDevices: number; maxRunning: number };
+      maxRunning: number;
+    };
+    const capacityOf = (limits: Limits): Config["capacity"] => ({
+      strategy: "resource",
+      config: {
+        limits,
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 3.5 * gibibyte },
+      },
+    });
+    const limited = (limits: Limits, totalRamBytes = 32 * gibibyte) =>
+      planner(capacityOf(limits), totalRamBytes);
+    const roomyLimits: Limits = {
+      android: { maxDevices: 4, maxRunning: 4 },
+      ios: { maxDevices: 4, maxRunning: 4 },
+      maxRunning: 8,
+    };
+
+    it.each([
+      {
+        name: "a new device at the device limit",
+        reason: "device-limit",
+        build: () => ({
+          made: limited({ ...roomyLimits, ios: { maxDevices: 1, maxRunning: 4 } }),
+          devices: [device("leased", "leased")],
+        }),
+      },
+      {
+        name: "a new device over the RAM budget",
+        reason: "ram-budget",
+        build: () => ({
+          made: limited(roomyLimits, 12 * gibibyte),
+          devices: [
+            device("a1", "leased", androidSpec),
+            device("a2", "leased", { ...androidSpec, osVersion: "35" }),
+          ],
+        }),
+      },
+      {
+        name: "a new device at the global running limit",
+        reason: "global-running-limit",
+        build: () => ({
+          made: limited({ ...roomyLimits, maxRunning: 1 }),
+          devices: [device("a1", "leased", androidSpec)],
+        }),
+      },
+      {
+        name: "a new device at the platform running limit",
+        reason: "platform-running-limit",
+        build: () => ({
+          made: limited({ ...roomyLimits, ios: { maxDevices: 4, maxRunning: 1 } }),
+          devices: [other("leased", "leased")],
+        }),
+      },
+      {
+        name: "the boot of a shut-down device at the global running limit",
+        reason: "global-running-limit",
+        build: () => ({
+          made: limited({ ...roomyLimits, maxRunning: 1 }),
+          devices: [device("a1", "leased", androidSpec), device("down", "shutdown")],
+        }),
+      },
+      {
+        name: "the boot of a shut-down device at the platform running limit",
+        reason: "platform-running-limit",
+        build: () => ({
+          made: limited({ ...roomyLimits, ios: { maxDevices: 4, maxRunning: 1 } }),
+          devices: [other("leased", "leased"), device("down", "shutdown")],
+        }),
+      },
+    ] as const)("carries $reason on wait and on no-capacity for $name", (row) => {
+      const { made, devices } = row.build();
+      const leases = devices.filter((entry) => entry.state === "leased").map(leaseOn);
+
+      expect(plan(made.planner, devices, { leases })).toEqual({
+        kind: "wait",
+        reason: row.reason,
+      });
+      expect(plan(made.planner, devices, { leases, noWait: true })).toEqual({
+        kind: "no-capacity",
+        reason: row.reason,
+      });
+    });
+
+    it("carries the capacity reason that asked for an eviction on the eviction plan", () => {
+      const managed = limited({ ...roomyLimits, ios: { maxDevices: 1, maxRunning: 4 } });
+      const idle = other("idle", "shutdown");
+      const running = limited({ ...roomyLimits, ios: { maxDevices: 4, maxRunning: 1 } });
+      const warm = other("warm", "ready");
+
+      expect(plan(managed.planner, [idle])).toMatchObject({
+        device: idle,
+        kind: "evict-managed",
+        reason: "device-limit",
+      });
+      expect(plan(running.planner, [warm])).toMatchObject({
+        device: warm,
+        kind: "evict-running",
+        reason: "platform-running-limit",
+      });
+    });
+
+    class RefusesClaims extends DeviceOperationClaims {
+      constructor(private readonly refused: "boot" | "eviction") {
+        super();
+      }
+
+      override tryClaim(
+        ...args: Parameters<DeviceOperationClaims["tryClaim"]>
+      ): ReturnType<DeviceOperationClaims["tryClaim"]> {
+        return args[1] === this.refused ? undefined : super.tryClaim(...args);
+      }
+    }
+
+    function plannerRefusing(refused: "boot" | "eviction", limits: Limits) {
+      const claims = new RefusesClaims(refused);
+      const capacity = new CapacityCoordinator(
+        createCapacityStrategy(
+          capacityOf(limits),
+          new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ),
+      );
+      return new AcquisitionPlanner(capacity, claims);
+    }
+
+    it("returns the capacity reason that asked for an eviction when the victim's claim is taken", () => {
+      const atDeviceLimit = plannerRefusing("eviction", {
+        ...roomyLimits,
+        ios: { maxDevices: 1, maxRunning: 4 },
+      });
+      const atRunningLimit = plannerRefusing("eviction", {
+        ...roomyLimits,
+        ios: { maxDevices: 4, maxRunning: 1 },
+      });
+
+      expect(plan(atDeviceLimit, [other("idle", "shutdown")])).toEqual({
+        kind: "wait",
+        reason: "device-limit",
+      });
+      expect(plan(atRunningLimit, [other("warm", "ready")])).toEqual({
+        kind: "wait",
+        reason: "platform-running-limit",
+      });
+    });
+
+    it("says waiting-for-device when the boot claim of a shut-down device is already taken", () => {
+      const boots = plannerRefusing("boot", roomyLimits);
+      const down = device("down", "shutdown");
+
+      expect(plan(boots, [down])).toEqual({ kind: "wait", reason: "waiting-for-device" });
+      expect(plan(boots, [down], { noWait: true })).toEqual({
+        kind: "no-capacity",
+        reason: "waiting-for-device",
+      });
+    });
+
+    describe("a physical request", () => {
+      const phone = (id: string, state: "ready" | "leased" = "ready"): PhysicalDevice => ({
+        physical: true,
+        createdAt: 1,
+        driverData: {},
+        driverDeviceId: `driver-${id}`,
+        enrolledApps: [],
+        id,
+        spec: {
+          class: "phone",
+          physical: true,
+          model: "iPhone 15 Pro",
+          osVersion: "18.4",
+          platform: "ios",
+        },
+        state,
+      });
+      const request = { model: "iPhone 15 Pro", platform: "ios" } as const;
+      const physicalPlan = (
+        devices: readonly PhysicalDevice[],
+        options: { heldByOlder?: (device: PhysicalDevice) => boolean; noWait?: boolean } = {},
+      ) =>
+        planner().planner.planPhysical({
+          absent: new Set(),
+          heldByOlder: options.heldByOlder ?? (() => false),
+          noWait: options.noWait ?? false,
+          owner: "waiter",
+          request,
+          snapshot: { devices, leases: [], virtualDevices: [] },
+        });
+
+      it("is granted a ready device that fits, as the control for the reasons below", () => {
+        const ready = phone("ready");
+
+        expect(physicalPlan([ready])).toMatchObject({ device: ready, kind: "grant-physical" });
+      });
+
+      it("says behind-earlier-request when the only fits are held for an older request", () => {
+        const held = phone("held");
+
+        expect(physicalPlan([held], { heldByOlder: () => true })).toEqual({
+          kind: "wait",
+          reason: "behind-earlier-request",
+        });
+        expect(physicalPlan([held], { heldByOlder: () => true, noWait: true })).toEqual({
+          kind: "no-capacity",
+          reason: "behind-earlier-request",
+        });
+      });
+
+      it("says no-free-physical when no ready, present device fits", () => {
+        expect(physicalPlan([phone("leased", "leased")])).toEqual({
+          kind: "wait",
+          reason: "no-free-physical",
+        });
+        expect(physicalPlan([], { noWait: true })).toEqual({
+          kind: "no-capacity",
+          reason: "no-free-physical",
+        });
+      });
     });
   });
 });

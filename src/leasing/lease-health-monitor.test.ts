@@ -20,6 +20,12 @@ import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const androidSpec = {
+  physical: false,
+  model: "Pixel 8",
+  osVersion: "35",
+  platform: "android",
+} as const;
 
 function config(overrides: Partial<Config["health"]> = {}): Config {
   return {
@@ -79,10 +85,10 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
@@ -105,11 +111,18 @@ class RecordingReleaser implements DeviceLostReleaser {
   }
 }
 
-async function createHarness(healthOverrides: Partial<Config["health"]> = {}) {
+async function createHarness(
+  healthOverrides: Partial<Config["health"]> = {},
+  platform: "ios" | "android" = "ios",
+) {
   const clock = new FakeClock(1_000);
   const filesystem = new HeldWritesFilesystem();
   const eventBus = new EventBus(clock);
-  const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+  const driver = new FakeDriver({
+    availableOsVersions: [platform === "ios" ? "26.5" : "35"],
+    clock,
+    platform,
+  });
   let nextId = 1;
   const registry = await Registry.load({
     clock,
@@ -152,7 +165,11 @@ let deviceCounter = 0;
 
 async function seedLeased(
   harness: Awaited<ReturnType<typeof createHarness>>,
-  options: { readonly driverDeviceId?: string; readonly requesterId?: string } = {},
+  options: {
+    readonly driverDeviceId?: string;
+    readonly requesterId?: string;
+    readonly spec?: typeof spec | typeof androidSpec;
+  } = {},
 ) {
   deviceCounter += 1;
   const driverDeviceId = options.driverDeviceId ?? `simlock-${deviceCounter}`;
@@ -160,7 +177,7 @@ async function seedLeased(
     driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,
-    spec,
+    spec: options.spec ?? spec,
   });
   await harness.registry.transitionDevice(device.id, "ready", {
     event: "device.ready",
@@ -369,6 +386,52 @@ describe("LeaseHealthMonitor", () => {
     expect(recovered?.recoveryAttempts).toBeUndefined();
     harness.monitor.dispose();
   });
+
+  it.each([
+    ["ios", spec],
+    ["android", androidSpec],
+  ] as const)(
+    "device.recovered and device.recovery-failed carry the device's own platform, for an %s device",
+    async (platform, deviceSpec) => {
+      const recovering = await createHarness({}, platform);
+      const first = await seedLeased(recovering, { spec: deviceSpec });
+      recovering.driver.setManagedReality({
+        devices: [observedDevice(first.device.driverDeviceId, "stopped")],
+        processes: [],
+      });
+      recovering.monitor.start();
+      recovering.clock.advance(30_000);
+      await flush();
+      recovering.clock.advance(30_000);
+      await flush();
+
+      const failing = await createHarness({}, platform);
+      const second = await seedLeased(failing, { spec: deviceSpec });
+      failing.driver.setManagedReality({
+        devices: [observedDevice(second.device.driverDeviceId, "stopped")],
+        processes: [],
+      });
+      failing.driver.failOn("makeReady", 1, new Error("boom-1"));
+      failing.driver.failOn("makeReady", 2, new Error("boom-2"));
+      failing.driver.failOn("makeReady", 3, new Error("boom-3"));
+      failing.monitor.start();
+      for (const step of [30_000, 30_000, 30_000, 5_000, 30_000, 10_000]) {
+        failing.clock.advance(step);
+        await flush();
+      }
+
+      const payloads = [recovering, failing].map(
+        (harness) =>
+          healthEvents(harness.eventBus).find(
+            (event) =>
+              event.event === "device.recovered" || event.event === "device.recovery-failed",
+          )?.payload,
+      );
+      expect(payloads).toMatchObject([{ platform }, { platform }]);
+      recovering.monitor.dispose();
+      failing.monitor.dispose();
+    },
+  );
 
   it("emits device.crash-detected once across a retry sequence, not per attempt", async () => {
     const harness = await createHarness();

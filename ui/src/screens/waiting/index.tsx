@@ -15,6 +15,9 @@ import {
   Loaded,
   MasterDetail,
   Pager,
+  Refusal,
+  StatRow,
+  StatTile,
   Status,
   StatusDot,
 } from "../../ds";
@@ -46,6 +49,7 @@ export function WaitingBody({ page }: { readonly page: WaitingPage }) {
             ) : undefined
           }
         >
+          <WaitTile wait={page.wait} />
           {rows.length === 0 ? (
             <Empty>No requests are waiting.</Empty>
           ) : (
@@ -61,6 +65,20 @@ export function WaitingBody({ page }: { readonly page: WaitingPage }) {
       }
       detail={detailOf(chosen, gone)}
     />
+  );
+}
+
+function WaitTile({ wait }: { readonly wait: WaitingPage["wait"] }) {
+  if (wait.kind === "loading") return <p className="muted loaded-note">Loading…</p>;
+  if (wait.kind === "refused") return <Refusal message={wait.message} />;
+  if (wait.kind === "unsupported") return null;
+  return (
+    <>
+      {wait.refusal === undefined ? null : <Refusal message={wait.refusal} />}
+      <StatRow label="Waiting figures">
+        <StatTile {...wait.data} />
+      </StatRow>
+    </>
   );
 }
 
@@ -135,6 +153,8 @@ function WaitingInspector({ row }: { readonly row: WaitingRow }) {
           { label: "Request", value: <Id>{row.id}</Id> },
           { label: "Created", value: row.created },
           { label: "Queue", value: <QueueValue queue={row.queue} /> },
+          ...(row.why === undefined ? [] : [{ label: "Why", value: row.why }]),
+          ...(row.workers ?? []).map((worker) => ({ label: worker.name, value: worker.text })),
         ]}
       />
     </Inspector>

@@ -25,6 +25,7 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   hostFactsSchema,
+  historyStatusSchema,
   hostLoadSchema,
   imageTagSchema,
   leaseGrantSchema,
@@ -41,6 +42,8 @@ import {
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  usageOutputSchema,
+  usageWindowSchema,
   waitingRequestSchema,
   capabilityListSchema,
   workerViewSchema,
@@ -117,6 +120,7 @@ export const statusGet = defineOperation({
     }),
     host: hostFactsSchema,
     load: hostLoadSchema.optional(),
+    history: historyStatusSchema.optional(),
     queueDepth: z.number().optional(),
     physicalQueueDepth: z.number().optional(),
     installs: statusInstallsSchema.optional(),
@@ -645,6 +649,15 @@ export const eventsReplay = defineOperation({
   output: z.array(eventEnvelopeSchema),
 });
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const usageGet = defineOperation({
+  name: "usage.get",
+  role: "admin",
+  effect: "read",
+  input: usageWindowSchema,
+  output: usageOutputSchema,
+});
+
 // ---- events.subscribe ---------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -1035,6 +1048,7 @@ export const OPERATIONS = {
   "events.replay": eventsReplay,
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
+  "usage.get": usageGet,
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,

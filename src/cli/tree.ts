@@ -63,6 +63,7 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "doctor", load: () => import("./commands/doctor.js") },
   { name: "nuke", load: () => import("./commands/nuke.js") },
   { name: "events", load: () => import("./commands/events.js") },
+  { name: "stats", load: () => import("./commands/stats.js") },
   {
     name: "daemon",
     load: daemonModule,

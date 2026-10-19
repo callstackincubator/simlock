@@ -23,17 +23,6 @@
   },
   {
     "type": "dependency",
-    "from": "src/bus/event-file.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../contract/schemas.js",
-    "dependencyTypes": ["local", "import"],
-    "rule": {
-      "severity": "error",
-      "name": "past-index"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/core/capacity/coordinator.test.ts",
     "to": "src/core/capacity/strategies/resource/index.ts",
     "unresolvedTo": "./strategies/resource/index.js",

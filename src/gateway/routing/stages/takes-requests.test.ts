@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createRoutingPolicy } from "../../routing.js";
+import { takesRequests } from "./takes-requests.js";
 import { catalogFixture, deviceFixture, statusFixture } from "../../test-support.js";
 import type { WorkerView } from "../../worker-registry.js";
 
@@ -76,6 +77,30 @@ describe("takes-requests for a worker that answered starting", () => {
   ])("drops it when it is %s", (_label, overrides) => {
     expect(policy.assess(REQUEST, [{ ...starting, ...overrides }])).toMatchObject({
       code: "NO_CAPACITY",
+    });
+  });
+});
+
+describe("takes-requests' reasons", () => {
+  it("names disconnected, incompatible, drained and not-ready, disconnected before drained, and nothing for a worker it keeps", () => {
+    const { capacity: _c, ...noCapacity } = view("wrk_a");
+
+    expect(takesRequests.check(view("wrk_a"), REQUEST)).toBeUndefined();
+    expect(takesRequests.check(view("wrk_a", { connection: "disconnected" }), REQUEST)).toEqual({
+      reason: "disconnected",
+    });
+    expect(takesRequests.check(view("wrk_a", { connection: "incompatible" }), REQUEST)).toEqual({
+      reason: "incompatible",
+    });
+    expect(takesRequests.check(view("wrk_a", { drained: true }), REQUEST)).toEqual({
+      reason: "drained",
+    });
+    expect(
+      takesRequests.check(view("wrk_a", { connection: "disconnected", drained: true }), REQUEST),
+    ).toEqual({ reason: "disconnected" });
+    expect(takesRequests.check(noCapacity, REQUEST)).toEqual({ reason: "not-ready" });
+    expect(takesRequests.check(view("wrk_a", { catalogReadAt: undefined }), REQUEST)).toEqual({
+      reason: "not-ready",
     });
   });
 });

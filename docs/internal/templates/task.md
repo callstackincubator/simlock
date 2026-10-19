@@ -36,9 +36,10 @@ commit toolchain.md names, or a command and the output line it printed. A
 value this change sends to another module, process or tool (an id, name,
 key, header, path, flag, JSON shape) is a row: its source is the line that
 parses or validates it, and the row shows the value passes. A fake of
-another tool cites the real reply it copies. A sentence below about today's
-behaviour names its row (F1). A fact with no source is an open question,
-not a row. -->
+another tool cites the real reply it copies. A sentence anywhere in this
+body about today's behaviour names its row (F1). Docs, memory or "to
+re-check" is no source; a fact with no source is an open question, not a
+row. -->
 
 | #  | Fact | Source |
 | -- | ---- | ------ |

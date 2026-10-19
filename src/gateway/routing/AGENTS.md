@@ -2,7 +2,7 @@
 
 Does: picks the worker for one fleet request, or says it cannot be served. Pure, over views.
 Entry: `index.ts`; composed in `../routing.ts` → `createRoutingPolicy(gateway.routing)` →
-`{ assess, select }`. Only policy: `warm-then-free`.
+`{ assess, explain, select }`. Only policy: `warm-then-free`.
 Uses: contract, core (catalog match only). Called by: `../fleet-coordinator.ts`.
 Flows: [device selection](../../../docs/internal/flows/device-selection.md), [gateway](../AGENTS.md).
 
@@ -27,7 +27,12 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [ga
 2. **Select** (`runStages`): workers sorted by id. A filter drops; a rank keeps its best scorers,
    abstains when the best is 0 or less, and a settling rank ends the walk. Pick the first left,
    only if some rank decided. A physical request skips stages with `appliesToPhysical: false`.
-3. The reported stage is the last rank that removed a worker, else the last that decided.
+3. **Explain** (`explainStages`, `RoutingPolicy.explain`): why each view would not be picked, in
+   worker id order, deciding nothing. A filter's `check(worker, request)` answers a reason to drop
+   or `undefined` to keep (`runStages` keeps on `undefined`); a rank may add `zeroReason` for a
+   worker it scores 0. Per view: the first filter reason in stage order, else the first rank zero
+   reason, else none. The coordinator adds its memos on top of this (`../AGENTS.md`).
+4. The reported stage is the last rank that removed a worker, else the last that decided.
    `reason` is `warm-hit` when that stage is `warm-hit`, else `free-capacity`.
 
 | Stage              | Kind          | Keeps or prefers                                                                                      | Physical |
@@ -47,6 +52,10 @@ A physical request has one rank, `warm-hit`: with no pickable device nothing is 
 ## Rules
 
 - Stages read the view and the request only. No clock, no I/O, no state.
+- A filter returns its own reason and a rank its own zero reason. The pipeline and the policy
+  name no stage and compare no stage name.
+- `can-serve` and the fleet table (`assess`) ask the same helpers in the same order, so the reason
+  `can-serve` gives is the code the table would reject with.
 - `gateway.routing` names a whole list; stage order is code, never config.
 - Downloads never make a worker able to serve: only installed runtimes count.
 - `matchRequest` gives the model name the gateway forwards, so the worker resolves what routing matched.

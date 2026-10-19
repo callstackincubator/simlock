@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   capacityChangedPayload,
   FakeDriver,
@@ -6,7 +6,17 @@ import {
   type FakeDriverOptions,
 } from "../core/testing.js";
 
-import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
+import { EventBus, type EventEnvelope } from "../bus/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
+import {
+  fixedEventHistory,
+  HOUR,
+  removeUsageRigs,
+  requested,
+  ringEventHistory,
+  T0,
+  usageRig,
+} from "../history/testing.js";
 import {
   CleanupReaper,
   ComponentInstaller,
@@ -26,7 +36,6 @@ import {
   type PassthroughResolver,
   toDriverDevice,
 } from "../core/index.js";
-import { NoCapacityError } from "../leasing/index.js";
 import {
   OPERATIONS,
   statusDeviceSchema,
@@ -40,7 +49,6 @@ import {
   FakeSystemStats,
   MemoryFilesystem,
   NodeProcessRunner,
-  NoopLogger,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
@@ -49,6 +57,29 @@ import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
+
+const threads = vi.hoisted(() => ({
+  crashOnPost: false,
+  posts: [] as unknown[],
+  workers: [] as { terminate(): Promise<number> }[],
+}));
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  class CountingWorker extends actual.Worker {
+    constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+      super(...args);
+      threads.workers.push(this);
+    }
+
+    override postMessage(...args: Parameters<InstanceType<typeof actual.Worker>["postMessage"]>) {
+      threads.posts.push(args[0]);
+      super.postMessage(...args);
+      if (threads.crashOnPost) void this.terminate();
+    }
+  }
+  return { ...actual, Worker: CountingWorker };
+});
 
 const gibibyte = 1024 ** 3;
 const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
@@ -95,13 +126,9 @@ function stallOptions(
 
 function resolveEventHistoryOverride(
   eventBus: EventBus,
-  filesystem: MemoryFilesystem,
-  override: Pick<EventHistory, "replay"> | undefined,
-): Pick<EventHistory, "replay"> {
-  return (
-    override ??
-    new EventHistory({ bus: eventBus, filesystem, logger: new NoopLogger(), path: "/events.jsonl" })
-  );
+  override: Pick<EventHistoryHandle, "replay" | "status"> | undefined,
+): Pick<EventHistoryHandle, "replay" | "status"> {
+  return override ?? ringEventHistory(eventBus);
 }
 
 /** The fake driver's `simlock <tool>` wrapper, when a test asks for one; nothing otherwise. Pulled
@@ -200,7 +227,9 @@ async function buildDispatcher(
     readonly passthroughOverride?: PassthroughResolver;
     readonly execEnv?: NodeJS.ProcessEnv;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
-    readonly eventHistory?: Pick<EventHistory, "replay">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly historyPath?: string;
+    readonly withoutTokens?: boolean;
     /** `status.get`'s host block; a fixed machine with no tools by default. */
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
@@ -329,7 +358,8 @@ async function buildDispatcher(
     config,
     doctor,
     eventBus,
-    eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
+    eventHistory: resolveEventHistoryOverride(eventBus, overrides.eventHistory),
+    ...(overrides.historyPath === undefined ? {} : { historyPath: overrides.historyPath }),
     health: () => overrides.health ?? "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
     instanceId: "instance-1",
@@ -345,7 +375,7 @@ async function buildDispatcher(
     reaper,
     registry,
     stalls: stallOptions(engine, driver, overrides),
-    tokens,
+    ...(overrides.withoutTokens === true ? {} : { tokens }),
     version: "1.2.3",
   });
   return {
@@ -1252,6 +1282,7 @@ describe("Dispatcher: events.replay", () => {
           asked.push(input);
           return fromHistory;
         },
+        status: () => ({ opened: true, writing: true }),
       },
     });
 
@@ -1260,6 +1291,60 @@ describe("Dispatcher: events.replay", () => {
     ).resolves.toEqual(fromHistory);
     expect(asked).toEqual([{ sinceTs: 10 }]);
   });
+});
+
+describe("Dispatcher: config.get eventLog", () => {
+  it("config.get reports eventLog.retention and maxBytes and no rotateBytes", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    const { eventLog } = await dispatcher.dispatch("config.get", {}, session({ role: "admin" }));
+
+    expect(eventLog).toStrictEqual({
+      maxBytes: 256 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+    });
+  });
+});
+
+describe("Dispatcher: config.get metrics", () => {
+  it("config.get reports metrics.retention", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    const { metrics } = await dispatcher.dispatch("config.get", {}, session({ role: "admin" }));
+
+    expect(metrics).toStrictEqual({ retention: 90 * 24 * 60 * 60 * 1000 });
+  });
+});
+
+describe("Dispatcher: status.get history", () => {
+  it.each([
+    {
+      health: "running" as const,
+      history: { opened: true, setAsideAt: 1_760_605_920_000, writing: false },
+    },
+    { health: "starting" as const, history: { opened: false, writing: false } },
+    { health: "running" as const, history: { opened: true, writing: true } },
+    {
+      health: "running" as const,
+      history: { opened: true, rebuiltAt: 1_760_605_920_000, writing: true },
+    },
+    {
+      health: "running" as const,
+      history: { opened: true, rebuildFailed: true as const, writing: true },
+    },
+  ])(
+    "status.get carries the history's opened, writing, setAsideAt, rebuiltAt and rebuildFailed, in the starting answer too ($health, $history)",
+    async ({ health, history }) => {
+      const { dispatcher } = await buildDispatcher({
+        eventHistory: fixedEventHistory(history),
+        health,
+      });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect((status as { history?: unknown }).history).toStrictEqual(history);
+    },
+  );
 });
 
 describe("Dispatcher: nuke.run", () => {
@@ -2147,6 +2232,7 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
         createdAt: firstAt,
         id: expect.any(String),
         queuePosition: 1,
+        reason: "device-limit",
         requesterId: "agent-a",
         spec: { ...IOS_REQUEST, mode: "full" },
         stage: "queued",
@@ -2155,6 +2241,7 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
         createdAt: firstAt + 5_000,
         id: expect.any(String),
         queuePosition: 2,
+        reason: "behind-earlier-request",
         requesterId: "agent-b",
         spec: IOS_REQUEST,
         stage: "queued",
@@ -2800,7 +2887,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       expect(fullStatus.capacity?.ios.atRamBudget).toBe(true);
       await expect(
         full.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
-      ).rejects.toBeInstanceOf(NoCapacityError);
+      ).rejects.toMatchObject({ code: "NO_CAPACITY" });
     });
 
     it("is false under the fixed strategy, which keeps no budget", async () => {
@@ -2823,6 +2910,91 @@ describe("Dispatcher: status.get RAM budget", () => {
     const status = await dispatcher.dispatch("status.get", {}, session());
 
     expect(status.capacity).not.toHaveProperty("ramBudget");
+  });
+});
+
+describe("Dispatcher: a noWait lease.request refused for capacity names the check that refused it", () => {
+  const sizes = { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte };
+  const limits = {
+    android: { maxDevices: 1, maxRunning: 1 },
+    ios: { maxDevices: 4, maxRunning: 4 },
+    maxRunning: 6,
+  };
+  const ios = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+  const resource = (
+    overrides: { limits?: typeof limits; ramBudget?: typeof sizes } = {},
+  ): Config["capacity"] => ({
+    strategy: "resource",
+    config: { limits: overrides.limits ?? limits, ramBudget: overrides.ramBudget ?? sizes },
+  });
+  const holder = () => session({ principal: "tok_holder" });
+  const asker = () => session({ principal: "tok_asker" });
+  const refusal = (promise: Promise<unknown>): Promise<unknown> =>
+    promise.then(
+      () => {
+        throw new Error("expected the request to be refused");
+      },
+      (error: unknown) => error,
+    );
+
+  it.each([
+    {
+      name: "the RAM budget",
+      reason: "ram-budget",
+      capacity: resource({ ramBudget: { ...sizes, iosBytesPerDevice: 30 * gibibyte } }),
+      holds: false,
+    },
+    {
+      name: "the device limit",
+      reason: "device-limit",
+      capacity: resource({ limits: { ...limits, ios: { maxDevices: 1, maxRunning: 4 } } }),
+      holds: true,
+    },
+    {
+      name: "the platform running limit",
+      reason: "platform-running-limit",
+      capacity: resource({ limits: { ...limits, ios: { maxDevices: 4, maxRunning: 1 } } }),
+      holds: true,
+    },
+  ] as const)("rejects NO_CAPACITY with details.capacityReason $reason at $name", async (row) => {
+    const { dispatcher } = await buildDispatcher({ capacity: row.capacity });
+    if (row.holds) await dispatcher.dispatch("lease.request", ios, holder());
+
+    await expect(
+      dispatcher.dispatch("lease.request", { ...ios, noWait: true }, asker()),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY", details: { capacityReason: row.reason } });
+  });
+
+  it("rejects NO_CAPACITY with no details for a request behind an earlier one", async () => {
+    const { dispatcher } = await buildDispatcher({
+      capacity: resource({ limits: { ...limits, ios: { maxDevices: 1, maxRunning: 4 } } }),
+    });
+    await dispatcher.dispatch("lease.request", ios, holder());
+    const waiting = dispatcher.dispatch("lease.request", ios, session({ principal: "tok_head" }));
+    void waiting.catch(() => undefined);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const error = await refusal(
+      dispatcher.dispatch("lease.request", { ...ios, noWait: true }, asker()),
+    );
+
+    expect(classifyError(error)).toBe("NO_CAPACITY");
+    expect((error as { details?: unknown }).details).toBeUndefined();
+  });
+
+  it("answers a replay of the RAM-budget request by its idempotency key with NO_CAPACITY and no details", async () => {
+    const { dispatcher } = await buildDispatcher({
+      capacity: resource({ ramBudget: { ...sizes, iosBytesPerDevice: 30 * gibibyte } }),
+    });
+    const input = { ...ios, idempotencyKey: "key-1", noWait: true } as const;
+    await expect(dispatcher.dispatch("lease.request", input, asker())).rejects.toMatchObject({
+      details: { capacityReason: "ram-budget" },
+    });
+
+    const replay = await refusal(dispatcher.dispatch("lease.request", input, asker()));
+
+    expect(classifyError(replay)).toBe("NO_CAPACITY");
+    expect((replay as { details?: unknown }).details).toBeUndefined();
   });
 });
 
@@ -3621,10 +3793,10 @@ function testConfig(
     capacity,
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -3949,7 +4121,7 @@ describe("Dispatcher: component.remove", () => {
 });
 
 describe("Dispatcher: status.get while the daemon is starting", () => {
-  it("status.get on a worker whose health is starting returns daemon and host and no other field", async () => {
+  it("status.get on a worker whose health is starting returns daemon, history and host and no other field", async () => {
     const { dispatcher, registry } = await buildDispatcher({ health: "starting" });
     await registry.registerDevice({
       driverData: {},
@@ -3960,13 +4132,13 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
     expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
     expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
   });
 
   it.each(["running", "failed"] as const)(
-    "status.get on a %s daemon returns every field it returns today",
+    "status.get on a %s daemon returns every field it returns today, and the history",
     async (health) => {
       const { dispatcher, registry } = await buildDispatcher({ health });
       await registry.registerDevice({
@@ -3982,6 +4154,7 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
         "capacity",
         "daemon",
         "devices",
+        "history",
         "host",
         "installs",
         "leases",
@@ -4284,5 +4457,186 @@ describe("Dispatcher: lease.request requires", () => {
     const requested = eventBus.replay().find((event) => event.event === "lease.requested");
     expect(requested?.payload).toMatchObject({ requestSpec: IOS });
     expect(JSON.stringify(requested?.payload)).not.toContain("requires");
+  });
+});
+
+describe("Dispatcher: usage.get", () => {
+  afterEach(removeUsageRigs);
+
+  const admin = session({ role: "admin" });
+
+  async function historyWithRows(options: { readonly gatewayLabel?: string } = {}) {
+    const rig = await usageRig();
+    rig.emit("lease.requested", requested("R1"));
+    const gate = { open: true };
+    const eventHistory = {
+      replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
+    };
+    return { eventHistory, gate, rig, ...options };
+  }
+
+  it("the worker handler answers HISTORY_NOT_KEPT with oldestTs and the message naming when the figures start when to is 1 ms before the oldest row, and figures when to is that row's time", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const { dispatcher } = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+
+    await expect(
+      dispatcher.dispatch("usage.get", { from: T0 - 2 * HOUR, to: T0 - 1 }, admin),
+    ).rejects.toMatchObject({
+      code: "HISTORY_NOT_KEPT",
+      details: { oldestTs: T0 },
+      message: `The history does not reach back to the end of that window; its figures start at ${new Date(T0).toISOString()}.`,
+    });
+    await expect(
+      dispatcher.dispatch("usage.get", { from: T0 - 2 * HOUR, to: T0 }, admin),
+    ).resolves.toMatchObject({ window: { to: T0 } });
+  });
+
+  it("the worker handler answers HISTORY_UNAVAILABLE with the message naming daemon.log while history.status().opened is false, after answering figures while it was true", async () => {
+    const { eventHistory, gate, rig } = await historyWithRows();
+    const { dispatcher } = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    const window = { from: T0, to: T0 + HOUR };
+
+    await expect(dispatcher.dispatch("usage.get", window, admin)).resolves.toMatchObject({
+      totals: { requests: 1 },
+    });
+    gate.open = false;
+    const before = threads.posts.length;
+
+    await expect(dispatcher.dispatch("usage.get", window, admin)).rejects.toMatchObject({
+      code: "HISTORY_UNAVAILABLE",
+      message: "The history could not be opened, so no figures can be read; see daemon.log.",
+    });
+    expect(threads.posts).toHaveLength(before);
+  });
+
+  it("the worker handler passes includeLedger to the reader: it lists the window's requests when true, leaves requests out when absent or false, and refuses a non-boolean as BAD_REQUEST", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const { dispatcher } = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    const window = { from: T0, to: T0 + HOUR };
+
+    const listed = await dispatcher.dispatch(
+      "usage.get",
+      { ...window, includeLedger: true },
+      admin,
+    );
+    const absent = await dispatcher.dispatch("usage.get", window, admin);
+    const off = await dispatcher.dispatch("usage.get", { ...window, includeLedger: false }, admin);
+
+    expect(listed.requests?.map((entry) => entry.requestId)).toEqual(["R1"]);
+    expect(absent).not.toHaveProperty("requests");
+    expect(off).not.toHaveProperty("requests");
+    await expect(
+      dispatcher.dispatch("usage.get", { ...window, includeLedger: "yes" } as never, admin),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("the worker handler answers one worker entry, itself, with its instance id and gateway.label, or no label when none is set", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const labelled = await buildDispatcher({
+      eventHistory,
+      gatewayLabel: "lab-a",
+      historyPath: rig.historyPath,
+    });
+    const plain = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    const window = { from: T0, to: T0 + HOUR };
+
+    const named = await labelled.dispatcher.dispatch("usage.get", window, admin);
+    const anonymous = await plain.dispatcher.dispatch("usage.get", window, admin);
+
+    expect(named.workers).toMatchObject([{ id: "instance-1", label: "lab-a", requests: 1 }]);
+    expect(anonymous.workers).toHaveLength(1);
+    expect(anonymous.workers[0]).toMatchObject({ id: "instance-1", requests: 1 });
+    expect(anonymous.workers[0]).not.toHaveProperty("label");
+  });
+
+  it("the worker handler labels a requester from the token store, and leaves the label out when the daemon has no token store", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const withStore = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    const withoutStore = await buildDispatcher({
+      eventHistory,
+      historyPath: rig.historyPath,
+      withoutTokens: true,
+    });
+    const { record } = await withStore.tokens.create("agent", "ci-bot");
+    rig.emit("lease.requested", requested("R2", { requester: record.id }));
+    const window = { from: T0, to: T0 + HOUR };
+
+    const labelled = await withStore.dispatcher.dispatch("usage.get", window, admin);
+    const unlabelled = await withoutStore.dispatcher.dispatch("usage.get", window, admin);
+
+    expect(labelled.requesters).toEqual([
+      { granted: 0, heldTotalMs: 0, id: "alice", rejected: 0, requests: 1 },
+      { granted: 0, heldTotalMs: 0, id: record.id, label: "ci-bot", rejected: 0, requests: 1 },
+    ]);
+    expect(unlabelled.requesters.map((entry) => entry.id)).toEqual(["alice", record.id]);
+    expect(unlabelled.requesters.every((entry) => !("label" in entry))).toBe(true);
+  });
+
+  it("usage.get runs two calls for one window as one read on the read thread and gives both its answer, and two windows as two reads", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const { dispatcher } = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    const call = (from: number, to = from + HOUR) =>
+      dispatcher.dispatch("usage.get", { from, to }, admin);
+    const readsOf = async (run: () => Promise<unknown>) => {
+      const before = threads.posts.length;
+      await run();
+      return threads.posts.length - before;
+    };
+    await call(T0);
+    const single = await readsOf(() => call(T0));
+
+    const [first, second] = await Promise.all([call(T0), call(T0)]);
+    const sameWindow = await readsOf(() => Promise.all([call(T0), call(T0)]));
+    const twoWindows = await readsOf(() => Promise.all([call(T0), call(T0 - HOUR)]));
+    const otherStart = await readsOf(() => Promise.all([call(T0), call(T0 - HOUR, T0 + HOUR)]));
+    const otherEnd = await readsOf(() => Promise.all([call(T0), call(T0, T0 + 2 * HOUR)]));
+
+    expect(single).toBeGreaterThan(0);
+    expect(sameWindow).toBe(single);
+    expect(twoWindows).toBe(2 * single);
+    expect(otherStart).toBe(2 * single);
+    expect(otherEnd).toBe(2 * single);
+    expect(first).toEqual(second);
+    expect(first.totals.requests).toBe(1);
+  });
+
+  it("dispose ends the read thread", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const { dispatcher } = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    await dispatcher.dispatch("usage.get", { from: T0, to: T0 + HOUR }, admin);
+    const thread = threads.workers.at(-1) as unknown as import("node:worker_threads").Worker;
+    let exited = false;
+    thread.on("exit", () => {
+      exited = true;
+    });
+
+    dispatcher.dispose();
+
+    await vi.waitFor(() => expect(exited).toBe(true));
+  });
+
+  it("usage.get answers INTERNAL to a call in flight when the read thread exits, and answers the next call from a new thread", async () => {
+    const { eventHistory, rig } = await historyWithRows();
+    const { dispatcher } = await buildDispatcher({ eventHistory, historyPath: rig.historyPath });
+    const window = { from: T0, to: T0 + HOUR };
+    await expect(dispatcher.dispatch("usage.get", window, admin)).resolves.toMatchObject({
+      totals: { requests: 1 },
+    });
+    const started = threads.workers.length;
+    threads.crashOnPost = true;
+
+    try {
+      await expect(dispatcher.dispatch("usage.get", window, admin)).rejects.toMatchObject({
+        code: "INTERNAL",
+      });
+    } finally {
+      threads.crashOnPost = false;
+    }
+
+    await expect(dispatcher.dispatch("usage.get", window, admin)).resolves.toMatchObject({
+      totals: { requests: 1 },
+    });
+    expect(threads.workers.length).toBe(started + 1);
   });
 });

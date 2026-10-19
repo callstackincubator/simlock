@@ -42,6 +42,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, doctor | [core](../../src/core/AGENTS.md) |
 | core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
 | core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
+| core/usage | Usage figures from the history rows, read on a thread | [usage](../../src/core/usage/AGENTS.md) |
 | drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) |
 | gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/AGENTS.md) · [routing](../../src/gateway/routing/AGENTS.md) |
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
@@ -52,7 +53,8 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | mcp | stdio MCP server for one agent session | [mcp](../../src/mcp/AGENTS.md) |
 | simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/AGENTS.md) · [client](../../src/client/AGENTS.md) · [admin](../../src/admin/AGENTS.md) |
 | lease-policy | Client-side renew timer | [lease-policy](../../src/lease-policy/AGENTS.md) |
-| bus | Post-commit business events and the event file | [bus](../../src/bus/AGENTS.md) |
+| bus | Post-commit business events and their in-memory ring | [bus](../../src/bus/AGENTS.md) |
+| history | The durable event history: `history.db`, prune, set-aside, projections (usage: request, minute and device fact rows) | [history](../../src/history/AGENTS.md) |
 | ports | Every external API behind an interface, with a fake | [ports](../../src/ports/AGENTS.md) |
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |

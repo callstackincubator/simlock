@@ -1,6 +1,6 @@
 ---
 name: calibrate-reviews
-description: Weekly routine — regenerate .agents/briefs/calibration.md, the findings reviews raised and the verification rejected in the last four weeks, which every reviewer reads before its diff, and land it as one docs-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "calibrate reviews".
+description: Weekly routine — regenerate .agents/briefs/calibration.md from the last four weeks of rejected review findings and land it as one docs-only PR. Use when a routine or the user says "calibrate reviews".
 model: sonnet
 effort: low
 ---
@@ -30,18 +30,13 @@ gh api -X POST repos/<owner>/<repo>/pulls -f title="chore(reviews): calibration 
   -f head="$(git branch --show-current)" -f base=main -F draft=true -F body=@<scratch>/pr.md -q .number
 ```
 
-The body: how many rejected findings the four weeks had and how many lines
-the brief lists per review, the `## Review` section exactly as the deliver
-skill's step 4 shapes it with `Spec review: skipped. Code review: skipped.`,
-and `*Written by an agent.*`.
+The body: how many rejected findings the four weeks had, how many lines the
+brief lists per review, and `*Written by an agent.*`.
 
 ## 2. Review and merge
 
-`reviewer` with the PR number, round 1: its kind is `docs-only`, so only the
-claims review runs. Fix each Fix line yourself, then `gh pr ready <M>` (in
-a cloud session it fails with a 403 naming the proxy's ready-for-review
-route: call that route) and `.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR open
-and report.
+As `toolchain.md` "Routines" says. The kind is `docs-only`, so only the
+claims review runs.
 
 ## Report
 

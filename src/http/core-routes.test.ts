@@ -41,7 +41,7 @@ describe("the routes createHttpApp registers", () => {
     expect(segments.filter((segment) => !CORE_ROUTE_SEGMENTS.includes(segment))).toEqual([]);
   });
 
-  it("CORE_ROUTE_SEGMENTS names the ten core first segments and uplink", () => {
+  it("CORE_ROUTE_SEGMENTS names the eleven core first segments and uplink", () => {
     expect([...CORE_ROUTE_SEGMENTS].sort()).toEqual(
       [
         "catalog",
@@ -51,6 +51,7 @@ describe("the routes createHttpApp registers", () => {
         "healthz",
         "lease-requests",
         "leases",
+        "stats",
         "status",
         "tokens",
         "uplink",

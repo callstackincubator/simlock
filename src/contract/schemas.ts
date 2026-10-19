@@ -121,6 +121,76 @@ const deviceSpecSchema = z.object({
   imageTag: imageTagSchema.optional(),
 });
 
+const QUARANTINE_MESSAGE_MAX = 300;
+
+export const quarantineCauseSchema = z
+  .object({
+    kind: z.enum(["purge-failed", "shutdown-failed", "delete-failed", "stalled"]),
+    stalledState: z.enum(["provisioning", "reclaiming"]).optional(),
+    message: z
+      .string()
+      .min(1)
+      .max(QUARANTINE_MESSAGE_MAX)
+      .refine((text) => !/[\p{Cc}\u2028\u2029]/u.test(text))
+      .optional(),
+  })
+  .refine((cause) =>
+    cause.kind === "stalled"
+      ? cause.stalledState !== undefined && cause.message === undefined
+      : cause.stalledState === undefined,
+  );
+
+/**
+ * The one place a failure's text becomes a quarantine cause's `message`: control characters to
+ * spaces, trimmed, and over the bound cut to end with `…` inside it. Empty gives no message.
+ */
+export function quarantineCauseMessage(text: string): string | undefined {
+  const cleaned = text.replace(CONTROL_CHARACTERS, " ").trim();
+  if (cleaned === "") return undefined;
+  if (cleaned.length <= QUARANTINE_MESSAGE_MAX) return cleaned;
+  let cut = cleaned.slice(0, QUARANTINE_MESSAGE_MAX - 1);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
+interface CauseCarrier {
+  readonly quarantineCause?: { readonly message?: string | undefined } | undefined;
+}
+
+function withoutMessage<T extends CauseCarrier>(device: T): T {
+  if (device.quarantineCause?.message === undefined) return device;
+  const { message: _message, ...kept } = device.quarantineCause;
+  return { ...device, quarantineCause: kept };
+}
+
+/**
+ * What an `agent` session may read of a `status.get` answer: every quarantine cause, in `devices`
+ * and in each `workers[].devices`, without its failure text. The one place the role rule lives.
+ */
+export function withoutQuarantineMessages<
+  S extends {
+    readonly devices?: readonly CauseCarrier[] | undefined;
+    readonly workers?:
+      | readonly { readonly devices?: readonly CauseCarrier[] | undefined }[]
+      | undefined;
+  },
+>(status: S): S {
+  return {
+    ...status,
+    ...(status.devices === undefined ? {} : { devices: status.devices.map(withoutMessage) }),
+    ...(status.workers === undefined
+      ? {}
+      : {
+          workers: status.workers.map((worker) =>
+            worker.devices === undefined
+              ? worker
+              : { ...worker, devices: worker.devices.map(withoutMessage) },
+          ),
+        }),
+  };
+}
+
 export const deviceRecordSchema = z
   .object({
     id: z.string(),
@@ -137,6 +207,7 @@ export const deviceRecordSchema = z
     quarantinedAt: z.number().optional(),
     quarantineAttempts: z.number().optional(),
     quarantineNextRetryAt: z.number().optional(),
+    quarantineCause: quarantineCauseSchema.optional(),
     address: z.string().optional(),
     absentReason: absentReasonSchema.optional(),
     physical: z.boolean(),
@@ -170,6 +241,7 @@ export const statusDeviceSchema = z
     foreignProvenanceDetectedAt: z.number().optional(),
     quarantineAttempts: z.number().optional(),
     quarantineNextRetryAt: z.number().optional(),
+    quarantineCause: quarantineCauseSchema.optional(),
     absentReason: absentReasonSchema.optional(),
     transitionAgeMs: z.number().optional(),
     stalled: z.boolean().optional(),
@@ -299,24 +371,90 @@ export const leaseRequestRecordSchema = z.object({
   failure: z.object({ code: z.string(), message: z.string() }).optional(),
 });
 
-/**
- * A request still waiting for a device (`list.get` with `requests`, `status.get`'s `waiting`).
- * `stage` is `queued` while the request holds a place in the queue, with that place in
- * `queuePosition`, counted from 1 the way `lease.queued` counts it; `starting` while the daemon is
- * working on it: placing it as it arrives, or finding, making, booting or downloading a device
- * for it. `workerId` names the worker whose own queue
- * the request waits in; only a gateway sets it. The request's idempotency key and owner are
- * never part of it: a key lets its holder replay the request, and neither is the operator's.
- */
-export const waitingRequestSchema = z.object({
+const waitingReasonSchema = z.enum([
+  "behind-earlier-request",
+  "device-limit",
+  "ram-budget",
+  "global-running-limit",
+  "platform-running-limit",
+  "waiting-for-device",
+  "no-free-physical",
+]);
+
+export const capacityReasonSchema = z.enum([
+  "device-limit",
+  "ram-budget",
+  "global-running-limit",
+  "platform-running-limit",
+]);
+
+const gatewayWaitingReasonSchema = z.enum([
+  "disconnected",
+  "incompatible",
+  "not-ready",
+  "unhealthy",
+  "drained",
+  "busy",
+  "no-driver",
+  "unknown-model",
+  "runtime-missing",
+  "capability-missing",
+  "full",
+  "no-free-physical",
+  "not-chosen",
+]);
+
+const waitingRequestShape = z.object({
   id: z.string(),
   requesterId: z.string(),
   spec: requestedDeviceSchema,
   createdAt: z.number(),
   stage: z.enum(["queued", "starting"]),
   queuePosition: z.number().int().positive().optional(),
+  reason: waitingReasonSchema.optional(),
   workerId: z.string().optional(),
+  workers: z
+    .array(
+      z.object({
+        workerId: z.string(),
+        reason: gatewayWaitingReasonSchema,
+        capacityReason: capacityReasonSchema.optional(),
+      }),
+    )
+    .optional(),
 });
+
+/**
+ * A request still waiting for a device (`list.get` with `requests`, `status.get`'s `waiting`).
+ * `stage` is `queued` while the request holds a place in the queue, with that place in
+ * `queuePosition`, counted from 1 the way `lease.queued` counts it; `starting` while the daemon is
+ * working on it: placing it as it arrives, or finding, making, booting or downloading a device
+ * for it. `reason` says why a `queued` request is not placed yet, from its latest attempt.
+ * `workerId` names the worker whose own queue the request waits in; only a gateway sets it. The request's idempotency key and owner are
+ * never part of it: a key lets its holder replay the request, and neither is the operator's.
+ */
+export const waitingRequestSchema = Object.assign(
+  waitingRequestShape
+    .refine((request) => request.reason === undefined || request.stage === "queued", {
+      message: "a starting request has no reason",
+      path: ["reason"],
+    })
+    .refine(
+      (request) =>
+        (request.workers ?? []).every(
+          (entry) => entry.capacityReason === undefined || entry.reason === "full",
+        ),
+      { message: "a capacity reason belongs to full", path: ["workers"] },
+    )
+    .refine(
+      (request) =>
+        new Set((request.workers ?? []).map((entry) => entry.workerId)).size ===
+        (request.workers ?? []).length,
+      { message: "a worker is listed once", path: ["workers"] },
+    ),
+  // why: the refinement hides the object's `shape`, which a reader of the field list still needs.
+  { shape: waitingRequestShape.shape },
+);
 
 /**
  * The scoped command `simlock simctl` / `simlock adb` runs on the caller's behalf. The command
@@ -772,6 +910,14 @@ export const nukeReportSchema = z.object({
 /** The largest magnitude, in ms, a JavaScript `Date` holds. */
 const MAX_DATE_MS = 8.64e15;
 
+export const historyStatusSchema = z.object({
+  opened: z.boolean(),
+  writing: z.boolean(),
+  setAsideAt: z.number().min(-MAX_DATE_MS).max(MAX_DATE_MS).optional(),
+  rebuiltAt: z.number().min(-MAX_DATE_MS).max(MAX_DATE_MS).optional(),
+  rebuildFailed: z.literal(true).optional(),
+});
+
 export const EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{1,64}$/;
 
 export const eventEnvelopeSchema = z.object({
@@ -896,11 +1042,11 @@ export const configSchema = z.object({
   // Optional: a newer gateway parses this from an older worker's `config.get`.
   eventLog: z
     .object({
-      rotateBytes: z.number(),
       retention: z.number().optional(),
       maxBytes: z.number().optional(),
     })
     .optional(),
+  metrics: z.object({ retention: z.number() }).optional(),
   http: z.object({
     enabled: z.boolean(),
     host: z.string(),
@@ -1162,3 +1308,131 @@ export const statusLeaseSchema = leaseRecordSchema.extend({
   /** Which worker holds this lease; absent on a worker's own answer, set by a gateway. */
   workerId: z.string().optional(),
 });
+
+const USAGE_MAX_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** `usage.get`'s input: wire input, so both ends are bounded before anything is read (safety rule 10). */
+export const usageWindowSchema = z
+  .object({
+    from: z.number().int().min(0).max(MAX_DATE_MS),
+    includeLedger: z.boolean().optional(),
+    to: z.number().int().min(0).max(MAX_DATE_MS),
+  })
+  .refine((window) => window.from < window.to, { message: "from must be before to" })
+  .refine((window) => window.to - window.from <= USAGE_MAX_WINDOW_MS, {
+    message: "the window must not be longer than 90 days",
+  });
+
+const usageSamplesSchema = z.object({
+  count: z.number().int().nonnegative(),
+  max: z.number().nullable(),
+  p50: z.number().nullable(),
+  p95: z.number().nullable(),
+});
+
+const usageCountsSchema = z.record(z.string(), z.number().int().nonnegative());
+
+const usageFiguresSchema = z.object({
+  bySource: z.object({
+    booted: z.number().int().nonnegative(),
+    provisioned: z.number().int().nonnegative(),
+    unknown: z.number().int().nonnegative().optional(),
+    warm: z.number().int().nonnegative(),
+  }),
+  boot: usageSamplesSchema,
+  declined: z.number().int().nonnegative(),
+  failures: z.object({ byEvent: usageCountsSchema }),
+  granted: z.number().int().nonnegative(),
+  held: usageSamplesSchema,
+  incidents: z.object({
+    crashRecovered: z.number().int().nonnegative(),
+    lost: z.number().int().nonnegative(),
+    quarantineRecovered: z.number().int().nonnegative(),
+    quarantined: z.number().int().nonnegative(),
+  }),
+  probes: z.number().int().nonnegative().optional(),
+  provisioning: usageSamplesSchema,
+  queue: z.object({ meanDepth: z.number().nullable(), peakDepth: z.number().nullable() }),
+  rejected: z.object({
+    byReason: usageCountsSchema,
+    total: z.number().int().nonnegative(),
+  }),
+  requests: z.number().int().nonnegative(),
+  turnaround: usageSamplesSchema,
+  utilisation: z.object({
+    ram: z
+      .object({
+        limitBytes: z.number(),
+        meanBytes: z.number(),
+        peakBytes: z.number(),
+      })
+      .optional(),
+    slots: z.object({
+      max: z.number().nullable(),
+      mean: z.number().nullable(),
+      peak: z.number().nullable(),
+    }),
+  }),
+  wait: usageSamplesSchema,
+});
+
+export const USAGE_LEDGER_MAX_ENTRIES = 100_000;
+
+const usageLedgerEntrySchema = z.object({
+  endReason: z.string().optional(),
+  endedAt: z.number().optional(),
+  grantedAt: z.number().optional(),
+  heldMs: z.number().optional(),
+  label: z.string().optional(),
+  model: z.string().optional(),
+  outcome: z.enum(["granted", "rejected", "declined", "open"]),
+  platform: z.string(),
+  probe: z.boolean(),
+  reason: z.string().optional(),
+  rejectedAt: z.number().optional(),
+  requestId: z.string(),
+  requestedAt: z.number(),
+  requester: z.string(),
+  source: z.string().optional(),
+  turnaroundMs: z.number().optional(),
+  waitMs: z.number().optional(),
+  workerId: z.string().optional(),
+});
+
+export type UsageLedgerEntry = z.infer<typeof usageLedgerEntrySchema>;
+
+export const usageOutputSchema = z.object({
+  bucketMs: z.number().int().positive(),
+  coversFrom: z.number(),
+  ledgerTruncated: z.literal(true).optional(),
+  requests: z.array(usageLedgerEntrySchema).optional(),
+  partial: z.boolean(),
+  platforms: z.object({ android: usageFiguresSchema, ios: usageFiguresSchema }),
+  requesters: z.array(
+    z.object({
+      granted: z.number().int().nonnegative(),
+      heldTotalMs: z.number().nonnegative(),
+      id: z.string(),
+      label: z.string().optional(),
+      rejected: z.number().int().nonnegative(),
+      requests: z.number().int().nonnegative(),
+    }),
+  ),
+  series: z.array(
+    z.object({
+      at: z.number(),
+      leasesHeld: z.number().nullable(),
+      queueDepth: z.number().nullable(),
+      ramUsedBytes: z.number().optional(),
+      slotsMax: z.number().nullable(),
+      slotsUsed: z.number().nullable(),
+      waiting: z.number().nullable(),
+    }),
+  ),
+  totals: usageFiguresSchema,
+  window: z.object({ from: z.number(), to: z.number() }),
+  workers: z.array(usageFiguresSchema.extend({ id: z.string(), label: z.string().optional() })),
+});
+
+export type UsageFigures = z.infer<typeof usageFiguresSchema>;
+export type UsageOutput = z.infer<typeof usageOutputSchema>;

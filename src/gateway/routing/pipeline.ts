@@ -13,10 +13,35 @@ export interface RoutableRequest {
   readonly requires?: readonly string[];
 }
 
+export type CapacityReason =
+  | "device-limit"
+  | "ram-budget"
+  | "global-running-limit"
+  | "platform-running-limit";
+
+export type WorkerReasonCode =
+  | "disconnected"
+  | "incompatible"
+  | "not-ready"
+  | "unhealthy"
+  | "drained"
+  | "busy"
+  | "no-driver"
+  | "unknown-model"
+  | "runtime-missing"
+  | "capability-missing"
+  | "full"
+  | "no-free-physical"
+  | "not-chosen";
+export interface WorkerReason {
+  readonly reason: WorkerReasonCode;
+  readonly capacityReason?: CapacityReason;
+}
+
 export interface FilterStage {
   readonly kind: "filter";
   readonly appliesToPhysical: boolean;
-  keeps(worker: WorkerView, request: RoutableRequest): boolean;
+  check(worker: WorkerView, request: RoutableRequest): WorkerReason | undefined;
 }
 
 export interface RankStage {
@@ -25,6 +50,7 @@ export interface RankStage {
   readonly appliesToPhysical: boolean;
   readonly settles: boolean;
   score(worker: WorkerView, request: RoutableRequest): number;
+  zeroReason?(worker: WorkerView, request: RoutableRequest): WorkerReason | undefined;
 }
 
 export type RoutingStage = FilterStage | RankStage;
@@ -53,7 +79,7 @@ export function runStages(
     // why: the one place a stage is skipped for a physical request.
     if (request.physical === true && !stage.appliesToPhysical) continue;
     if (stage.kind === "filter") {
-      remaining = remaining.filter((worker) => stage.keeps(worker, request));
+      remaining = remaining.filter((worker) => stage.check(worker, request) === undefined);
       continue;
     }
     const scored = remaining.map((worker) => ({ score: stage.score(worker, request), worker }));
@@ -69,4 +95,42 @@ export function runStages(
   const first = remaining[0];
   if (lastDecided === undefined || first === undefined) return undefined;
   return { stage: lastRemoved ?? lastDecided, workerId: first.id };
+}
+
+export interface Explanation {
+  readonly workerId: string;
+  readonly reason?: WorkerReason;
+}
+
+// why: reasons only, in ascending worker id; it picks no one, `runStages` does.
+export function explainStages(
+  stages: readonly RoutingStage[],
+  request: RoutableRequest,
+  workers: readonly WorkerView[],
+): readonly Explanation[] {
+  const applicable = stages.filter((stage) => request.physical !== true || stage.appliesToPhysical);
+  return [...workers]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((worker) => {
+      const reason = firstReason(applicable, worker, request);
+      return reason === undefined ? { workerId: worker.id } : { reason, workerId: worker.id };
+    });
+}
+
+function firstReason(
+  stages: readonly RoutingStage[],
+  worker: WorkerView,
+  request: RoutableRequest,
+): WorkerReason | undefined {
+  for (const stage of stages) {
+    if (stage.kind !== "filter") continue;
+    const reason = stage.check(worker, request);
+    if (reason !== undefined) return reason;
+  }
+  for (const stage of stages) {
+    if (stage.kind !== "rank" || stage.score(worker, request) !== 0) continue;
+    const reason = stage.zeroReason?.(worker, request);
+    if (reason !== undefined) return reason;
+  }
+  return undefined;
 }

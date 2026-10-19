@@ -42,6 +42,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.replay", input: {}, role: "admin" },
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   {
@@ -126,6 +127,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "events.replay", input: {}, effect: "read" },
   { name: "events.subscribe", input: {}, effect: "read" },
   { name: "events.unsubscribe", input: {}, effect: "read" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, effect: "read" },
   { name: "token.create", input: { role: "agent" }, effect: "write" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, effect: "read" },
   {
@@ -1590,5 +1592,36 @@ describe("relay.request on a byte channel", () => {
     expect(Object.keys(OPERATIONS)).not.toContain("relay.body");
     expect(Object.keys(PUSH_SCHEMAS)).not.toContain("relay-chunk");
     expect(Object.keys(PUSH_SCHEMAS)).toContain("relay-head");
+  });
+});
+
+describe("usage.get input", () => {
+  const parse = (input: unknown) => OPERATIONS["usage.get"].input.safeParse(input);
+  const issues = (input: unknown) => {
+    const result = parse(input);
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("takes epoch milliseconds with from before to, up to ninety days apart, and names the bound it refuses", () => {
+    expect(parse({ from: 0, to: 1 }).success).toBe(true);
+    expect(parse({ from: 1_000, to: 1_000 + 90 * DAY }).success).toBe(true);
+    expect(parse({ from: 1_000, to: 1_001 + 90 * DAY }).success).toBe(false);
+    expect(parse({ from: 5, to: 5 }).success).toBe(false);
+    expect(parse({ from: 6, to: 5 }).success).toBe(false);
+    expect(issues({ from: 6, to: 5 })).toEqual(["from must be before to"]);
+    expect(issues({ from: 0, to: 91 * DAY })).toEqual([
+      "the window must not be longer than 90 days",
+    ]);
+  });
+
+  it("refuses a bound that is not an integer, is negative, is above 8.64e15 or is a string, and takes the last date a Date holds", () => {
+    expect(parse({ from: 8.64e15 - 1, to: 8.64e15 }).success).toBe(true);
+    expect(parse({ from: 0.5, to: 10 }).success).toBe(false);
+    expect(parse({ from: 0, to: 10.5 }).success).toBe(false);
+    expect(parse({ from: -1, to: 10 }).success).toBe(false);
+    expect(parse({ from: 8.64e15, to: 8.64e15 + 2 }).success).toBe(false);
+    expect(parse({ from: "0", to: 10 }).success).toBe(false);
+    expect(parse({ from: 0 }).success).toBe(false);
   });
 });

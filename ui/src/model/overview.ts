@@ -2,7 +2,8 @@ import { eventSummary, eventTone } from "./activity";
 import { attentionItems, attentionTone } from "./attention";
 import type { ConsoleEvent } from "./events";
 import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
-import { extremes, leaseHistory, type MinuteCount, minuteLabel } from "./history";
+import type { FiguresState } from "./figures";
+import { minuteLabel } from "./history";
 import { formatBusyPercent, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { formatCount } from "./paging";
@@ -65,8 +66,7 @@ export interface OverviewActivity {
 
 export interface Overview {
   readonly tiles: readonly OverviewTile[];
-  readonly minutes: readonly MinuteCount[];
-  readonly chartSummary: string;
+  readonly figures: FiguresState;
   readonly platforms: readonly PlatformUse[];
   readonly workers: readonly OverviewWorker[];
   readonly attention: readonly OverviewItem[];
@@ -74,7 +74,6 @@ export interface Overview {
 }
 
 const ACTIVITY_ROWS = 8;
-const HOUR = 60 * 60 * 1_000;
 
 function percentOf(part: number, whole: number): number {
   return whole === 0 ? 0 : (part / whole) * 100;
@@ -130,26 +129,15 @@ function overviewWorker(worker: WorkerView): OverviewWorker {
   };
 }
 
-function historySummary(minutes: readonly MinuteCount[]): string {
-  const range = extremes(minutes);
-  const current = minutes.at(-1);
-  if (range === undefined || current === undefined) return "";
-  return `Now ${current.count}; highest ${range.highest.count} at ${range.highest.label}; lowest ${range.lowest.count} at ${range.lowest.label}.`;
-}
-
 function tiles(
   workers: readonly WorkerView[],
   requests: readonly WaitingRequest[],
-  events: readonly ConsoleEvent[],
   platforms: readonly PlatformUse[],
   now: number,
 ): readonly OverviewTile[] {
   const held = leasesHeld(workers);
   const limit = platforms.reduce((sum, platform) => sum + (platform.limit ?? 0), 0);
   const connected = workers.filter((worker) => worker.connection === "connected").length;
-  const granted = events.filter(
-    (event) => event.event === "lease.granted" && event.timestamp > now - HOUR,
-  ).length;
   const oldest = Math.min(...requests.map((request) => request.createdAt));
   const unknown = held === undefined;
   return [
@@ -176,7 +164,6 @@ function tiles(
       unit: `of ${formatCount(workers.length)} up`,
       value: formatCount(connected),
     },
-    { label: "Granted", to: "/events", unit: "last hour", value: formatCount(granted) },
   ];
 }
 
@@ -186,12 +173,11 @@ export function overviewOf(input: {
   readonly workers: readonly WorkerView[];
   readonly requests: readonly WaitingRequest[];
   readonly events: readonly ConsoleEvent[];
+  readonly figures?: FiguresState;
   readonly now: number;
 }): Overview {
-  const { events, now, requests, workers } = input;
+  const { events, figures = { kind: "loading" }, now, requests, workers } = input;
   const platforms = [platformUse(workers, "ios"), platformUse(workers, "android")];
-  const held = leasesHeld(workers);
-  const minutes = held === undefined ? [] : leaseHistory(held, events, now);
   return {
     activity: [...events]
       .sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
@@ -217,10 +203,12 @@ export function overviewOf(input: {
       tone: attentionTone(item.condition),
       word: item.condition,
     })),
-    chartSummary: historySummary(minutes),
-    minutes,
+    figures,
     platforms,
-    tiles: tiles(workers, requests, events, platforms, now),
+    tiles: [
+      ...tiles(workers, requests, platforms, now),
+      ...(figures.kind === "ready" ? [figures.data.granted, figures.data.wait] : []),
+    ],
     workers: workers.map(overviewWorker),
   };
 }

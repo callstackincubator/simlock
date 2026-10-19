@@ -111,7 +111,14 @@ export class ReclaimCoordinator {
       result = await driver.reclaim(toDriverDevice(device), { clean: "standard" });
     } catch (error: unknown) {
       if (device.physical && (await this.#absentAfterFailure(device, error))) return;
-      await this.#recoverPurgeFailure(device.id, leaseId, startedAt, attemptedStrategy, error);
+      await this.#recoverPurgeFailure(
+        device.id,
+        leaseId,
+        startedAt,
+        attemptedStrategy,
+        "purge-failed",
+        error,
+      );
       return;
     }
 
@@ -268,6 +275,7 @@ export class ReclaimCoordinator {
         released.lease.id,
         startedAt,
         "delete",
+        "shutdown-failed",
         error,
       );
       return;
@@ -286,6 +294,7 @@ export class ReclaimCoordinator {
         released.lease.id,
         startedAt,
         "delete",
+        "delete-failed",
         error,
       );
     }
@@ -324,6 +333,7 @@ export class ReclaimCoordinator {
     leaseId: string | undefined,
     startedAt: number,
     attemptedStrategy: QuarantinePurgeFailure["attemptedStrategy"],
+    kind: QuarantinePurgeFailure["kind"],
     error: unknown,
   ): Promise<void> {
     await this.options.quarantine.enter({
@@ -331,6 +341,7 @@ export class ReclaimCoordinator {
       deviceId,
       duration: this.options.clock.now() - startedAt,
       error: stableError(error),
+      kind,
       leaseId,
     });
   }

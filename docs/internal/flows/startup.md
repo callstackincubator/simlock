@@ -8,7 +8,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 1. `loadConfig` reads `config.json`; its warnings are logged once the logger exists.
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
-4. `EventBus` → `EventHistory` opens `events.jsonl`.
+4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
 5. `config.mode: gateway` → the gateway section. Otherwise go on.
 
 ## Worker: build (before the claim)
@@ -36,7 +36,9 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 13. `admin.token` written (0600, atomic).
 14. Converge starts. Health `starting`. From here `hello` and `status.get` answer;
     every other request parks.
-15. `onSocketClaimed`, nothing awaited: agent-device starts; the uplink dials once
+15. `onSocketClaimed`, nothing awaited: the event history starts (opens `history.db`, sets a
+    damaged one aside, migrates the projections, writes the ring, prunes, rebuilds a projection whose
+    check failed; a newer stored version or a failed migration stops the daemon, exit 1); agent-device starts; the uplink dials once
     the first host load reading is in; HTTP starts when `http.enabled`.
 
 Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop
@@ -94,7 +96,7 @@ platform runs the deferred reclaim (step 21.2).
    `GatewayService` (`workers.json`), `FleetLeaseCoordinator`, `DaemonServer`
    with `GatewayDispatcher`. No registry, drivers, reaper or health monitor.
 3. `DaemonServer.start`: claim → host load → `admin.token` → converge starts →
-   HTTP starts (uplink listener on the same server).
+   the event history starts → HTTP starts (uplink listener on the same server).
 4. Converge — `GatewayService.start`, then `FleetLeaseCoordinator.start`. A worker
    that dials before it ends is refused and redials.
 5. `daemon.started`. The gateway's dispatcher never parks a request.
@@ -113,11 +115,12 @@ platform runs the deferred reclaim (step 21.2).
 5. Settle — later converge steps are skipped; leasing drains the physical
    watcher and background reclaims; core drains the warm pool.
 6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
-   stop, every driver's `dispose` (all tried; failures logged).
+   stop, every driver's `dispose` (all tried; failures logged), then the event history stops
+   (cancels its prune timer, closes `history.db`), so the stop's own events are written.
 7. Close connections, remove `admin.token`, release the socket (released even when the removal fails).
 
 A gateway's stop: agent-device edge and HTTP, then `FleetLeaseCoordinator` and
-`GatewayService` are disposed.
+`GatewayService` are disposed, then the event history stops.
 
 A stop releases nothing. Leases stay in `state.json` with their deadlines; the
 next start re-arms or ends them (steps 19–20).

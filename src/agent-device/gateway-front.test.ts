@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeDriver } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
+import { readHistoryEvents } from "../history/testing.js";
 import type { DaemonServer } from "../daemon/server.js";
 import type { WebSocketUplinkListenerFactory } from "../ports/uplink-websocket.js";
 import type { GatewayRelay } from "../gateway/index.js";
@@ -1252,10 +1253,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     expect(renewedBefore).toBeGreaterThan(0);
     expect(tap.operations.length).toBe(afterStop);
-    const lines = (await readFile(join(rig.directory, "events.jsonl"), "utf8"))
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as { event?: string; payload?: Record<string, unknown> });
+    const lines = (await readHistoryEvents(rig.directory)) as Array<{
+      event?: string;
+      payload?: Record<string, unknown>;
+    }>;
     expect(
       lines.filter(
         (entry) =>
