@@ -119,16 +119,85 @@ If the console does not accept the token, it says why:
 | The daemon cannot be reached. | Nothing answers at this address. |
 | The daemon answered with an error (HTTP *n*). | Anything else; the daemon's log says more. |
 
+## Behind a sign-in proxy
+
+When a sign-in proxy stands in front of Simlock, the console opens with no
+token form. It asks the daemon who you are (`GET /v1/identity`), and if the
+proxy signed you in, it opens at once and the sidebar reads **Signed in as**
+and your name. Until the answer comes the page says **Signing in…**.
+
+What you configure is in `http.proxyAuth` (see CONFIGURATION.md): the header
+that carries the proxy's JWT, where the proxy publishes its keys, the issuer
+and the audience. Set `signOutUrl` to the proxy's sign-out page. The proxy
+must let `/v1/uplink` and `/v1/healthz` through without signing in.
+
+Cloudflare Access:
+
+```json
+{
+  "http": {
+    "proxyAuth": {
+      "header": "cf-access-jwt-assertion",
+      "jwksUrl": "https://TEAM.cloudflareaccess.com/cdn-cgi/access/certs",
+      "issuer": "https://TEAM.cloudflareaccess.com",
+      "audience": "APPLICATION-AUD-TAG",
+      "signOutUrl": "https://TEAM.cloudflareaccess.com/cdn-cgi/access/logout"
+    }
+  }
+}
+```
+
+oauth2-proxy, with its alpha config injecting the session's ID token into a
+header of your choosing (`claimSource: { claim: id_token }`), so that an
+operator token pasted into the console still reaches Simlock in
+`Authorization`:
+
+```json
+{
+  "http": {
+    "proxyAuth": {
+      "header": "x-id-token",
+      "jwksUrl": "https://ISSUER/.well-known/jwks.json",
+      "issuer": "https://ISSUER",
+      "audience": "OAUTH2-PROXY-CLIENT-ID",
+      "signOutUrl": "https://CONSOLE-HOST/oauth2/sign_out"
+    }
+  }
+}
+```
+
+If the daemon refuses the proxy's identity, the token form says why: "Your
+sign-in proxy's identity was refused: *reason*. You can still sign in with an
+operator token." The reasons are that it has expired, is not valid yet (check
+this machine's clock), comes from a different sign-in service or was made for
+a different application than the daemon expects, has a signature that does
+not check out, is signed in a way the daemon does not accept, is not a valid
+sign-in token, or that the daemon cannot reach the sign-in service's keys.
+
+Pasting an operator token behind the proxy works as without it, and the
+sidebar then reads the token's label.
+
 ## Staying signed in
 
-The console keeps the token in this browser tab only.
+The console keeps a token in this browser tab only. A person signed in
+through a proxy is not kept by the console at all: every page load asks the
+daemon again.
 
 - **Reload** the page and you stay signed in.
 - **Open a new tab** and it asks for a token again.
 - **Close the tab** and you are signed out.
-- **Sign out** forgets the token at once.
+- **Sign out** forgets the token at once. Behind a sign-in proxy, a token's
+  Sign out brings back the proxy's sign-in; a person the proxy signed in goes
+  to the proxy's sign-out page (`signOutUrl`), and with none set there is no
+  Sign out button.
+- If the proxy's own session ends, the page reloads so the proxy can show its
+  login page. If that happens again within a minute, the console says **Your
+  sign-in has ended.** with a **Sign in again** button instead of reloading.
+- If the proxy's identity is refused while you are signed in through it, the
+  console shows the token form with the reason.
 - If the token is **revoked**, the console signs you out the next time it asks
-  the daemon for anything, and at the latest when you reload.
+  the daemon for anything, and at the latest when you reload. Behind a
+  sign-in proxy it then signs you in as the proxy's person, if there is one.
 
 Some browsers copy a tab's storage into a duplicated or reopened tab, so such a
 tab may still be signed in.
