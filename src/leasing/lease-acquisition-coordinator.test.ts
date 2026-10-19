@@ -1300,6 +1300,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       leaseRequesters: harness.registry.snapshot.leases.map((lease) => lease.requesterId),
       outcome: outcome.state,
       queueDepth: harness.coordinator.queueDepth,
+      queuedReasons: harness.queue.places().map((place) => place.reason),
       storedRequestStates: harness.registry
         .leaseRequests()
         .map((record) => [record.requesterId, record.state]),
@@ -1308,6 +1309,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       leaseRequesters: [],
       outcome: "pending",
       queueDepth: 1,
+      queuedReasons: ["waiting-for-device"],
       storedRequestStates: [["retrying", "open"]],
     });
 
@@ -1366,6 +1368,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         leaseRequesters: harness.registry.snapshot.leases.map((lease) => lease.requesterId),
         outcome: outcome.state,
         queueDepth: harness.coordinator.queueDepth,
+        queuedReasons: harness.queue.places().map((place) => place.reason),
         storedRequestStates: harness.registry
           .leaseRequests()
           .map((record) => [record.requesterId, record.state]),
@@ -1374,6 +1377,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         leaseRequesters: [],
         outcome: "pending",
         queueDepth: 1,
+        queuedReasons: ["waiting-for-device"],
         storedRequestStates: [["orphaned", "open"]],
       });
 
