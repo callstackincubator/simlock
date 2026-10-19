@@ -1,0 +1,169 @@
+{
+  "pr": 733,
+  "invocations": [
+    {
+      "id": "code-r1",
+      "role": "code",
+      "provider": "claudeAgent",
+      "model": "claude-opus-5-5",
+      "commit": "107b31a2508083608106641f219808a36dfef39c",
+      "round": "1",
+      "startedAt": "2026-10-19T14:14:12.288Z",
+      "finishedAt": "2026-10-19T14:19:12.538Z",
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "spec-r1",
+      "role": "spec",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "commit": "107b31a2508083608106641f219808a36dfef39c",
+      "round": "1",
+      "startedAt": "2026-10-19T14:14:13.291Z",
+      "finishedAt": "2026-10-19T14:16:15.800Z",
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "claims-r1",
+      "role": "claims",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "commit": "107b31a2508083608106641f219808a36dfef39c",
+      "round": "1",
+      "startedAt": "2026-10-19T14:16:26.575Z",
+      "finishedAt": "2026-10-19T14:18:31.088Z",
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "fix-r1",
+      "role": "fix",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "commit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "round": "1",
+      "startedAt": "2026-10-19T14:21:52.271Z",
+      "finishedAt": "2026-10-19T14:25:03.289Z",
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": 191.018
+    },
+    {
+      "id": "code-r2",
+      "role": "code",
+      "provider": "claudeAgent",
+      "model": "claude-opus-5-5",
+      "commit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "round": "2",
+      "startedAt": "2026-10-19T14:25:31.625Z",
+      "finishedAt": "2026-10-19T14:26:55.506Z",
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "claims-r2",
+      "role": "claims",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "commit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "round": "2",
+      "startedAt": "2026-10-19T14:27:14.782Z",
+      "finishedAt": "2026-10-19T14:28:12.560Z",
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "coord-r1",
+      "role": "coordination",
+      "provider": "codex",
+      "model": "gpt-6-luna",
+      "commit": "107b31a2508083608106641f219808a36dfef39c",
+      "round": "1",
+      "startedAt": null,
+      "finishedAt": null,
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "coord-r2",
+      "role": "coordination",
+      "provider": "codex",
+      "model": "gpt-6-luna",
+      "commit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "round": "2",
+      "startedAt": null,
+      "finishedAt": null,
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    },
+    {
+      "id": "coord-fix-check",
+      "role": "coordination",
+      "provider": "codex",
+      "model": "gpt-6-luna",
+      "commit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "round": "fix-check",
+      "startedAt": null,
+      "finishedAt": null,
+      "tokens": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "costUsd": null,
+      "fixSeconds": null
+    }
+  ],
+  "findings": [
+    {
+      "id": "R1",
+      "roles": ["code"],
+      "severity": "blocking",
+      "impact": ["test-logic"],
+      "outcome": "fixed",
+      "evidence": "src/drivers/android/index.test.ts:1587 title claimed AVD path participation, but its body passed against merge-base code without a path query.",
+      "reason": "The title now states only the running/stopped/process observations the body asserts. Round 2 confirmed the correction and no semantic test change.",
+      "fixCommit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "verificationCommit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c"
+    },
+    {
+      "id": "R2",
+      "roles": ["claims", "code"],
+      "severity": "blocking",
+      "impact": ["claims"],
+      "outcome": "fixed",
+      "evidence": "src/drivers/android/AGENTS.md:79 and index.test.ts:3670 claimed marks require path proof although durable marks are reported independently.",
+      "reason": "The manual and table title now distinguish durable marks from path-gated erasable marks. Round 2 claims and code checks confirmed both.",
+      "fixCommit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c",
+      "verificationCommit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c"
+    },
+    {
+      "id": "R3",
+      "roles": ["code"],
+      "severity": "note",
+      "impact": ["behavior"],
+      "outcome": "intentional",
+      "evidence": "A failed or timed-out AVD path query can report transitioning and startup may reclaim that lease.",
+      "reason": "ADR 0019 section 2 accepts lease loss during an adb attribution hiccup; runtime health ignores transitioning observations. The behavior is unchanged by the title/manual correction.",
+      "fixCommit": null,
+      "verificationCommit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c"
+    },
+    {
+      "id": "R4",
+      "roles": ["code"],
+      "severity": "nit",
+      "impact": ["mechanical"],
+      "outcome": "nonblocking",
+      "evidence": "src/drivers/android/AGENTS.md:79 is a long line compared with nearby lines.",
+      "reason": "Style-only; no correctness or claims impact, left unchanged.",
+      "fixCommit": null,
+      "verificationCommit": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c"
+    }
+  ],
+  "escapedDefects": null
+}
