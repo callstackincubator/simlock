@@ -115,7 +115,7 @@ the start (fails closed), on a gateway and on a worker alike, as
 |---|---|
 | `name` | `^[a-z][a-z0-9-]{0,31}$`, unique in the list |
 | `format` | `slack` or `generic` |
-| `url` | absolute; `https:`, or `http:` only when the host is `localhost`, `127.0.0.1` or `[::1]` |
+| `url` | absolute; no user name or password; `https:`, or `http:` only when the host is `localhost`, `127.0.0.1` or `[::1]` |
 | `events` | not empty, no repeats, each one of the eleven below |
 | `secret` | required and not empty for `generic`; refused for `slack` |
 | the list | at most 16 destinations; default `[]` |
@@ -164,7 +164,10 @@ sequenceDiagram
   waits for nothing.
 
 Every message ends in one named way, each a log line on the `alerts`
-child logger that names the destination, never its URL:
+child logger that names the destination, never its URL. A failed try is
+logged by a code (`timeout`, `build-failed`, a network code such as
+`ECONNREFUSED`, or `network-error`), never by an error's message, which can
+hold the URL:
 
 | End | Log |
 |---|---|
@@ -195,8 +198,9 @@ the existing event contract, so it changes only additively (events rule
 The receiver checks the signature over the bytes it received, and can
 drop a repeat by `X-Simlock-Delivery`.
 
-**`slack`.** The body is `{"text": "<message>"}`, which Slack, Mattermost,
-Google Chat and Discord's `/slack` endpoint accept. Each of the eleven
+**`slack`.** The body is `{"text": "<message>"}`, Slack's incoming-webhook
+body. Slack is the promised receiver; other services that take the same body
+may work. Each of the eleven
 events has one written message, held in a table typed over the event list,
 so a missing message fails the type check. A message names the worker by
 `workerLabel`. Its words are part of #707's spec, not of this ADR.
