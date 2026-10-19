@@ -100,16 +100,22 @@ the CLI and `simlock mcp` choose:
 flowchart TD
   A["simlock &lt;command&gt;"] --> B{--gateway?}
   B -- yes --> G[gateway folder]
-  B -- no --> C{"gateway folder has config.json<br/>and ~/.simlock has no worker data?"}
+  B -- no --> C{"gateway/config.json exists<br/>and ~/.simlock/instance.json does not?"}
   C -- yes --> G
   C -- no --> W["~/.simlock worker<br/>(auto-start as today)"]
-  W --> D{"a command only a gateway answers,<br/>and a gateway folder exists?"}
-  D -- yes --> E["error: add --gateway"]
+  W --> D{"worker replies UNSUPPORTED_IN_WORKER_MODE<br/>and gateway/config.json exists?"}
+  D -- yes --> E["same error, plus: add --gateway"]
 ```
 
 - A machine with one daemon never needs the flag.
+- "The root holds a worker" means `~/.simlock/instance.json` exists. A worker
+  writes it on its first start, before anything else. `config set` alone
+  never writes it, so a stray plain `config set` on a gateway-only machine
+  does not turn it into a worker machine.
 - With both, a plain command reaches the worker. A command only a gateway
-  answers fails before it connects, with a hint to add `--gateway`.
+  answers gets the worker's own `UNSUPPORTED_IN_WORKER_MODE` refusal, and
+  the CLI adds a hint to use `--gateway`. The CLI keeps no list of
+  gateway-only commands: the worker's reply is the list.
 - Auto-start follows the same choice. On a gateway-only machine a plain
   command starts the gateway, never an empty worker.
 
