@@ -85,11 +85,12 @@ one of four ways:
 | `rejected` | Its credential is present and bad. Carries a reason. | Stop; `401`. |
 
 A present but bad credential is never `not-mine`, so a broken credential
-never falls through to a weaker one. When every strategy says `not-mine`,
-the answer is `401`, with today's messages: "Missing bearer token" when no
-`Authorization` header was sent, else "Unknown bearer token".
+never falls through to a weaker one. When every strategy says `not-mine`, the answer is `401` with today's
+messages: "Missing bearer token" when the request has no `Bearer <value>`
+credential, else "Unknown bearer token". A refusal's message and details come
+from the strategy that refused, never from the host.
 
-`Identity` is `{ principal, name, role, via, expiresAt?, ambient }`. `role`
+`Identity` is `{ principal, name, role, via, expiresAt?, ambient, signOutUrl? }`. `role`
 is `operator` or `agent`, the HTTP roles a token has today.
 `ambient` is true when a browser attaches the credential by itself (a
 cookie the proxy turns into a JWT). It drives §5 without the HTTP module
@@ -125,7 +126,9 @@ The check, with the `jose` library:
   fetched through a port (`fetch` behind an interface with a fake) into a
   cache of Simlock's own on the `Clock` port, with jose's default values:
   5 s timeout, a refetch for an unknown key at most every 30 s, keys kept
-  10 minutes. jose verifies against the cached set.
+  10 minutes. Past 10 minutes with the key URL down, keys are dropped and
+  every proxy JWT is refused until a fetch succeeds. jose verifies against
+  the cached set.
 - Claims: `iss` equals `issuer`, `aud` contains `audience`, `exp` is
   present, and `exp` and `nbf` hold with 60 s of clock difference allowed.
 - A person: a non-empty `sub` (at most 120 characters) and a non-empty
@@ -209,6 +212,12 @@ open stream.
   sidebar. `401` with a proxy reason: the token form, with a line saying the
   proxy's identity was refused and why. `401` without one: the token form as
   today.
+- When the proxy's own session ends, its answers stop being Simlock's (a
+  redirect `fetch` cannot follow, or the proxy's HTML page). The console then
+  asks `GET /v1/identity`; if that is not Simlock's answer either while
+  `/v1/healthz` (let around the proxy) answers, it reloads the page so the
+  proxy shows its login, at most once a minute; within the minute it shows
+  "Your sign-in has ended" with **Sign in again**.
 - Sign out goes to `signOutUrl` for a proxy identity, and is hidden when
   there is none. For a token it forgets the token, as today.
 
