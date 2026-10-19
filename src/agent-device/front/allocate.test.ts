@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { tokenIdentity } from "../../auth/testing.js";
 import type { HttpDispatch } from "../../http/dispatcher-session.js";
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { FakeClock, NoopLogger } from "../../ports/index.js";
 import { allocate } from "./allocate.js";
 import type { FrontContext } from "./context.js";
 import { FrontMap } from "./front-map.js";
 
-const agent: TokenIdentity = { requesterId: "tok_a", role: "agent" };
+const agent: Identity = tokenIdentity("tok_a");
 const leaseId = "00000000000000000000000000000001";
 
 interface AdmitSession {

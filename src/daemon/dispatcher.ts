@@ -67,7 +67,7 @@ import {
   workerViewFields,
   withoutQuarantineMessages,
 } from "../contract/index.js";
-import type { TokenStore } from "../http/token-store.js";
+import type { TokenOperations } from "../auth/index.js";
 import {
   DispatchError,
   runDispatch,
@@ -182,7 +182,7 @@ export interface DispatcherOptions {
    * majority) don't need to fabricate one -- `#tokenCreate`/`#tokenList`/`#tokenRevoke` throw a
    * clear `DispatchError` when it is missing rather than crashing on `undefined.create(...)`.
    */
-  readonly tokens?: TokenStore;
+  readonly tokens?: TokenOperations;
   /** Reports current daemon health for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
   /** `status.get`'s host block, from memory: answering never waits for a read (ADR 0008 §7). */
@@ -1011,7 +1011,7 @@ export class Dispatcher {
     revoked: await this.#requireTokens().revoke(input.id),
   });
 
-  #requireTokens(): TokenStore {
+  #requireTokens(): TokenOperations {
     if (this.options.tokens === undefined) {
       throw new DispatchError("INTERNAL", "Token store is unavailable");
     }

@@ -76,7 +76,7 @@ export type ModuleDispatch = <Op extends OperationName>(
 ) => Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>>;
 
 export interface ModuleIdentity {
-  readonly requesterId: string;
+  readonly principal: string;
   readonly role: "agent" | "operator" | "worker";
 }
 

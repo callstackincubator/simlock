@@ -28,3 +28,7 @@ export function fakeAuth(identities: ReadonlyMap<string, Identity>): Auth {
     adminSecret: { persist: unused, remove: unused },
   };
 }
+
+export function tokenIdentity(principal: string, role: Identity["role"] = "agent"): Identity {
+  return { principal, name: principal, role, via: "token", ambient: false };
+}

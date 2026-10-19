@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,11 +24,9 @@ import {
   type IdGenerator,
 } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
-import { TokenStore } from "../http/token-store.js";
+import { type Auth, createAuth } from "../auth/index.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
-import { AdminSecretManager } from "../daemon/admin-secret.js";
-import { createCredentialRoleResolver } from "../daemon/session.js";
 import {
   fromWireError,
   SimlockError,
@@ -6461,11 +6459,13 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     filesystem,
     registry,
   });
-  const tokens = new TokenStore({
+  const auth = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
     secrets: new CryptoTokenSecrets(),
   });
   const daemon = new DaemonServer({
@@ -6492,7 +6492,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     reaper,
     registry,
     resolveRole: { resolve: () => "admin" },
-    tokens,
+    tokens: auth.tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
@@ -6522,7 +6522,7 @@ function realCliEnvironmentPorts(
 /**
  * why: A real `DaemonServer` wired against in-memory ports (`MemoryFilesystem` + `MemoryIpcTransport`
  * shared with the CLI environment under test), with the genuine credential handshake
- * (`AdminSecretManager` + `createCredentialRoleResolver`) instead of `startTestDaemon`'s
+ * (`createAuth`) instead of `startTestDaemon`'s
  * `resolveRole: { resolve: () => "admin" }` shortcut -- B1 and B2 both hinge on that handshake
  * actually running.
  */
@@ -6531,7 +6531,7 @@ async function startInMemoryDaemon(options: {
   readonly ipcTransport: MemoryIpcTransport;
   readonly socketPath: string;
   readonly adminTokenPath: string;
-}): Promise<{ daemon: DaemonServer; adminSecret: AdminSecretManager }> {
+}): Promise<{ daemon: DaemonServer; adminSecret: Auth["adminSecret"] }> {
   const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -6571,24 +6571,17 @@ async function startInMemoryDaemon(options: {
     filesystem,
     registry,
   });
-  const tokens = new TokenStore({
+  const auth = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: dirname(adminTokenPath),
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
     secrets: new CryptoTokenSecrets(),
-  });
-  const adminSecret = new AdminSecretManager({
-    filesystem,
-    secrets: new CryptoTokenSecrets(),
-    path: adminTokenPath,
-  });
-  const resolveRole = createCredentialRoleResolver({
-    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
-    verifyAdminSecret: (secret) => adminSecret.verify(secret),
   });
   const daemon = new DaemonServer({
-    adminSecret,
+    adminSecret: auth.adminSecret,
     capacity: engine,
     warmPool: engine,
     deviceModes: engine,
@@ -6611,13 +6604,13 @@ async function startInMemoryDaemon(options: {
     queue: engine,
     reaper,
     registry,
-    resolveRole,
-    tokens,
+    resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
+    tokens: auth.tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
   await daemon.start();
-  return { daemon, adminSecret };
+  return { daemon, adminSecret: auth.adminSecret };
 }
 
 function testConfig(): Config {

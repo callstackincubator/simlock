@@ -106,7 +106,7 @@ describe("TokenStore", () => {
     expect(persisted).toHaveLength(2);
     expect(persisted).toEqual(expect.arrayContaining(created.map(({ record }) => record)));
     await expect(Promise.all(created.map(({ secret }) => store.verify(secret)))).resolves.toEqual(
-      created.map(({ record }) => ({ requesterId: record.id, role: record.role })),
+      created.map(({ record }) => record),
     );
   });
 
@@ -125,10 +125,7 @@ describe("TokenStore", () => {
       expect(revoked).toBe(true);
       expect(JSON.parse(await filesystem.readFile(tokensPath))).toEqual([created.record]);
       await expect(store.verify(existing.secret)).resolves.toBeUndefined();
-      await expect(store.verify(created.secret)).resolves.toEqual({
-        requesterId: created.record.id,
-        role: "operator",
-      });
+      await expect(store.verify(created.secret)).resolves.toEqual(created.record);
     },
   );
 
@@ -165,10 +162,7 @@ describe("TokenStore", () => {
         existing.record,
         created.record,
       ]);
-      await expect(store.verify(created.secret)).resolves.toEqual({
-        requesterId: created.record.id,
-        role: "operator",
-      });
+      await expect(store.verify(created.secret)).resolves.toEqual(created.record);
     },
   );
 
@@ -176,10 +170,7 @@ describe("TokenStore", () => {
     const { store } = tokenStore();
     const { record, secret } = await store.create("operator", "root");
 
-    await expect(store.verify(secret)).resolves.toEqual({
-      requesterId: record.id,
-      role: "operator",
-    });
+    await expect(store.verify(secret)).resolves.toEqual(record);
     await expect(store.verify("slk_not-a-real-secret")).resolves.toBeUndefined();
   });
 
@@ -192,8 +183,8 @@ describe("TokenStore", () => {
     await expect(reader.verify("slk_fake-secret-1")).resolves.toBeUndefined();
     const { secret } = await writer.create("agent");
 
-    await expect(reader.verify(secret)).resolves.toEqual({
-      requesterId: "tok_writer-id",
+    await expect(reader.verify(secret)).resolves.toMatchObject({
+      id: "tok_writer-id",
       role: "agent",
     });
   });

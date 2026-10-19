@@ -48,7 +48,7 @@ import {
 import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";
-import { AdminAuthenticationFailedError } from "./session.js";
+import { AdminAuthenticationFailedError } from "../auth/index.js";
 
 /**
  * Thrown to a request parked on startup readiness (ADR §2 step 4's `awaitReady`) when

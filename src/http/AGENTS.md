@@ -2,7 +2,7 @@
 
 Does: the network API — `/v1` routes, bearer token → session, SSE, lease-request resources, console files.
 Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway`
-(`server.ts`) and `TokenStore` (`token-store.ts`).
+(`server.ts`).
 Uses: contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
 bus, core (types), ports. Never imports: drivers, gateway.
 Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.md).
@@ -12,14 +12,13 @@ Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.
 | File                    | Role                                                             |
 | ----------------------- | ---------------------------------------------------------------- |
 | `app.ts`                | Every `/v1` route, error boundary, request log line              |
-| `auth.ts`               | `requireAuth`: bearer token → `TokenIdentity`                    |
+| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403       |
 | `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession` |
 | `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources               |
 | `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls        |
 | `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response        |
 | `sse.ts`                | `pipeSse`: ordered writes, keepalive                             |
 | `errors.ts`             | `HttpApiError`, `mapError`: error → status and body              |
-| `token-store.ts`        | `TokenStore`: hashed tokens in `tokens.json`                     |
 | `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`     |
 | `test-fakes.ts`         | Fakes for this module's tests                                    |
 
@@ -90,8 +89,8 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
   convergence. Early requests park in the dispatcher. On a gateway the worker uplink
   upgrades on the same listener (`onServerCreated`).
 - `tokens.json` (data directory): `{ id: "tok_…", hash, role, label?, createdAt }`, written
-  atomically, mode `0600`. The dispatcher's `token.*` handlers write it through the same `TokenStore`.
-  `verify` reads the file on every call. The secret is shown once, by `token.create`.
+  atomically, mode `0600`. `src/auth` owns it: the dispatcher's `token.*` handlers write it through `Auth.tokens`,
+  and every verify re-reads the file. The secret is shown once, by `token.create`.
 - `LeaseNoticeBuffer` is memory only. `HttpGateway.stop` closes the server and destroys
   every open socket.
 

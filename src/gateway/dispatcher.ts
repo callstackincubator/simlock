@@ -32,6 +32,7 @@
  * the message say why. The table is typed total over the contract minus `daemon.stop`, so a
  * newly declared operation is a compile error here until someone decides where it belongs.
  */
+import type { TokenOperations } from "../auth/index.js";
 import type { z } from "zod";
 
 import { createUsageReader, type UsageReader } from "../core/index.js";
@@ -41,7 +42,6 @@ import {
   OPERATIONS,
   requestedDevice,
   type OperationName,
-  type tokenRecordSchema,
   withoutQuarantineMessages,
 } from "../contract/index.js";
 import {
@@ -65,8 +65,6 @@ type Handler<Op extends OperationName> = (
   session: DispatchSession,
 ) => Promise<unknown> | unknown;
 
-type TokenRecord = z.infer<typeof tokenRecordSchema>;
-
 type DeepReadonly<Value> = Value extends (infer Item)[]
   ? readonly DeepReadonly<Item>[]
   : Value extends object
@@ -82,20 +80,6 @@ type DeepReadonly<Value> = Value extends (infer Item)[]
  */
 export type GatewayConfig = DeepReadonly<z.infer<(typeof OPERATIONS)["config.get"]["output"]>>;
 
-/**
- * The token store, structurally. Narrower than importing `TokenStore` itself (which lives under
- * `src/http` for historical reasons): the gateway needs three methods, and depending on the
- * shape rather than the class is what keeps `src/gateway` from importing a frontend.
- */
-export interface GatewayTokenStore {
-  create(
-    role: "agent" | "operator" | "worker",
-    label?: string,
-  ): Promise<{ record: TokenRecord; secret: string }>;
-  list(): Promise<TokenRecord[]>;
-  revoke(id: string): Promise<boolean>;
-}
-
 export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
@@ -105,7 +89,7 @@ export interface GatewayDispatcherOptions {
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
   readonly directory: WorkerDirectory;
-  readonly tokens?: GatewayTokenStore;
+  readonly tokens?: TokenOperations;
   /**
    * C-2, ADR 0005 §8: "revoking closes the uplink". Called after a successful `token.revoke`
    * with the revoked token's id, so any uplink that token authenticated is closed immediately
@@ -559,7 +543,7 @@ export class GatewayDispatcher {
     }
   }
 
-  #requireTokens(): GatewayTokenStore {
+  #requireTokens(): TokenOperations {
     if (this.options.tokens === undefined) {
       throw new DispatchError("INTERNAL", "Token store is unavailable");
     }

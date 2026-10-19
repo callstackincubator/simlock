@@ -39,7 +39,12 @@ import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
 import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
-import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
+import {
+  AdminAuthenticationFailedError,
+  type Auth,
+  createAuth,
+  type SessionRoleResolver,
+} from "../auth/index.js";
 import { DaemonServer } from "./server.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
 import { linkPair } from "../link/testing.js";
@@ -47,7 +52,6 @@ import { connectSimlockClient } from "../simlock-client/client.js";
 import { SimlockWire } from "../simlock-client/wire.js";
 import type { RelayTargets } from "./relay.js";
 import * as relaySupport from "./test-relay-support.js";
-import { AdminSecretManager } from "./admin-secret.js";
 import { type PhysicalDeviceWatcher } from "../leasing/index.js";
 import { createTestEngine } from "../leasing/testing.js";
 
@@ -920,11 +924,7 @@ describe("DaemonServer", () => {
     // for `afterEach` to stop, and this test only needs the winner alive on `socketPath` (so
     // the loser's own `start()` below actually loses) plus its filesystem.
     await createHarness({
-      adminSecret: new AdminSecretManager({
-        filesystem: winnerFilesystem,
-        path: "/admin.token",
-        secrets,
-      }),
+      adminSecret: adminAuth(winnerFilesystem, secrets).adminSecret,
       socketPath,
     });
     // The winner (the only one whose `start()` actually reached `host.start()`'s success path)
@@ -933,11 +933,7 @@ describe("DaemonServer", () => {
 
     const loserFilesystem = new MemoryFilesystem();
     const second = await createHarness({
-      adminSecret: new AdminSecretManager({
-        filesystem: loserFilesystem,
-        path: "/admin.token",
-        secrets,
-      }),
+      adminSecret: adminAuth(loserFilesystem, secrets).adminSecret,
       socketPath,
       start: false,
     });
@@ -964,14 +960,10 @@ describe("DaemonServer", () => {
       const socketPath = join(directory, "daemon.sock");
       const filesystem = new MemoryFilesystem();
       const secrets = new CryptoTokenSecrets();
-      const oldSecret = new AdminSecretManager({ filesystem, path: "/admin.token", secrets });
-      const replacementSecret = new AdminSecretManager({
-        filesystem,
-        path: "/admin.token",
-        secrets,
-      });
+      const oldSecret = adminAuth(filesystem, secrets);
+      const replacementSecret = adminAuth(filesystem, secrets);
       const replacement = await createHarness({
-        adminSecret: replacementSecret,
+        adminSecret: replacementSecret.adminSecret,
         socketPath,
         start: false,
       });
@@ -983,7 +975,7 @@ describe("DaemonServer", () => {
       });
       let replacementToken: string | undefined;
       const old = await createHarness({
-        adminSecret: oldSecret,
+        adminSecret: oldSecret.adminSecret,
         host: {
           endpoint: socketPath,
           start: (accept) => host.start(accept),
@@ -992,12 +984,18 @@ describe("DaemonServer", () => {
             // why: endpoint release lets a new process start before the old stop resumes.
             await replacement.daemon.start();
             replacementToken = await filesystem.readFile("/admin.token");
-            expect(replacementSecret.verify(replacementToken.trim())).toBe(true);
+            await expect(
+              replacementSecret.resolveHelloRole({ credential: replacementToken.trim() }),
+            ).resolves.toBe("admin");
           },
         },
         socketPath,
       });
-      expect(oldSecret.verify((await filesystem.readFile("/admin.token")).trim())).toBe(true);
+      await expect(
+        oldSecret.resolveHelloRole({
+          credential: (await filesystem.readFile("/admin.token")).trim(),
+        }),
+      ).resolves.toBe("admin");
 
       if (removalFails) {
         vi.spyOn(filesystem, "rm").mockRejectedValueOnce(new Error("EACCES"));
@@ -3257,7 +3255,7 @@ async function createHarness(
     readonly beginStop?: () => void;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
-    readonly adminSecret?: AdminSecretManager;
+    readonly adminSecret?: Auth["adminSecret"];
     readonly resolveRole?: SessionRoleResolver;
     readonly downloads?: Partial<Config["downloads"]>;
     readonly processRunner?: ProcessRunner;
@@ -3735,4 +3733,16 @@ function testConfig(
       },
     },
   };
+}
+
+function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): Auth {
+  return createAuth({
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
+    filesystem,
+    secrets,
+    idGenerator: { generate: () => "id" },
+    clock: new FakeClock(1_000),
+    logger: new NoopLogger(),
+  });
 }

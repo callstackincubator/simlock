@@ -16,7 +16,8 @@ import {
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
-import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
+import type { TokenOperations } from "../auth/index.js";
+import { GatewayDispatcher } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
@@ -88,7 +89,7 @@ const gatewayConfig = {
   },
 };
 
-class FakeTokens implements GatewayTokenStore {
+class FakeTokens implements TokenOperations {
   constructor(private readonly records: readonly { id: string; label?: string }[] = []) {}
 
   readonly created: string[] = [];
@@ -97,15 +98,21 @@ class FakeTokens implements GatewayTokenStore {
   async create(role: "agent" | "operator" | "worker", label?: string) {
     this.created.push(role);
     return {
-      record: { createdAt: 1, id: "tok_1", role, ...(label === undefined ? {} : { label }) },
+      record: {
+        createdAt: 1,
+        hash: "unused",
+        id: "tok_1",
+        role,
+        ...(label === undefined ? {} : { label }),
+      },
       secret: "slk_secret",
     };
   }
 
   async list() {
     return [
-      { createdAt: 1, id: "tok_1", role: "worker" as const },
-      ...this.records.map((record) => ({ createdAt: 1, role: "agent" as const, ...record })),
+      { createdAt: 1, hash: "unused", id: "tok_1", role: "worker" as const },
+      ...this.records.map((record) => ({ createdAt: 1, hash: "unused", role: "agent" as const, ...record })),
     ];
   }
 

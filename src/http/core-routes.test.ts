@@ -4,14 +4,9 @@ import { EventBus } from "../bus/index.js";
 import { CORE_ROUTE_SEGMENTS } from "../contract/index.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import { fakeAuth } from "../auth/testing.js";
 import { createHttpApp } from "./app.js";
-import {
-  FakeDispatcher,
-  FakeRegistry,
-  FakeTokenVerifier,
-  sequenceIdGenerator,
-  testConfig,
-} from "./test-fakes.js";
+import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from "./test-fakes.js";
 
 describe("the routes createHttpApp registers", () => {
   it("every route createHttpApp registers starts with a name in CORE_ROUTE_SEGMENTS", () => {
@@ -29,7 +24,7 @@ describe("the routes createHttpApp registers", () => {
       logger: new JsonLinesLogger({ clock, sink: new MemoryLogSink() }),
       ownerRoutedFacts: new OwnerRoutedFactBus(eventBus, registry),
       registry,
-      tokens: new FakeTokenVerifier(),
+      auth: fakeAuth(new Map()),
     });
 
     const segments = app.routes

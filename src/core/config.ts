@@ -1,5 +1,10 @@
+import type { ZodType } from "zod";
+
 import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
-import type { AuthStrategyDefinition } from "../auth/index.js";
+import {
+  authStrategies as registeredAuthStrategies,
+  type AuthStrategyDefinition,
+} from "../auth/index.js";
 import {
   capacityStrategyNames,
   capacityStrategyValidator,
@@ -368,6 +373,7 @@ export interface LoadConfigOptions {
 type Layer = Record<string, unknown>;
 
 export async function loadConfig({
+  authStrategies = registeredAuthStrategies,
   configPath = DEFAULT_CONFIG_PATH,
   filesystem,
   modules = [],
@@ -386,7 +392,7 @@ export async function loadConfig({
   // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
   // about.
   const mode = resolveMode([fromFile, fromOverrides]);
-  const validators = configValidators(strategy, modules);
+  const validators = configValidators(strategy, modules, authStrategies);
 
   const fileConfig = normalizeLayer(
     validateConfigLayer(fromFile, "", warn, validators),
@@ -400,7 +406,7 @@ export async function loadConfig({
   );
 
   const mergedWithoutMetrics = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, mode, modules), fileConfig),
+    mergeConfig(defaultConfig(systemStats, strategy, mode, modules, authStrategies), fileConfig),
     overrideConfig,
   ) as unknown as Omit<Config, "metrics"> & { readonly metrics?: Config["metrics"] };
   const merged: Config = {
@@ -713,6 +719,7 @@ function defaultConfig(
   strategy: CapacityStrategyName,
   mode: DaemonMode,
   modules: readonly ModuleConfigEntry[],
+  authStrategies: readonly AuthStrategyDefinition[],
 ): Omit<Config, "metrics"> {
   return {
     mode,
@@ -765,7 +772,18 @@ function defaultConfig(
     // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
     // something every operator has to remember to switch on; a worker's HTTP gateway stays
     // opt-in exactly as before.
-    http: { enabled: mode === "gateway", host: "127.0.0.1", port: 4700 },
+    http: {
+      enabled: mode === "gateway",
+      host: "127.0.0.1",
+      port: 4700,
+      ...Object.fromEntries(
+        authStrategies.flatMap((definition) =>
+          definition.config === undefined
+            ? []
+            : [[definition.config.key, definition.config.defaults]],
+        ),
+      ),
+    },
     health: {
       enabled: true,
       probeIntervalMs: 30_000,
@@ -855,6 +873,7 @@ const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 function configValidators(
   strategy: CapacityStrategyName,
   modules: readonly ModuleConfigEntry[],
+  authStrategies: readonly AuthStrategyDefinition[],
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
@@ -920,6 +939,13 @@ function configValidators(
       enabled: booleanValue,
       host: stringValue,
       port: integerInRange(1, 65535),
+      ...Object.fromEntries(
+        authStrategies.flatMap((definition) =>
+          definition.config === undefined
+            ? []
+            : [[definition.config.key, schemaValidator(definition.config.schema)]],
+        ),
+      ),
     }),
     health: objectValidator({
       enabled: booleanValue,
@@ -950,6 +976,18 @@ function configValidators(
       thresholdMultiplier: numberAtLeast(1),
       minimumThresholdMs: nonNegativeNumber,
     }),
+  };
+}
+
+function schemaValidator(schema: ZodType): Validator {
+  return (value, path) => {
+    const result = schema.safeParse(value);
+    if (result.success) return result.data;
+    const issue = result.error.issues[0];
+    throw invalidValue(
+      path,
+      issue === undefined ? "a valid value" : `a valid value (${issue.message})`,
+    );
   };
 }
 

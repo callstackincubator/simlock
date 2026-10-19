@@ -122,7 +122,7 @@
   },
   {
     "type": "dependency",
-    "from": "src/http/token-store.test.ts",
+    "from": "src/auth/token-store.test.ts",
     "to": "src/ports/token-secrets.ts",
     "unresolvedTo": "../ports/token-secrets.js",
     "dependencyTypes": ["local", "type-only", "import"],

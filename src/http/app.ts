@@ -31,7 +31,7 @@ import {
 import { LeaseNoticeBuffer } from "./notices.js";
 import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
-import type { TokenIdentity } from "./token-store.js";
+import type { Auth, Identity } from "../auth/index.js";
 import {
   buildLeasePayload,
   type HttpLeaseDevice,
@@ -78,7 +78,7 @@ export interface HttpGatewayDeps {
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
   readonly config: Config;
-  readonly tokens: { verify(secret: string): Promise<TokenIdentity | undefined> };
+  readonly auth: Pick<Auth, "authenticateRequest">;
   /** `false` on a gateway, which never downloads: `allowDownload` then does not answer the lease
    * request `POST` early. Default `true`. */
   readonly answerDownloadsEarly?: boolean | undefined;
@@ -87,7 +87,7 @@ export interface HttpGatewayDeps {
 
 export interface HttpMount {
   readonly prefix: string;
-  handle(request: Request, identity: TokenIdentity): Promise<Response>;
+  handle(request: Request, identity: Identity): Promise<Response>;
 }
 
 type Env = AuthEnv;
@@ -195,7 +195,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   });
   const notices = new LeaseNoticeBuffer(deps.ownerRoutedFacts);
 
-  const agentAuth = requireAuth(deps.tokens);
+  const agentAuth = requireAuth(deps.auth);
 
   // The one error boundary. Hono's `compose` catches a thrown error at the layer that threw
   // it and hands it to `app.onError` right there -- it never propagates up through an outer
@@ -216,12 +216,12 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     // The one unauthenticated route is also the one a tunnel/load-balancer polls: logging it
     // would let an anonymous flood drive the synchronous log sink from the event loop.
     if (c.req.path === "/v1/healthz") return;
-    const identity = c.get("identity") as TokenIdentity | undefined;
+    const identity = c.get("identity") as Identity | undefined;
     logger.info("request", {
       durationMs: deps.clock.now() - start,
       method: c.req.method,
       path: c.req.path,
-      requesterId: identity?.requesterId,
+      requesterId: identity?.principal,
       status: c.res.status,
     });
   });
@@ -758,13 +758,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   });
 }
 
-/** Guard for the lease-request routes. The request is the daemon's stored record now, but there
- * is still no dispatcher operation that reads one by id, so no `authorize` hook to reuse the way
- * `lease.renew`/`lease.release`/`lease.cancel` do. Compared against the record's `ownerId` --
- * the principal the daemon saw send it -- never its `requesterId`, which is the caller's claim.
- * A token's principal is its `requesterId` (`buildHttpSession`). */
-function requireOwnRequest(identity: TokenIdentity, ownerId: string): void {
-  if (identity.role === "operator" || identity.requesterId === ownerId) return;
+// why: no dispatcher operation reads a stored lease request by id, so there is no `authorize` hook to reuse; compared against the record's `ownerId`, the principal the daemon saw send it, never its caller-claimed `requesterId`.
+function requireOwnRequest(identity: Identity, ownerId: string): void {
+  if (identity.role === "operator" || identity.principal === ownerId) return;
   throw forbidden("Not permitted to access another requester's resource");
 }
 

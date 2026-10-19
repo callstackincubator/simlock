@@ -13,11 +13,12 @@ import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import type { Identity } from "../auth/index.js";
+import { fakeAuth, tokenIdentity } from "../auth/testing.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
   FakeDispatcher,
   FakeRegistry,
-  FakeTokenVerifier,
   makeDevice,
   makeGrant,
   makeLease,
@@ -40,10 +41,13 @@ function buildHarness(
   const dispatcher = new FakeDispatcher(clock);
   const registry = new FakeRegistry();
   const ownerRoutedFacts = new OwnerRoutedFactBus(eventBus, registry);
-  const tokens = new FakeTokenVerifier();
-  tokens.register("slk_agent", { requesterId: "tok_agent", role: "agent" });
-  tokens.register("slk_other", { requesterId: "tok_other", role: "agent" });
-  tokens.register("slk_operator", { requesterId: "tok_operator", role: "operator" });
+  const auth = fakeAuth(
+    new Map<string, Identity>([
+      ["slk_agent", tokenIdentity("tok_agent", "agent")],
+      ["slk_other", tokenIdentity("tok_other", "agent")],
+      ["slk_operator", tokenIdentity("tok_operator", "operator")],
+    ]),
+  );
   const logSink = new MemoryLogSink();
   const logger = new JsonLinesLogger({ clock, sink: logSink });
   const config = overrides.config ?? testConfig();
@@ -68,13 +72,13 @@ function buildHarness(
     logger,
     ownerRoutedFacts,
     registry: overrides.registry ?? registry,
-    tokens,
+    auth,
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),
   });
 
-  return { app, clock, config, dispatcher, eventBus, logSink, registry, tokens };
+  return { app, clock, config, dispatcher, eventBus, logSink, registry };
 }
 
 type App = ReturnType<typeof buildHarness>["app"];

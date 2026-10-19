@@ -1111,7 +1111,7 @@ export const configSchema = z.object({
 // ---- tokens -----------------------------------------------------------------------------------
 
 /**
- * `TokenRole` (agent/operator/worker token store roles, src/http/token-store.ts) is a
+ * `TokenRole` (agent/operator/worker token store roles, src/auth/tokens.ts) is a
  * deliberately different vocabulary from the daemon session `Role` (agent/admin, see
  * `roles.ts`) -- a `token.create --role operator` mints a credential that *resolves to* the
  * admin session role at `hello` (ADR 0003 §5), it is not itself that role. Keeping the two

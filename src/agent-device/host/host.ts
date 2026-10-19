@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import type { AgentDevicePlatform } from "./agent-device-supervisor.js";
 import { FRONT_PREFIX, PROXY_BASE_PATH } from "../shared/paths.js";
 import { frontReply, refusal } from "../shared/replies.js";
@@ -84,7 +84,7 @@ function capped(response: Response): Response {
 }
 
 export class AgentDeviceHost {
-  readonly #identities = new Map<string, TokenIdentity>();
+  readonly #identities = new Map<string, Identity>();
   #loading: Promise<ProxyModule | undefined> | undefined;
   #loadError: string | undefined;
   #proxy: { readonly generation: number; readonly proxy: DaemonProxy } | undefined;
@@ -113,7 +113,7 @@ export class AgentDeviceHost {
     };
   }
 
-  tag(request: Request, identity: TokenIdentity): string {
+  tag(request: Request, identity: Identity): string {
     const tag = randomUUID();
     this.#identities.set(tag, identity);
     request.headers.set(TAG_HEADER, tag);
@@ -123,10 +123,10 @@ export class AgentDeviceHost {
   authenticate(request: Request): { readonly tenantId: string } | null {
     const tag = request.headers.get(TAG_HEADER);
     const identity = tag === null ? undefined : this.#identities.get(tag);
-    return identity === undefined ? null : { tenantId: identity.requesterId };
+    return identity === undefined ? null : { tenantId: identity.principal };
   }
 
-  async forward(request: Request, identity: TokenIdentity): Promise<Response> {
+  async forward(request: Request, identity: Identity): Promise<Response> {
     const status = await this.status();
     if (status.state === "unavailable") throw new Error(status.reason);
     const module = await this.#load();

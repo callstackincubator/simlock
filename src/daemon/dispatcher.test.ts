@@ -52,7 +52,7 @@ import {
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
-import { TokenStore } from "../http/token-store.js";
+import { createAuth } from "../auth/index.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
@@ -337,11 +337,13 @@ async function buildDispatcher(
     quarantine: engine.core.quarantine,
     registry,
   });
-  const tokens = new TokenStore({
+  const { tokens } = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
     secrets: new CryptoTokenSecrets(),
   });
   const dispatcher = new Dispatcher({
