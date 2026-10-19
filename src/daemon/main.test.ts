@@ -1593,6 +1593,7 @@ describe("startDaemon HTTP status for a quarantined device", () => {
       manageEventSubscription: () => undefined,
       principal: "agent-1",
       role: "agent",
+      via: "socket",
     } as const;
     const grant = (await daemon.dispatch(
       "lease.request",
@@ -2142,7 +2143,12 @@ describe("startDaemon event history", () => {
     const status = (await daemon.dispatch(
       "status.get",
       {},
-      { manageEventSubscription: () => undefined, principal: "operator", role: "admin" },
+      {
+        manageEventSubscription: () => undefined,
+        principal: "operator",
+        role: "admin",
+        via: "socket",
+      },
     )) as { readonly history?: unknown };
     expect(daemon.health).toBe("running");
     expect(names).toContain("history.db.damaged-1000");
