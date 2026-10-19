@@ -3,7 +3,7 @@
 Does: the network API — `/v1` routes, bearer token → session, SSE, lease-request resources, console files.
 Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway`
 (`server.ts`).
-Uses: contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
+Uses: auth, contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
 bus, core (types), ports. Never imports: drivers, gateway.
 Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.md).
 

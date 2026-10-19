@@ -188,11 +188,6 @@ export interface DispatcherOptions {
   /** `status.get`'s host block, from memory: answering never waits for a read (ADR 0008 §7). */
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;
-  /**
-   * ADR §2 step 4: every operation but `status.get` parks here before its handler runs.
-   * `hello` never reaches `dispatch()` at all -- it is answered before a `Session` exists,
-   * since the session's `role` is itself resolved from `hello`'s payload (see `session.ts`).
-   */
   readonly awaitReady: () => Promise<void>;
   /** This daemon's instance id (`instance.json`), the id it presents to a gateway. `worker.list`
    * answers with it as the one worker's id (ADR 0012 §1). */

@@ -26,7 +26,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Composition (`main.ts`)
 
-Both modes: config (`config.json`) → `Logger` → `createAuth` (`src/auth`, once) → host info → `EventBus` → event history (`createEventHistory`, not yet started).
+Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `createAuth` (`src/auth`, once).
 `config.mode` then picks one branch; a gateway builds none of the worker's parts.
 
 - **Worker** — `Registry` (`state.json`) → instance id (`instance.json`) →

@@ -7,9 +7,9 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 
 1. `loadConfig` reads `config.json`; its warnings are logged once the logger exists.
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
-   `createAuth` then builds the token store and the admin secret (hash in memory), once, for both modes.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
+   `createAuth` then builds the token store and the admin secret (hash in memory), once, for both modes.
 5. `config.mode: gateway` → the gateway section. Otherwise go on.
 
 ## Worker: build (before the claim)
