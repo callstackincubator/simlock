@@ -163,7 +163,12 @@ test.describe("signing in through a proxy", () => {
   test("the page makes no request to any host but the proxy's", async ({ page, proxied }) => {
     const origin = new URL(proxied.url).origin;
     const requested: string[] = [];
+    const errors: string[] = [];
     page.on("request", (request) => requested.push(request.url()));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
 
     await page.goto(proxied.url);
     for (const label of NAV_LABELS) {
@@ -175,5 +180,8 @@ test.describe("signing in through a proxy", () => {
 
     expect(requested.length).toBeGreaterThan(0);
     expect(requested.filter((url) => new URL(url).origin !== origin)).toEqual([]);
+    // why: a request the page's Content-Security-Policy refused never reaches the network, but the
+    // browser reports it as an error.
+    expect(errors).toEqual([]);
   });
 });
