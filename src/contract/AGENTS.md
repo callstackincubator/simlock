@@ -30,7 +30,7 @@ park on readiness (all but `status.get`) → handler → parse output.
 `src/daemon/dispatcher.ts` and `src/gateway/dispatcher.ts` each hold a handler for
 every operation but `daemon.stop`, which `DaemonServer` answers.
 
-- `agent`: `catalog.get`, `status.get`, `component.list`, `lease.request`, `lease.cancel`,
+- `agent`: `identity.get`, `catalog.get`, `status.get`, `component.list`, `lease.request`, `lease.cancel`,
   `lease.renew`, `lease.release`, `lease.list`, `driver.passthrough`, `device.exec`,
   `doctor.run` without `fix` or `purgeOrphans`.
 - `admin`: every other operation (`list.get`, `config.get`, `daemon.stop`, `events.*`,

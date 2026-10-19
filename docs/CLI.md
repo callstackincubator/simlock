@@ -3,7 +3,7 @@
 Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status`, `catalog`, `stats` and
+agents are the primary audience. `status`, `catalog`, `stats`, `whoami`, and
 `daemon <start|stop|status|logs>` are the exception: they default to a
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
