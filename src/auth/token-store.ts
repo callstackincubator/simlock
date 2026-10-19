@@ -36,7 +36,6 @@ export class TokenStore {
     this.#path = options.path;
   }
 
-  // fallow-ignore-next-line unused-class-member -- called by `Dispatcher`'s `token.create` handler through `#requireTokens()`'s return value (src/daemon/dispatcher.ts); the audit does not follow a member access on a method's result.
   async create(role: TokenRole, label?: string): Promise<{ record: TokenRecord; secret: string }> {
     return this.#mutate(async () => {
       const secret = this.#secrets.generateSecret();
@@ -60,7 +59,6 @@ export class TokenStore {
     return this.#readAll();
   }
 
-  // fallow-ignore-next-line unused-class-member -- same as `create` above: reached through `#requireTokens()`'s return value.
   async revoke(id: string): Promise<boolean> {
     return this.#mutate(async () => {
       const records = await this.#readAll();

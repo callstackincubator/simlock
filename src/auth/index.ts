@@ -11,16 +11,9 @@ import { TokenStore } from "./token-store.js";
 import type { TokenOperations } from "./tokens.js";
 
 export { AuthError } from "./strategy.js";
-export type {
-  AuthConfig,
-  AuthDeps,
-  AuthRequest,
-  AuthStrategy,
-  AuthStrategyDefinition,
-  StrategyAnswer,
-} from "./strategy.js";
+export type { AuthConfig, AuthStrategyDefinition, StrategyAnswer } from "./strategy.js";
 export type { Identity } from "./identity.js";
-export type { TokenOperations, TokenRecord, TokenRole } from "./tokens.js";
+export type { TokenOperations, TokenRole } from "./tokens.js";
 export { authStrategies };
 export { AdminAuthenticationFailedError, resolveAgentRole } from "./hello.js";
 export type { SessionRoleResolver } from "./hello.js";
