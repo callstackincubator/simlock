@@ -107,34 +107,37 @@ test.describe("signing in through a proxy", () => {
     page,
     proxied,
   }) => {
-    await page.goto(proxied.url);
-    await expect(page.getByText("Signed in as Alice")).toBeVisible();
-
+    // why: the reload guard lives in sessionStorage, so each first ending starts in a fresh tab.
+    const redirected = await page.context().newPage();
+    await redirected.goto(proxied.url);
+    await expect(redirected.getByText("Signed in as Alice")).toBeVisible();
     proxied.setMode("redirect");
-    await openFromNav(page, "Leases");
-    await expect(page).toHaveURL(proxied.loginUrl);
-    await expect(page.getByRole("heading", { name: "Proxy login" })).toBeVisible();
+    await openFromNav(redirected, "Leases");
+    await expect(redirected).toHaveURL(proxied.loginUrl);
+    await expect(redirected.getByRole("heading", { name: "Proxy login" })).toBeVisible();
+    await redirected.close();
 
     proxied.setMode("signed-in");
-    await page.goto(proxied.url);
-    await expect(page.getByText("Signed in as Alice")).toBeVisible();
+    const reloaded = await page.context().newPage();
+    await reloaded.goto(proxied.url);
+    await expect(reloaded.getByText("Signed in as Alice")).toBeVisible();
     proxied.setMode("html");
-    await openFromNav(page, "Leases");
-    await expect(page.getByRole("heading", { name: "Proxy sign-in" })).toBeVisible();
+    await openFromNav(reloaded, "Leases");
+    await expect(reloaded.getByRole("heading", { name: "Proxy sign-in" })).toBeVisible();
 
     proxied.setMode("signed-in");
-    await page.goto(proxied.url);
-    await expect(page.getByText("Signed in as Alice")).toBeVisible();
-    await page.evaluate(() => {
+    await reloaded.goto(proxied.url);
+    await expect(reloaded.getByText("Signed in as Alice")).toBeVisible();
+    await reloaded.evaluate(() => {
       (window as unknown as { loadedOnce: boolean }).loadedOnce = true;
     });
     proxied.setMode("html");
-    await openFromNav(page, "Leases");
+    await openFromNav(reloaded, "Leases");
 
-    await expect(page.getByText("Your sign-in has ended.")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign in again" })).toBeVisible();
+    await expect(reloaded.getByText("Your sign-in has ended.")).toBeVisible();
+    await expect(reloaded.getByRole("button", { name: "Sign in again" })).toBeVisible();
     expect(
-      await page.evaluate(() => (window as unknown as { loadedOnce?: boolean }).loadedOnce),
+      await reloaded.evaluate(() => (window as unknown as { loadedOnce?: boolean }).loadedOnce),
     ).toBe(true);
   });
 
