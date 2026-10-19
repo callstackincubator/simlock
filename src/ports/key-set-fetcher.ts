@@ -10,9 +10,30 @@ export interface KeySetFetcher {
 }
 
 export class NodeKeySetFetcher implements KeySetFetcher {
-  async fetch(_url: string, _options: { readonly signal: AbortSignal }): Promise<KeySetResponse> {
-    return { status: 0, body: "" };
+  async fetch(url: string, options: { readonly signal: AbortSignal }): Promise<KeySetResponse> {
+    const response = await globalThis.fetch(url, { redirect: "manual", signal: options.signal });
+    const body = await readCapped(response, options.signal);
+    return { status: response.status, body };
   }
+}
+
+async function readCapped(response: Response, signal: AbortSignal): Promise<string> {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    signal.throwIfAborted();
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > KEY_SET_MAX_BYTES) {
+      await reader.cancel();
+      throw new Error(`Key set body is over ${String(KEY_SET_MAX_BYTES)} bytes`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export class FakeKeySetFetcher implements KeySetFetcher {
