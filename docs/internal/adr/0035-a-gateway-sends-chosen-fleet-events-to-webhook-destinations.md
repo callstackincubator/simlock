@@ -1,6 +1,6 @@
 # 0035. A gateway sends chosen fleet events to webhook destinations
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-19
 - **Issue:** [#707](https://github.com/callstackincubator/simlock/issues/707)
 - **Supersedes:** nothing. Leaves [ADR
