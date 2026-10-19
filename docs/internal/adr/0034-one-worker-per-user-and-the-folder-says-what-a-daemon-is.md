@@ -1,6 +1,6 @@
 # 0034. One worker per user, and the folder says what a daemon is
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-19
 - **Issue:** [#700](https://github.com/callstackincubator/simlock/issues/700)
 - **Supersedes:** in part, [ADR 0005](0005-gateway-and-worker-modes.md):
