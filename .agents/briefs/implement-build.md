@@ -12,13 +12,16 @@ For each line, one cycle:
    claim, word for word where it fits. Read it against testing rules 6, 8
    and 10. Run its file: it fails on a named assertion, for the reason the
    line gives, not on a typo or a timeout (testing rule 2). Commit the test
-   alone: `git commit -m "test: <the line's claim> (#<N>)"`. A test that
-   passes before you change code proves behaviour that exists: delete it
-   when an existing test proves the line, else keep it and list the line
-   under `open` as `already green: <line>`.
-2. **Green.** Make the smallest change that turns it green, and run the
-   files of every earlier cycle's test: they stay green. Commit:
-   `<type>(<scope>): <what now works> (#<N>)`.
+   alone, one test per commit: `git commit -m "test: <the line's claim>
+(#<N>)"`. A test that passes before you change code either proves
+   behaviour the repo had before this issue (delete it when an existing
+   test proves the line, else keep it and list the line under `open` as
+   `already green: <line>`), or code an earlier cycle built ahead of its
+   test: keep it and list the line as `built ahead: <line>`.
+2. **Green.** Write only the code this test needs to pass: no branch,
+   case, field or error path that a later Tests line asks for, even when
+   you can see it coming. Run the files of every earlier cycle's test:
+   they stay green. Commit: `<type>(<scope>): <what now works> (#<N>)`.
 
 Never write the next test before this one is green, and never refactor
 between cycles: the audit and the review do that. Changing an earlier
