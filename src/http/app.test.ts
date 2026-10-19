@@ -2536,7 +2536,10 @@ describe("a person the sign-in proxy signed in", () => {
       [
         "GET /v1/lease-requests/{id}/events",
         async ({ app, dispatcher }) => {
-          const { id } = await createLeaseRequest(app, dispatcher, defaultBody, proxyHeaders);
+          const { id } = await createLeaseRequest(app, dispatcher, defaultBody, {
+            ...proxyHeaders,
+            "sec-fetch-site": "same-origin",
+          });
           return app.request(`/v1/lease-requests/${id}/events`, { headers: proxyHeaders });
         },
       ],
@@ -2594,7 +2597,11 @@ describe("a person the sign-in proxy signed in", () => {
       const harness = harnessFor(proxyPerson(signedInAt + 2 * 60_000));
       const responsePromise = harness.app.request("/v1/leases/lse_1/exec", {
         body: JSON.stringify({ args: ["list"], tool: "simctl" }),
-        headers: { ...proxyHeaders, "content-type": "application/json" },
+        headers: {
+          ...proxyHeaders,
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json",
+        },
         method: "POST",
       });
       const call = await waitForDispatch(harness.dispatcher, "device.exec");
@@ -2615,7 +2622,11 @@ describe("a person the sign-in proxy signed in", () => {
       const harness = harnessFor(proxyPerson(signedInAt + 2 * 60_000));
       const responsePromise = harness.app.request("/v1/components/install", {
         body: JSON.stringify({ platform: "android", version: "35" }),
-        headers: { ...proxyHeaders, "content-type": "application/json" },
+        headers: {
+          ...proxyHeaders,
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json",
+        },
         method: "POST",
       });
       const call = await waitForDispatch(harness.dispatcher, "component.install");

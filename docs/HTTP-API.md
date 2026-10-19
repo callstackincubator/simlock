@@ -88,6 +88,14 @@ A JWT Simlock cannot trust is `401 UNAUTHENTICATED` with a `reason` beside `code
 
 A follow stream (`GET /v1/events/stream`, `GET /v1/leases/{id}/events`, `GET /v1/lease-requests/{id}/events`) opened by a person ends when their JWT expires (`exp` plus 60 s), or after 2^31-1 ms if that is sooner; the client reconnects with a fresh JWT. Command streams (exec, component install) are not ended.
 
+A request signed in by the proxy (not by a token) that is not `GET`, `HEAD` or `OPTIONS` must carry `Sec-Fetch-Site: same-origin`, which the browser sets itself; any other value, or none, is refused before anything runs:
+
+```json
+{"error":{"code":"FORBIDDEN","message":"Cross-site request refused: a request signed in through a sign-in proxy must come from the console"}}
+```
+
+Requests signed in by a token are not affected. Browsers send `Sec-Fetch-Site` only to an `https://` address or to loopback, so serve the proxy over HTTPS (or on loopback): behind plain `http://` on a network name every changing request signed in through the proxy is `403`.
+
 The proxy must let `/v1/uplink` and `/v1/healthz` through: a worker joins with its join token and a health probe sends no credential, and neither carries a proxy JWT.
 
 Three roles:
