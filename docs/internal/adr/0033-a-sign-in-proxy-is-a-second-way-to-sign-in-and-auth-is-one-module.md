@@ -1,6 +1,6 @@
 # 0033. A sign-in proxy is a second way to sign in, and auth is one module
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-19
 - **Issue:** [#701](https://github.com/callstackincubator/simlock/issues/701)
 - **Supersedes:** nothing. Amends [ADR
