@@ -135,7 +135,9 @@ is open, done means closed as completed.
    section is `task:draft` no matter what anyone says in a comment. Before
    a task gets `task:ready`, the spec session has the `check-spec` skill
    read the body as posted, with a fresh context, and fixes in the body
-   what it reports.
+   what it reports; the same checker then rechecks only what the fix
+   changed. The maintainer approves the feature, its ADRs and its tasks
+   once, at the end.
 
 8. **Triage produces a report, not a fix.** An agent working `bug:triage`
    reproduces the bug as a failing test whose title states the claim the

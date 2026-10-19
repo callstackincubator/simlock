@@ -88,18 +88,20 @@ still change.
    each with its recommended answer first and an `Explain` option: pick it
    and the session shows the problem and what each option brings, with
    diagrams or snippets, then asks again. It looks up facts itself and
-   never asks you one. Any decision that constrains more than one task or
-   would be expensive to reverse becomes an ADR at _Proposed_, which you
-   accept in a later round. It ends when no decision is left open.
-5. **Play back.** Who, today, outcome, how it is checked, the decisions,
-   what is out of scope, and the task list. Nothing is written before you
-   say yes.
+   never asks you one: while you answer, background explorers read the
+   source behind each claim about today, another tool's included. Any
+   decision that constrains more than one task or would be expensive to
+   reverse becomes an ADR at _Proposed_. It ends when no decision is left
+   open.
+5. **Facts.** Every claim the design rests on has a source line before
+   anything is written. One with none is a question for you.
 6. **Write.** The feature gets its business sections from
    [templates/feature.md](templates/feature.md), Decisions, Shared values
    and Tasks. Each task is a native sub-issue, labelled `task:draft`, with
    a body from [templates/task.md](templates/task.md): Scope, Technical
    spec, Facts, Done when, Out of scope and Depends on. A small feature is
    one task. Every fact cites the line or command output it was read from.
+   The bodies are posted as drafts without asking you.
 7. **Check.** `check-spec` reads the bodies as posted, one checker per task
    and one for the feature as a whole. It first plans the change file by
    file and runs a pre-mortem, then gives every category a status:
@@ -109,12 +111,15 @@ still change.
    on, and undefined terms. Each finding is blocking (an implementer
    would build the wrong thing, stop, or leave broken state) or a note (a
    gap the implementer may close as an `Assumption:` line, five at most).
-   The session fixes the blocking ones with you; notes never start another
-   round. After the second check, a closure check confirms each fix closed
-   its finding; one that did not goes to you.
-8. **Ready.** Once the check passes and every linked ADR is accepted, the
-   session sets every task `task:ready` and the feature `feature:planned`.
-   The ADRs move to _Accepted — not yet implemented_. Your say is the
+   The session fixes the blocking ones, asking you in one round about any
+   that needs a decision; notes never start another round. Then the same
+   checker rechecks only what the fix changed; a finding still open goes
+   to you.
+8. **Approve, then ready.** You approve once, from a short summary: the
+   feature, each ADR in a line or two, and a table of the tasks with their
+   Depends on and any open findings. The session then sets every task
+   `task:ready` and the feature `feature:planned`, and the ADRs move to
+   _Accepted — not yet implemented_. Your say is the
    session; move a task back to `task:draft` to hold it. Depends on sets
    only the order: `deliver` starts a task once each dependency is closed
    or is a task of the same feature whose PR passed review.
