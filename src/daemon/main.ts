@@ -636,13 +636,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // calling `stopHttpGateway`. Stopping here too would double-stop it.
   }
 
-  // Awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise
+  // why: awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise
   // `onSocketClaimed`'s handler above settles once the concurrently-started HTTP gateway either
   // finishes starting or fails to. Both are already running concurrently by the time this line
   // is reached (the gateway since `onSocketClaimed` fired partway through `daemon.start()`), so
   // this changes nothing about when either finishes -- only what `startDaemon()` itself reports.
   // `gatewayStarted` is settled only from inside `onSocketClaimed`'s handler, and `start()`
-  // fires that callback only once the socket claim (and the admin-secret write) has succeeded.
+  // fires that callback only once the socket claim (and the admin secret write) has succeeded.
   // A daemon that loses the start race therefore rejects without the callback ever running, so
   // nothing would settle `gatewayStarted` and the join below would hang forever rather than
   // reporting the failure. Release it here on that path -- resolving an already-settled promise

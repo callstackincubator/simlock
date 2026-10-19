@@ -233,7 +233,7 @@ export interface DaemonServerCommonOptions {
    * otherwise there is nothing for a request to park against, it just gets connection-refused
    * the way it always did. Called synchronously right after `#readyPromise` is assigned (so any
    * request `dispatch()` serves as a result of this callback already parks correctly) and after
-   * the socket claim and the admin-secret write, but *before* awaiting convergence -- an
+   * the socket claim and the admin secret write, but *before* awaiting convergence -- an
    * auxiliary frontend started from here must not itself assume convergence is done. A no-op
    * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
    */

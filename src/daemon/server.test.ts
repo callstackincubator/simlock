@@ -902,7 +902,7 @@ describe("DaemonServer", () => {
     expect(first.daemon.socketPath).toBe(socketPath);
   });
 
-  // Review finding S1: `AdminSecretManager`'s own doc (`admin-secret.ts`) asserts "a daemon
+  // why: review finding S1: `AdminSecretManager`'s own doc (`src/auth`) asserts "a daemon
   // that loses the start race never calls `persist()` at all ... so the file an
   // already-running daemon wrote is never touched by the loser" -- untested anywhere before
   // this. Mirrors the "recovers a stale socket file" test above (two harnesses racing for the
