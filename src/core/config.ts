@@ -991,10 +991,13 @@ function schemaValidator(schema: ZodType): Validator {
     const result = schema.safeParse(value);
     if (result.success) return result.data;
     const issue = result.error.issues[0];
-    throw invalidValue(
-      path,
-      issue === undefined ? "a valid value" : `a valid value (${issue.message})`,
-    );
+    if (issue === undefined) throw invalidValue(path, "a valid value");
+    const issuePath = [path, ...issue.path.map(String)].join(".");
+    // why: a strategy's own messages are lower-case phrases that finish "expected ..."; zod's built-in ones start with a capital.
+    const expected = /^[A-Z]/.test(issue.message)
+      ? `a valid value (${issue.message})`
+      : issue.message;
+    throw invalidValue(issuePath, expected);
   };
 }
 
