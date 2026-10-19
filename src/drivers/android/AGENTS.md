@@ -76,8 +76,8 @@ Reclaim — `reclaim`:
 
 `shutdown`: `adb emu kill`, wait, SIGKILL. `destroy`: kills only an emulator this process
 started, then `avdmanager delete avd`, frees the port.
-`listManaged`: root AVDs + `adb devices` + `ro.boot.qemu.avd_name`; processes, running state and marks
-require a matching `emu avd path` (exact or `realpath`). Invalid paths are ignored; query failures leave stopped AVDs transitioning.
+`listManaged`: root AVDs + `adb devices` + `ro.boot.qemu.avd_name`; processes, running state and erasable marks require a matching `emu avd path` (exact or `realpath`).
+Durable marks come from root AVD configs independently of that proof. Invalid paths are ignored; query failures leave otherwise-stopped AVDs transitioning.
 
 Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml
 (`$ANDROID_USER_HOME/devices.xml`, else `.android/devices.xml` under `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME`

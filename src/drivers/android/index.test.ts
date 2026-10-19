@@ -1584,7 +1584,7 @@ describe("AndroidDriver", () => {
     expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
   });
 
-  it("joins adb devices, getprop and the AVD path to distinguish running and stopped AVDs", async () => {
+  it("reports one running root AVD, one stopped root AVD and the running AVD's process", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${avdDirectory}/simlock_running.avd`);
     await filesystem.mkdirp(`${avdDirectory}/simlock_stopped.avd`);
@@ -3667,7 +3667,7 @@ describe("AndroidDriver ownership", () => {
       runState: "transitioning",
     },
   ])(
-    "attributes running state, processes and marks only with path proof: $reported",
+    "gates running state, processes and erasable marks on path proof while retaining durable marks: $reported",
     async ({ answer, runState }) => {
       const filesystem = await androidFilesystem(
         { config: "simlock.mark=tok-123\n" },
