@@ -1,4 +1,4 @@
-# 0033. One worker per user, and the folder says what a daemon is
+# 0034. One worker per user, and the folder says what a daemon is
 
 - **Status:** Proposed
 - **Date:** 2026-10-19
@@ -76,7 +76,12 @@ about and ignores worker-only keys, and refuses `http.enabled: false`. Each
 rule that said "in `mode: "gateway"`" now says "in the gateway folder".
 
 The worker never reads or writes `~/.simlock/gateway`. The gateway never
-reads or writes the worker's files.
+reads or writes the worker's files. A daemon learns its role from how it was
+started (`--gateway` or not) and takes its folder from the role; only the
+CLI and MCP look at the folders to choose.
+
+A worker's HTTP listens on port 4701 by default and a gateway's on 4700, so
+both can run with defaults on one machine.
 
 ```mermaid
 flowchart LR
@@ -93,13 +98,15 @@ flowchart LR
 
 ### 3. The CLI and MCP pick the daemon by folder
 
-A global `--gateway` flag sends a command to the gateway folder. Without it,
-the CLI and `simlock mcp` choose:
+A global `--gateway` flag sends a command to the gateway folder, and a
+global `--worker` flag to the worker's. Without either, the CLI and
+`simlock mcp` choose:
 
 ```mermaid
 flowchart TD
-  A["simlock &lt;command&gt;"] --> B{--gateway?}
-  B -- yes --> G[gateway folder]
+  A["simlock &lt;command&gt;"] --> B{--gateway or --worker?}
+  B -- "--gateway" --> G[gateway folder]
+  B -- "--worker" --> W
   B -- no --> C{"a gateway is present<br/>and ~/.simlock/instance.json does not exist?"}
   C -- yes --> G
   C -- no --> W["~/.simlock worker<br/>(auto-start as today)"]
@@ -112,17 +119,24 @@ flowchart TD
   `~/.simlock/gateway/config.json` exists. The gateway writes the first on
   its first start; `simlock --gateway config set` writes the second before
   that. An empty `gateway` folder is not a gateway.
-- Only `simlock --gateway daemon start` creates a gateway. Any other command
-  with `--gateway`, on a machine where no gateway is present, fails before
-  it launches anything, and says to run `simlock --gateway daemon start`. A
-  present gateway that is not running is auto-started like a worker.
+- Only `simlock --gateway daemon start` creates a gateway. On a machine
+  where no gateway is present, every other `--gateway` command except
+  `config set` fails before it does anything, with the new error code
+  `GATEWAY_NOT_PRESENT` and a message that says to run
+  `simlock --gateway daemon start`. An MCP tool call fails the same way. A
+  present gateway that is not running is auto-started like a worker. The
+  code is raised only by the CLI and MCP; no daemon sends it.
+- `--worker` always reaches the worker and auto-starts it. On a machine that
+  got its gateway first, `simlock --worker daemon start` starts the worker;
+  from its first start on, plain commands reach it.
 - "The root holds a worker" means `~/.simlock/instance.json` exists. A worker
   writes it on its first start, before anything else. `config set` alone
   never writes it, so a stray plain `config set` on a gateway-only machine
   does not turn it into a worker machine.
 - With both, a plain command reaches the worker. A command only a gateway
   answers gets the worker's own `UNSUPPORTED_IN_WORKER_MODE` refusal, and
-  the CLI adds a hint to use `--gateway`. The CLI keeps no list of
+  the CLI adds a hint to use `--gateway` when it chose the worker and a
+  gateway is present. The CLI keeps no list of
   gateway-only commands: the worker's reply is the list.
 - Auto-start follows the same choice. On a gateway-only machine a plain
   command starts the gateway, never an empty worker.
