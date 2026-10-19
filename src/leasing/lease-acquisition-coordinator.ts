@@ -134,17 +134,12 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
-  /** Mints a request's id before admission checks, so a request refused there still has one. */
   readonly idGenerator: IdGenerator;
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<
     ManagedDeviceLifecycle,
     "bootForLease" | "destroy" | "dispose" | "shutdown"
   >;
-  /**
-   * The model names to try for each class, per platform, operator's list first (ADR 0015 §4),
-   * built at the composition root. This coordinator holds no model name of its own.
-   */
   readonly modelPreferences: ModelPreferences;
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
@@ -221,7 +216,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Synchronous and not routed through `decisions.run`: `lease.cancel`'s `authorize` hook runs
+   * why: Synchronous and not routed through `decisions.run`: `lease.cancel`'s `authorize` hook runs
    * before the handler, so it cannot go through the handler's serialized decision.
    */
   pendingRequestOwner(requesterId: string): string | undefined {
@@ -229,7 +224,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Admits a request, or answers a repeat of one. A repeat under a stored key is answered before
+   * why: Admits a request, or answers a repeat of one. A repeat under a stored key is answered before
    * any other check -- its result never depends on what changed on the host since. A new
    * request is stored before the queue sees it, inside the same serialized section as the
    * one-request-per-requester check, so two concurrent requests under one key cannot both pass.
@@ -321,7 +316,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * ADR 0020: the one clash check on a host, inside the same admission section as the
+   * why: ADR 0020: the one clash check on a host, inside the same admission section as the
    * one-lease-per-requester check and after it. An ID is held by an active lease and by a
    * request still waiting, so a restart, which fails every waiting request, frees it.
    */
@@ -352,7 +347,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     throw new LeaseIdTakenError(leaseId);
   }
 
-  /** Closes acquisition admission, settles all demand, and drains driver work. */
   async beginMaintenance(): Promise<void> {
     await this.options.decisions.run(async () => {
       this.#maintenanceDepth += 1;
@@ -376,7 +370,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
   }
 
-  /** Reopens acquisition admission after an administrative maintenance operation. */
   async endMaintenance(): Promise<void> {
     await this.options.decisions.run(async () => {
       this.#maintenanceDepth = Math.max(0, this.#maintenanceDepth - 1);
@@ -429,14 +422,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
-    // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     const range = requestedRange(request);
     const target =
       range === undefined
         ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
         : await this.#resolveRanged(request, mode, range);
-    // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
     const resolved = await this.#resolveOrInstall(onProgress, driver, target.exact, {
       ...options,
       allowDownload: options.allowDownload === true && range === undefined,
@@ -449,26 +440,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     };
   }
 
-  /**
-   * The exact request an exact-model request already is, answered without awaiting anything so
-   * its path takes no extra turn of the event loop; `undefined` for one that names no model.
-   */
   #exactTarget(request: DeviceRequest, mode: DeviceMode): ResolvedTarget | undefined {
     const { class: _class, model, ...rest } = request;
     return model === undefined ? undefined : { exact: { ...rest, mode, model } };
   }
 
-  /**
-   * Turns a request that names no model, or names an OS range, into the exact one a driver
-   * resolves (ADR 0015 §5). A class, named or meant by naming nothing, becomes the first model
-   * on its preference list that this host's catalog lists, classes as that class, and pairs with
-   * an installed runtime (of the requested image tag, and in the requested range, when it names
-   * them); an exact model with a range must be listed, or the request fails as
-   * `UnknownModelError`. With a range the runtime is the newest paired one in it, passed on as an
-   * exact version. The catalog is read, and nothing is downloaded. A class with no listed model
-   * fails as `UnknownModelError`, and a model or class with no pairing as a `RuntimeMissingError`
-   * no download can fix.
-   */
   async #resolveClass(
     request: DeviceRequest,
     mode: DeviceMode,
@@ -504,7 +480,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     };
   }
 
-  /** A request that names a model and an OS range: the model must be listed (ADR 0015 §5). */
   async #resolveRanged(
     request: DeviceRequest,
     mode: DeviceMode,
@@ -525,7 +500,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     );
   }
 
-  /** The target for `model` once the request's runtime constraints are settled against `entry`. */
   #rangedTarget(
     entry: DriverCatalogEntry,
     model: string,
@@ -551,17 +525,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     };
   }
 
-  /**
-   * Resolves the request; when its runtime is missing, a download could supply it, and the
-   * request may download, asks the installer for it and resolves once more. The installer skips
-   * the install when, by the time this call reaches the front of its queue, `resolveSpec` no
-   * longer fails with `RuntimeMissingError` -- another install made the runtime available.
-   * Without `allowDownload` the first failure stands and the installer is never called.
-   *
-   * The installer's reports reach the requester as the `downloading` stage, through the queue
-   * like every other stage. A report equal to the last one sent is skipped, so a percentage is
-   * sent once per whole number.
-   */
   async #resolveOrInstall(
     onProgress: (progress: DownloadingProgress) => void,
     driver: Driver,
@@ -605,7 +568,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Only a `queued` waiter is safe to reject: `processing` means device work already claimed it,
+   * why: Only a `queued` waiter is safe to reject: `processing` means device work already claimed it,
    * which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
    * read, so it is cancellable in any live state.
    */
@@ -637,11 +600,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     );
   }
 
-  /**
-   * Resolves a request to the spec it would be granted a device of, with downloads off, or says
-   * why there is none. A read: nothing is queued, reserved or installed. The warm pool resolves
-   * its targets here, so a target and a request become a spec in one place.
-   */
   async resolve(request: DeviceRequest): Promise<TargetResolution> {
     let driver: Driver;
     try {
@@ -833,7 +791,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      // The spec resolved to a component being removed (ADR 0010 §8): no device was created,
+      // why: The spec resolved to a component being removed (ADR 0010 §8): no device was created,
       // and none will be on it, so the request ends as `RUNTIME_MISSING` rather than retrying.
       if (error instanceof ComponentBeingRemovedError) {
         await this.options.decisions.run(async () => {
@@ -849,7 +807,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           this.options.queue.markNew(waiter);
           return true;
         }
-        // ADR 0021 §1: a probe is never queued on a worker. It is declined instead, and its
+        // why: ADR 0021 §1: a probe is never queued on a worker. It is declined instead, and its
         // caller (the gateway) walks on to another worker.
         if (waiter.options.fleetRequestId !== undefined) {
           this.#reject(waiter, new NoCapacityError(), "no-wait");
@@ -931,7 +889,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     device: DeviceRecord,
     kind: GrantingPlanKind,
   ): Promise<void> {
-    // Built before the write: the grant a repeat of this request answers is stored with the lease.
+    // why: Built before the write: the grant a repeat of this request answers is stored with the lease.
     const granted = await this.options.leases.grant({
       deviceId: device.id,
       environment: this.options.drivers
@@ -1018,8 +976,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     await this.#perform(waiter, next);
   }
 
-  /** One `warn` line for a device step that failed in the background and is handled here by
-   * deferring the waiter or destroying the device. The waiter only ever sees a generic outcome. */
   #logFailure(
     message: string,
     waiter: AcquisitionWaiter,
@@ -1120,7 +1076,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * A queued waiter whose spec matches a device already being reclaimed is waiting on that
+   * why: A queued waiter whose spec matches a device already being reclaimed is waiting on that
    * reclaim, not on nothing in particular: an iOS erase holds the only matching device for
    * tens of seconds, and reporting only `queued` leaves the requester with a position and no
    * sense of how long. Purely informational -- the plan is untouched. When the reclaim
@@ -1143,7 +1099,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Wakes the queue after a grant as well as after a waiter that was rejected meanwhile: a
+   * why: Wakes the queue after a grant as well as after a waiter that was rejected meanwhile: a
    * request that planned while this device was still being readied may have queued only
    * because this waiter held the head of the queue or because the capacity reservation
    * released here still counted.
@@ -1278,7 +1234,6 @@ function estimatedBootTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   };
 }
 
-/** A device that is already ready costs nothing to hand over; only its reclaim lies ahead. */
 function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   return {
     estimatedBootMs: 0,
@@ -1288,7 +1243,6 @@ function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   };
 }
 
-/** `standard`: every release path asks for it; a holder cannot request another clean level. */
 function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
   return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
 }
@@ -1342,13 +1296,12 @@ function downloadingProgress(
     : { component, percent: Math.floor(percent), stage: "downloading", waiting: false };
 }
 
-/** Both reports are for the one component a `#resolveOrInstall` call downloads. */
 function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
   return left.waiting === right.waiting && left.percent === right.percent;
 }
 
 /**
- * The spec a driver resolved, held to what the request asked. The image tag is the request's, or
+ * why: The spec a driver resolved, held to what the request asked. The image tag is the request's, or
  * none: a driver that returns another, or one the request did not name, would plan the device
  * into a pool the request did not ask for. Full is a guarantee (ADR 0007 §5): a slim spec is
  * accepted only for a slim request, so a driver that returns the wrong thing still cannot put a
@@ -1364,25 +1317,18 @@ function checkedSpec(resolved: VirtualSpec, request: DeviceRequest, mode: Device
   return mode === "slim" ? resolved : fullSpec(resolved);
 }
 
-/** What a target's refusal is called: the kinds a pool can act on, and any other as is. */
 function refusalOf(error: unknown): Exclude<TargetResolution, { spec: VirtualSpec }>["refusal"] {
   if (error instanceof RuntimeMissingError) return "runtime-missing";
   if (error instanceof UnknownModelError) return "unknown-model";
   return "unresolvable";
 }
 
-/** What `#resolveClass` settles on; an exact request has only `exact`. */
 interface ResolvedTarget {
   readonly exact: ExactDeviceRequest;
   readonly requirement?: DeviceRequirement;
   readonly classOf?: (model: string) => DeviceClass | undefined;
 }
 
-/**
- * The installed runtimes a model pairs with that the request accepts: the one it names, or those
- * in its range, or any when it names none; and only runtimes that have an image of the requested
- * tag when it names one (the rule the gateway's `matchRequest` applies).
- */
 function matchingRuntimes(
   entry: DriverCatalogEntry,
   model: string,
@@ -1399,7 +1345,6 @@ function matchingRuntimes(
   );
 }
 
-/** The newest runtime `model` pairs with that the request's range accepts, or none installed. */
 function newestRuntime(
   entry: DriverCatalogEntry,
   model: string,
@@ -1411,7 +1356,6 @@ function newestRuntime(
   return newest;
 }
 
-/** What a device's OS must satisfy: the range, the exact version named, or any installed runtime. */
 function requiredOs(
   entry: DriverCatalogEntry,
   { osVersion }: DeviceRequest,
@@ -1423,7 +1367,6 @@ function requiredOs(
     : { kind: "exact", version: osVersion };
 }
 
-/** The request's OS range, when its `osVersion` is one rather than an exact version. */
 function requestedRange(request: DeviceRequest): OsRange | undefined {
   if (request.osVersion === undefined) return undefined;
   const parsed = parseOsConstraint(request.osVersion);

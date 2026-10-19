@@ -136,13 +136,10 @@ function config(maxDevices = 1, maxRunning = 1): Config {
 // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
-    /** Stands in for the installer, when a test needs to see whether it was reached at all. */
     readonly components?: Pick<ComponentInstaller, "install">;
     readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
     readonly drivers?: readonly Driver[];
-    /** Free disk the installer sees; unlimited unless a test says otherwise. */
     readonly freeDiskBytes?: number;
-    /** Stands between the coordinator and the real lifecycle, when a test interleaves other work. */
     readonly lifecycle?: (
       lifecycle: ManagedDeviceLifecycle,
       collaborators: {
@@ -155,9 +152,7 @@ async function createHarness(
     readonly maxDevices?: number;
     readonly maxRunning?: number;
     readonly quarantine?: LeaseAcquisitionCoordinatorOptions["quarantine"];
-    /** The class preference lists the daemon would build from config and the drivers. */
     readonly preferences?: ModelPreferences;
-    /** Stands in for the catalog reader a class request reads, when a test scripts it. */
     readonly catalogReader?: Pick<CatalogReader, "listCatalog">;
   } = {},
 ) {
@@ -207,7 +202,6 @@ async function createHarness(
     catalog,
     claims,
     clock,
-    // Never refuses: what a removal does to provisioning is `DeviceProvisioner`'s own test.
     components: { claimProvision: () => () => undefined },
     decisions,
     lifecycle,
@@ -222,7 +216,6 @@ async function createHarness(
     ttl: { defaultMs: 100 },
   });
   let coordinator: LeaseAcquisitionCoordinator | undefined;
-  /** Every id minted for a request, in order. */
   const requestIds: string[] = [];
   const idGenerator = {
     generate: () => {
@@ -280,7 +273,6 @@ async function createHarness(
     registry,
     requests: new LeaseRequestBook({
       decisions,
-      // The daemon's classifier, cut down to the codes these tests read back.
       describeFailure: (error) => ({
         code: error instanceof NoCapacityError ? "NO_CAPACITY" : "INTERNAL",
         message: error instanceof Error ? error.message : String(error),
@@ -330,7 +322,6 @@ async function flush(): Promise<void> {
   for (let count = 0; count < 50; count += 1) await Promise.resolve();
 }
 
-/** Lets fire-and-forget device work that crosses several registry writes run to rest. */
 async function settle(): Promise<void> {
   for (let count = 0; count < 20; count += 1) await new Promise((resolve) => setImmediate(resolve));
 }
@@ -434,7 +425,6 @@ describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
     const broken = new DriverCrashError("simctl list failed");
-    // The first resolve finds the runtime missing; the check at the front of the queue breaks.
     driver.failOn("resolveSpec", 2, broken);
     driver.failOn("resolveSpec", 3, broken);
     const harness = await createHarness({ drivers: [driver] });
@@ -573,7 +563,6 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     });
     await flush();
 
-    // The driver is still holding: this is the replay, not a later report.
     expect(joined).toEqual([
       { component: "26.5", percent: 41, stage: "downloading", waiting: false },
     ]);
@@ -631,7 +620,6 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
 
   it("sends a request waiting on an install percent 100 once, before provisioning", async () => {
     const clock = new FakeClock(1_000);
-    // An iOS download's last report before the runtime is mounted.
     const driver = new FakeDriver({
       availableOsVersions: [],
       clock,
@@ -704,8 +692,6 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
       ownerId: "a",
       requesterId: "a",
     });
-    // No version: the fake names its word for newest, a different component that waits its turn
-    // and finds, at the front, that the first install made its runtime available.
     const newest = harness.coordinator.request(
       { model: "iPhone 16", platform: "ios" },
       {
@@ -731,7 +717,7 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
 
 describe("LeaseAcquisitionCoordinator", () => {
   it("rejects a second request from a requester whose first is still pending, under no key or a new idempotency key, with lease.rejected already-leased", async () => {
-    // The one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
+    // why: The one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
     // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a
     // lease is createLeasing's "enforces one active request or lease per requester" case.
     const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
@@ -796,7 +782,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         platform: "ios",
       });
       const harness = await createHarness({ drivers: [driver] });
-      // Both acquisition paths funnel through the same construction site; asserting only
+      // why: Both acquisition paths funnel through the same construction site; asserting only
       // the fresh-provision one would leave a warm-pool grant free to carry nothing.
       if (path === "ready") await seedReady(harness);
 
@@ -875,8 +861,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     ]);
     const booting = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
     await settle();
-    // Both devices come back shut down without the release path, so only the kick below wakes
-    // the queue; its head boots one of them and holds there.
     harness.driver.hangMakeReady();
     for (const grant of held) {
       await harness.registry.beginRelease(grant.lease.id);
@@ -918,12 +902,8 @@ describe("LeaseAcquisitionCoordinator", () => {
     const secondState = promiseState(second);
     await settle();
     expect(harness.coordinator.queueDepth).toBe(2);
-    // Makeready calls 1 and 2 readied the held devices; call 3 is the head's boot. Its device
-    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
     harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
     harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
-    // Both devices come back shut down without the release path, so only the kick below wakes
-    // the queue; its head is the request that fails.
     for (const grant of held) {
       await harness.registry.beginRelease(grant.lease.id);
       await harness.registry.transitionDevice(grant.device.id, "shutdown", {
@@ -1147,7 +1127,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       requestSpec: request,
     });
 
-    // No capacity remains (still held by "first"), but crucially this is NoCapacityError,
+    // why: No capacity remains (still held by "first"), but crucially this is NoCapacityError,
     // not RequesterAlreadyLeasedError -- the cancelled requester is no longer pending.
     await expect(
       harness.coordinator.request(request, {
@@ -1582,7 +1562,6 @@ describe("LeaseAcquisitionCoordinator", () => {
   });
 
   describe("device mode", () => {
-    /** A driver that slims 26.5 and cannot slim 17.5, like iOS on either side of 18.5. */
     function slimmingDriver(options: { readonly mode?: DeviceMode } = {}): FakeDriver {
       return new FakeDriver({
         availableOsVersions: ["17.5", "26.5"],
@@ -1774,8 +1753,6 @@ describe("LeaseAcquisitionCoordinator", () => {
 
   it("A failed eviction shutdown logs the device id and the error, and the waiter is deferred as before.", async () => {
     const { logger, sink } = capturingLogger();
-    // Two devices allowed but only one running: a running device of another spec is
-    // evicted by shutdown (not deleted) to make room for the request.
     const harness = await createHarness({ logger, maxDevices: 2 });
     const victim = await seedReady(harness, { ...request, model: "iPhone SE" });
     harness.driver.failOn("shutdown", 1, new DriverCrashError("shutdown wedged"));
@@ -1803,7 +1780,6 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
-    // Deferred: back in the queue, still pending, and the victim untouched.
     expect(settled).toBe(false);
     expect(harness.coordinator.queueDepth).toBe(1);
     expect(harness.registry.snapshot.devices.find((device) => device.id === victim.id)?.state).toBe(
@@ -1815,7 +1791,6 @@ describe("LeaseAcquisitionCoordinator", () => {
 
   it("A failed eviction delete logs the device id and the error.", async () => {
     const { logger, sink } = capturingLogger();
-    // One device allowed: a managed device of another spec is deleted to make room.
     const harness = await createHarness({ logger, maxDevices: 1 });
     const victim = await seedShutdown(harness, { ...request, model: "iPhone SE" });
     harness.driver.failOn("destroy", 1, new DriverCrashError("simctl delete refused"));
@@ -1955,7 +1930,6 @@ describe("LeaseAcquisitionCoordinator", () => {
       try {
         return await realMakeReady(...args);
       } finally {
-        // The record leaves `shutdown` while the boot fails, so the destroy finds nothing to claim.
         await harness.registry.transitionDevice(shutdown.id, "deleted", {
           event: "device.deleted",
           payload: { deviceId: shutdown.id, initiator: "test" },
@@ -2003,7 +1977,7 @@ describe("LeaseAcquisitionCoordinator", () => {
   );
 
   it("releases the running slot reserved to boot a shut-down device for a waiter when the boot fails and another boot claims the device before it is destroyed", async () => {
-    // The warm pool's boot reserves its own slot and claims the device in one decision. Here it
+    // why: The warm pool's boot reserves its own slot and claims the device in one decision. Here it
     // lands after the failed boot has released its claim and before the destroy claims the device.
     let raced = false;
     let warmBoot: { release(): void } | undefined;
@@ -2031,7 +2005,6 @@ describe("LeaseAcquisitionCoordinator", () => {
       }),
     });
     await seedShutdown(harness);
-    // Call 1 is seedShutdown's own boot; call 2 is the waiter's.
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
 
     await expect(
@@ -2039,7 +2012,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
     expect(raced).toBe(true);
 
-    // The warm pool's boot ends and gives back its own claim and slot.
     warmBoot?.release();
     await settle();
 
@@ -2056,7 +2028,6 @@ describe("LeaseAcquisitionCoordinator", () => {
 describe("LeaseAcquisitionCoordinator stored requests", () => {
   const keyed = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" } as const;
 
-  /** Grants the one device capacity allows to `holder`, then frees it again on demand. */
   async function holdTheOnlyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
     const held = await harness.coordinator.request(request, {
       ownerId: "holder",
@@ -2166,7 +2137,6 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     });
 
     expect(granted.lease.requesterId).toBe("agent");
-    // The grant and its stored result land in one commit; the flush lets the wait settle.
     await flush();
     expect(harness.registry.leaseRequests().map((record) => record.state)).toEqual([
       "granted",
@@ -2235,7 +2205,6 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
   const playstore = { ...android, imageTag: "google_apis_playstore" } as const;
   const owner = (id: string) => ({ ownerId: id, requesterId: id });
 
-  /** API 34 has a google_apis and a google_apis_playstore image; API 35 only google_apis. */
   function taggedDriver(): FakeDriver {
     return new FakeDriver({
       availableOsVersions: ["34", "35"],
@@ -3260,8 +3229,6 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
       }),
     ]);
 
-    // The same position in the sequence, on a request that passes admission: that id is the one
-    // the stored request gets, and nothing mints a second.
     const mintedBeforeAdmitted = harness.requestIds.length;
     await harness.coordinator.request(request, owner("other"));
     expect(harness.requestIds).toHaveLength(mintedBeforeAdmitted + 1);
