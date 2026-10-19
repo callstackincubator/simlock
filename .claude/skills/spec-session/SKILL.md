@@ -1,6 +1,6 @@
 ---
 name: spec-session
-description: Run a spec session on a GitHub issue — explore the code, docs, ADRs and open work first, then interview the maintainer in rounds on business and technical decisions together, draft any ADRs, and write the feature's business sections and its task sub-issues in one session; it ends with the spec-checker agent reading every posted body, and its findings are fixed before any task is set task:ready. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "spec #N", "split #N into tasks", or "revise the spec of #N".
+description: Run a spec session on an issue with the maintainer — explore, interview in rounds, draft ADRs, write the feature and its tasks, check them, and set them ready after one approval. Use when the user says "spec session for #N", "spec #N", "split #N into tasks" or "revise the spec of #N".
 model: opus
 effort: medium
 ---

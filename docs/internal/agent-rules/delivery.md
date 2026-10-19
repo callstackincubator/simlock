@@ -193,22 +193,12 @@ is open, done means closed as completed.
 
 13. **Assume every agent is in a worktree:** [coding.md](coding.md) rule 4.
 
-14. **Review before ready.** Every PR starts in draft. Follow
-    [the review protocol](../REVIEW.md) for immutable inputs, independent
-    spec/code/claims lenses, risk-based model routing, verification and the
-    resolution ledger. Rules and briefs come from the pinned PR base;
-    explicitly authorized rule amendments are reviewed as such. One full
-    review, one targeted round 2 and one targeted fix-check are the cap.
-    Follow-up depends on actual behavior, test-logic, acceptance and claims
-    impact, not file extension. Only mechanical fixes need no lens rerun.
-    Missing coverage or exhausted budget means incomplete, never pass.
-    An unresolved PR regression or incomplete assessment at the cap leaves
-    the PR in draft for escalation. Pre-existing unrelated debt is separate.
-    No reviewer sees author narration or another lens's findings before
-    synthesis; later checks receive the resolution history and fix delta.
-    The coordinator deduplicates before verification and records every
-    invocation, including fix-check and fix effort. Notes go out once after
-    the last check; they do not start rounds without evidence of a defect.
+14. **Review before ready.** Every PR starts in draft and leaves it only
+    after [the review protocol](../REVIEW.md): independent spec, code and
+    claims lenses on a pinned commit, rules and briefs from the PR base, and
+    at most one full round, one targeted round 2 and one fix-check. A PR
+    with an open blocking finding or an incomplete assessment at the cap
+    stays in draft for the maintainer.
 
 15. **An agent merges only through the gate, and a feature merges as one
     stack.** `.agents/scripts/merge-pr.sh`

@@ -31,6 +31,13 @@ step 3 is the mode's own brief in `.agents/briefs/`:
 | `fix`          | `implement-fix.md`          | the branch and `fixes`                 | each finding fixed                     |
 | `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests | those tests pass on the lane           |
 
+**Order**, which the caller runs, a fresh agent per mode: `red`; `green`
+with the last `map`, again while a report still lists `failing` and turned
+a test green since the last; then `audit` with the PR's base, merge-base
+and head from `review-inputs.sh`. `fix` applies findings, `hardware-fix`
+failing slow-lane tests. An agent given `fixes` does them and skips the
+audit. Every caller stops at `spec needs` under `open`.
+
 ## 1. Workspace
 
 ```bash

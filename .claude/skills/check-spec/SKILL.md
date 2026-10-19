@@ -1,6 +1,6 @@
 ---
 name: check-spec
-description: Check a feature or task spec as posted on GitHub, with a fresh context, before its ready label is set — one spec-checker per task plus one for the feature — and report, with a status for every category, contradictions, lines nobody could check, behaviour no test pins, failure modes no line answers, existing code on the same state no line names, facts with no source or a source that does not bear them out, values another module or tool would reject, lists the code contradicts, overlapping tasks without a Depends on and Depends on lines between tasks that share nothing, slow-lane lines with no test, undefined terms, and tasks too big for one agent and two review rounds. Read-only. Use when spec-session has posted a feature's tasks, or when the user says "check the spec of #N".
+description: Check a posted feature or task spec with fresh spec-checker agents (one per task, one for the feature) before its ready label is set. Read-only. Use when the user says "check the spec of #N".
 ---
 
 Arguments: $ARGUMENTS
