@@ -12,7 +12,7 @@
 # name with a slash is a branch itself (task/118, bug/79): its directory is task-118, and an
 # existing origin/<branch> is checked out instead of base, so delivery resumes where it stopped.
 # A branch a worktree already holds gets that worktree back, fast-forwarded to origin/<branch>:
-# every stage of a task (red, green, audit, fix) works in it, one after another.
+# every stage of a task (build, audit, fix) works in it, one after another.
 #
 # node_modules of the main checkout is cloned with APFS clonefile(2): no data copied, blocks
 # shared copy-on-write. pnpm then relinks offline, which takes about a second. Without
