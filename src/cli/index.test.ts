@@ -20,6 +20,7 @@ import {
   MemoryIpcTransport,
   NodeFilesystem,
   NodeIpcTransport,
+  NoopLogger,
   type Filesystem,
   type IdGenerator,
 } from "../ports/index.js";

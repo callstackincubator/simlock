@@ -27,6 +27,7 @@ import {
   MemoryLogSink,
   NodeFilesystem,
   NodeIpcTransport,
+  NoopLogger,
   ScriptedProcessRunner,
   type IpcConnection,
   type Logger,

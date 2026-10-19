@@ -49,6 +49,7 @@ import {
   FakeSystemStats,
   MemoryFilesystem,
   NodeProcessRunner,
+  NoopLogger,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
