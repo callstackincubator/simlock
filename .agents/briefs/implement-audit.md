@@ -38,9 +38,9 @@ edited after its `test:` commit:
   it.
 - It proves a claim no other test proves, through the module's surface
   (testing rules 6 and 7). One that repeats another test's claim is folded
-  into that test. One in a file whose subject the module's `index.ts` does
-  not export has the `why:` reason rule 6 asks for, or moves to the
-  surface.
+  into that test. One that imports a module's internal file instead of its
+  `index.ts` has the `why:` reason rule 6 asks for, or moves to the
+  surface, even when `index.ts` exports the same name.
 - Break the code it covers once (flip the condition, drop the filter, delete
   the call, move the constant, return early) and run its file: it fails on
   the assertion its title names. Restore the code. A test that stays green

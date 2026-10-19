@@ -35,7 +35,10 @@ For each line, one cycle:
    test: keep it and list the line as `built ahead: <line>`.
 2. **Green.** Write only the code this test needs to pass: no branch,
    case, field or error path that a later Tests line asks for, even when
-   you can see it coming. Run the files of every earlier cycle's test:
+   you can see it coming. What you write is the general logic the spec
+   describes, never a value or branch that matches only the test's input;
+   a field the type needs but no Tests line asserts is computed from
+   state, never a placeholder (`ready: 0`). Run the files of every earlier cycle's test:
    they stay green. Commit: `<type>(<scope>): <what now works> (#<N>)`.
 
 Never write the next test before this one is green, and never refactor
