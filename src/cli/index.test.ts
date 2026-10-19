@@ -6523,60 +6523,69 @@ class HelloThenDeathConnection implements IpcConnection {
     if (this.#closed) return;
     let answeredHello = false;
     for (const line of contents.split("\n")) {
-      if (line.trim() === "") continue;
-      const frame = JSON.parse(line) as {
-        id?: unknown;
-        type?: unknown;
-        payload?: { credential?: string };
-      };
-      if (frame.type === "status.get" && this.daemon.closeAfter === "stopping") {
-        const reply = {
-          id: frame.id,
-          ok: false,
-          error: {
-            code: "DAEMON_STOPPING",
-            message: "Daemon is stopping",
-            details: {},
-          },
-        };
-        for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
-      }
-      if (frame.type !== "hello" || typeof frame.id !== "number") continue;
-      if (this.daemon.rejectCredential && frame.payload?.credential !== undefined) {
-        this.daemon.rejectedCredentials += 1;
-        const reply = {
-          id: frame.id,
-          ok: false,
-          error: {
-            code: "ADMIN_AUTHENTICATION_FAILED",
-            message: "Rejected credential",
-            details: {},
-          },
-        };
-        for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
-        this.#shutDown(false);
-        return;
-      }
-      answeredHello = true;
-      this.daemon.helloReplies += 1;
-      const reply = {
-        id: frame.id,
-        ok: true,
-        payload: {
-          protocolVersion: PROTOCOL_VERSION_RANGE.max,
-          daemonProtocolRange: PROTOCOL_VERSION_RANGE,
-          version: "0.0.0-test",
-          role: "admin",
-          principal: "test-requester",
-        },
-      };
-      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+      answeredHello = this.#receiveFrame(line) || answeredHello;
+      if (this.#closed) return;
     }
     if (
       this.daemon.closeAfter === "hello" ||
       (!answeredHello && this.daemon.closeAfter === "request")
     )
       this.#shutDown(true);
+  }
+
+  #receiveFrame(line: string): boolean {
+    if (line.trim() === "") return false;
+    const frame = JSON.parse(line) as {
+      id?: unknown;
+      type?: unknown;
+      payload?: { credential?: string };
+    };
+    if (frame.type === "status.get" && this.daemon.closeAfter === "stopping") {
+      const reply = {
+        id: frame.id,
+        ok: false,
+        error: {
+          code: "DAEMON_STOPPING",
+          message: "Daemon is stopping",
+          details: {},
+        },
+      };
+      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+    }
+    if (frame.type !== "hello" || typeof frame.id !== "number") return false;
+    this.#answerHello(frame.id, frame.payload?.credential);
+    return true;
+  }
+
+  #answerHello(id: number, credential: string | undefined): void {
+    if (this.daemon.rejectCredential && credential !== undefined) {
+      this.daemon.rejectedCredentials += 1;
+      const reply = {
+        id: id,
+        ok: false,
+        error: {
+          code: "ADMIN_AUTHENTICATION_FAILED",
+          message: "Rejected credential",
+          details: {},
+        },
+      };
+      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+      this.#shutDown(false);
+      return;
+    }
+    this.daemon.helloReplies += 1;
+    const reply = {
+      id: id,
+      ok: true,
+      payload: {
+        protocolVersion: PROTOCOL_VERSION_RANGE.max,
+        daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+        version: "0.0.0-test",
+        role: "admin",
+        principal: "test-requester",
+      },
+    };
+    for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
   }
 
   async close(): Promise<void> {
