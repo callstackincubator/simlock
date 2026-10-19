@@ -183,4 +183,28 @@ describe("sign-in proxy JWT against a real gateway", () => {
     expect(issuer.code, issuer.stderr).toBe(0);
     expect(issuer.stdout.trim()).toBe(JSON.stringify(ISSUER));
   });
+
+  it("a good JWT on POST /v1/workers/no-such-worker/drain is 403 with cross-site and reaches the dispatcher with same-origin", async () => {
+    const key = await createTestKey("ES256", "k1");
+    const gateway = await gatewayTrusting(await startKeyServer(key));
+    const drain = async (site: string) =>
+      fetch(`${gateway.baseUrl}/v1/workers/no-such-worker/drain`, {
+        headers: { [HEADER]: await key.sign(claims()), "sec-fetch-site": site },
+        method: "POST",
+      });
+
+    const same = await drain("same-origin");
+    expect(same.status).toBe(404);
+    expect(await same.json()).toMatchObject({ error: { code: "UNKNOWN_WORKER" } });
+
+    const cross = await drain("cross-site");
+    expect(cross.status).toBe(403);
+    expect(await cross.json()).toEqual({
+      error: {
+        code: "FORBIDDEN",
+        message:
+          "Cross-site request refused: a request signed in through a sign-in proxy must come from the console",
+      },
+    });
+  });
 });

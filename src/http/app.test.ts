@@ -55,6 +55,7 @@ function buildHarness(
     readonly answerDownloadsEarly?: boolean;
     readonly identities?: Readonly<Record<string, Identity>>;
     readonly auth?: Auth;
+    readonly mounts?: HttpGatewayDeps["mounts"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -101,6 +102,7 @@ function buildHarness(
     ownerRoutedFacts,
     registry: overrides.registry ?? registry,
     auth,
+    ...(overrides.mounts === undefined ? {} : { mounts: overrides.mounts }),
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),
@@ -2628,6 +2630,147 @@ describe("a person the sign-in proxy signed in", () => {
 
       const frames = await framesPromise;
       expect(frames.map((frame) => frame.event)).toEqual(["progress", "result"]);
+    });
+  });
+
+  describe("changing requests", () => {
+    const CSRF_BODY = {
+      error: {
+        code: "FORBIDDEN",
+        message:
+          "Cross-site request refused: a request signed in through a sign-in proxy must come from the console",
+      },
+    };
+    const changing: ReadonlyArray<readonly [string, string, string, number]> = [
+      ["POST", "/v1/workers/w/drain", "worker.drain", 200],
+      ["DELETE", "/v1/leases/lse_1", "lease.release", 202],
+    ];
+    const refused: ReadonlyArray<string | undefined> = [
+      "cross-site",
+      "same-site",
+      "none",
+      "Same-Origin",
+      "same-origin, cross-site",
+      undefined,
+    ];
+
+    function changingHarness() {
+      const harness = harnessFor(proxyPerson(signedInAt + 120_000));
+      harness.registry.devices = [makeDevice({ id: "dev_1" })];
+      harness.registry.leases = [
+        makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" }),
+      ];
+      harness.dispatcher.handlers["worker.drain"] = () => ({ workerId: "w" });
+      harness.dispatcher.handlers["lease.release"] = () => ({ leaseId: "lse_1" });
+      return harness;
+    }
+
+    function withSite(site: string | undefined): Record<string, string> {
+      return site === undefined ? proxyHeaders : { ...proxyHeaders, "sec-fetch-site": site };
+    }
+
+    describe.each(changing)("%s %s", (method, path, operation, accepted) => {
+      it("is dispatched with Sec-Fetch-Site same-origin", async () => {
+        const { app, dispatcher } = changingHarness();
+
+        const response = await app.request(path, { headers: withSite("same-origin"), method });
+
+        expect(response.status).toBe(accepted);
+        expect(dispatcher.calls.map((call) => call.operation)).toContain(operation);
+      });
+
+      it.each(refused)("is 403 and dispatches nothing with Sec-Fetch-Site %s", async (site) => {
+        const { app, dispatcher } = changingHarness();
+
+        const response = await app.request(path, { headers: withSite(site), method });
+
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual(CSRF_BODY);
+        expect(dispatcher.calls).toEqual([]);
+      });
+    });
+
+    describe("to a mount", () => {
+      function mountedHarness() {
+        const seen: string[] = [];
+        const harness = buildHarness({
+          identities: { slk_proxy: proxyPerson(signedInAt + 120_000) },
+          mounts: [
+            {
+              prefix: "stream",
+              handle: (request: Request) => {
+                seen.push(request.method);
+                return new Response("ok");
+              },
+            },
+          ] as never,
+        });
+        return { ...harness, seen };
+      }
+
+      it.each(["PUT", "PATCH"])(
+        "refuses %s with cross-site and does not call it",
+        async (method) => {
+          const { app, seen } = mountedHarness();
+
+          const response = await app.request("/v1/stream/x", {
+            headers: withSite("cross-site"),
+            method,
+          });
+
+          expect(response.status).toBe(403);
+          expect(await response.json()).toEqual(CSRF_BODY);
+          expect(seen).toEqual([]);
+        },
+      );
+
+      it.each(["PUT", "PATCH"])("calls it for %s with same-origin", async (method) => {
+        const { app, seen } = mountedHarness();
+
+        const response = await app.request("/v1/stream/x", {
+          headers: withSite("same-origin"),
+          method,
+        });
+
+        expect(response.status).toBe(200);
+        expect(seen).toEqual([method]);
+      });
+
+      it.each(["GET", "HEAD", "OPTIONS"])("calls it for %s with cross-site", async (method) => {
+        const { app, seen } = mountedHarness();
+
+        const response = await app.request("/v1/stream/x", {
+          headers: withSite("cross-site"),
+          method,
+        });
+
+        expect(response.status).toBe(200);
+        expect(seen).toEqual([method]);
+      });
+    });
+
+    it("dispatches GET /v1/leases with cross-site", async () => {
+      const { app, dispatcher } = changingHarness();
+
+      const response = await app.request("/v1/leases", { headers: withSite("cross-site") });
+
+      expect(response.status).toBe(200);
+      expect(dispatcher.calls.map((call) => call.operation)).toContain("lease.list");
+    });
+
+    it("dispatches DELETE /v1/leases/x from a token identity with cross-site", async () => {
+      const { app, dispatcher, registry } = buildHarness();
+      registry.devices = [makeDevice({ id: "dev_1" })];
+      registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+      dispatcher.handlers["lease.release"] = () => ({ leaseId: "lse_1" });
+
+      const response = await app.request("/v1/leases/lse_1", {
+        headers: { ...agentAuth, "sec-fetch-site": "cross-site" },
+        method: "DELETE",
+      });
+
+      expect(response.status).toBe(202);
+      expect(dispatcher.calls.map((call) => call.operation)).toContain("lease.release");
     });
   });
 });
