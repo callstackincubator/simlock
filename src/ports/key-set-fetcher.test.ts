@@ -46,15 +46,22 @@ describe("NodeKeySetFetcher against a real server", () => {
     const controller = new AbortController();
 
     const pending = new NodeKeySetFetcher().fetch(`${base}/keys`, { signal: controller.signal });
-    const outcome = pending.then(
-      () => "answered",
-      (error: unknown) => (error as Error).name,
+    let outcome: string | undefined;
+    const settled = pending.then(
+      () => {
+        outcome = "answered";
+      },
+      (error: unknown) => {
+        outcome = (error as Error).name;
+      },
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect(received).toBe(true);
     controller.abort();
 
-    await expect(outcome).resolves.toBe("AbortError");
+    await Promise.race([settled, new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
+
+    expect(outcome).toBe("AbortError");
   });
 
   it("returns a body of 64 KiB and fails on a body over 64 KiB", async () => {

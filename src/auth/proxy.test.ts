@@ -352,9 +352,10 @@ describe("the proxy strategy's key URL", () => {
     expect(settled).toEqual([]);
     expect(keySetFetcher.signals[0]?.aborted).toBe(false);
     clock.advance(1);
-    await pending;
+    await flush();
 
     expect(settled).toEqual([refused("keys-unavailable")]);
+    await pending;
     expect(keySetFetcher.signals[0]?.aborted).toBe(true);
   });
 
@@ -417,6 +418,21 @@ describe("the proxy strategy's key URL", () => {
       identity: { principal: "proxy:iss1#u1" },
     });
     expect(keySetFetcher.urls).toHaveLength(2);
+  });
+
+  it("counts the 30 s from the last good fetch, not from a failed attempt", async () => {
+    const { auth, clock, keySetFetcher } = await harness();
+    const unknown = () => unlisted.sign(personClaims());
+    await outcome(auth, proxyRequest(await k1.sign(personClaims())));
+    keySetFetcher.fail(new Error("connect ECONNREFUSED"));
+
+    clock.advance(31_000);
+    expect(await outcome(auth, proxyRequest(await unknown()))).toEqual(refused("unknown-key"));
+    expect(keySetFetcher.urls).toHaveLength(2);
+
+    clock.advance(5_000);
+    expect(await outcome(auth, proxyRequest(await unknown()))).toEqual(refused("unknown-key"));
+    expect(keySetFetcher.urls).toHaveLength(3);
   });
 
   it("shares one fetch between JWTs checked at once with an empty cache", async () => {
