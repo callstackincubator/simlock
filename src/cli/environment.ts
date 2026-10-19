@@ -10,7 +10,6 @@ import type {
   Clock,
   DaemonLauncher,
   Filesystem,
-  IpcConnection,
   IpcConnector,
   ParentWatch,
   ParentWatchHandle,
@@ -20,17 +19,17 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
 
-class AutoLaunchIpcConnector implements IpcConnector {
+class AutoLaunchAdminConnector {
   constructor(
-    private readonly ipc: IpcConnector,
+    private readonly connectClient: () => Promise<SimlockAdminClient>,
     private readonly clock: Clock,
     private readonly launcher: DaemonLauncher,
     private readonly checkConfig: () => Promise<void>,
   ) {}
 
-  async connect(endpoint: string): Promise<IpcConnection> {
+  async connect(): Promise<SimlockAdminClient> {
     try {
-      return await this.ipc.connect(endpoint);
+      return await this.connectClient();
     } catch (error: unknown) {
       if (!(await isUnavailable(error))) throw error;
     }
@@ -42,7 +41,7 @@ class AutoLaunchIpcConnector implements IpcConnector {
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
-        return await this.ipc.connect(endpoint);
+        return await withStartupFailure(await this.connectClient());
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
@@ -57,6 +56,42 @@ class AutoLaunchIpcConnector implements IpcConnector {
       {},
     );
   }
+}
+
+async function withStartupFailure(client: SimlockAdminClient): Promise<SimlockAdminClient> {
+  const { isSimlockError, SimlockError } = await import("../contract/index.js");
+  let requestAnswered = false;
+  return new Proxy(client, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]): unknown => {
+        const result: unknown = Reflect.apply(value, target, args);
+        if (!(result instanceof Promise) || property === "close") return result;
+        return result.then(
+          (answer: unknown) => {
+            requestAnswered = true;
+            return answer;
+          },
+          (error: unknown) => {
+            if (
+              !requestAnswered &&
+              isSimlockError(error) &&
+              error.code === "DAEMON_CONNECTION_LOST"
+            ) {
+              throw new SimlockError(
+                "DAEMON_STARTUP_FAILED",
+                "transport",
+                "The daemon closed its connection while starting, before answering the first request",
+                {},
+              );
+            }
+            throw error;
+          },
+        );
+      };
+    },
+  });
 }
 
 /** why: the class lives behind the ports barrel, which this module must not load at CLI start;
@@ -132,9 +167,9 @@ export function buildCliEnvironment(
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
   const requesterId = resolveRequesterId(env, String(process.pid));
-  // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
-  // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
-  const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher, async () => {
+  const checkConfig = async (): Promise<void> => {
+    // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
+    // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
     const { loadConfig } = await import("../core/index.js");
     await loadConfig({
       configPath,
@@ -142,7 +177,7 @@ export function buildCliEnvironment(
       modules: await moduleConfigEntries(),
       systemStats,
     });
-  });
+  };
 
   const connect = async (
     connector: IpcConnector,
@@ -170,7 +205,13 @@ export function buildCliEnvironment(
     clock,
     configPath,
     requesterId,
-    connectAdmin: (resolveCredential) => connect(autoLaunchIpc, resolveCredential),
+    connectAdmin: (resolveCredential) =>
+      new AutoLaunchAdminConnector(
+        () => connect(ipc, resolveCredential),
+        clock,
+        launcher,
+        checkConfig,
+      ).connect(),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}

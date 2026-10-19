@@ -54,9 +54,12 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
    `SIMLOCK_ADMIN_TOKEN` → `admin.token` in the data directory (3 reads, 50 ms apart).
    None, or a rejected one → an `agent` session and one stderr `notice` line.
-3. **Auto-launch** (`AutoLaunchIpcConnector`) — when nothing listens: load the config
+3. **Auto-launch** (`AutoLaunchAdminConnector`) — when nothing listens: load the config
    first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
-   for `DAEMON_STARTUP_TIMEOUT_MS`.
+   for `DAEMON_STARTUP_TIMEOUT_MS`. Only the client returned by that launch poll wraps
+   request failures: `DAEMON_CONNECTION_LOST` before the first successful request becomes
+   `DAEMON_STARTUP_FAILED`. The handshake alone does not end that window. Once a request
+   succeeds, later failures keep their original codes; a pre-existing daemon is never wrapped.
 4. **`simlock lease`** — `requestLease`; progress pushes as JSON lines on stderr; one result
    line on stdout, with the session's `role` (`--export-env`: shell lines). `--agent-id`
    sets the requester. Then, unless `--detach`:

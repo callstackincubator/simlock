@@ -1447,66 +1447,194 @@ describe("CLI: auto-launch's failed start (#672)", () => {
 });
 
 describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)", () => {
-  it("reports a daemon it launched that answers hello then dies during that start as a failed start, not a lost connection", async () => {
-    // why: this stages the daemon that loses its HTTP port race exactly as the socket shows it
-    // to the CLI: absent before the launch, then listening, answering `hello`, and closing on
-    // its own `http-start-failed` stop before the command's first real request is answered.
-    // The connection is the auto-launch poll's own, so `daemon start` never had a daemon to
-    // lose -- yet it currently prints `DAEMON_CONNECTION_LOST`, the code docs/CLI.md reserves
-    // for a live connection that died, leaving a script unable to tell a failed start from a
-    // lost daemon. The expectation below (the contract's start-failure code, which #672 gave
-    // the timeout sibling of this same auto-launch path) is the report's proposal.
+  it.each(["hello", "request"] as const)(
+    "reports a daemon it launched that answers hello then dies during that start as a failed start, not a lost connection (after %s)",
+    async (closeAfter) => {
+      // why: this stages the daemon that loses its HTTP port race exactly as the socket shows it
+      // to the CLI: absent before the launch, then listening, answering `hello`, and closing on
+      // its own `http-start-failed` stop before the command's first real request is answered.
+      const dyingDaemon = new HelloThenDeathIpc(closeAfter);
+      const clock = new FakeClock(0);
+      const launcher = new FakeDaemonLauncher(() => {
+        dyingDaemon.startListening();
+      });
+      const output = outputCapture({
+        filesystem: new MemoryFilesystem(),
+        clock,
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: dyingDaemon,
+        launcher,
+        dataDirectory: "/simlock",
+      });
+      let settled = false;
+      const exitCode = runCli(
+        ["daemon", "start", "--json", "--token", "probe"],
+        output.environmentWith(),
+      ).then((code) => {
+        settled = true;
+        return code;
+      });
+      // why: the tick bound is generous because #671 made every module a command loads lazy, so
+      // one `daemon start` now passes through several more import turns than when this repro was
+      // first staged; the clock is fake and the loop stops the moment the command settles, so the
+      // extra headroom pins nothing -- it only keeps a hung command failing on this named
+      // assertion instead of on a test timeout.
+      for (let tick = 0; tick < 100 && !settled; tick += 1) {
+        clock.advance(50);
+        await settle();
+        await settle();
+      }
+      expect(
+        settled,
+        `simlock daemon start still had not settled at ${String(clock.now())}ms`,
+      ).toBe(true);
+
+      // why: the staging itself, proven from the fake's side -- the socket was absent until this
+      // command launched the daemon, the daemon did answer that command's `hello`, and every
+      // connection it accepted died by its own hand. Without these the assertion below could be
+      // reached by a connection that never saw a daemon at all.
+      expect(launcher.launches).toBe(1);
+      expect(dyingDaemon.helloReplies).toBe(1);
+      expect(dyingDaemon.deaths).toBe(1);
+
+      expect(await exitCode).toBe(1);
+      expect(output.stdout).toBe("");
+      expect(JSON.parse(output.stderr)).toMatchObject({
+        error: {
+          code: "DAEMON_STARTUP_FAILED",
+          message: expect.stringContaining("daemon"),
+        },
+      });
+    },
+  );
+
+  it("keeps a pre-existing daemon's hello-then-close as DAEMON_CONNECTION_LOST", async () => {
     const dyingDaemon = new HelloThenDeathIpc();
-    const clock = new FakeClock(0);
-    const launcher = new FakeDaemonLauncher(() => {
-      dyingDaemon.startListening();
-    });
+    dyingDaemon.startListening();
+    const launcher = new FakeDaemonLauncher();
     const output = outputCapture({
-      filesystem: new MemoryFilesystem(),
-      clock,
-      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ...realCliEnvironmentPorts(),
       ipc: dyingDaemon,
       launcher,
-      dataDirectory: "/simlock",
     });
-    let settled = false;
-    const exitCode = runCli(
-      ["daemon", "start", "--json", "--token", "probe"],
-      output.environmentWith(),
-    ).then((code) => {
-      settled = true;
-      return code;
-    });
-    // why: the tick bound is generous because #671 made every module a command loads lazy, so
-    // one `daemon start` now passes through several more import turns than when this repro was
-    // first staged; the clock is fake and the loop stops the moment the command settles, so the
-    // extra headroom pins nothing -- it only keeps a hung command failing on this named
-    // assertion instead of on a test timeout.
-    for (let tick = 0; tick < 100 && !settled; tick += 1) {
-      clock.advance(50);
-      await settle();
-      await settle();
-    }
-    expect(settled, `simlock daemon start still had not settled at ${String(clock.now())}ms`).toBe(
-      true,
-    );
 
-    // why: the staging itself, proven from the fake's side -- the socket was absent until this
-    // command launched the daemon, the daemon did answer that command's `hello`, and every
-    // connection it accepted died by its own hand. Without these the assertion below could be
-    // reached by a connection that never saw a daemon at all.
-    expect(launcher.launches).toBe(1);
+    expect(
+      await runCli(["daemon", "start", "--json", "--token", "probe"], output.environmentWith()),
+    ).toBe(1);
+    expect(launcher.launches).toBe(0);
     expect(dyingDaemon.helloReplies).toBe(1);
     expect(dyingDaemon.deaths).toBe(1);
-
-    expect(await exitCode).toBe(1);
     expect(output.stdout).toBe("");
-    expect(JSON.parse(output.stderr)).toMatchObject({
-      error: {
-        code: "DAEMON_STARTUP_FAILED",
-        message: expect.stringContaining("daemon"),
-      },
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "DAEMON_CONNECTION_LOST", message: "Daemon connection closed" },
     });
+  });
+
+  it.each(["held lease", "in-flight request"] as const)(
+    "keeps an auto-launched daemon's death after a successful request as DAEMON_CONNECTION_LOST during %s",
+    async (operation) => {
+      const ipc = new MemoryIpcTransport();
+      const clock = new FakeClock(0);
+      const requests: string[] = [];
+      const replies: string[] = [];
+      const connections: IpcConnection[] = [];
+      const launcher = new FakeDaemonLauncher(async () => {
+        await ipc.listen("/simlock/daemon.sock", (connection) => {
+          connections.push(connection);
+          connection.onData((contents) => {
+            const frame = JSON.parse(contents) as { id: number; type: string };
+            requests.push(frame.type);
+            const payload =
+              frame.type === "hello"
+                ? {
+                    protocolVersion: PROTOCOL_VERSION_RANGE.max,
+                    daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+                    version: "0.0.0-test",
+                    role: "admin",
+                    principal: "test-requester",
+                  }
+                : frame.type === "lease.request"
+                  ? detachedGrant
+                  : frame.type === "status.get"
+                    ? EMPTY_STATUS
+                    : undefined;
+            if (payload === undefined) return;
+            replies.push(frame.type);
+            void connection.write(`${JSON.stringify({ id: frame.id, ok: true, payload })}\n`);
+          });
+        });
+      });
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(),
+        ipc,
+        clock,
+        launcher,
+      });
+      let settled = false;
+      const runPromise = runCli(
+        operation === "held lease"
+          ? ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--token", "probe"]
+          : ["simctl", "list", "--token", "probe"],
+        output.environmentWith(),
+      ).then((code) => {
+        settled = true;
+        return code;
+      });
+      const ready = (): boolean =>
+        operation === "held lease" ? output.stdout !== "" : requests.includes("driver.passthrough");
+      for (let tick = 0; tick < 100 && !ready() && !settled; tick += 1) {
+        clock.advance(50);
+        await settle();
+        await settle();
+      }
+      expect(ready()).toBe(true);
+      expect(settled).toBe(false);
+      expect(launcher.launches).toBe(1);
+      expect(connections).toHaveLength(1);
+      expect(replies).toEqual([
+        "hello",
+        operation === "held lease" ? "lease.request" : "status.get",
+      ]);
+      await connections[0]!.close();
+      expect(await runPromise).toBe(1);
+      expect(JSON.parse(output.stderr)).toMatchObject({
+        error: { code: "DAEMON_CONNECTION_LOST" },
+      });
+      if (operation === "held lease") {
+        expect(JSON.parse(output.stdout)).toMatchObject({ lease: detachedGrant.lease });
+        expect(JSON.parse(output.stderr).error.message).toContain(detachedGrant.lease.id);
+        expect(requests).toEqual(["hello", "lease.request"]);
+      } else {
+        expect(output.stdout).toBe("");
+        expect(requests).toEqual(["hello", "status.get", "driver.passthrough"]);
+      }
+    },
+  );
+
+  it("preserves the daemon's refusal of the first auto-launched request", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipc = new MemoryIpcTransport();
+    const launcher = new FakeDaemonLauncher(async () => {
+      await startInMemoryDaemon({
+        filesystem,
+        ipcTransport: ipc,
+        socketPath: "/simlock/daemon.sock",
+        adminTokenPath: "/simlock/admin.token",
+      });
+    });
+    const output = outputCapture({
+      ...realCliEnvironmentPorts(),
+      filesystem,
+      ipc,
+      launcher,
+    });
+
+    expect(
+      await runCli(["lease", "--platform", "android", "--detach"], output.environmentWith()),
+    ).toBe(12);
+    expect(launcher.launches).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "NO_DRIVER" } });
   });
 });
 
@@ -6287,6 +6415,8 @@ class HelloThenDeathIpc implements IpcConnector {
   deaths = 0;
   #listening = false;
 
+  constructor(readonly closeAfter: "hello" | "request" = "hello") {}
+
   startListening(): void {
     this.#listening = true;
   }
@@ -6326,10 +6456,12 @@ class HelloThenDeathConnection implements IpcConnection {
 
   async write(contents: string): Promise<void> {
     if (this.#closed) return;
+    let answeredHello = false;
     for (const line of contents.split("\n")) {
       if (line.trim() === "") continue;
       const frame = JSON.parse(line) as { id?: unknown; type?: unknown };
       if (frame.type !== "hello" || typeof frame.id !== "number") continue;
+      answeredHello = true;
       this.daemon.helloReplies += 1;
       const reply = {
         id: frame.id,
@@ -6344,9 +6476,7 @@ class HelloThenDeathConnection implements IpcConnection {
       };
       for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
     }
-    // why: the daemon's own stop, right after the handshake -- this start never held a live
-    // daemon, so the close is the death of a boot, not the loss of a running one.
-    this.#shutDown(true);
+    if (!answeredHello || this.daemon.closeAfter === "hello") this.#shutDown(true);
   }
 
   async close(): Promise<void> {
