@@ -70,6 +70,7 @@ import {
 import type { TokenOperations } from "../auth/index.js";
 import {
   DispatchError,
+  identityGet,
   runDispatch,
   usageAnswer,
   type DispatchSession,
@@ -313,6 +314,7 @@ export class Dispatcher {
       "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
+      "identity.get": identityGet,
       "token.create": this.#tokenCreate,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,

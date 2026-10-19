@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { OPERATIONS } from "../../contract/index.js";
 import { authStrategies } from "./index.js";
 import { tokenFixture } from "./token/testing.js";
 
@@ -41,3 +42,12 @@ describe.each(authStrategies.map((definition) => ({ definition })))(
     });
   },
 );
+
+describe("the strategy registry and identity.get", () => {
+  it("every registered strategy's name is a value of identity.get's via enum", () => {
+    const via: readonly string[] = OPERATIONS["identity.get"].output.shape.via.options;
+
+    expect(authStrategies.length).toBeGreaterThan(0);
+    for (const definition of authStrategies) expect(via).toContain(definition.name);
+  });
+});

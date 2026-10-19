@@ -1028,7 +1028,22 @@ export const relayCancel = defineOperation({
   output: z.object({}),
 });
 
+export const identityGet = defineOperation({
+  name: "identity.get",
+  role: "agent",
+  effect: "read",
+  input: z.object({}),
+  output: z.object({
+    principal: z.string(),
+    name: z.string(),
+    role: z.enum(["admin", "agent"]),
+    via: z.enum(["socket", "uplink"]),
+    signOutUrl: z.string().optional(),
+  }),
+});
+
 export const OPERATIONS = {
+  "identity.get": identityGet,
   "catalog.get": catalogGet,
   "status.get": statusGet,
   "lease.request": leaseRequest,

@@ -46,6 +46,7 @@ import {
 } from "../contract/index.js";
 import {
   DispatchError,
+  identityGet,
   runDispatch,
   usageAnswer,
   type DispatchSession,
@@ -173,6 +174,7 @@ export class GatewayDispatcher {
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
+      "identity.get": identityGet,
 
       "nuke.run": unsupportedByDesign("nuke.run"),
       "cleanup.run": unsupportedByDesign("cleanup.run"),

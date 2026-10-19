@@ -8,7 +8,7 @@ import {
   LeaseRequestBook,
   RequestCancelledError,
 } from "../leasing/index.js";
-import { runDispatch } from "../daemon/dispatch.js";
+import { identityGet, runDispatch } from "../daemon/dispatch.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
@@ -46,6 +46,10 @@ function buildHarness(
       ["slk_agent", tokenIdentity("tok_agent", "agent")],
       ["slk_other", tokenIdentity("tok_other", "agent")],
       ["slk_operator", tokenIdentity("tok_operator", "operator")],
+      [
+        "slk_labelled",
+        { ambient: false, name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" },
+      ],
     ]),
   );
   const logSink = new MemoryLogSink();
@@ -174,6 +178,37 @@ describe("GET /v1/healthz", () => {
     const response = await app.request("/v1/healthz");
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+  });
+});
+
+describe("GET /v1/identity", () => {
+  it("answers the token's id as principal, its label as name, its role and via token; an unlabelled operator token's name is its id; no token is a 401 Missing bearer token", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["identity.get"] = identityGet;
+
+    const labelled = await app.request("/v1/identity", {
+      headers: { authorization: "Bearer slk_labelled" },
+    });
+    expect(labelled.status).toBe(200);
+    expect(await labelled.json()).toEqual({
+      name: "ci-runner",
+      principal: "tok_9f2c",
+      role: "agent",
+      via: "token",
+    });
+
+    const operator = await app.request("/v1/identity", { headers: operatorAuth });
+    expect(operator.status).toBe(200);
+    expect(await operator.json()).toEqual({
+      name: "tok_operator",
+      principal: "tok_operator",
+      role: "admin",
+      via: "token",
+    });
+
+    const anonymous = await app.request("/v1/identity");
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.json()).toMatchObject({ error: { message: "Missing bearer token" } });
   });
 });
 

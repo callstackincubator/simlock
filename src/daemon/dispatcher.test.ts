@@ -821,6 +821,26 @@ describe("Dispatcher: token.create | token.list | token.revoke", () => {
   });
 });
 
+describe("Dispatcher: identity.get", () => {
+  it("copies signOutUrl from a session that has one into its output, and omits it otherwise", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    const withUrl = await dispatcher.dispatch(
+      "identity.get",
+      {},
+      session({ role: "admin", via: "proxy", signOutUrl: "https://sso.example/logout" }),
+    );
+    const without = await dispatcher.dispatch(
+      "identity.get",
+      {},
+      session({ role: "admin", via: "socket" }),
+    );
+
+    expect(withUrl).toHaveProperty("signOutUrl", "https://sso.example/logout");
+    expect(without).not.toHaveProperty("signOutUrl");
+  });
+});
+
 describe("Dispatcher: role rejection", () => {
   it("rejects an admin-only operation from an agent session with FORBIDDEN", async () => {
     const { dispatcher } = await buildDispatcher();

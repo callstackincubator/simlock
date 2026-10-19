@@ -251,6 +251,30 @@ const EVERY_OPERATION = (Object.keys(OPERATIONS) as OperationName[]).filter(
 );
 
 describe("GatewayDispatcher", () => {
+  it("answers identity.get from its own caller's session, the same shape", async () => {
+    const { dispatcher } = harness();
+
+    await expect(
+      dispatcher.dispatch(
+        "identity.get",
+        {},
+        session({ principal: "operator-1", role: "admin", via: "socket" }),
+      ),
+    ).resolves.toEqual({
+      name: "operator-1",
+      principal: "operator-1",
+      role: "admin",
+      via: "socket",
+    });
+    await expect(
+      dispatcher.dispatch(
+        "identity.get",
+        {},
+        session({ name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" }),
+      ),
+    ).resolves.toEqual({ name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" });
+  });
+
   it("The gateway dispatcher logs the same line for the same operation", async () => {
     const { clock, dispatcher, logSink, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");

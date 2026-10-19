@@ -3140,6 +3140,40 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await local.close();
   });
 
+  it("identity.get answers the declared principal as principal and name over a socket: agent with no credential, admin with the admin secret, admin with an operator token", async () => {
+    const harness = await createHarness({
+      resolveRole: {
+        resolve: (payload) =>
+          payload.credential === "admin-secret" || payload.credential === "slk_operator"
+            ? "admin"
+            : "agent",
+      },
+    });
+    const cases = [
+      { credential: undefined, principal: "claude-1", role: "agent" },
+      { credential: "admin-secret", principal: "claude-2", role: "admin" },
+      { credential: "slk_operator", principal: "claude-3", role: "admin" },
+    ];
+
+    for (const { credential, principal, role } of cases) {
+      const client = await createClient(harness.socketPath);
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          principal,
+          ...(credential === undefined ? {} : { credential }),
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      await expect(client.request("identity.get", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { name: principal, principal, role, via: "socket" },
+      });
+      await client.close();
+    }
+  });
+
   it("negotiates the protocol range over an uplink exactly as over the socket (ADR 0005 §31)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const pair = linkPair();

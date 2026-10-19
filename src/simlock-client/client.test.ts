@@ -207,6 +207,23 @@ describe("connectSimlock: handshake", () => {
     await expect(callPromise).resolves.toEqual(answer);
   });
 
+  it("identity() sends identity.get and returns its output", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+    const answer = { name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" };
+
+    const callPromise = client.identity();
+    await flushMicrotasks();
+    const call = connection.lastSentOf("identity.get")!;
+    expect(call.payload).toEqual({});
+    connection.reply(call.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+  });
+
   it("removes a component from an admin client with component.remove, sending the input and returning the daemon's answer", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });

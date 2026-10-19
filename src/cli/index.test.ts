@@ -6292,6 +6292,13 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
     getStatus: () => Promise.resolve(EMPTY_STATUS),
+    identity: () =>
+      Promise.resolve({
+        name: "test-requester",
+        principal: "test-requester",
+        role: "admin",
+        via: "socket",
+      }),
     listComponents: () => Promise.resolve({ components: [] }),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),

@@ -59,6 +59,7 @@ export type UsageGetInput = OpInput<"usage.get">;
 export type UsageGetOutput = OpOutput<"usage.get">;
 export type EventsSubscribeOutput = OpOutput<"events.subscribe">;
 export type EventsUnsubscribeOutput = OpOutput<"events.unsubscribe">;
+export type IdentityOutput = OpOutput<"identity.get">;
 export type TokenCreateInput = OpInput<"token.create">;
 export type TokenCreateOutput = OpOutput<"token.create">;
 export type TokenListOutput = OpOutput<"token.list">;
