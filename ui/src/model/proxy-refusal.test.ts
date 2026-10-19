@@ -18,6 +18,7 @@ describe("proxyRefusalLine", () => {
       ["malformed", "it is not a valid sign-in token"],
       ["keys-unavailable", "this daemon cannot reach the sign-in service's keys"],
       ["something-new", "it was refused"],
+      ["constructor", "it was refused"],
     ];
 
     expect(cases.map(([reason]) => proxyRefusalLine(reason))).toEqual(

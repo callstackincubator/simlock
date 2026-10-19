@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Fetch } from "./api";
 import { checkIdentity, type IdentityOutcome } from "./identity-check";
@@ -70,6 +70,8 @@ describe("checkIdentity", () => {
       expect(answering.calls.map((call) => call.input)).toEqual(["/v1/identity", "/v1/healthz"]);
       const down = asking(identity, NETWORK_ERROR);
       expect(await checkIdentity(down.fetch)).toEqual({ kind: "unreachable" });
+      const failing = asking(identity, new Response("down", { status: 503 }));
+      expect(await checkIdentity(failing.fetch)).toEqual({ kind: "unreachable" });
     }
   });
 
@@ -90,5 +92,26 @@ describe("checkIdentity", () => {
     expect(identity?.input).toBe("/v1/identity");
     expect(identity?.init.credentials).toBe("same-origin");
     expect(new Headers(identity?.init.headers).has("Authorization")).toBe(false);
+  });
+
+  it("answers nobody, and asks nothing more, when the identity request times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const fetch: Fetch = (input, init) => {
+        calls.push(input);
+        return new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new DOMException("", "AbortError")));
+        });
+      };
+
+      const outcome = checkIdentity(fetch);
+      await vi.advanceTimersByTimeAsync(10_001);
+
+      expect(await outcome).toEqual({ kind: "none" });
+      expect(calls).toEqual(["/v1/identity"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

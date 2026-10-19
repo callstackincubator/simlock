@@ -237,4 +237,31 @@ describe("a session behind a sign-in proxy", () => {
     await vi.waitFor(() => expect(loaded.state()).toEqual({ kind: "none" }));
     expect(loading.reload).not.toHaveBeenCalled();
   });
+
+  it("keeps the token when a token session gets an answer that is not Simlock's", async () => {
+    const proxied = page({ healthz, identity: answers(200, ALICE), workers: HTML_403 });
+    proxied.storage.setItem("simlock.operatorToken", "slk_op");
+    const { api, session } = proxied.open();
+
+    await api.getJson("/v1/workers").catch(() => undefined);
+    await settled();
+
+    expect(session.state()).toEqual({ kind: "token", token: "slk_op" });
+    expect(proxied.storage.getItem("simlock.operatorToken")).toBe("slk_op");
+    expect(proxied.calls).not.toContain("/v1/identity");
+  });
+
+  it("does not undo a token signed in while the identity check ran", async () => {
+    const proxied = page({ identity: answers(200, ALICE) });
+    let release: (response: Response) => void = () => {};
+    proxied.routes.identity = () => new Promise<Response>((resolve) => (release = resolve));
+    const { session } = proxied.open();
+    session.start();
+
+    session.signIn("slk_op");
+    release(new Response(JSON.stringify(ALICE), { status: 200 }));
+    await settled();
+
+    expect(session.state()).toEqual({ kind: "token", token: "slk_op" });
+  });
 });
