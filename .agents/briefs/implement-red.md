@@ -1,7 +1,9 @@
 # Mode `red`: the spec's tests first
 
 Write one test per line under Tests (a bug's triage test already exists),
-or extend the existing test the line names (testing rule 7). Each title is
+or extend the existing test the line names (testing rule 7). A line that
+lists cases is still one test, its cases a table in its body; a line names
+one seam, and its claim is tested there only. Each title is
 the spec's claim, word for word where it fits. Before you run them, read
 each against testing rules 6, 8 and 10: it asserts on the module's output,
 not its internals; no log line the user docs do not describe; none of the

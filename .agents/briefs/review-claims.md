@@ -31,7 +31,8 @@ Whether a comment may exist at all is the commit hook's (rule 17 in
 
 A claim is false when the code at this commit contradicts it: a name or
 path that no longer exists, a behaviour, order, owner, default or limit that
-changed. Blocking: a false claim. Note: a claim that is true but misleading.
+changed. Blocking: a false claim. A claim that is true but misleading is
+no finding.
 
 ## Assessment
 
@@ -44,8 +45,10 @@ already supported remain valid; identify unresolved coverage separately.
 
 `F0` is a good result: do not look for findings to have some. Output only
 your list, then your findings: no preamble, no headings, no summary, no
-narration. Report every blocking finding; there is no limit. At most five
-notes; write no other note. One line per defect, in this form and no other:
+narration, at most 400 words besides the list. Report every blocking
+finding; there is no limit. Write a note only for a suspected leak of a
+secret or a credential that you could not prove: at most two. One line per
+defect, in this form and no other:
 
 ```
 F<n> B|N <path:line> <the claim and what the code does instead, at most 25 words> [architecture 13] ev: <path:line, ...>

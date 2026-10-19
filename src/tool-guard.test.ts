@@ -17,11 +17,11 @@ function call(input: object): { status: number | null; stderr: string } {
   return { status: result.status, stderr: result.stderr };
 }
 
-function bash(command: string, agentId: string | null = "a1") {
+function bash(command: string, agentId: string | null = "a1", agentType = "reviewer") {
   return call({
     tool_name: "Bash",
     tool_input: { command },
-    ...(agentId && { agent_id: agentId }),
+    ...(agentId && { agent_id: agentId, agent_type: agentType }),
   });
 }
 
@@ -46,6 +46,9 @@ describe("tool-guard.mjs", () => {
     "pnpm --workspace check",
     "pnpm -C . run lint",
     "(FORCE_COLOR=0 pnpm lint | tail -3)",
+    "pnpm mutate origin/main",
+    "node scripts/mutate.mjs origin/main",
+    "pnpm exec stryker run",
   ])("refuses a sub-agent's check: %s", (command) => {
     const result = bash(command);
 
@@ -92,6 +95,15 @@ describe("tool-guard.mjs", () => {
 
   it("lets the main session run a check, as a routine does", () => {
     expect(bash("pnpm mutate origin/main", null)).toEqual({ status: 0, stderr: "" });
+  });
+
+  it("lets an implementer run the mutation script, and no tool behind it", () => {
+    const implementer = (command: string) => bash(command, "a1", "implementer");
+
+    expect(implementer("pnpm mutate abc123 > m.txt 2>&1")).toEqual({ status: 0, stderr: "" });
+    expect(implementer("node scripts/mutate.mjs abc123")).toEqual({ status: 0, stderr: "" });
+    expect(implementer("pnpm exec stryker run").status).toBe(2);
+    expect(implementer("pnpm check").status).toBe(2);
   });
 
   it.each(["implementer", "reviewer", "hardware-verifier"])(

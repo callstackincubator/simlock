@@ -91,12 +91,13 @@ function inputs(
   comments: readonly { body: string }[],
   previous?: string,
   base = "main",
+  prBody: string | null = null,
 ) {
   const file = join(mkdtempSync(join(root, "gh-")), "github.json");
   writeFileSync(
     file,
     JSON.stringify({
-      "repos/o/r/pulls/7": { head: { ref: "bug/12" }, base: { ref: base }, body: null },
+      "repos/o/r/pulls/7": { head: { ref: "bug/12" }, base: { ref: base }, body: prBody },
       "repos/o/r/issues/12": issue,
       "repos/o/r/issues/12/comments": comments,
       "repos/o/r/issues/5": { body: "Feature\r\nfive." },
@@ -126,6 +127,24 @@ function inputs(
 const BUG = { body: "The bug.", labels: [{ name: "bug:ready" }], parent_issue_url: null };
 
 describe("review-inputs.sh over repo-scoped REST", { timeout: 30_000 }, () => {
+  it("writes the PR body's Mutants section to mutants.md and no other part of the body", () => {
+    const body = [
+      "Closes #12",
+      "## Mutants",
+      "40 mutants, 1 alive:",
+      "- src/a.ts:3 ConditionalExpression: equivalent, the branch only logs",
+      "## Review",
+      "Spec review: skipped.",
+    ].join("\r\n");
+
+    const { read } = inputs(BUG, [], undefined, "main", body);
+
+    expect(read("mutants.md")).toBe(
+      "40 mutants, 1 alive:\n- src/a.ts:3 ConditionalExpression: equivalent, the branch only logs\n",
+    );
+    expect(inputs(BUG, []).read("mutants.md")).toBeNull();
+  });
+
   it("writes the issue the branch names, and its parent from parent_issue_url", () => {
     const parented = { ...BUG, parent_issue_url: "https://api.github.com/repos/o/r/issues/5" };
     const result = inputs(parented, []);

@@ -25,18 +25,20 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    lens gets its own detached worktree at `commit`, prepared with
    `.agents/scripts/worktree.sh --prepare <path>`; spec and claims get
    read-only worktrees. Spawn the selected `spec-reviewer`,
-   `code-reviewer` and `claims-reviewer` together in the foreground with
-   inputs, worktree, round and lens. A user prohibiting delegation: do the
+   `code-reviewer` and `claims-reviewer` together in the foreground, each
+   prompt the ledger tag line (`toolchain.md`, "Review measurement") and
+   then inputs, worktree, round and lens. A user prohibiting delegation: do the
    checks yourself and label the report author self-check.
 3. **Synthesis.** Wait for every lens, then follow REVIEW.md "Synthesis and
-   convergence". Remove probe worktrees after collecting evidence. Record
-   every invocation in the metrics ledger.
+   convergence". Remove probe worktrees after collecting evidence. Write
+   every canonical finding, with its class, to the findings file REVIEW.md
+   "Measurement" describes.
 
 ## Report
 
 End with this block; counts are unique canonical findings by owning role.
 A repeated finding keeps its ID and is not counted again. Preserve the
-resolution ledger and per-invocation metrics with the PR.
+resolution ledger and the findings file with the PR.
 
 ```
 PR: #M  Round: <1|2|fix-check>  Kind: <kind>  Commit: <full sha>
@@ -50,7 +52,7 @@ Notes: <role: path:line claim, or none>
 Rejected: <role: ID [incorrect|intentional|nonblocking] claim — reason, or none>
 Spec needs: <unresolved decision, or none>
 Rerun: round 2 | fix-check | none
-Metrics: <durable ledger location>
+Findings file: <path>
 ```
 
 `Rerun: none` never means unresolved findings passed. A non-delivery PR

@@ -22,7 +22,8 @@ Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm lint`, `pnpm lint:comments`,
 `pnpm format`, `pnpm format:check`,
-`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
+`pnpm fallow`, `pnpm mutate` (outside the implementer and the `harden-tests`
+routine), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine). A PreToolUse hook
@@ -43,16 +44,26 @@ list and this one the same.
 
 ## Mutation testing
 
-Not part of delivery. The weekly `harden-tests` routine runs
-`pnpm mutate <base> --max-lines 1500` on `main` for the source lines
-changed since `<base>`, newest files first up to that many lines, kills
-the survivors that change behaviour a caller or user can see, and opens
-one tests-only PR.
+`pnpm mutate <base>` mutates the source lines changed since `<base>` and
+lists each mutant the unit suite let live. It first runs only the test
+files that import a changed file, or reach it through their own module's
+`index.ts`, or that the branch changed; a mutant those leave alive gets a
+second run with every related test file. It reuses each unchanged result,
+so a fix run pays only for what changed.
+
+- **Delivery:** the implementer's audit runs it on the PR's diff (testing
+  rule 2) and writes what stays alive, with a reason each, under
+  `## Mutants` in the PR body; the code review checks those reasons.
+- **Weekly:** the `harden-tests` routine runs `pnpm mutate <base>
+  --max-lines 1500` on `main`, newest files first up to that many lines,
+  kills the survivors that change behaviour a caller or user can see, and
+  opens one tests-only PR.
 
 ## Routines
 
-Claude Code routines run these skills on a schedule, each opening one PR
-that goes through the reviews its diff's kind gets and the merge gate:
+Claude Code routines run these skills on a schedule, each but one opening
+one PR that goes through the reviews its diff's kind gets and the merge
+gate:
 
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
@@ -60,8 +71,11 @@ that goes through the reviews its diff's kind gets and the merge gate:
 | Test audit         | `audit-tests`       | weekly |
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
+| Recurring findings | `recurring-findings` | weekly |
 
-Every routine ends the same way; its skill adds only what it changes:
+`recurring-findings` opens draft task issues instead of a PR, and skips
+the ending below. Every other routine ends the same way; its skill adds
+only what it changes:
 
 1. `reviewer` with the PR number, round 1. Fix each Fix line yourself,
    within the routine's kind of edit, then the check its `Rerun` names:
@@ -178,7 +192,16 @@ the tool's docs alone.
 
 ## Review measurement
 
-`node .agents/scripts/review-metrics.mjs <ledger.json>` validates and
-summarizes per-PR invocation records. Use the template and evaluation
-procedure in [REVIEW.md](../REVIEW.md). This is reporting, not a broad
-project check. Preserve unknown usage/cost as null.
+Every prompt a delivery stage or review lens is started with begins with
+this line, `-` for a key that does not apply yet:
+
+```
+ledger: pr=<M> issue=<N> stage=<red|green|audit|fix|hardware-fix|review|hardware> round=<1|2|fix-check> role=<implementer|reviewer|spec|code|claims|hardware-verifier> lens=<behaviour|tests|both>
+```
+
+`node .agents/scripts/review-metrics.mjs --pr <M> --issue <N> [--findings
+<file>]` reads the runs so tagged from Claude Code's transcripts on this
+machine and prints their models, seconds, tokens and cost, and with
+`--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
+what goes in the findings file and where the result is posted. It reports,
+it checks nothing.

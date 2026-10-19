@@ -49,7 +49,8 @@ prove the behaviour, each at the cheapest level that can prove it
    of the part that matters — usually because the test exercises an
    internal callback rather than the observable output the path exists to
    produce. Write the test that goes red, then restore the code. Mutation
-   testing does this mechanically, weekly, for the newest changes on `main`
+   testing does this mechanically for every pull request's changed lines,
+   and weekly for the newest changes on `main`
    ([toolchain.md](toolchain.md) says where it runs).
 
 4. **A test that enforces a rule must see everything the rule covers.** A
@@ -88,9 +89,13 @@ prove the behaviour, each at the cheapest level that can prove it
 7. **Prove each claim once, at the cheapest level that can prove it.**
    Before you add a test, search for one that already proves the claim or
    the behaviour next to it, and extend that one (a case, an assertion);
-   write a new test only when none does. A contract several
-   implementations share is one suite run over each of them. A claim proved
-   at one level is not proved again at another:
+   write a new test only when none does. A spec's Tests line is one test:
+   the cases it lists go in that test's body, as one table when they differ
+   only in data, never one test per case. A contract several
+   implementations share (the worker's and the gateway's handlers of one
+   operation) is one suite run over each of them. A claim proved at one
+   level is not proved again at another, nor through a second seam of the
+   same level:
 
    | Claim                                                      | Level                                               |
    | ---------------------------------------------------------- | --------------------------------------------------- |
@@ -109,7 +114,8 @@ prove the behaviour, each at the cheapest level that can prove it
    `main` keeps its reproduction as its regression test. A defect a review
    finds in a pull request is fixed and proven as rule 7 says: by extending
    the test that proves the behaviour next to it, and by a new test only
-   when none does.
+   when none does; the fix report then names the test it could not extend,
+   and why.
 
 10. **The usual ways an assertion cannot fail.** Each of these passes
     against a broken implementation; check every test you write or change

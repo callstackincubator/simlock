@@ -39,13 +39,21 @@ edited after the red commit:
 - It proves a claim no other test proves, through the module's surface
   (testing rules 6 and 7). One that repeats another test's claim is folded
   into that test.
-- Break the code it covers once (flip the condition, drop the filter, return
-  early) and run its file: it fails on the assertion its title names.
-  Restore the code. A test that stays green is vacuous: fix it. Every
-  test, no skipping: a probe the audit skips, a reviewer does on a far
-  costlier model. Report `probed <p>/<t>` on the `audit:` line: `t` tests
-  added or changed, `p` probed.
 - A test comparing two outputs also asserts one of them against a literal.
+
+**Mutate.** Run `pnpm mutate <merge-base> > <scratch>/mutants.txt 2>&1`
+(after fixes: the same command; it reuses every unchanged result). Exit 2:
+`Assessment: incomplete`. For each mutant it lists alive, either kill it
+(extend the test that proves the behaviour next to it, testing rule 7) or
+write one line on why it changes nothing a caller, user, stored record or
+event can see; in a strict area (`toolchain.md`) only a log line may stay
+alive. Then put the result in the PR body under `## Mutants`: the summary
+line, and per mutant still alive its `path:line`, mutator and reason.
+Report `mutants <total> alive <a> explained <e>` on the `audit:` line.
+When the script finds no changed source line (a tests-only diff), report
+`mutants none` and instead break the code each added or changed test covers
+once, run its file, see it fail on the assertion its title names, and
+restore the code.
 
 Run the "Project checks" in `toolchain.md` that the diff triggers. Then the
 tests from mode `green` pass, and you push.

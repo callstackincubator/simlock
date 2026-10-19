@@ -32,6 +32,8 @@
 #   tests-after-red.patch  what changed in the files of the branch's first `test:` commit (the
 #                          red tests, or a bug's reproduction) between that commit and the head
 #   assumptions.md         the PR body's `Assumption:` lines (coding rule 2)
+#   mutants.md             the PR body's `## Mutants` section: what `pnpm mutate` left alive at the
+#                          audit, and how each was killed or why it changes nothing a caller sees
 #
 # Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules, ADRs
 # and briefs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
@@ -194,6 +196,15 @@ if [ -n "$issue" ]; then
 else
   say "PR #$pr closes no issue (branch $head_ref, no 'Closes #n' in the body)"
 fi
+
+printf '%s\n' "$pr_body" | awk '
+  /^## / { inside = ($0 ~ /^## Mutants[ \t]*$/); next }
+  inside { print }
+' >"$out/mutants.md"
+grep -q . "$out/mutants.md" || {
+  rm -f "$out/mutants.md"
+  say "no ## Mutants section in the PR body"
+}
 
 # ADRs by number, wherever the spec names them, or wherever the record an ADR diff adds or edits
 # names them: "ADR 0014", "ADR-0014", "ADRs 0004 and 0005", or a link to adr/0014-....md. Each

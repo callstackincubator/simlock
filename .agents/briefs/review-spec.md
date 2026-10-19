@@ -23,16 +23,21 @@ delivered`, or `Done when 3: differently: <how, at most 15 words>`.
 2. Does the diff do anything the specification did not ask for? Anything
    `always-in-scope.md` lists is asked for: never a finding.
 3. For every Tests line of the specification: the test in the diff that
-   proves it, by `file:line`, or `missing`. For every change in Tests after
+   proves it, by `file:line`, or `missing`. A line proven by more than one
+   new test, or a new test no Tests line asks for and no failure-mode or
+   always-in-scope item needs, is a finding [testing 7]. For every change in Tests after
    red that deletes a test or removes or loosens an assertion: which line of
    the specification is no longer proven? Whether a test's body proves its
-   title is the code review's question, not yours.
+   title, or can fail at all, is the code review's question, not yours; so
+   is a defect in behaviour the specification does not name (a missing
+   bound, a race). Do not report them.
 4. For each assumption: is it the conservative choice, and consistent with
    the specification? One that contradicts a line of it, or decides
    behaviour a user would see that nobody decided, is blocking.
 
 Blocking: a line not delivered or delivered differently, a Tests line with
-no test, a line of the specification left unproven, an
+no test or with several, a new test nothing asks for, a line of the
+specification left unproven, an
 assumption that fails question 4, behaviour a user sees that the
 specification did not ask for, or a breach of a file in `spec/`.
 
@@ -55,13 +60,15 @@ A finding is blocking only when it shows wrong behaviour or state, a false
 statement, a rule or ADR breach, or a line of the specification left
 undelivered or unproven. Testing rules and always-in-scope coverage apply
 even when the spec omits a case. Extra coverage beyond those requirements,
-a stronger assertion than its claim needs, or defensive code is a note.
+a stronger assertion than its claim needs, or defensive code is no
+finding.
 `F0` is a good result: do not look for findings to have some.
 
 Output only your list, then your findings: no preamble, no headings, no
-summary, no narration. Report every blocking finding; there is no limit.
-At most five notes, each a possible wrong behaviour or state; write no
-other note. One line per defect, in this form and no other:
+summary, no narration, at most 400 words besides the list. Report every
+blocking finding; there is no limit. Write a note only for a suspected
+leak of a secret or a credential, or loss of user data, that you could not
+prove: at most two. One line per defect, in this form and no other:
 
 ```
 F<n> B|N <path:line> <the defect, at most 25 words> [<class>] ev: <path:line, ...>
