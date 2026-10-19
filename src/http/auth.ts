@@ -19,9 +19,16 @@ export function requireAuth(auth: Pick<Auth, "authenticateRequest">): Middleware
         error.status,
         error.status === 401 ? "UNAUTHENTICATED" : "FORBIDDEN",
         error.message,
-        error.details === undefined ? undefined : { details: error.details },
+        error.details === undefined
+          ? undefined
+          : { details: error.details, ...reasonOf(error.details) },
       );
     }
     await next();
   };
+}
+
+function reasonOf(details: unknown): { reason?: string } {
+  const reason = (details as { reason?: unknown } | null)?.reason;
+  return typeof reason === "string" ? { reason } : {};
 }

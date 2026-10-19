@@ -6,6 +6,8 @@ import type { Clock } from "../ports/index.js";
 /** ~15s per the issue spec, so idle tunnels don't close the stream. */
 const KEEPALIVE_MS = 15_000;
 
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 export interface SseEvent {
   readonly event: string;
   readonly data: unknown;
@@ -31,7 +33,7 @@ export interface SseSource {
  * lifetime both go through the injected `Clock` -- no `stream.sleep` (real `setTimeout` under
  * the hood) and no bare timers. Client abort unsubscribes the source and cancels the timer.
  */
-export function pipeSse(c: Context, clock: Clock, source: SseSource): Response {
+export function pipeSse(c: Context, clock: Clock, source: SseSource, endsAt?: number): Response {
   return streamSSE(c, async (stream) => {
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
@@ -78,9 +80,16 @@ export function pipeSse(c: Context, clock: Clock, source: SseSource): Response {
 
     stream.onAbort(() => finish());
 
+    // why: a timer delay over 2^31-1 ms fires at once, so a far `endsAt` ends the stream at the cap and the client reconnects.
+    const endTimer =
+      endsAt === undefined
+        ? undefined
+        : clock.setTimer(Math.min(Math.max(0, endsAt - clock.now()), MAX_TIMER_MS), finish);
+
     const unsubscribe = source.subscribe(send, finish);
     await done;
     clock.cancel(keepaliveTimer);
+    if (endTimer !== undefined) clock.cancel(endTimer);
     await writeChain;
     unsubscribe();
   });

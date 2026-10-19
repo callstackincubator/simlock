@@ -344,28 +344,33 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     if (initial === undefined) throw unknownRequest(id);
     requireOwnRequest(c.get("identity"), initial.ownerId);
 
-    return pipeSse(c, deps.clock, {
-      subscribe(send, end) {
-        const current = tracker.get(id) ?? initial;
-        send({ data: serializeRequest(current), event: current.state.stage });
-        if (isTerminalStage(current.state)) {
-          end();
-          return () => {};
-        }
-        const unsubscribe = tracker.subscribe(id, (state) => {
-          send({ data: serializeRequest({ ...current, state }), event: state.stage });
-          if (isTerminalStage(state)) end();
-        });
-        // Nothing in this process is driving the request -- one a restarted daemon has not
-        // settled yet -- so no change will ever arrive on this stream: end it rather than
-        // hold it open. The client reconnects and reads the settled state.
-        if (unsubscribe === undefined) {
-          end();
-          return () => {};
-        }
-        return unsubscribe;
+    return pipeSse(
+      c,
+      deps.clock,
+      {
+        subscribe(send, end) {
+          const current = tracker.get(id) ?? initial;
+          send({ data: serializeRequest(current), event: current.state.stage });
+          if (isTerminalStage(current.state)) {
+            end();
+            return () => {};
+          }
+          const unsubscribe = tracker.subscribe(id, (state) => {
+            send({ data: serializeRequest({ ...current, state }), event: state.stage });
+            if (isTerminalStage(state)) end();
+          });
+          // Nothing in this process is driving the request -- one a restarted daemon has not
+          // settled yet -- so no change will ever arrive on this stream: end it rather than
+          // hold it open. The client reconnects and reads the settled state.
+          if (unsubscribe === undefined) {
+            end();
+            return () => {};
+          }
+          return unsubscribe;
+        },
       },
-    });
+      c.get("identity").expiresAt,
+    );
   });
 
   app.delete("/v1/lease-requests/:id", agentAuth, async (c) => {
@@ -580,14 +585,19 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const identity = c.get("identity");
     const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.param("id"));
 
-    return pipeSse(c, deps.clock, {
-      subscribe(send, end) {
-        return notices.subscribe(lease.id, (notice) => {
-          send({ data: notice, event: notice.event });
-          if (notice.event === "lease_lost") end();
-        });
+    return pipeSse(
+      c,
+      deps.clock,
+      {
+        subscribe(send, end) {
+          return notices.subscribe(lease.id, (notice) => {
+            send({ data: notice, event: notice.event });
+            if (notice.event === "lease_lost") end();
+          });
+        },
       },
-    });
+      identity.expiresAt,
+    );
   });
 
   app.delete("/v1/leases/:id", agentAuth, async (c) => {
@@ -733,17 +743,22 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     // HTTP notice buffer stays, because a polling client has no connection to push to" --
     // this route is the same story for the full event bus).
     await deps.dispatch("events.subscribe", {}, session);
-    return pipeSse(c, deps.clock, {
-      subscribe(send) {
-        unsubscribeBus = deps.eventBus.subscribeAll((envelope) => {
-          send({ data: envelope, event: envelope.event });
-        });
-        return () => {
-          unsubscribeBus?.();
-          unsubscribeBus = undefined;
-        };
+    return pipeSse(
+      c,
+      deps.clock,
+      {
+        subscribe(send) {
+          unsubscribeBus = deps.eventBus.subscribeAll((envelope) => {
+            send({ data: envelope, event: envelope.event });
+          });
+          return () => {
+            unsubscribeBus?.();
+            unsubscribeBus = undefined;
+          };
+        },
       },
-    });
+      identity.expiresAt,
+    );
   });
 
   for (const mount of deps.mounts ?? []) {

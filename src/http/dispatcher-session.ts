@@ -73,6 +73,7 @@ export function buildHttpSession(
     name: identity.name,
     role: toRole(identity.role),
     via: toVia(identity.via),
+    ...(identity.signOutUrl === undefined ? {} : { signOutUrl: identity.signOutUrl }),
     ...(extra?.onProgress === undefined ? {} : { onProgress: extra.onProgress }),
     ...(extra?.onRequestAdmitted === undefined
       ? {}
