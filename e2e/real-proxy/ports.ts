@@ -1,7 +1,19 @@
-/**
- * why: placeholder so the red tests compile; green replaces it with the lane's real port check
- * of 4180, 5556 and 4700.
- */
+import { createServer } from "node:net";
+
+export const LANE_PORTS = [4180, 5556, 4700] as const;
+
+function isFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+  });
+}
+
 export async function assertLanePortsFree(): Promise<void> {
-  throw new Error("not implemented");
+  for (const port of LANE_PORTS) {
+    if (!(await isFree(port))) {
+      throw new Error(`port ${port} is in use; the real-proxy lane needs it free`);
+    }
+  }
 }

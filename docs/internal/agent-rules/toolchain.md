@@ -78,6 +78,14 @@ In a cloud session, edit a PR body with
 (`gh pr edit` is GraphQL, which the cloud refuses), and when `gh pr ready`
 fails with a 403 naming the proxy's ready-for-review route, call that route.
 
+## The real-proxy lane
+
+`pnpm test:real-proxy` runs Simlock behind oauth2-proxy and Dex (both in
+Docker, host networking) and signs a person in through them in Chromium. Linux
+with Docker only; agents never run it, CI does (the "Real proxy" workflow, on a
+pull request that changes source, and weekly). One run per machine: ports 4180,
+5556 and 4700 are fixed, and the setup fails naming one that is busy.
+
 ## The screen capture programs
 
 `pnpm build` runs `scripts/build-capture.mjs`: it copies the vendored scrcpy

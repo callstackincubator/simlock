@@ -53,6 +53,7 @@
     "test:e2e:physical": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --no-file-parallelism --reporter=default --reporter=./e2e/progress-reporter.ts --tags-filter='physical'",
     "test:e2e:physical-manual": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --no-file-parallelism --reporter=default --reporter=./e2e/progress-reporter.ts --tags-filter='physical-manual'",
     "test:console": "pnpm run build && pnpm run build:e2e && playwright test",
+    "test:real-proxy": "pnpm run build && pnpm run build:e2e && playwright test --config playwright.real-proxy.config.ts",
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/src.tsbuildinfo && tsc -p ui/tsconfig.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/ui.tsbuildinfo",
     "typecheck:e2e": "pnpm run build && tsc -p e2e/tsconfig.typecheck.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e.tsbuildinfo",
     "lint": "oxlint src e2e ui && depcruise src e2e ui --ignore-known",
