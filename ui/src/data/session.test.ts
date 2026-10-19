@@ -238,17 +238,75 @@ describe("a session behind a sign-in proxy", () => {
     expect(loading.reload).not.toHaveBeenCalled();
   });
 
-  it("keeps the token when a token session gets an answer that is not Simlock's", async () => {
-    const proxied = page({ healthz, identity: answers(200, ALICE), workers: HTML_403 });
+  it("keeps the token when a token session gets an answer that is not Simlock's, a 401 or a 403", async () => {
+    for (const status of [401, 403]) {
+      const proxied = page({
+        healthz,
+        identity: answers(200, ALICE),
+        workers: () => new Response("<html>Sign in</html>", { status }),
+      });
+      proxied.storage.setItem("simlock.operatorToken", "slk_op");
+      const { api, session } = proxied.open();
+
+      await api.getJson("/v1/workers").catch(() => undefined);
+      await settled();
+
+      expect(session.state()).toEqual({ kind: "token", token: "slk_op" });
+      expect(proxied.storage.getItem("simlock.operatorToken")).toBe("slk_op");
+      expect(proxied.calls).not.toContain("/v1/identity");
+    }
+  });
+
+  it("counts an unreachable daemon at load as nobody signed in", async () => {
+    const loading = page({
+      identity: () => {
+        throw new TypeError("Failed to fetch");
+      },
+    });
+    const { session } = loading.open();
+
+    session.start();
+
+    await vi.waitFor(() => expect(session.state()).toEqual({ kind: "none" }));
+    expect(loading.reload).not.toHaveBeenCalled();
+  });
+
+  it("tells a lost live connection to reconnect, back off or stop, by the identity check", async () => {
+    const cases = [
+      { answer: "reconnect", identity: answers(200, ALICE), reloads: 0, state: "proxy" },
+      {
+        answer: "backoff",
+        identity: () => {
+          throw new TypeError("Failed to fetch");
+        },
+        reloads: 0,
+        state: "proxy",
+      },
+      { answer: "stop", identity: HTML_403, reloads: 1, state: "proxy" },
+      { answer: "stop", identity: answers(200, { via: "token" }), reloads: 0, state: "none" },
+    ] as const;
+    for (const { answer, identity, reloads, state } of cases) {
+      const proxied = page({ healthz, identity: answers(200, ALICE) });
+      const { session } = proxied.open();
+      session.start();
+      await vi.waitFor(() => expect(session.state().kind).toBe("proxy"));
+      proxied.routes.identity = identity;
+      if (answer === "backoff") delete proxied.routes.healthz;
+
+      expect(await session.lost()).toBe(answer);
+
+      expect(session.state().kind).toBe(state);
+      expect(proxied.reload).toHaveBeenCalledTimes(reloads);
+    }
+  });
+
+  it("leaves a lost live connection to its backoff outside a proxy session, without a check", async () => {
+    const proxied = page({ identity: answers(200, ALICE) });
     proxied.storage.setItem("simlock.operatorToken", "slk_op");
-    const { api, session } = proxied.open();
+    const { session } = proxied.open();
 
-    await api.getJson("/v1/workers").catch(() => undefined);
-    await settled();
-
-    expect(session.state()).toEqual({ kind: "token", token: "slk_op" });
-    expect(proxied.storage.getItem("simlock.operatorToken")).toBe("slk_op");
-    expect(proxied.calls).not.toContain("/v1/identity");
+    expect(await session.lost()).toBe("backoff");
+    expect(proxied.calls).toEqual([]);
   });
 
   it("does not undo a token signed in while the identity check ran", async () => {

@@ -5,7 +5,9 @@ what a Simlock host, or a gateway and its workers, is doing. The daemon serves
 it itself. There is nothing to install and nothing is fetched from the
 internet.
 
-The console is for people who operate Simlock. It needs an operator token.
+The console is for people who operate Simlock. It needs an operator token, or
+a sign-in proxy in front of Simlock that signs you in
+(see [Behind a sign-in proxy](#behind-a-sign-in-proxy)).
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
 ## Finding your way
@@ -13,8 +15,11 @@ Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 A sidebar on the left leads to every page: **Overview**, **Workers**,
 **Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how
 many items need you, on every page. At the bottom of the sidebar are the
-connection (see [Live updates](#live-updates)), **Sign out**, and the button
-that collapses the sidebar to its icons and widens it again. The console
+connection (see [Live updates](#live-updates)), who you are signed in as
+(**Signed in as** and the name, hidden while the sidebar is collapsed),
+**Sign out** (absent when a sign-in proxy signed you in and has no sign-out
+page set), and the button that collapses the sidebar to its icons and widens
+it again. The console
 remembers your choice in this browser, and changing pages never changes it.
 A window narrower than 1280 pixels starts with the sidebar collapsed until you
 choose. On a phone the sidebar is a bar along the top with a menu button.

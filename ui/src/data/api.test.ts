@@ -43,6 +43,25 @@ describe("createApiClient", () => {
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
+  it("tells a 401 or 403 that is not Simlock's from a Simlock 401", async () => {
+    const refused = async (status: number, body: unknown) => {
+      const onRefused = vi.fn();
+      const api = createApiClient({
+        fetch: answering(status, body).fetch,
+        onRefused,
+        token: () => undefined,
+      });
+      await api.getJson("/v1/workers").catch(() => undefined);
+      return onRefused.mock.calls.map(([failure]) => failure);
+    };
+    const simlock = { error: { code: "UNAUTHENTICATED", message: "refused" } };
+
+    expect(await refused(401, {})).toEqual(["not-simlock"]);
+    expect(await refused(403, {})).toEqual(["not-simlock"]);
+    expect(await refused(401, simlock)).toEqual(["unauthorized"]);
+    expect(await refused(403, simlock)).toEqual([]);
+  });
+
   it("the fetch helper gives up after 10 seconds", async () => {
     vi.useFakeTimers();
     const api = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });

@@ -1,4 +1,5 @@
 import type { ApiFailure, Fetch } from "./api";
+import type { LostAnswer } from "./live/connection";
 import { checkIdentity, type IdentityOutcome } from "./identity-check";
 
 const STORAGE_KEY = "simlock.operatorToken";
@@ -22,6 +23,7 @@ export interface Session {
   state(): SessionState;
   start(): void;
   refused(failure: ApiFailure): void;
+  lost(): Promise<LostAnswer>;
   token(): string | undefined;
   signIn(token: string): void;
   signOut(): void;
@@ -111,6 +113,19 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
       } else if (state.kind === "proxy") {
         void opening(false);
       }
+    },
+    // why: a proxy session's live connection asks here before its backoff, because a lost stream
+    // may be the proxy's session ending; any other session is "Simlock is unreachable" as before.
+    async lost() {
+      if (state.kind !== "proxy") return "backoff";
+      const first = inFlight === undefined;
+      const running = check();
+      if (running === undefined) return "backoff";
+      const outcome = await running;
+      if (outcome.kind === "proxy") return "reconnect";
+      if (outcome.kind === "unreachable") return "backoff";
+      if (first && state.kind === "proxy") apply(outcome, false);
+      return "stop";
     },
     token: () => token,
     signIn(next) {
