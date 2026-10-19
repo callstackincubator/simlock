@@ -71,11 +71,15 @@ flowchart LR
 
 ### 2. One strategy shape, tried in order
 
-An HTTP request is checked by an ordered list of strategies. Each one
-answers one of three ways:
+An HTTP request is checked by an ordered list of strategies, in the shape
+every extension point has: a `AuthStrategyDefinition` (`name`,
+`enabled(config)`, `create`), one registry in `src/auth/strategies/`, one
+directory per strategy, and one conformance suite. Each strategy answers
+one of four ways:
 
 | Answer | Means | Next |
 |---|---|---|
+| `forbidden` | Its credential is real but has no authority here (a join token on the API). | Stop; `403`. |
 | `identified` | Its credential is present and good. Carries the `Identity`. | Stop; the request has this identity. |
 | `not-mine` | Its kind of credential is absent. | Try the next strategy. |
 | `rejected` | Its credential is present and bad. Carries a reason. | Stop; `401`. |
@@ -118,12 +122,14 @@ plain-HTTP fetch across a network could be swapped on the way.
 The check, with the `jose` library:
 
 - Signature: `RS256` or `ES256` only, with a key from `jwksUrl`. Keys are
-  fetched through a port (`fetch` behind an interface with a fake), with
-  jose's defaults: 5 s timeout, a refetch for an unknown key at most every
-  30 s, keys kept 10 minutes. Time comes from the `Clock` port.
-- Claims: `iss` equals `issuer`, `aud` contains `audience`, `exp` and `nbf`
-  hold with 60 s of clock difference allowed.
-- A person: a non-empty `sub` and an `email`. A JWT without them is
+  fetched through a port (`fetch` behind an interface with a fake) into a
+  cache of Simlock's own on the `Clock` port, with jose's default values:
+  5 s timeout, a refetch for an unknown key at most every 30 s, keys kept
+  10 minutes. jose verifies against the cached set.
+- Claims: `iss` equals `issuer`, `aud` contains `audience`, `exp` is
+  present, and `exp` and `nbf` hold with 60 s of clock difference allowed.
+- A person: a non-empty `sub` (at most 120 characters) and a non-empty
+  `email`. A JWT without them is
   `not-mine`, not `rejected`: it is a machine credential that opened the
   proxy's door (a Cloudflare service token has an empty `sub`), and the
   request is judged by its Simlock token instead.
@@ -138,7 +144,7 @@ An identified person is:
 | Field | Value |
 |---|---|
 | `principal` | `proxy:<iss>#<sub>` |
-| `name` | the `name` claim, else `email`, else `sub` |
+| `name` | the `name` claim when it is a non-empty string, else `email` |
 | `role` | `operator`, which the dispatcher runs as `admin`, as for an operator token. Who gets in is the proxy's policy. |
 | `via` | `proxy` |
 | `expiresAt` | `exp` + 60 s |
@@ -179,7 +185,10 @@ by one.
 A request whose identity is `ambient`, with a method other than `GET`,
 `HEAD` or `OPTIONS`, must carry `Sec-Fetch-Site: same-origin`. Any other
 value, or no header, is `403 FORBIDDEN`. A bearer token is not ambient, so
-agents and scripts are not affected.
+agents and scripts are not affected. Browsers send the header only to an
+`https://` address or to loopback, so behind a proxy served over plain HTTP
+on a network name every such request is refused; the console sends none
+today, and the docs say to serve the proxy over HTTPS.
 
 ### 6. A stream ends when its identity expires
 
@@ -212,8 +221,11 @@ open stream.
   proxy's public keys from `jwksUrl`.
 - The docs tell the operator to let `/v1/uplink` and `/v1/healthz` through
   the proxy, and how agents reach the API: a proxy bypass or service token
-  plus a Simlock token. oauth2-proxy replaces `Authorization`, so behind it
-  agents reach the daemon around the proxy.
+  plus a Simlock token. The oauth2-proxy example injects the ID token into a
+  header of its own (`X-Id-Token`, through its alpha config), because its
+  `--pass-authorization-header` either strips the request's own
+  `Authorization` (losing a join token or a Simlock token) or adds a second
+  value beside it.
 - `jose` becomes a direct dependency.
 - Protocol +1 for `identity.get`. A gateway and its workers upgrade
   together, as for every contract change.
@@ -240,4 +252,5 @@ open stream.
   stable for every provider; the name order covers Cloudflare (email only)
   and Dex (name and email).
 - **Allow a missing `Sec-Fetch-Site`.** Rejected: it fails open for a
-  cookie-carrying client, and every supported browser sends it.
+  cookie-carrying client. Browsers send it on HTTPS and loopback, which is
+  how a sign-in proxy is served.
