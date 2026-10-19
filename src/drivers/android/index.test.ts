@@ -3629,6 +3629,49 @@ describe("AndroidDriver.create", () => {
 });
 
 describe("AndroidDriver ownership", () => {
+  it("does not attribute an outside-root emulator to a root AVD with the same name (#261)", async () => {
+    const filesystem = await androidFilesystem();
+    const ownedPath = `${avdDirectory}/simlock_mine.avd`;
+    const foreignPath = `${home}/.android/avd/simlock_mine.avd`;
+    await filesystem.mkdirp(ownedPath);
+    await filesystem.mkdirp(foreignPath);
+
+    for (const path of [ownedPath, foreignPath]) {
+      const runner = answeringAvdPath(
+        new ScriptedProcessRunner([
+          processResult(
+            binaries.adb,
+            ["devices"],
+            "List of devices attached\nemulator-5586\tdevice\n",
+          ),
+          processResult(
+            binaries.adb,
+            ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
+            "simlock_mine\n",
+          ),
+        ]),
+        ok(`${path}\r\nOK\r\n`),
+      );
+      const driver = await createDriver(filesystem, runner);
+
+      const reality = await driver.listManaged();
+
+      expect
+        .soft(reality.processes, path)
+        .toEqual(
+          path === ownedPath
+            ? [expect.objectContaining({ address: "emulator-5586", deviceId: "simlock_mine" })]
+            : [],
+        );
+      expect.soft(reality.devices, path).toEqual([
+        expect.objectContaining({
+          deviceId: "simlock_mine",
+          runState: path === ownedPath ? "running" : "stopped",
+        }),
+      ]);
+    }
+  });
+
   it("manages every AVD in its root, whatever the AVD is called", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${avdDirectory}/a-name-nobody-prefixed.avd`);
