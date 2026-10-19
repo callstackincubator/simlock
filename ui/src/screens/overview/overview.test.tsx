@@ -24,7 +24,7 @@ const quiet: Overview = {
 };
 
 describe("the overview screen", () => {
-  it("says so in one line where a fleet has no workers, no lease count, nothing needs attention and nothing happened", () => {
+  it("says so in one line where a fleet has no workers, nothing needs attention and nothing happened", () => {
     const shown = text(renderToStaticMarkup(<OverviewBody overview={quiet} />));
 
     expect(shown).toContain("No workers have connected.");
