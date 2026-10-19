@@ -95,6 +95,17 @@ describe("authenticateRequest with the token strategy", () => {
     expect((refusal as AuthError).details).toBeUndefined();
   });
 
+  it("trims the bearer value before reading it, as the HTTP check does today", async () => {
+    const auth = createAuth(await options());
+
+    await expect(auth.authenticateRequest(headers("Bearer   slk_agent  "))).resolves.toMatchObject({
+      principal: "tok_agent",
+    });
+    await expect(auth.authenticateRequest(headers("Bearer    "))).rejects.toMatchObject({
+      message: "Missing bearer token",
+    });
+  });
+
   it("identifies a known slk_ token with its id as principal, its label as name, its role, via token, not ambient", async () => {
     const auth = createAuth(await options());
 
@@ -252,12 +263,13 @@ describe("resolveHelloRole", () => {
 });
 
 describe("authenticateUplink", () => {
-  it("answers unauthenticated for none and unknown, forbidden for an operator token, accept with the token id for a worker token", async () => {
+  it("answers unauthenticated for none and unknown, forbidden for a token that is not a worker's, accept with the token id for a worker token", async () => {
     const auth = createAuth(await options());
 
     await expect(auth.authenticateUplink(undefined)).resolves.toBe("unauthenticated");
     await expect(auth.authenticateUplink("slk_unknown")).resolves.toBe("unauthenticated");
     await expect(auth.authenticateUplink("slk_operator")).resolves.toBe("forbidden");
+    await expect(auth.authenticateUplink("slk_agent")).resolves.toBe("forbidden");
     await expect(auth.authenticateUplink("slk_worker")).resolves.toEqual({
       outcome: "accept",
       tokenId: "tok_worker",
