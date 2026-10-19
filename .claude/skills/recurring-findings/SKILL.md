@@ -9,6 +9,7 @@ effort: low
 
 A defect that reviews keep finding is cheaper to catch with a script than
 with a reviewer. You open draft tasks; you change no code and open no PR.
+Call GitHub through `gh api` REST only: a cloud session refuses GraphQL.
 
 ## 1. Count
 
@@ -24,7 +25,7 @@ None: report `Issues: none` and stop.
 For each class:
 
 1. Skip it when an open issue's title already names it:
-   `gh issue list --state open --search "Recurring finding: <class> in:title"`.
+   `gh api -X GET search/issues -f q='repo:<owner>/<repo> is:issue is:open in:title "Recurring finding: <class>"' -q .total_count`.
 2. Read each listed PR's `## Review ledger` comment and the fix commit of
    every finding of the class (`git show <fix>`): what the code was before
    the fix, and after.
@@ -37,7 +38,8 @@ For each class:
 4. Open the task:
 
    ```bash
-   gh issue create --label task:draft --title "Recurring finding: <class>" --body-file <scratch>/<class>.md
+   gh api -X POST repos/<owner>/<repo>/issues -f title="Recurring finding: <class>" \
+     -F body=@<scratch>/<class>.md -f 'labels[]=task:draft' -q .number
    ```
 
    The body: the class and the PRs; for each finding its `path:line` and
