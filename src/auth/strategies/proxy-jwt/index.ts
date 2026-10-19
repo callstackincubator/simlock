@@ -99,17 +99,21 @@ function reasonOf(error: unknown): Reason {
   return byClass.find(([type]) => error instanceof type)?.[1] ?? "malformed";
 }
 
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
 function personOf(
   payload: JWTPayload,
   settings: { readonly issuer: string; readonly signOutUrl?: string | undefined },
 ): Identity | undefined {
   const { sub, email, iss, exp } = payload;
-  if (typeof sub !== "string" || sub === "") return undefined;
-  if (typeof email !== "string" || email === "") return undefined;
-  const claimedName: unknown = payload["name"];
+  const person = nonEmpty(sub);
+  const address = nonEmpty(email);
+  if (person === undefined || address === undefined) return undefined;
   return {
-    principal: `proxy:${iss ?? settings.issuer}#${sub}`,
-    name: typeof claimedName === "string" && claimedName !== "" ? claimedName : email,
+    principal: `proxy:${iss ?? settings.issuer}#${person}`,
+    name: nonEmpty(payload["name"]) ?? address,
     role: "operator",
     via: "proxy",
     expiresAt: (exp ?? 0) * 1000 + EXPIRY_GRACE_MS,
