@@ -57,7 +57,10 @@ Three identities:
 
 - Now `{ min: 46, max: 46 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
-  a compatibility path stays side by side.
+  a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
+  it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
+  helpers in its `NOT_SHAPES` (`console-url.ts`, `duration.ts`, `os-range.ts`). A new helper
+  that carries no wire shape goes in that list.
 - `hello` picks the highest overlap. None → `PROTOCOL_VERSION_UNSUPPORTED` with both ranges.
   A protocol-2 daemon is mapped by `mapLegacyProtocolMismatch`.
 - `daemon.stop` is accepted at any version, so the upgrade path exists.

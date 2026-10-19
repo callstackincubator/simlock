@@ -180,7 +180,11 @@ the tool's docs alone.
 - **Contract shapes.** Every change to a contract shape bumps
   `DAEMON_PROTOCOL_VERSION` by one in the same PR (a spec's "protocol +1 at
   merge" means this too), so two tasks that change contract shapes
-  overlap even when they touch different files.
+  overlap even when they touch different files. The push hook and CI run
+  `.agents/scripts/protocol-bump-check.mjs`: a contract shape change with
+  no bump, or a bump with no shape change, fails. A contract edit that
+  changes no wire shape (a refactor, a client-only error code) carries the
+  commit trailer `Protocol-bump: none (<reason>)`.
 
 ## Review measurement
 
