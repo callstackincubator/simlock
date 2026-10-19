@@ -22,8 +22,7 @@ Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm lint`, `pnpm lint:comments`,
 `pnpm format`, `pnpm format:check`,
-`pnpm fallow`, `pnpm mutate` (outside the implementer and the `harden-tests`
-routine), the whole
+`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine). A PreToolUse hook
@@ -44,20 +43,13 @@ list and this one the same.
 
 ## Mutation testing
 
-`pnpm mutate <base>` mutates the source lines changed since `<base>` and
-lists each mutant the unit suite let live. It first runs only the test
-files that import a changed file, or reach it through their own module's
-`index.ts`, or that the branch changed; a mutant those leave alive gets a
-second run with every related test file. It reuses each unchanged result,
-so a fix run pays only for what changed.
-
-- **Delivery:** the implementer's audit runs it on the PR's diff (testing
-  rule 2) and writes what stays alive, with a reason each, under
-  `## Mutants` in the PR body; the code review checks those reasons.
-- **Weekly:** the `harden-tests` routine runs `pnpm mutate <base>
-  --max-lines 1500` on `main`, newest files first up to that many lines,
-  kills the survivors that change behaviour a caller or user can see, and
-  opens one tests-only PR.
+Not part of delivery. The weekly `harden-tests` routine runs `pnpm mutate
+<base> --max-lines 1500` on `main` for the source lines changed since
+`<base>`, newest files first up to that many lines, kills the survivors that
+change behaviour a caller or user can see, and opens one tests-only PR. The
+script first runs only the test files that import a changed file, or reach
+it through their own module's `index.ts`, or that the branch changed; a
+mutant those leave alive gets a second run with every related test file.
 
 ## Routines
 

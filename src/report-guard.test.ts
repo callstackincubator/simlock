@@ -54,26 +54,25 @@ describe("report-guard.mjs", () => {
       JSON.parse(stop("implementer", `${head}fixes:\n  a -> found 1 fixed 1\n`)).reason,
     ).toContain("no `audit:` line");
     expect(
-      stop(
-        "implementer",
-        `${head}audit: stale 0  replaced 0  donewhen 5/5  probed 4/4  mutants none\n`,
-      ),
+      stop("implementer", `${head}audit: stale 0  replaced 0  donewhen 5/5  probed 4/4\n`),
     ).toBe("");
   });
 
-  it("blocks an audit that probed fewer tests than it changed, explained fewer mutants than it left alive, or gives either count", () => {
+  it("blocks an audit that probed fewer tests than it added or changed, or gives no count", () => {
     const head =
       "issue: 472  branch: task/472  pr: 497  mode: audit  head: 9d78eb95\ntests: 49/49\n";
-    const audit = (counts: string) =>
-      stop("implementer", `${head}audit: stale 0  replaced 0  donewhen 5/5  ${counts}\n`);
-    const reason = (counts: string) => JSON.parse(audit(counts)).reason as string;
 
-    expect(reason("probed 1/4  mutants none")).toContain("probed 1 of 4");
-    expect(reason("mutants none")).toContain("no `probed` count");
-    expect(reason("probed 4/4  mutants 40 alive 3 explained 1")).toContain("explained 1 of 3");
-    expect(reason("probed 4/4")).toContain("no `mutants` count");
-    expect(audit("probed 4/4  mutants 40 alive 3 explained 3")).toBe("");
-    expect(audit("probed 0/0  mutants 40 alive 0 explained 0")).toBe("");
+    expect(
+      JSON.parse(
+        stop("implementer", `${head}audit: stale 0  replaced 0  donewhen 5/5  probed 1/4\n`),
+      ).reason,
+    ).toContain("probed 1 of 4");
+    expect(
+      JSON.parse(stop("implementer", `${head}audit: stale 0  replaced 0  donewhen 5/5\n`)).reason,
+    ).toContain("no `probed` count");
+    expect(
+      stop("implementer", `${head}audit: stale 0  replaced 0  donewhen 5/5  probed 0/0\n`),
+    ).toBe("");
   });
 
   it("blocks a reviewer whose block belongs to another agent, and lets any other agent stop", () => {

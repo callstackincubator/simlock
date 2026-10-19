@@ -49,8 +49,7 @@ prove the behaviour, each at the cheapest level that can prove it
    of the part that matters — usually because the test exercises an
    internal callback rather than the observable output the path exists to
    produce. Write the test that goes red, then restore the code. Mutation
-   testing does this mechanically for every pull request's changed lines,
-   and weekly for the newest changes on `main`
+   testing does this mechanically, weekly, for the newest changes on `main`
    ([toolchain.md](toolchain.md) says where it runs).
 
 4. **A test that enforces a rule must see everything the rule covers.** A

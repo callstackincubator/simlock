@@ -97,15 +97,6 @@ describe("tool-guard.mjs", () => {
     expect(bash("pnpm mutate origin/main", null)).toEqual({ status: 0, stderr: "" });
   });
 
-  it("lets an implementer run the mutation script, and no tool behind it", () => {
-    const implementer = (command: string) => bash(command, "a1", "implementer");
-
-    expect(implementer("pnpm mutate abc123 > m.txt 2>&1")).toEqual({ status: 0, stderr: "" });
-    expect(implementer("node scripts/mutate.mjs abc123")).toEqual({ status: 0, stderr: "" });
-    expect(implementer("pnpm exec stryker run").status).toBe(2);
-    expect(implementer("pnpm check").status).toBe(2);
-  });
-
   it.each(["implementer", "reviewer", "hardware-verifier"])(
     "refuses to start a %s in its own worktree",
     (agent) => {

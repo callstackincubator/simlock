@@ -49,19 +49,6 @@ edited after its `test:` commit:
   `audit:` line: `t` tests added or changed, `p` probed.
 - A test comparing two outputs also asserts one of them against a literal.
 
-**Mutate.** Run `pnpm mutate <merge-base> > <scratch>/mutants.txt 2>&1`
-(after fixes: the same command; it reuses every unchanged result). Exit 2:
-`Assessment: incomplete`. For each mutant it lists alive, either kill it
-(extend the test that proves the behaviour next to it, testing rule 7) or
-write one line on why it changes nothing a caller, user, stored record or
-event can see; in a strict area (`toolchain.md`) only a log line may stay
-alive. Then put the result in the PR body under `## Mutants`: the summary
-line, and per mutant still alive its `path:line`, mutator and reason.
-Report `mutants <total> alive <a> explained <e>` on the `audit:` line, or
-`mutants none` when the script finds no changed source line. The script
-never deletes a call that takes arguments or is awaited, nor moves a
-number: the probes above cover those.
-
 Run the "Project checks" in `toolchain.md` that the diff triggers. Then the
 tests from mode `build` pass, and you push.
 

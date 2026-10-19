@@ -49,9 +49,8 @@ without that assessment leave the finding unresolved, never rejected.
 Select independent lenses by work, not size alone. ADR-only: spec. Docs or
 comments: spec and claims. Tests: spec, code/tests and affected claims.
 Other changes: spec and code/both, plus affected claims. No issue: skip spec.
-Add a separate code/tests lens for complex fixtures, many survivors in
-`mutants.md` or high-risk coverage; split behavior and tests
-responsibilities explicitly.
+Add a separate code/tests lens for complex fixtures or high-risk coverage;
+split behavior and tests responsibilities explicitly.
 A large mechanical diff alone does not warrant two code reviewers. Record
 why a lens was added or skipped. Run selected lenses in parallel, with
 separate worktrees for probes; do not share findings until synthesis.

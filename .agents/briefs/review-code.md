@@ -7,9 +7,7 @@ the code.
 In the inputs directory: the specification (`issue.md`, `feature.md`,
 `triage.md` and `spec/`, those that exist), so you know what the code is
 meant to do; `rules/`, every rule file but `delivery.md`, and the ADR index;
-`diff.patch`; `mutants.md`, when it exists, what `pnpm mutate` left alive on
-the changed lines and the implementer's reason for each;
-`briefs/calibration.md`, when it exists, findings like yours that were
+`diff.patch`; `briefs/calibration.md`, when it exists, findings like yours that were
 rejected lately: read it first. Repository: the worktree you were given,
 checked out at the reviewed commit.
 
@@ -55,21 +53,16 @@ whose tests only gained a fixture field: `file: fixture only`.
 
 Then answer:
 
-1. For each mutant `mutants.md` lists alive: does its reason hold? Read the
-   code: a mutant whose change a caller, user, stored record or event can
-   see is untested behaviour (testing rule 3). No `mutants.md` on a diff
-   that changes source: `Assessment: incomplete`.
-2. For each test: can it fail for the reason its title gives? Read it
+1. For each test: can it fail for the reason its title gives? Read it
    against testing rule 10's list first; those shapes need no probe to
    prove. Spend your probes on the tests most likely to be wired to
-   nothing, on what `pnpm mutate` never tries: delete a call that takes
-   arguments or is awaited, move a constant to its edge, loosen what the
+   nothing: delete a call, move a constant to its edge, loosen what the
    test compares. A test that stays green is a finding.
-3. Does the diff break any rule in `rules/`? Cite the file and the rule
+2. Does the diff break any rule in `rules/`? Cite the file and the rule
    number.
 
-Blocking: a survivor's reason that does not hold, a test that cannot fail
-for the reason its title gives, or a breach of a rule or an accepted ADR.
+Blocking: a test that cannot fail for the reason its title gives, or a
+breach of a rule or an accepted ADR.
 
 ## Assessment
 

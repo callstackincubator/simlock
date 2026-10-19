@@ -3,8 +3,7 @@
 //
 //   check      a sub-agent runs a check from toolchain.md's "Checks agents never run" (`pnpm
 //              check`, `pnpm fallow`, ...) or a tool behind one, from any path. The commit hook,
-//              the push hook and CI run them. The main session (a person, a routine) may, and
-//              an implementer may run `pnpm mutate` (its audit and fix modes do).
+//              the push hook and CI run them. The main session (a person, a routine) may.
 //   hooks      a sub-agent skips the git hooks: `--no-verify`, `LEFTHOOK=0`, `core.hooksPath`, or
 //              `LEFTHOOK_EXCLUDE` naming anything but `fallow` (a build stage's push before its
 //              last cycle, whose code a later cycle wires in Fallow calls dead code).
@@ -26,9 +25,10 @@ const SCRIPTS = new Set([
   "format",
   "format:check",
   "fallow",
+  "mutate",
 ]);
 const TOOLS = new Set(["tsc", "oxlint", "depcruise", "oxfmt", "fallow", "stryker"]);
-const NODE_SCRIPTS = new Set(["comment-lint.mjs"]);
+const NODE_SCRIPTS = new Set(["comment-lint.mjs", "mutate.mjs"]);
 const WRAPPERS = new Set(["time", "nice", "env", "command", "exec"]);
 const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "-F", "--filter", "--reporter"]);
 const STAGES = new Set(["implementer", "reviewer", "hardware-verifier"]);
@@ -41,7 +41,6 @@ const HOOK_BYPASS = [
 
 const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
 const tool = input.tool_name;
-const mayMutate = input.agent_type === "implementer";
 const args = input.tool_input ?? {};
 
 if ((tool === "Agent" || tool === "Task") && args.isolation && STAGES.has(args.subagent_type)) {
@@ -100,11 +99,7 @@ function isForbidden(words) {
   const [first, ...rest] = words;
   const name = path.basename(first);
   if (TOOLS.has(name) || NODE_SCRIPTS.has(name)) return true;
-  if (name === "mutate.mjs") return !mayMutate;
-  if (name === "node") {
-    if (rest.some((w) => path.basename(w) === "mutate.mjs")) return !mayMutate;
-    return rest.some((w) => NODE_SCRIPTS.has(path.basename(w)));
-  }
+  if (name === "node") return rest.some((w) => NODE_SCRIPTS.has(path.basename(w)));
   if (name === "npx" || name === "bunx") return isTool(firstOperand(rest));
   return name === "pnpm" && isForbiddenPnpm(rest);
 }
@@ -118,7 +113,6 @@ function isForbiddenPnpm(args) {
   // why: these scripts are allowed only in their narrow forms: named e2e files, Chromium only.
   if (sub === "test:e2e") return after.length === 0;
   if (sub === "test:console") return !args.includes("--project=chromium");
-  if (sub === "mutate") return !mayMutate;
   return SCRIPTS.has(sub);
 }
 
