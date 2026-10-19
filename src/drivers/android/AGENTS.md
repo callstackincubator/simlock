@@ -76,7 +76,8 @@ Reclaim — `reclaim`:
 
 `shutdown`: `adb emu kill`, wait, SIGKILL. `destroy`: kills only an emulator this process
 started, then `avdmanager delete avd`, frees the port.
-`listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
+`listManaged`: root AVDs + `adb devices` + `ro.boot.qemu.avd_name`; processes, running state and marks
+require a matching `emu avd path` (exact or `realpath`). Invalid paths are ignored; query failures leave stopped AVDs transitioning.
 
 Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml
 (`$ANDROID_USER_HOME/devices.xml`, else `.android/devices.xml` under `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME`
@@ -110,37 +111,36 @@ No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's
 
 Screen — `screenCapture`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md).
 
-Plain facts: `avdmanager list device` runs on every `listCatalog`, every resolve of a model the library
-lacks, and every library provision (seed); nothing is cached. The sdkmanager catalog is never read.
-Existing devices are not re-checked against the fit rule.
+Plain facts: `avdmanager list device` runs on every `listCatalog`, resolve of a model the library lacks,
+and library provision (seed); nothing is cached. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
 
 ## State and timers
 
-| What                           | Default                                 | Key                                                             |
-| ------------------------------ | --------------------------------------- | --------------------------------------------------------------- |
-| Device root                    | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
-| adb server port                | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
-| Emulator flags                 | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
-| Readiness timeout              | 180 s, poll 2 s                         | none                                                            |
-| adb server start / stop        | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
-| `adb devices` in `listManaged` | 30 s                                    | none                                                            |
-| Physical read / uninstall      | 30 s / 60 s                             | none                                                            |
+| What                            | Default                                 | Key                                                             |
+| ------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| Device root                     | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
+| adb server port                 | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
+| Emulator flags                  | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| Readiness timeout               | 180 s, poll 2 s                         | none                                                            |
+| adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
+| `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
+| AVD path query (listing / boot) | 5 s                                     | none                                                            |
+| Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
 
-Writes: `<root>/<avd>.avd/` (`config.ini`, `boot.prop`, snapshots,
-`simlock-clean-baseline.json`), `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
+Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
 Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 
-- Ownership is root membership, proven again at boot by `emu avd path`. An AVD name proves nothing.
+- Ownership is root membership, proven at boot and in running observations by `emu avd path`, never a name.
 - The 5037 server is never started, stopped or adopted on purpose; physical commands pass the gate first.
 - A recovery boot never wipes and never captures a baseline.
 - A stored port is not trusted after a restart (#52); pinned by `two-instances.test.ts`.
 
 ## Known gaps
 
-- **Simlock's adb server is stopped by pid only.** `ADB_REJECT_KILL_SERVER=1` refuses its `kill-server`. A
-  server with no record is `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
+- **Simlock's adb server is stopped by pid only.** `ADB_REJECT_KILL_SERVER=1` refuses its `kill-server`.
+  No record → `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
 - **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
   between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
 - **Port checks are partial.** After a restart `shutdown` sends `emu kill` to the stored serial

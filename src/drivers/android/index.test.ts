@@ -1584,7 +1584,7 @@ describe("AndroidDriver", () => {
     expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
   });
 
-  it("joins adb devices with getprop to compute runState per AVD: running, stopped, transitioning", async () => {
+  it("joins adb devices, getprop and the AVD path to distinguish running and stopped AVDs", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${avdDirectory}/simlock_running.avd`);
     await filesystem.mkdirp(`${avdDirectory}/simlock_stopped.avd`);
@@ -1600,6 +1600,7 @@ describe("AndroidDriver", () => {
         ],
         "simlock_running\n",
       ),
+      avdPathExpectation("emulator-5586", "simlock_running"),
     ]);
     const driver = await createDriver(filesystem, runner);
 
@@ -1863,6 +1864,7 @@ describe("AndroidDriver", () => {
         ],
         'simlock_one\n{"token":"tok-123"}',
       ),
+      avdPathExpectation("emulator-5586"),
     ]);
     const driver = await createDriver(filesystem, runner);
 
@@ -1892,6 +1894,7 @@ describe("AndroidDriver", () => {
         ],
         "simlock_one\n",
       ),
+      avdPathExpectation("emulator-5586"),
     ]);
     const driver = await createDriver(filesystem, runner);
 
@@ -3629,11 +3632,100 @@ describe("AndroidDriver.create", () => {
 });
 
 describe("AndroidDriver ownership", () => {
+  it.each([
+    {
+      reported: "a trailing slash",
+      answer: ok(`${avdDirectory}/simlock_one.avd/\r\nOK\r\n`),
+      runState: "running",
+    },
+    {
+      reported: "a canonical alias",
+      answer: ok(`/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`),
+      runState: "running",
+    },
+    { reported: "a blank path", answer: ok("\r\nOK\r\n"), runState: "stopped" },
+    { reported: "a console error", answer: ok("KO: unknown command\r\n"), runState: "stopped" },
+    { reported: "a relative path", answer: ok("simlock_one.avd\r\nOK\r\n"), runState: "stopped" },
+    {
+      reported: "a missing directory",
+      answer: ok("/missing/simlock_one.avd\r\nOK\r\n"),
+      runState: "stopped",
+    },
+    {
+      reported: "an unreadable alias",
+      answer: ok(`/unreadable/simlock_one.avd\r\nOK\r\n`),
+      runState: "stopped",
+    },
+    {
+      reported: "a sibling AVD",
+      answer: ok(`${avdDirectory}/simlock_two.avd\r\nOK\r\n`),
+      runState: "stopped",
+    },
+    {
+      reported: "a vanished serial",
+      answer: { code: 1, stderr: "device 'emulator-5586' not found", stdout: "" },
+      runState: "transitioning",
+    },
+  ])(
+    "attributes running state, processes and marks only with path proof: $reported",
+    async ({ answer, runState }) => {
+      const filesystem = await androidFilesystem(
+        { config: "simlock.mark=tok-123\n" },
+        new WorkingDirectoryFilesystem(avdDirectory),
+      );
+      filesystem.defineSymlink("/private/home", "/home");
+      filesystem.defineSymlink("/unreadable", avdDirectory);
+      filesystem.defineFailure("/unreadable/simlock_one.avd", "EACCES");
+      await filesystem.mkdirp(`${avdDirectory}/simlock_two.avd`);
+
+      for (const result of [ok(`${avdDirectory}/simlock_one.avd\r\nOK\r\n`), answer]) {
+        const runner = new ScriptedProcessRunner([
+          processResult(
+            binaries.adb,
+            ["devices"],
+            "List of devices attached\nemulator-5586\tdevice\n",
+          ),
+          processResult(
+            binaries.adb,
+            ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
+            'simlock_one\n{"token":"tok-123"}',
+          ),
+          {
+            match: { command: binaries.adb, args: ["-s", "emulator-5586", "emu", "avd", "path"] },
+            result,
+          },
+        ]);
+        const driver = await createDriver(filesystem, runner);
+        const reality = await driver.listManaged();
+        const expectedState = result === answer ? runState : "running";
+        const running = expectedState === "running";
+
+        expect(reality.processes).toEqual(
+          running
+            ? [expect.objectContaining({ address: "emulator-5586", deviceId: "simlock_one" })]
+            : [],
+        );
+        expect(reality.devices.find((device) => device.deviceId === "simlock_one")).toMatchObject({
+          runState: expectedState,
+          mark: {
+            durable: "tok-123",
+            erasable: running ? "tok-123" : undefined,
+            erasableReadable: running,
+          },
+        });
+        expect(
+          runner.calls.find((call) => call.args.slice(2).join(" ") === "emu avd path")?.options,
+        ).toEqual({ env: scopedEnv, timeoutMs: 5_000 });
+      }
+    },
+  );
+
   it("does not attribute an outside-root emulator to a root AVD with the same name (#261)", async () => {
     const filesystem = await androidFilesystem();
     const ownedPath = `${avdDirectory}/simlock_mine.avd`;
     const foreignPath = `${home}/.android/avd/simlock_mine.avd`;
     await filesystem.mkdirp(ownedPath);
+    await filesystem.writeFileAtomic(`${ownedPath}/config.ini`, "simlock.mark=owned-token\n");
     await filesystem.mkdirp(foreignPath);
 
     for (const path of [ownedPath, foreignPath]) {
@@ -3647,7 +3739,7 @@ describe("AndroidDriver ownership", () => {
           processResult(
             binaries.adb,
             ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
-            "simlock_mine\n",
+            'simlock_mine\n{"token":"owned-token"}',
           ),
         ]),
         ok(`${path}\r\nOK\r\n`),
@@ -3667,6 +3759,11 @@ describe("AndroidDriver ownership", () => {
         expect.objectContaining({
           deviceId: "simlock_mine",
           runState: path === ownedPath ? "running" : "stopped",
+          mark: {
+            durable: "owned-token",
+            erasable: path === ownedPath ? "owned-token" : undefined,
+            erasableReadable: path === ownedPath,
+          },
         }),
       ]);
     }
