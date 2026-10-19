@@ -32,6 +32,8 @@ Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.
 3. `requireAuth` on every route but `GET /v1/healthz`. It asks `src/auth` with the request's
    headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
    Neither valid → 401 `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
+   A proxy-signed (`ambient`) identity on any method but GET, HEAD or OPTIONS needs
+   `Sec-Fetch-Site: same-origin` exactly, else 403 `FORBIDDEN` (mounts included). Tokens are exempt.
 4. Body — strict zod schema (`jsonBody`), else 400 `BAD_REQUEST`.
 5. `buildHttpSession` — principal = the identity's (a token's id, or `proxy:<iss>#<sub>`); `operator` → `admin`, `agent` → `agent`.
 6. `deps.dispatch` — the daemon's own dispatcher, in process: `DaemonServer.dispatch`.
