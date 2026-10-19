@@ -41,9 +41,12 @@ edited after its `test:` commit:
   into that test. One that imports a module's internal file instead of its
   `index.ts` has the `why:` reason rule 6 asks for, or moves to the
   surface, even when `index.ts` exports the same name.
-- Break the code it covers once (flip the condition, drop the filter, delete
-  the call, move the constant, return early) and run its file: it fails on
-  the assertion its title names. Restore the code. A test that stays green
+- Break the code it covers once per claim in its title (flip the
+  condition, drop the filter, delete the call, move the constant either
+  way, return early, or swap a rule for a near one: sort by another key,
+  drop the tie-break, take the first instead of the lowest, drop one side
+  of an `||` or `&&`) and run its file: it fails on the assertion its
+  title names, not by timing out. Restore the code. A test that stays green
   is vacuous: fix it. Every test, no skipping: a probe the audit skips, a
   reviewer does on a far costlier model. Report `probed <p>/<t>` on the
   `audit:` line: `t` tests added or changed, `p` probed.
