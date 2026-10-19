@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:net";
+import { createServer, type AddressInfo, type Server } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -12,6 +12,14 @@ afterEach(async () => {
   );
 });
 
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 async function hold(port: number): Promise<void> {
   const server = createServer();
   held.push(server);
@@ -23,12 +31,15 @@ async function hold(port: number): Promise<void> {
 
 describe("the real-proxy lane's port check", () => {
   it("passes with every port free", async () => {
-    await expect(assertLanePortsFree()).resolves.toBeUndefined();
+    const ports = [await freePort(), await freePort()];
+
+    await expect(assertLanePortsFree(ports)).resolves.toBeUndefined();
   });
 
-  it("with port 4180 held by the test, fails naming 4180", async () => {
-    await hold(4180);
+  it("with a port held by the test, fails naming it", async () => {
+    const port = await freePort();
+    await hold(port);
 
-    await expect(assertLanePortsFree()).rejects.toThrow("4180");
+    await expect(assertLanePortsFree([port])).rejects.toThrow(String(port));
   });
 });

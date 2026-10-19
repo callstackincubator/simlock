@@ -10,8 +10,8 @@ function isFree(port: number): Promise<boolean> {
   });
 }
 
-export async function assertLanePortsFree(): Promise<void> {
-  for (const port of LANE_PORTS) {
+export async function assertLanePortsFree(ports: readonly number[] = LANE_PORTS): Promise<void> {
+  for (const port of ports) {
     if (!(await isFree(port))) {
       throw new Error(`port ${port} is in use; the real-proxy lane needs it free`);
     }

@@ -34,14 +34,14 @@ test.describe("behind a real sign-in proxy", () => {
     await logInAsAlice(page);
 
     await expect(page).toHaveURL(`${PROXY_URL}/`);
-    await expect(page.getByText("Signed in as Alice")).toBeVisible();
+    await expect(page.getByText("Signed in as Alice", { exact: true })).toBeVisible();
   });
 
   test("after that login, GET /v1/identity from the page answers a proxy principal at Dex, Alice's name, via proxy and role admin", async ({
     page,
   }) => {
     await logInAsAlice(page);
-    await expect(page.getByText("Signed in as Alice")).toBeVisible();
+    await expect(page.getByText("Signed in as Alice", { exact: true })).toBeVisible();
 
     const body = await identity(page);
 
@@ -88,7 +88,7 @@ test.describe("behind a real sign-in proxy", () => {
     expect(minted.code, minted.stderr).toBe(0);
     const secret = (minted.json as { secret: string }).secret;
     await logInAsAlice(page);
-    await expect(page.getByText("Signed in as Alice")).toBeVisible();
+    await expect(page.getByText("Signed in as Alice", { exact: true })).toBeVisible();
 
     const body = await page.evaluate(async (token) => {
       const answer = await fetch("/v1/identity", { headers: { authorization: `Bearer ${token}` } });
