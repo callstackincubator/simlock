@@ -50,29 +50,12 @@ export function Shell() {
   );
 }
 
-// why: the connection's word is a live region so a screen reader hears it change; the data's age
-// beside it ticks every second, so it stays outside the region.
 function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
-  const status = useConnectionStatus();
-  const signOut = useSignOut();
   const signedIn = useSignedIn();
+  const signOut = useSignOut();
   return (
     <>
-      <div className="connection">
-        {collapsed ? (
-          <>
-            <StatusDot tone={status.tone} label={status.word} />
-            <span role="status" className="visually-hidden">
-              {status.word}
-            </span>
-          </>
-        ) : (
-          <Status tone={status.tone}>
-            <span role="status">{status.word}</span>
-            {status.age === undefined ? null : <span> — data from {status.age} ago</span>}
-          </Status>
-        )}
-      </div>
+      <ConnectionStatus collapsed={collapsed} />
       {signedIn.name === undefined || collapsed ? null : (
         <p className="signed-in-as">Signed in as {signedIn.name}</p>
       )}
@@ -80,6 +63,29 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
         <SignOutButton collapsed={collapsed} name={signedIn.name} onClick={signOut} />
       ) : null}
     </>
+  );
+}
+
+// why: the connection's word is a live region so a screen reader hears it change; the data's age
+// beside it ticks every second, so it stays outside the region.
+function ConnectionStatus({ collapsed }: { readonly collapsed: boolean }) {
+  const status = useConnectionStatus();
+  return (
+    <div className="connection">
+      {collapsed ? (
+        <>
+          <StatusDot tone={status.tone} label={status.word} />
+          <span role="status" className="visually-hidden">
+            {status.word}
+          </span>
+        </>
+      ) : (
+        <Status tone={status.tone}>
+          <span role="status">{status.word}</span>
+          {status.age === undefined ? null : <span> — data from {status.age} ago</span>}
+        </Status>
+      )}
+    </div>
   );
 }
 
