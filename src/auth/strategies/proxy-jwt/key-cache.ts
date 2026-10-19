@@ -4,9 +4,9 @@ import { type Clock, KEY_SET_MAX_BYTES, type KeySetFetcher } from "../../../port
 
 export type KeySet = ReturnType<typeof createLocalJWKSet>;
 
-export const KEY_KEEP_MS = 10 * 60_000;
-export const KEY_FETCH_LIMIT_MS = 5_000;
-export const UNKNOWN_KEY_REFETCH_MS = 30_000;
+const KEY_KEEP_MS = 10 * 60_000;
+const KEY_FETCH_LIMIT_MS = 5_000;
+const UNKNOWN_KEY_REFETCH_MS = 30_000;
 
 export class KeysUnavailableError extends Error {
   constructor(message: string) {

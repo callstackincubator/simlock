@@ -1,4 +1,4 @@
-import { errors, jwtVerify } from "jose";
+import { errors, type JWTPayload, jwtVerify } from "jose";
 import { z } from "zod";
 
 import type { Identity } from "../../identity.js";
@@ -49,7 +49,7 @@ function isWebUrl(value: string): boolean {
 }
 
 // why: each message is the text after "expected" in the config error, so core/config.ts prints it as written.
-export const proxyAuthSchema = z.object({
+const proxyAuthSchema = z.object({
   header: z
     .string(required("an HTTP header name"))
     .regex(/^[A-Za-z0-9-]{1,64}$/, "an HTTP header name"),
@@ -79,19 +79,43 @@ function credentialIn(headers: Headers, header: string): string | undefined {
   return secret.startsWith(TOKEN_PREFIX) ? undefined : secret;
 }
 
+const CLAIM_REASONS: Readonly<Record<string, Reason>> = {
+  iss: "wrong-issuer",
+  aud: "wrong-audience",
+  nbf: "not-yet-valid",
+};
+
 function reasonOf(error: unknown): Reason {
-  if (error instanceof KeysUnavailableError) return "keys-unavailable";
-  if (error instanceof errors.JWTExpired) return "expired";
   if (error instanceof errors.JWTClaimValidationFailed) {
-    if (error.claim === "iss") return "wrong-issuer";
-    if (error.claim === "aud") return "wrong-audience";
-    if (error.claim === "nbf") return "not-yet-valid";
-    return "malformed";
+    return CLAIM_REASONS[error.claim] ?? "malformed";
   }
-  if (error instanceof errors.JOSEAlgNotAllowed) return "algorithm";
-  if (error instanceof errors.JWKSNoMatchingKey) return "unknown-key";
-  if (error instanceof errors.JWSSignatureVerificationFailed) return "bad-signature";
-  return "malformed";
+  const byClass: ReadonlyArray<readonly [new (...args: never[]) => Error, Reason]> = [
+    [KeysUnavailableError, "keys-unavailable"],
+    [errors.JWTExpired, "expired"],
+    [errors.JOSEAlgNotAllowed, "algorithm"],
+    [errors.JWKSNoMatchingKey, "unknown-key"],
+    [errors.JWSSignatureVerificationFailed, "bad-signature"],
+  ];
+  return byClass.find(([type]) => error instanceof type)?.[1] ?? "malformed";
+}
+
+function personOf(
+  payload: JWTPayload,
+  settings: { readonly issuer: string; readonly signOutUrl?: string | undefined },
+): Identity | undefined {
+  const { sub, email, iss, exp } = payload;
+  if (typeof sub !== "string" || sub === "") return undefined;
+  if (typeof email !== "string" || email === "") return undefined;
+  const claimedName: unknown = payload["name"];
+  return {
+    principal: `proxy:${iss ?? settings.issuer}#${sub}`,
+    name: typeof claimedName === "string" && claimedName !== "" ? claimedName : email,
+    role: "operator",
+    via: "proxy",
+    expiresAt: (exp ?? 0) * 1000 + EXPIRY_GRACE_MS,
+    ambient: true,
+    ...(settings.signOutUrl === undefined ? {} : { signOutUrl: settings.signOutUrl }),
+  };
 }
 
 export const proxyStrategy: AuthStrategyDefinition = {
@@ -155,25 +179,12 @@ export const proxyStrategy: AuthStrategyDefinition = {
           return refuse(reasonOf(error), detail);
         }
 
-        const { sub, email, iss, exp } = payload;
+        const { sub } = payload;
         if (typeof sub === "string" && sub.length > SUB_MAX_LENGTH) {
           return refuse("malformed", "sub is over 120 characters");
         }
-        if (typeof sub !== "string" || sub === "")
-          return { kind: "not-mine", sawCredential: false };
-        if (typeof email !== "string" || email === "") {
-          return { kind: "not-mine", sawCredential: false };
-        }
-        const claimedName: unknown = payload["name"];
-        const identity: Identity = {
-          principal: `proxy:${iss ?? settings.issuer}#${sub}`,
-          name: typeof claimedName === "string" && claimedName !== "" ? claimedName : email,
-          role: "operator",
-          via: "proxy",
-          expiresAt: (exp ?? 0) * 1000 + EXPIRY_GRACE_MS,
-          ambient: true,
-          ...(settings.signOutUrl === undefined ? {} : { signOutUrl: settings.signOutUrl }),
-        };
+        const identity = personOf(payload, settings);
+        if (identity === undefined) return { kind: "not-mine", sawCredential: false };
         return { kind: "identified", identity };
       },
     };

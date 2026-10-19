@@ -63,7 +63,6 @@ export {
   FakeKeySetFetcher,
   KEY_SET_MAX_BYTES,
   type KeySetFetcher,
-  type KeySetResponse,
   NodeKeySetFetcher,
 } from "./key-set-fetcher.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
