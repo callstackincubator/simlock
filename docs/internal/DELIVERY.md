@@ -69,7 +69,8 @@ under Open questions, and the next session starts there.
 `deliver` writes no code. It hands each stage to a background agent in
 `.claude/agents/` (`implementer`, `reviewer`, `hardware-verifier`) and
 reasons only over the report each returns. The implementer works
-tests-first, one fresh agent per mode (red, green, audit), and runs only
+one test at a time, each committed failing before the code that passes
+it, one fresh agent per mode (build, audit), and runs only
 the tests its change reaches; hooks and CI run every other check
 ([toolchain.md](agent-rules/toolchain.md)).
 

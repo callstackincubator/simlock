@@ -86,7 +86,7 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("skips the git hooks");
   });
 
-  it("lets the red stage skip Fallow alone on its push", () => {
+  it("lets a build stage skip Fallow alone on a push", () => {
     expect(bash("LEFTHOOK_EXCLUDE=fallow git push -u origin task/1")).toEqual({
       status: 0,
       stderr: "",

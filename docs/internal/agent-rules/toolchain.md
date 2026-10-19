@@ -196,7 +196,7 @@ Every prompt a delivery stage or review lens is started with begins with
 this line, `-` for a key that does not apply yet:
 
 ```
-ledger: pr=<M> issue=<N> stage=<red|green|audit|fix|hardware-fix|review|hardware> round=<1|2|fix-check> role=<implementer|reviewer|spec|code|claims|hardware-verifier> lens=<behaviour|tests|both>
+ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> round=<1|2|fix-check> role=<implementer|reviewer|spec|code|claims|hardware-verifier> lens=<behaviour|tests|both>
 ```
 
 `node .agents/scripts/review-metrics.mjs --pr <M> --issue <N> [--findings

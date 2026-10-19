@@ -6,8 +6,8 @@
 //              the push hook and CI run them. The main session (a person, a routine) may, and
 //              an implementer may run `pnpm mutate` (its audit and fix modes do).
 //   hooks      a sub-agent skips the git hooks: `--no-verify`, `LEFTHOOK=0`, `core.hooksPath`, or
-//              `LEFTHOOK_EXCLUDE` naming anything but `fallow` (the red stage's one push, whose
-//              placeholders Fallow calls dead code).
+//              `LEFTHOOK_EXCLUDE` naming anything but `fallow` (a build stage's push before its
+//              last cycle, whose code a later cycle wires in Fallow calls dead code).
 //   isolation  an `implementer`, `reviewer` or `hardware-verifier` is started with `isolation`.
 //              Every stage of a task works in the task's one worktree, one after another.
 //
@@ -57,7 +57,8 @@ if (tool === "Bash" && typeof input.agent_id === "string") {
   if (HOOK_BYPASS.some((re) => re.test(shell))) {
     refuse(
       "Refused: this skips the git hooks. They run the checks agents never run by hand. Only the " +
-        "red stage may skip Fallow, on its one push: `LEFTHOOK_EXCLUDE=fallow git push ...`.",
+        "build stage may skip Fallow, on a push before its last cycle: " +
+        "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
     );
   }
   const found = forbiddenCheck(shell);

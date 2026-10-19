@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Implement one claimed task or bug tests-first (red, green, audit), or apply review or hardware findings to its branch, through the implementer agent. Use when the user says "implement #N".
+description: Implement one claimed task or bug one test at a time (build, audit), or apply review or hardware findings to its branch, through the implementer agent. Use when the user says "implement #N".
 ---
 
 Arguments: $ARGUMENTS

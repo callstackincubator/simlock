@@ -31,7 +31,7 @@ when and assumptions; retain earlier evidence for unaffected claims.
   under `open`. Never tick a box on intent.
 
 **Check every test you added or changed**, including setup or assertions
-edited after the red commit:
+edited after its `test:` commit:
 
 - Its title, assertions and fixture state make the same claim. A title with
   two claims has an assertion for each. Walk testing rule 10's list against
@@ -61,7 +61,7 @@ never deletes a call that takes arguments or is awaited, nor moves a
 number: the probes above cover those.
 
 Run the "Project checks" in `toolchain.md` that the diff triggers. Then the
-tests from mode `green` pass, and you push.
+tests from mode `build` pass, and you push.
 
 **A failing test you did not touch**, locally or in a failed CI run
 (`gh run view <id> --log-failed`):

@@ -18,7 +18,7 @@ rules 1, 2, 3, 9, 14, 15 and 16.
 whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
 then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
-report (`map`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
+report (`remaining`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
 `previous` plus the resolution ledger. No prose, and no
 reminders of what the agent's own instructions already say. Never pass a
 model or `isolation`: every stage of a task works in the task's one
@@ -135,7 +135,7 @@ gh issue view <N> --json number,title,labels,assignees,body
 
 Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
 `<kind>/<N>`. A task of a feature, or an issue whose feature has an open
-ADR PR, is stacked (step 3): its red stage gets `base:` and its PR waits
+ADR PR, is stacked (step 3): its build stage gets `base:` and its PR waits
 in the stack instead of the gate. If it already has a PR, read the PR body's `### Status`
 section and the latest `## Handoff` comment, and go on from the next stage
 they name; never build again or restart review at round 1.
@@ -194,6 +194,7 @@ they name; never build again or restart review at round 1.
 
    Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes.
    Rounds: <n>. Tokens: <t>M.
+   <the first line review-metrics.mjs prints: Runs: … Cost USD: … Agent seconds: …>
 
    Rejected:
 
@@ -282,7 +283,7 @@ Runnable: open, `task:ready`, unassigned, and every issue under its Depends
 on closed or a task of this feature whose PR passed review (open, not a
 draft). Check the Depends on yourself; no workflow promotes tasks.
 
-- A task's red stage gets `base: <branch of the stack's top PR>`; with no
+- A task's build stage gets `base: <branch of the stack's top PR>`; with no
   PR yet, no `base` (it starts from `main`).
 - Its review passed (step 2, item 6): `gh pr ready <M>` and `gh stack link
 <PR below> <M>` (PR numbers, bottom to top; none below yet: nothing to
