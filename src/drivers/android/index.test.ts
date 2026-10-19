@@ -3880,6 +3880,54 @@ describe("AndroidDriver emulator registration", () => {
 });
 
 describe("AndroidDriver console ports across a restart", () => {
+  it.each(["shutdown", "full reclaim", "standard reclaim"] as const)(
+    "%s after a restart sends neither kill nor snapshot load to another device on the stored serial (#284)",
+    async (operation) => {
+      const spec = {
+        physical: false,
+        model: "Pixel 5",
+        osVersion: "34",
+        platform: "android",
+      } as const;
+      const filesystem = await androidFilesystem();
+      const host = new EmulatorHost(filesystem);
+      const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+      await before.resolveSpec(spec);
+      const stopped = await before.makeReady(await before.provision(spec));
+      await before.shutdown(stopped);
+
+      const runner = new RecordingRunner(host.runner());
+      const after = await createDriver(filesystem, runner, { ids: ["two"] });
+      await after.resolveSpec(spec);
+      const running = await after.makeReady(await after.provision(spec));
+      expect(running.address).toBe(stopped.address);
+      expect(host.avdAnswering(running.address)).toBe("simlock_two");
+      const callStart = runner.calls.length;
+
+      const action =
+        operation === "shutdown"
+          ? after.shutdown(stopped)
+          : after.reclaim(stopped, {
+              clean: operation === "full reclaim" ? "full" : "standard",
+            });
+      await action.then(() => undefined, driverCrashMessage);
+
+      expect({
+        running: host.avdAnswering(running.address),
+        mutations: runner.calls
+          .slice(callStart)
+          .filter(
+            (call) =>
+              call.command === binaries.adb &&
+              call.args[1] === running.address &&
+              (call.args.slice(2).join(" ") === "emu kill" ||
+                call.args.slice(2, 6).join(" ") === "emu avd snapshot load"),
+          )
+          .map((call) => call.args),
+      }).toEqual({ running: "simlock_two", mutations: [] });
+    },
+  );
+
   it("readies a stopped device and one provisioned after a restart each at an address its own emulator answers (#52)", async () => {
     const spec = {
       physical: false,
@@ -6088,6 +6136,7 @@ const ADB_ANSWERS = new Map([
   ["shell getprop init.svc.bootanim", "stopped\n"],
   ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
   ["emu avd snapshot list", "simlock_clean_baseline\n"],
+  ["emu avd snapshot load simlock_clean_baseline", "OK\n"],
 ]);
 
 function consolePortOf(serial: string | undefined): number {
