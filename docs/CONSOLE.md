@@ -291,7 +291,9 @@ not wake is refused with a message that says so.
 
 ### Who holds a lease
 
-A lease taken over the HTTP API belongs to the token that took it. The list
+A lease taken over the HTTP API belongs to the token that took it, or, for a
+person signed in through the proxy, to that person: it is held as
+`proxy:<iss>#<sub>` and shown with their name. The list
 shows that token's label, `ci-runner-3`, and the lease's page the token id
 beside it: `ci-runner-3 tok_9f2c`. Give each agent's token a label when you create it, so you can tell
 them apart:

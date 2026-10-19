@@ -397,7 +397,12 @@ describe("the proxy strategy's key URL", () => {
       identity: { via: "proxy" },
     });
 
-    clock.advance(10 * MINUTE);
+    clock.advance(10 * MINUTE - 1_000 - 31_000);
+    expect(await outcome(auth, proxyRequest(await jwt()))).toMatchObject({
+      identity: { via: "proxy" },
+    });
+
+    clock.advance(2_000);
     expect(await outcome(auth, proxyRequest(await jwt()))).toEqual(refused("keys-unavailable"));
   });
 

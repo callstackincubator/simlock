@@ -48,7 +48,7 @@ Every route requires `Authorization: Bearer slk_<secret>` (or, with `http.proxyA
 /v1/healthz`, and the web console's own files, which the daemon serves at
 every path outside `/v1` (see [CONSOLE.md](CONSOLE.md)). They hold no data;
 the console reads everything it shows from the routes below, with the
-operator's token. A request with neither a recognized token nor a trusted proxy JWT is `401 UNAUTHENTICATED`.
+operator's token or, signed in through the proxy, without one. A request with neither a recognized token nor a trusted proxy JWT is `401 UNAUTHENTICATED`.
 
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
@@ -1865,7 +1865,7 @@ Every failure is the same shape the daemon protocol uses:
 | HTTP | Codes |
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
-| 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
+| 401 | `UNAUTHENTICATED` (missing or unrecognized token, or a proxy JWT that is refused) |
 | 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid); also `GET /v1/stream/leases/{leaseId}` naming a lease unknown, released, or another requester's — a stream reveals no lease that asking could not already list), `UNKNOWN_DEVICE` (`DELETE /v1/devices/{id}` naming a device that is not enrolled) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `LEASE_ID_TAKEN` (a `leaseId` an active lease or a waiting request holds; body carries `leaseId`; on a gateway, one of the gateway's own leases or requests, or a worker that refused it), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device or `leaseId`), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`), `DEVICE_BUSY` (`POST /v1/devices`, `DELETE /v1/devices/{id}` of a leased, reclaiming or held device; body carries `id` and `reason`) |
