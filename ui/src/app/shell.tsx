@@ -3,7 +3,13 @@ import { useEffect } from "react";
 import { AppFrame, Button, Icon, Sidebar, Status, StatusDot } from "../ds";
 import { NotFoundScreen } from "../screens/not-found";
 import { usePath } from "../state/router";
-import { useAttentionCount, useConnectionStatus, useSignOut, useTokenCheck } from "../state/shell";
+import {
+  useAttentionCount,
+  useConnectionStatus,
+  useSignedIn,
+  useSignOut,
+  useTokenCheck,
+} from "../state/shell";
 import { useSidebar } from "../state/sidebar";
 import { ROUTES, routeFor } from "./routes";
 
@@ -49,6 +55,7 @@ export function Shell() {
 function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
   const status = useConnectionStatus();
   const signOut = useSignOut();
+  const signedIn = useSignedIn();
   return (
     <>
       <div className="connection">
@@ -66,16 +73,23 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
           </Status>
         )}
       </div>
-      <Button
-        variant="secondary"
-        className="sign-out"
-        onClick={signOut}
-        aria-label="Sign out"
-        title="Sign out"
-      >
-        <Icon name="signOut" />
-        <span className="nav-label">Sign out</span>
-      </Button>
+      {signedIn.name === undefined || collapsed ? null : (
+        <p className="signed-in-as">Signed in as {signedIn.name}</p>
+      )}
+      {signedIn.canSignOut ? (
+        <Button
+          variant="secondary"
+          className="sign-out"
+          onClick={signOut}
+          aria-label="Sign out"
+          title={
+            collapsed && signedIn.name !== undefined ? `Sign out (${signedIn.name})` : "Sign out"
+          }
+        >
+          <Icon name="signOut" />
+          <span className="nav-label">Sign out</span>
+        </Button>
+      ) : null}
     </>
   );
 }

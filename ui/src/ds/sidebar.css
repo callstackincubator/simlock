@@ -351,3 +351,11 @@
 .sidebar-collapsed .connection {
   justify-content: center;
 }
+
+.signed-in-as {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
