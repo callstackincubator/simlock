@@ -19,7 +19,7 @@ export function App(props: {
   readonly session: Session;
 }) {
   const { session } = props;
-  const state = useSyncExternalStore(session.subscribe, session.state);
+  const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   return (
     <ConsoleProvider {...props}>
       <NavigationProvider navigate={navigate}>

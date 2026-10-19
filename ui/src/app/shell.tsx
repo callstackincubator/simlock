@@ -77,19 +77,28 @@ function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
         <p className="signed-in-as">Signed in as {signedIn.name}</p>
       )}
       {signedIn.canSignOut ? (
-        <Button
-          variant="secondary"
-          className="sign-out"
-          onClick={signOut}
-          aria-label="Sign out"
-          title={
-            collapsed && signedIn.name !== undefined ? `Sign out (${signedIn.name})` : "Sign out"
-          }
-        >
-          <Icon name="signOut" />
-          <span className="nav-label">Sign out</span>
-        </Button>
+        <SignOutButton collapsed={collapsed} name={signedIn.name} onClick={signOut} />
       ) : null}
     </>
+  );
+}
+
+function SignOutButton(props: {
+  readonly collapsed: boolean;
+  readonly name: string | undefined;
+  readonly onClick: () => void;
+}) {
+  const { collapsed, name, onClick } = props;
+  return (
+    <Button
+      variant="secondary"
+      className="sign-out"
+      onClick={onClick}
+      aria-label="Sign out"
+      title={collapsed && name !== undefined ? `Sign out (${name})` : "Sign out"}
+    >
+      <Icon name="signOut" />
+      <span className="nav-label">Sign out</span>
+    </Button>
   );
 }

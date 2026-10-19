@@ -31,7 +31,7 @@ export interface SignedIn {
 export function useSignedIn(): SignedIn {
   const api = useApi();
   const session = useSession();
-  const state = useSyncExternalStore(session.subscribe, session.state);
+  const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   const token = state.kind === "token" ? state.token : undefined;
   const [tokenName, setTokenName] = useState<string | undefined>(undefined);
   useEffect(() => {

@@ -60,31 +60,28 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
     inFlight = running;
     return running;
   };
+  const apply = (outcome: IdentityOutcome, atLoad: boolean) => {
+    switch (outcome.kind) {
+      case "proxy":
+        return set(proxyState(outcome));
+      case "refused":
+        return set({ kind: "none", refusedReason: outcome.reason });
+      case "ended":
+        return atLoad ? set({ kind: "none" }) : ended();
+      case "unreachable":
+        return atLoad ? set({ kind: "none" }) : undefined;
+      case "none":
+        return set({ kind: "none" });
+    }
+  };
   const opening = async (atLoad: boolean) => {
     const first = inFlight === undefined;
     const running = check();
     if (running === undefined) return set({ kind: "none" });
     const outcome = await running;
-    if (!first) return;
-    if (state.kind === "token") return;
-    switch (outcome.kind) {
-      case "proxy":
-        return set(
-          outcome.signOutUrl === undefined
-            ? { kind: "proxy", name: outcome.name }
-            : { kind: "proxy", name: outcome.name, signOutUrl: outcome.signOutUrl },
-        );
-      case "refused":
-        return set({ kind: "none", refusedReason: outcome.reason });
-      case "ended":
-        if (!atLoad) return ended();
-        return set({ kind: "none" });
-      case "unreachable":
-        if (!atLoad) return;
-        return set({ kind: "none" });
-      case "none":
-        return set({ kind: "none" });
-    }
+    // why: only the caller that started the check applies its outcome, and a token signed in while
+    // it ran is not undone by it.
+    if (first && state.kind !== "token") apply(outcome, atLoad);
   };
   // why: a proxy's login page cannot be drawn in this page, so the page reloads to let the proxy
   // show it; a second ending within a minute of the reload would loop, and a browser that keeps no
@@ -132,6 +129,12 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
       return () => listeners.delete(listener);
     },
   };
+}
+
+function proxyState(outcome: Extract<IdentityOutcome, { kind: "proxy" }>): SessionState {
+  return outcome.signOutUrl === undefined
+    ? { kind: "proxy", name: outcome.name }
+    : { kind: "proxy", name: outcome.name, signOutUrl: outcome.signOutUrl };
 }
 
 function attempt<T>(call: () => T): T | undefined {
