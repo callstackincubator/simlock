@@ -981,6 +981,14 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 /** ADR 0015 §4: `ios.defaultModels` and `android.defaultModels`, a list of model names per class. */
 const defaultModelsSchema = z.record(deviceClassSchema, z.array(z.string().min(1)).min(1));
 
+const proxyAuthSchema = z.object({
+  header: z.string(),
+  jwksUrl: z.string(),
+  issuer: z.string(),
+  audience: z.string(),
+  signOutUrl: z.string().optional(),
+});
+
 export const configSchema = z.object({
   /** ADR 0005 §1. `config.get` is how a caller learns which mode the daemon it is talking to
    * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
@@ -1051,6 +1059,7 @@ export const configSchema = z.object({
     enabled: z.boolean(),
     host: z.string(),
     port: z.number(),
+    proxyAuth: proxyAuthSchema.optional(),
   }),
   health: z.object({
     enabled: z.boolean(),
@@ -1111,7 +1120,7 @@ export const configSchema = z.object({
 // ---- tokens -----------------------------------------------------------------------------------
 
 /**
- * `TokenRole` (agent/operator/worker token store roles, src/http/token-store.ts) is a
+ * `TokenRole` (agent/operator/worker token store roles, src/auth/tokens.ts) is a
  * deliberately different vocabulary from the daemon session `Role` (agent/admin, see
  * `roles.ts`) -- a `token.create --role operator` mints a credential that *resolves to* the
  * admin session role at `hello` (ADR 0003 §5), it is not itself that role. Keeping the two

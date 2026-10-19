@@ -38,6 +38,16 @@ Each layer imports only the layers below it. `.dependency-cruiser.mjs` enforces 
    composes `ds` components. Its CSS sits beside it.
 4. Route: an entry in `src/app/routes.ts` gives it a path, a label and an icon.
 
+## Session
+
+`data/session.ts` holds who is signed in: a token (kept in `sessionStorage`), a person a sign-in
+proxy signed in (memory only), none, checking (the first `GET /v1/identity` runs), or ended. The
+API client reports a 401, or an answer that is not Simlock's, to the session; in a proxy session
+that starts the one shared `data/identity-check.ts`, in a token session a 401 forgets the token and
+asks it. The live connection asks `session.lost()` when it loses the stream, in a proxy session
+the same check: reconnect at once, back off as for an unreachable daemon, or stop while the session
+ends. `model/proxy-refusal.ts` words a refusal.
+
 ## Pages
 
 | Path                | Screen    | Layout                                                                               |

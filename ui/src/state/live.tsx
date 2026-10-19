@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import type { ApiPath } from "../data/api";
-import { useApi } from "./services";
+import { useApi, useSession } from "./services";
 import { browserClock, documentVisibility } from "../data/live/browser";
 import {
   type Clock,
@@ -34,12 +34,14 @@ const LiveContext = createContext<Live | undefined>(undefined);
 
 export function LiveProvider({ children }: { readonly children: ReactNode }) {
   const api = useApi();
+  const session = useSession();
   const [live, setLive] = useState<Live | undefined>(undefined);
   useEffect(() => {
     const connection = new LiveConnection({
       api,
       clock: browserClock,
       visibility: documentVisibility,
+      whenLost: session.lost,
     });
     const ticker = createTicker(browserClock, () => connection.serverNow());
     setLive({ connection, ticker });
@@ -47,7 +49,7 @@ export function LiveProvider({ children }: { readonly children: ReactNode }) {
       ticker.dispose();
       connection.dispose();
     };
-  }, [api]);
+  }, [api, session]);
   if (live === undefined) return null;
   return <LiveContext.Provider value={live}>{children}</LiveContext.Provider>;
 }

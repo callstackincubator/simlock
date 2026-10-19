@@ -1,35 +1,9 @@
 import { dirname } from "node:path";
 
 import type { Clock, Filesystem, IdGenerator, TokenSecrets } from "../ports/index.js";
+import type { TokenRecord, TokenRole } from "./tokens.js";
 
-/**
- * ADR 0003 §5 (`agent`, `operator`) plus ADR 0005 §8/§25's `worker`: a *join token*, minted on
- * a gateway with `simlock token create --role worker` and presented by a worker when it opens
- * its uplink. It authorizes exactly one thing -- opening an uplink -- and nothing else: the
- * HTTP bearer adapter answers `403` for a `worker` token on any `/v1` route (`auth.ts`), and
- * it resolves to no daemon session role at all. Revoking it closes the uplink (ADR 0005 §8):
- * `GatewayDispatcher#tokenRevoke` closes every link the revoked token authenticated
- * (`GatewayService#closeLinksForToken`), so the effect is immediate rather than waiting on that
- * worker's next reconnect.
- */
-export type TokenRole = "agent" | "operator" | "worker";
-
-/** The same three values as a list, for `isTokenRole`'s membership check -- one branch there
- * instead of one per role. Module-private: `TokenRole` is the exported vocabulary. */
 const TOKEN_ROLES: readonly TokenRole[] = ["agent", "operator", "worker"];
-
-export interface TokenRecord {
-  readonly id: string;
-  readonly hash: string;
-  readonly role: TokenRole;
-  readonly label?: string;
-  readonly createdAt: number;
-}
-
-export interface TokenIdentity {
-  readonly requesterId: string;
-  readonly role: TokenRole;
-}
 
 export interface TokenStoreOptions {
   readonly filesystem: Filesystem;
@@ -62,7 +36,6 @@ export class TokenStore {
     this.#path = options.path;
   }
 
-  // fallow-ignore-next-line unused-class-member -- called by `Dispatcher`'s `token.create` handler through `#requireTokens()`'s return value (src/daemon/dispatcher.ts); the audit does not follow a member access on a method's result.
   async create(role: TokenRole, label?: string): Promise<{ record: TokenRecord; secret: string }> {
     return this.#mutate(async () => {
       const secret = this.#secrets.generateSecret();
@@ -86,7 +59,6 @@ export class TokenStore {
     return this.#readAll();
   }
 
-  // fallow-ignore-next-line unused-class-member -- same as `create` above: reached through `#requireTokens()`'s return value.
   async revoke(id: string): Promise<boolean> {
     return this.#mutate(async () => {
       const records = await this.#readAll();
@@ -99,18 +71,10 @@ export class TokenStore {
     });
   }
 
-  /**
-   * Re-reads tokens.json on every call instead of caching in memory, so a
-   * `simlock token create`/`revoke` run from another process takes effect
-   * immediately for a long-running process (the daemon) verifying bearer
-   * tokens -- there is no in-process invalidation path otherwise.
-   */
-  async verify(secret: string): Promise<TokenIdentity | undefined> {
+  // why: re-reading on every call is what lets a `token create`/`revoke` from another process take effect in the long-running daemon, which has no invalidation path.
+  async verify(secret: string): Promise<TokenRecord | undefined> {
     const hash = this.#secrets.hash(secret);
-    const record = (await this.#readAll()).find((candidate) => candidate.hash === hash);
-    if (record === undefined) return undefined;
-
-    return { requesterId: record.id, role: record.role };
+    return (await this.#readAll()).find((candidate) => candidate.hash === hash);
   }
 
   #mutate<T>(operation: () => Promise<T>): Promise<T> {

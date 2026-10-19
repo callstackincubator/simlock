@@ -47,7 +47,7 @@ describe("helloRequestSchema", () => {
 });
 
 describe("PROTOCOL_VERSION_RANGE", () => {
-  it("is 46, for usage.get and its ledger", () => {
-    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 46, min: 46 });
+  it("is one above #713's, for http.proxyAuth", () => {
+    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 48, min: 48 });
   });
 });

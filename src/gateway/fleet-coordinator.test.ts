@@ -1071,7 +1071,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     await coordinator.exec(
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-      { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent-1",
+        role: "agent",
+      },
     );
 
     expect(client.calls).toContain(`device.exec:${GATEWAY_PREFIX}agent-1`);
@@ -1096,6 +1101,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
       {
         manageEventSubscription: () => undefined,
+        via: "socket",
         onOutput: () => {
           order.push("output");
         },
@@ -1139,6 +1145,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
         { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
         {
           manageEventSubscription: () => undefined,
+          via: "socket",
           onStarted: () => {
             started = true;
           },
@@ -1246,6 +1253,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
       { args: ["install", "/path/to.app"], leaseId: grant.lease.id, tool: "simctl" },
       {
         manageEventSubscription: () => undefined,
+        via: "socket",
         onStarted: () => {
           started = true;
         },
@@ -1276,6 +1284,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
         { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
         {
           manageEventSubscription: () => undefined,
+          via: "socket",
           onStarted: () => {
             started = true;
           },
@@ -1314,7 +1323,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     const execution = coordinator.exec(
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-      { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent-1",
+        role: "agent",
+      },
     );
     const executionState = promiseState(execution);
     const rejection = execution.catch((error: unknown) => error);
@@ -1351,6 +1365,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
       {
         manageEventSubscription: () => undefined,
+        via: "socket",
         onOutput: (stream, chunk) => {
           relayed.push({ chunk, stream });
         },
@@ -1387,6 +1402,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
       {
         manageEventSubscription: () => undefined,
+        via: "socket",
         onStarted: () => {
           startedCount += 1;
         },
@@ -1423,6 +1439,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
       {
         manageEventSubscription: () => undefined,
+        via: "socket",
         onStarted: () => {
           startedCount += 1;
         },
@@ -1799,7 +1816,12 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     const rejection = await coordinator
       .exec(
         { args: ["devices"], leaseId: "wrk_a.lse_1", tool: "adb" },
-        { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "agent-1",
+          role: "agent",
+        },
       )
       .catch((error: unknown) => error);
 

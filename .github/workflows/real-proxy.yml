@@ -1,0 +1,86 @@
+name: Real proxy
+
+on:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: real-proxy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Decides whether the lane has work to do; a job skipped by `if` reports success.
+  changes:
+    name: Changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      lane: ${{ steps.filter.outputs.lane }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # A pull_request run checks out the merge commit; its first parent is the base.
+          fetch-depth: 2
+      - name: Files the lane depends on
+        id: filter
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "lane=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
+          if printf '%s\n' "$changed" | grep -v -E '^(src|ui)/.*\.test\.tsx?$' | grep -q -E \
+            '^(src/|ui/|e2e/real-proxy/|playwright\.real-proxy\.config\.ts$|package\.json$|pnpm-lock\.yaml$|\.github/workflows/real-proxy\.yml$)'; then
+            echo "lane=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "lane=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  real-proxy:
+    name: Real proxy
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.lane != 'false' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Real-proxy lane
+        run: pnpm test:real-proxy
+      - name: Report a failed scheduled run
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Real-proxy lane failed"
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" \
+            --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "The scheduled run failed again: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label bug:new \
+              --body "The scheduled run failed: $RUN_URL"
+          fi

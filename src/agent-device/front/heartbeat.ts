@@ -1,4 +1,4 @@
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { failure, frontReply, leaseEndedByHost, refusal } from "../shared/replies.js";
 import {
   leaseCallFields,
@@ -40,7 +40,7 @@ function forwardedHeartbeat(request: Request, call: Call, ceiling: number | unde
 // why: simlock's own ownership check decides about a lease another token holds, so a refusal there is not a failure of the heartbeat.
 async function releaseOurs(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   leaseId: string,
   call: Call,
   held: boolean,
@@ -56,7 +56,7 @@ async function releaseOurs(
 
 async function leaseStillThere(
   context: FrontContext,
-  { request, identity, call }: { request: Request; identity: TokenIdentity; call: Call },
+  { request, identity, call }: { request: Request; identity: Identity; call: Call },
   leaseId: string,
 ): Promise<Response> {
   const ended = await releaseAgentDevice(
@@ -96,9 +96,9 @@ async function renewHeld(
   return relay(reply);
 }
 
-function ownEntry(context: FrontContext, leaseId: string, identity: TokenIdentity) {
+function ownEntry(context: FrontContext, leaseId: string, identity: Identity) {
   const entry = context.map.get(leaseId);
-  return entry?.identity.requesterId === identity.requesterId ? entry : undefined;
+  return entry?.identity.principal === identity.principal ? entry : undefined;
 }
 
 function badTtl(call: Call): boolean {
@@ -114,7 +114,7 @@ export async function heartbeat(
   context: FrontContext,
   arguments_: {
     readonly request: Request;
-    readonly identity: TokenIdentity;
+    readonly identity: Identity;
     readonly call: Call;
     readonly leaseMaxTtlMs: number | undefined;
   },

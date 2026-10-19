@@ -3,12 +3,6 @@ import { describe, expect, it } from "vitest";
 import { MemoryFilesystem, CryptoTokenSecrets, type Filesystem } from "../ports/index.js";
 import { AdminSecretManager } from "./admin-secret.js";
 
-/**
- * Regression coverage for review finding S1: `AdminSecretManager` (ADR 0003 §5's per-start
- * admin secret) had zero test coverage of its own -- everything that exercises the daemon's
- * credential handshake in `server.test.ts` goes through a stubbed `resolveRole`, so none of it
- * ever calls `persist()` or `verify()` for real.
- */
 describe("AdminSecretManager", () => {
   function secrets(): CryptoTokenSecrets {
     return new CryptoTokenSecrets();
@@ -31,14 +25,7 @@ describe("AdminSecretManager", () => {
     expect(stat.mode).toBe(0o600);
   });
 
-  // ADR §5: "owner-only permissions set at creation" -- not a later `chmod`. `Filesystem` (see
-  // `ports/filesystem.ts`) has no `chmod` method at all, only `writeFileAtomic(path, contents,
-  // {mode})`, so the interface itself rules out a two-step "write, then chmod" implementation --
-  // this asserts `persist()` actually uses that option rather than, say, calling
-  // `writeFileAtomic` without `mode` and relying on the process umask to happen to land on
-  // 0600. Spying on the raw `Filesystem` call (rather than reading the mode back through
-  // `MemoryFilesystem#stat`, which the test above already does) proves the *call site* passes
-  // the option, not just that `MemoryFilesystem` happens to record whatever mode was implied.
+  // why: spying on the raw call proves the call site passes `mode`, not that MemoryFilesystem happens to record one.
   it("passes mode 0600 to writeFileAtomic itself, at the single call persist() makes", async () => {
     const calls: Array<{ readonly path: string; readonly mode: number | undefined }> = [];
     const filesystem: Filesystem = {
@@ -102,12 +89,7 @@ describe("AdminSecretManager", () => {
     expect(manager.verify("")).toBe(false);
   });
 
-  // ADR §5: "`verify()` never touches the filesystem or reconstructs the secret; it only ever
-  // compares hashes" -- and `session.ts`'s doc on the real credential handshake depends on this:
-  // "`hello` verifies against memory, so a credential can be checked before the file lands and
-  // before convergence." A `Filesystem` whose every method throws proves `verify()` truly never
-  // calls any of them, for a correct candidate, a wrong one, and before `persist()` has ever
-  // run.
+  // why: a Filesystem whose every method throws proves verify() never calls one, before persist() has run.
   it("verify() never touches the filesystem, even before persist() has ever run", () => {
     const throwingFilesystem: Filesystem = {
       readFile: () => {
@@ -163,9 +145,7 @@ describe("AdminSecretManager", () => {
       },
     };
     const realSecrets = secrets();
-    // Constructing `AdminSecretManager` calls `secrets.generateSecret()`/`secrets.hash(...)`
-    // once (see its constructor) -- capture the plaintext it generated to verify against, the
-    // only way to get a real candidate without ever calling `persist()`.
+    // why: the constructor generates the secret, so capturing it is the only way to get a real candidate without persist().
     let generated = "";
     const spySecrets: CryptoTokenSecrets = {
       ...realSecrets,
@@ -181,8 +161,6 @@ describe("AdminSecretManager", () => {
       secrets: spySecrets,
     });
 
-    // None of these touch `throwingFilesystem` -- if they did, the test would already have
-    // thrown before reaching these assertions.
     expect(manager.verify(generated)).toBe(true);
     expect(manager.verify("wrong")).toBe(false);
   });
@@ -242,9 +220,7 @@ describe("AdminSecretManager", () => {
       },
     };
 
-    // Constructing an `AdminSecretManager` -- e.g. a daemon that loses the start race and never
-    // calls `persist()` at all (ADR §5, `admin-secret.ts`'s class doc) -- must not touch the
-    // real file. Nothing here throws.
+    // why: a daemon that loses the start race constructs the manager and never persists, so construction must not touch the real file.
     expect(
       () =>
         new AdminSecretManager({

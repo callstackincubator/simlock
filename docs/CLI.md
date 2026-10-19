@@ -3,7 +3,7 @@
 Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status`, `catalog`, `stats` and
+agents are the primary audience. `status`, `catalog`, `stats`, `whoami`, and
 `daemon <start|stop|status|logs>` are the exception: they default to a
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
@@ -1374,6 +1374,22 @@ under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
 `allowDownload`, `requesterId`, ...); those did not change shape, only their
 schema's source of truth.
 
+## `simlock whoami [--json]`
+
+Prints who Simlock thinks you are, for this CLI's own session: the principal,
+the name to show, the role and how you signed in. Like every command it
+starts the daemon when none runs.
+
+```
+$ simlock whoami
+Principal: claude-1
+Name:      claude-1
+Role:      admin
+Via:       socket
+```
+
+`--json` prints `{"principal","name","role","via"}` as one object.
+
 ## `simlock status`
 
 In `status --json`, an enrolled physical device's entry carries `driverDeviceId`,
@@ -2544,6 +2560,8 @@ running daemon keeps running in the mode it started in until
 `gateway.url` and `gateway.token` to join a fleet. See
 [CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for which keys
 each mode reads.
+
+An object value takes JSON: `simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://…","issuer":"https://…","audience":"…"}'`. Each `config set` checks the whole file, so the four required `http.proxyAuth` keys go in together as one object; one alone is refused (see [CONFIGURATION.md](CONFIGURATION.md#signing-in-through-a-proxy)).
 
 Switching to `gateway` is **two keys, not one**: `mode` and `http.enabled`.
 A gateway is the fleet's contact point, so it must listen on HTTP — workers

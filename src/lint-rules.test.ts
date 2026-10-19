@@ -633,6 +633,35 @@ describe("main.ts imports nothing from any module", () => {
   });
 });
 
+describe("src/auth imports little", () => {
+  function authViolations(source: string): string[] {
+    const dir = join(scratch, `auth-little-${counter++}`);
+    const world: Record<string, string> = {
+      "src/core/index.ts": "export const value = 1;\n",
+      "src/ports/index.ts": "export const port = 1;\n",
+      "src/auth/index.ts": source,
+    };
+    for (const [path, contents] of Object.entries(world)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src"])
+      .filter((v) => v.from === "src/auth/index.ts")
+      .map((v) => v.rule.name);
+  }
+
+  it("dependency-cruiser fails a file in src/auth importing src/core/index.ts and passes one importing src/ports/index.ts", () => {
+    expect(authViolations('import { port } from "../ports/index.js";\nexport { port };\n')).toEqual(
+      [],
+    );
+    expect(
+      authViolations('import { value } from "../core/index.js";\nexport { value };\n'),
+    ).toContain("auth-imports-little");
+  });
+});
+
 describe("the cycle check between components", () => {
   function cycleWorld(files: Record<string, string>): Violation[] {
     const dir = join(scratch, `cycles-${counter++}`);

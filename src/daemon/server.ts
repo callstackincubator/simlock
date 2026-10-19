@@ -49,7 +49,12 @@ import {
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { ConnectionHost } from "./connection-host.js";
-import type { TokenStore } from "../http/token-store.js";
+import {
+  resolveAgentRole,
+  type Auth,
+  type SessionRoleResolver,
+  type TokenOperations,
+} from "../auth/index.js";
 import {
   Dispatcher,
   DispatchError,
@@ -57,8 +62,6 @@ import {
   type DispatcherOptions,
   type DispatchSession,
 } from "./dispatcher.js";
-import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
-import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
 import { RelayConnection, type RelayTargets } from "./relay.js";
@@ -162,7 +165,7 @@ export interface DaemonServerEngineOptions {
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
-  readonly tokens?: TokenStore;
+  readonly tokens?: TokenOperations;
 }
 
 export interface DaemonServerCommonOptions {
@@ -186,7 +189,7 @@ export interface DaemonServerCommonOptions {
    * exercise the admin handshake at all -- `start()`/`#stop()` simply skip the persist/remove
    * calls below when it is absent, same style as `doctor`/`nuke`.
    */
-  readonly adminSecret?: AdminSecretManager;
+  readonly adminSecret?: Auth["adminSecret"];
   /**
    * why: Startup recovery work (doctor reconciliation, running-capacity convergence) run
    * *after* the socket is claimed, so reachability never depends on it. `hello` and
@@ -230,7 +233,7 @@ export interface DaemonServerCommonOptions {
    * otherwise there is nothing for a request to park against, it just gets connection-refused
    * the way it always did. Called synchronously right after `#readyPromise` is assigned (so any
    * request `dispatch()` serves as a result of this callback already parks correctly) and after
-   * the socket claim and the admin-secret write, but *before* awaiting convergence -- an
+   * the socket claim and the admin secret write, but *before* awaiting convergence -- an
    * auxiliary frontend started from here must not itself assume convergence is done. A no-op
    * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
    */
@@ -1120,6 +1123,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "identity.get":
+        return this.#dispatcher.dispatch(
+          "identity.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "token.create":
         return this.#dispatcher.dispatch("token.create", frame.payload, this.#session(connection));
       case "token.list":
@@ -1205,6 +1214,7 @@ export class DaemonServer {
       principal: connection.principal,
       relays: connection.relays,
       role: connection.role,
+      via: connection.isGatewayUplink === true ? "uplink" : "socket",
     };
   }
 

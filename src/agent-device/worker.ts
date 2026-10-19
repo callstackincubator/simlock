@@ -1,5 +1,5 @@
 import type { HttpDispatch } from "../http/dispatcher-session.js";
-import type { TokenIdentity } from "../http/token-store.js";
+import type { Identity } from "../auth/index.js";
 import type { Clock } from "../ports/index.js";
 import type { WorkerContext, WorkerModule } from "../modules/index.js";
 import type { AgentDeviceModuleConfig } from "./definition.js";
@@ -47,7 +47,13 @@ function agentDeviceRelayTarget(
     if (status.state === "unavailable") {
       return frontReplyFor(request, notAvailable(status.reason));
     }
-    return parts.link.forward(request, { requesterId: tenant, role: "agent" });
+    return parts.link.forward(request, {
+      principal: tenant,
+      name: tenant,
+      role: "agent",
+      via: "relay",
+      ambient: false,
+    });
   };
 }
 
@@ -132,7 +138,7 @@ export function createWorkerWith(
             ? {}
             : { leaseTtlCapMs: ctx.config.leaseTtlCapMs }),
         });
-        return (request, identity) => front.handle(request, identity as TokenIdentity);
+        return (request, identity) => front.handle(request, identity as Identity);
       },
       relayTarget: agentDeviceRelayTarget(parts),
     };

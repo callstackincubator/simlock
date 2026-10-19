@@ -23,6 +23,8 @@
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
     "e2e/console/*.spec.ts",
+    "e2e/real-proxy/*.spec.ts",
+    "e2e/real-proxy/global-setup.ts",
     "vitest.mutate.config.ts",
     ".agents/scripts/*.mjs",
     ".dependency-cruiser.cycles.mjs",

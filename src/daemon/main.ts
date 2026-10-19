@@ -51,10 +51,10 @@ import {
   type SlimmedFact,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
+import { type Auth, createAuth } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
-import { TokenStore } from "../http/token-store.js";
 import {
   CryptoIdGenerator,
   CryptoTokenSecrets,
@@ -86,6 +86,7 @@ import {
   resolveDaemonSocketPath,
   readPackageVersion,
   resolveSimlockHome,
+  NodeKeySetFetcher,
   SystemClock,
   type SystemStats,
   type ProcessRunner,
@@ -112,12 +113,10 @@ import { createModuleHost, type OptionalModuleDefinition } from "../modules/inde
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
-import { AdminSecretManager } from "./admin-secret.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 import type { RelayTargets } from "./relay.js";
-import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
   readonly clock?: Clock;
@@ -208,12 +207,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
   });
+  // why: both modes check the same credentials, so the checks are built once, before the mode branch.
+  const auth = createAuth({
+    clock,
+    config: config.http,
+    dataDirectory,
+    filesystem,
+    idGenerator,
+    keySetFetcher: new NodeKeySetFetcher(),
+    logger: logger.child("auth"),
+    secrets: new CryptoTokenSecrets(),
+  });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
   // through the worker's composition below.
   if (config.mode === "gateway") {
     return startGatewayDaemon({
+      auth,
       clock,
       config,
       dataDirectory,
@@ -393,27 +404,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     targetedDevices: () => core.targetedDevices(),
   });
   const nuke = new Nuke({ executor: core.nuke, registry });
-  // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
-  // token is a socket-hello credential too, so the daemon must be able to verify one against
-  // the token store regardless of whether the HTTP gateway is running. Previously this was
-  // only ever constructed inside the `config.http.enabled` block below; it is reused there now
-  // instead of being built twice.
-  const tokens = new TokenStore({
-    clock,
-    filesystem,
-    idGenerator,
-    path: join(dataDirectory, "tokens.json"),
-    secrets: new CryptoTokenSecrets(),
-  });
-  const adminSecret = new AdminSecretManager({
-    filesystem,
-    secrets: new CryptoTokenSecrets(),
-    path: join(dataDirectory, "admin.token"),
-  });
-  const resolveRole = createCredentialRoleResolver({
-    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
-    verifyAdminSecret: (secret) => adminSecret.verify(secret),
-  });
   /**
    * ADR 0005 §3/§4: two config keys join a fleet. Undefined here means this worker has no
    * gateway, which is every worker today -- and the daemon is otherwise completely unchanged
@@ -529,9 +519,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     nuke,
     registry,
     stalls: { claims: core.claimReader, drivers },
-    resolveRole,
-    adminSecret,
-    tokens,
+    resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
+    adminSecret: auth.adminSecret,
+    tokens: auth.tokens,
     version: version,
     converge: convergeStartup,
     settle: async () => {
@@ -630,7 +620,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       mounts: [...moduleHost.mounts({ dispatch })],
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
-      tokens,
+      auth,
     });
     const gateway = new HttpGateway(app, {
       host: config.http.host,
@@ -648,13 +638,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // calling `stopHttpGateway`. Stopping here too would double-stop it.
   }
 
-  // Awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise
+  // why: awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise
   // `onSocketClaimed`'s handler above settles once the concurrently-started HTTP gateway either
   // finishes starting or fails to. Both are already running concurrently by the time this line
   // is reached (the gateway since `onSocketClaimed` fired partway through `daemon.start()`), so
   // this changes nothing about when either finishes -- only what `startDaemon()` itself reports.
   // `gatewayStarted` is settled only from inside `onSocketClaimed`'s handler, and `start()`
-  // fires that callback only once the socket claim (and the admin-secret write) has succeeded.
+  // fires that callback only once the socket claim (and the admin secret write) has succeeded.
   // A daemon that loses the start race therefore rejects without the callback ever running, so
   // nothing would settle `gatewayStarted` and the join below would hang forever rather than
   // reporting the failure. Release it here on that path -- resolving an already-settled promise
@@ -679,6 +669,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 }
 
 interface GatewayDaemonOptions {
+  readonly auth: Auth;
   readonly clock: Clock;
   readonly config: Config;
   readonly dataDirectory: string;
@@ -711,8 +702,17 @@ interface GatewayDaemonOptions {
  */
 // fallow-ignore-next-line complexity -- explicit production composition, exactly like `startDaemon`'s worker half.
 async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<DaemonServer> {
-  const { clock, config, dataDirectory, eventBus, eventHistory, filesystem, idGenerator, logger } =
-    options;
+  const {
+    auth,
+    clock,
+    config,
+    dataDirectory,
+    eventBus,
+    eventHistory,
+    filesystem,
+    idGenerator,
+    logger,
+  } = options;
   // The gateway's own identity, used to namespace the principal it announces to each worker
   // (ADR 0005 §27's shape) so a worker's logs attribute what the gateway did to the gateway.
   const instanceId = await loadInstanceId({
@@ -720,26 +720,6 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     idGenerator,
     path: join(dataDirectory, "instance.json"),
   });
-  // ADR 0005 §24: a gateway has its own token store and mints its own credentials. A gateway
-  // token is never valid on a worker and vice versa -- they are different stores on different
-  // machines, which is what makes that true without any code enforcing it.
-  const tokens = new TokenStore({
-    clock,
-    filesystem,
-    idGenerator,
-    path: join(dataDirectory, "tokens.json"),
-    secrets: new CryptoTokenSecrets(),
-  });
-  const adminSecret = new AdminSecretManager({
-    filesystem,
-    secrets: new CryptoTokenSecrets(),
-    path: join(dataDirectory, "admin.token"),
-  });
-  const resolveRole = createCredentialRoleResolver({
-    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
-    verifyAdminSecret: (secret) => adminSecret.verify(secret),
-  });
-
   // ADR 0005 §14/§27: stamped on every requester id this gateway forwards, and what
   // `FleetLeaseIndex` recognizes its own leases by when rebuilding from a worker's view.
   const gatewayRequesterPrefix = `gw:${instanceId}:`;
@@ -756,13 +736,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // real and simply has no authority here (403); anything else is unauthenticated (401).
     // C-2: the accepted case names the token's own id, so `token.revoke` can later find and
     // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
-    authenticate: async (credential) => {
-      if (credential === undefined) return "unauthenticated";
-      const identity = await tokens.verify(credential);
-      if (identity === undefined) return "unauthenticated";
-      if (identity.role !== "worker") return "forbidden";
-      return { outcome: "accept", tokenId: identity.requesterId };
-    },
+    authenticate: (credential) => auth.authenticateUplink(credential),
     clock,
     drainStore: new FileDrainStore({
       filesystem,
@@ -862,13 +836,13 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
     leaseIndex,
     logger: logger.child("gateway"),
-    tokens,
+    tokens: auth.tokens,
     workers: gatewayService.workers,
     historyPath: join(dataDirectory, HISTORY_DB_NAME),
   });
 
   const daemon = new DaemonServer({
-    adminSecret,
+    adminSecret: auth.adminSecret,
     clock,
     config,
     defaultRequesterId: process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
@@ -889,7 +863,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       leaseIndex.all().map((entry) => ({ id: entry.gatewayLeaseId, ownerId: entry.ownerId })),
     logger: logger.child("server"),
     ownerRoutedFacts: gatewayOwnerRoutedFacts,
-    resolveRole,
+    resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     version: options.version,
     // A gateway's "convergence" is starting to accept uplinks and arming the refresh tick.
     // Running it here rather than before `start()` keeps one lifecycle: a listener that cannot
@@ -959,7 +933,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       // A gateway never downloads, so `allowDownload` has nothing slow to outlast the `POST`:
       // a request no worker can serve fails it, as without the flag.
       answerDownloadsEarly: false,
-      tokens,
+      auth,
     });
     const gateway = new HttpGateway(app, {
       host: config.http.host,

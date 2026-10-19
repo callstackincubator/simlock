@@ -49,10 +49,12 @@ import {
   FakeSystemStats,
   MemoryFilesystem,
   NodeProcessRunner,
+  FakeKeySetFetcher,
+  NoopLogger,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
-import { TokenStore } from "../http/token-store.js";
+import { createAuth } from "../auth/index.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
@@ -337,11 +339,14 @@ async function buildDispatcher(
     quarantine: engine.core.quarantine,
     registry,
   });
-  const tokens = new TokenStore({
+  const { tokens } = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    keySetFetcher: new FakeKeySetFetcher(),
+    logger: new NoopLogger(),
     secrets: new CryptoTokenSecrets(),
   });
   const dispatcher = new Dispatcher({
@@ -394,6 +399,7 @@ async function buildDispatcher(
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
   return {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "tok_agent",
     role: "agent",
     ...overrides,
@@ -815,6 +821,26 @@ describe("Dispatcher: token.create | token.list | token.revoke", () => {
       session({ role: "admin" }),
     );
     expect(result.revoked).toBe(false);
+  });
+});
+
+describe("Dispatcher: identity.get", () => {
+  it("copies signOutUrl from a session that has one into its output, and omits it otherwise", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    const withUrl = await dispatcher.dispatch(
+      "identity.get",
+      {},
+      session({ role: "admin", via: "proxy", signOutUrl: "https://sso.example/logout" }),
+    );
+    const without = await dispatcher.dispatch(
+      "identity.get",
+      {},
+      session({ role: "admin", via: "socket" }),
+    );
+
+    expect(withUrl).toHaveProperty("signOutUrl", "https://sso.example/logout");
+    expect(without).not.toHaveProperty("signOutUrl");
   });
 });
 

@@ -7,15 +7,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import type { Identity } from "../auth/index.js";
+import { fakeAuth, tokenIdentity } from "../auth/testing.js";
 import { createHttpApp } from "./app.js";
 import { CONSOLE_CONTENT_SECURITY_POLICY, HttpGateway, withConsole } from "./server.js";
-import {
-  FakeDispatcher,
-  FakeRegistry,
-  FakeTokenVerifier,
-  sequenceIdGenerator,
-  testConfig,
-} from "./test-fakes.js";
+import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from "./test-fakes.js";
 
 const PAGE = '<!doctype html><title>Simlock</title><div id="root"></div>';
 const SCRIPT = "console.log('console');";
@@ -50,8 +46,9 @@ function harness(root: string) {
   const dispatcher = new FakeDispatcher(clock);
   dispatcher.handlers["status.get"] = () => ({ ok: true });
   const registry = new FakeRegistry();
-  const tokens = new FakeTokenVerifier();
-  tokens.register("slk_operator", { requesterId: "tok_operator", role: "operator" });
+  const auth = fakeAuth(
+    new Map<string, Identity>([["slk_operator", tokenIdentity("tok_operator", "operator")]]),
+  );
   const logSink = new MemoryLogSink();
   const logger = new JsonLinesLogger({ clock, sink: logSink });
   const app = createHttpApp({
@@ -64,7 +61,7 @@ function harness(root: string) {
     logger,
     ownerRoutedFacts: new OwnerRoutedFactBus(eventBus, registry),
     registry,
-    tokens,
+    auth,
   });
   const site = withConsole(app, { logger, root });
   const get = (path: string, init: RequestInit = {}) =>

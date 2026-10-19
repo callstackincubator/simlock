@@ -209,7 +209,7 @@ async function agentStatus(daemon: DaemonServer) {
   return (await daemon.dispatch(
     "status.get",
     {},
-    { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+    { manageEventSubscription: () => undefined, via: "socket", principal: "agent", role: "agent" },
   )) as { readonly host: { readonly tools: readonly unknown[] } };
 }
 
@@ -266,6 +266,7 @@ describe("startDaemon", () => {
     });
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -300,7 +301,12 @@ describe("startDaemon", () => {
     const replayed = (await daemon.dispatch(
       "events.replay",
       {},
-      { manageEventSubscription: () => undefined, principal: "operator", role: "admin" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
     )) as readonly { readonly event: string; readonly payload: unknown }[];
 
     const started = replayed.find((envelope) => envelope.event === "daemon.started");
@@ -337,6 +343,7 @@ describe("startDaemon", () => {
     });
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -370,6 +377,7 @@ describe("startDaemon", () => {
     } as const;
     const session = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "agent",
       role: "agent",
     } as const;
@@ -475,7 +483,12 @@ describe("startDaemon", () => {
           osVersion: "26.5",
           platform: "ios",
         },
-        { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "agent",
+          role: "agent",
+        },
       )
       .catch((error: unknown) => error);
     await expect.poll(() => events).toEqual(["install-started"]);
@@ -555,7 +568,12 @@ describe("startDaemon", () => {
     const listed = await daemon.dispatch(
       "component.list",
       {},
-      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
     );
 
     expect(listed).toEqual({ components: [] });
@@ -581,11 +599,13 @@ describe("startDaemon", () => {
 describe("startDaemon wires core and leasing together", () => {
   const agent = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent",
     role: "agent",
   } as const;
   const admin = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "operator",
     role: "admin",
   } as const;
@@ -1573,6 +1593,7 @@ describe("startDaemon HTTP status for a quarantined device", () => {
       manageEventSubscription: () => undefined,
       principal: "agent-1",
       role: "agent",
+      via: "socket",
     } as const;
     const grant = (await daemon.dispatch(
       "lease.request",
@@ -2122,7 +2143,12 @@ describe("startDaemon event history", () => {
     const status = (await daemon.dispatch(
       "status.get",
       {},
-      { manageEventSubscription: () => undefined, principal: "operator", role: "admin" },
+      {
+        manageEventSubscription: () => undefined,
+        principal: "operator",
+        role: "admin",
+        via: "socket",
+      },
     )) as { readonly history?: unknown };
     expect(daemon.health).toBe("running");
     expect(names).toContain("history.db.damaged-1000");
@@ -2501,7 +2527,12 @@ describe("startDaemon logger wiring", () => {
       daemon.dispatch(
         "worker.drain",
         { workerId: "wrk_ghost" },
-        { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "test-operator",
+          role: "admin",
+        },
       ),
     ).rejects.toMatchObject({ code: "UNKNOWN_WORKER" });
 
@@ -2541,6 +2572,7 @@ describe("startDaemon with the agent-device edge", () => {
   } as const;
   const agent = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent",
     role: "agent",
   } as const;
@@ -2799,6 +2831,7 @@ describe("startDaemon with the agent-device edge", () => {
   it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "op",
       role: "admin",
     } as const;
@@ -2846,6 +2879,7 @@ describe("startDaemon with the agent-device edge", () => {
   it('a worker whose config has only the old agentDevice key warns `Unknown config key: "agentDevice"` and reports agent-device off', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "op",
       role: "admin",
     } as const;
@@ -2902,6 +2936,7 @@ describe("startDaemon with the agent-device edge", () => {
   describe("doctor.run", () => {
     const operator = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -3068,7 +3103,12 @@ describe("startDaemon host load", () => {
     return (await daemon.dispatch(
       "status.get",
       {},
-      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
     )) as Record<string, unknown>;
   }
 
@@ -3278,6 +3318,7 @@ describe("startDaemon in gateway mode host load", () => {
   };
   const operator = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "test-operator",
     role: "admin",
   } as const;

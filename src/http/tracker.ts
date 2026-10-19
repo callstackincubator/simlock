@@ -4,7 +4,7 @@ import { type DeviceClass, leaseRequestRecordSchema } from "../contract/index.js
 import type { Clock } from "../ports/index.js";
 import { buildHttpSession } from "./dispatcher-session.js";
 import type { HttpDispatch } from "./dispatcher-session.js";
-import type { TokenIdentity } from "./token-store.js";
+import type { Identity } from "../auth/index.js";
 
 export interface LeaseRequestInput {
   readonly platform: "ios" | "android";
@@ -190,7 +190,7 @@ export class LeaseRequestTracker {
    * the resource exists, and its state is the stored result.
    */
   submit(
-    identity: TokenIdentity,
+    identity: Identity,
     body: LeaseRequestInput,
     idempotencyKey?: string,
   ): Promise<
@@ -223,8 +223,8 @@ export class LeaseRequestTracker {
         const view = this.get(requestId) ?? {
           createdAt: new Date(this.options.clock.now()).toISOString(),
           id: requestId,
-          ownerId: identity.requesterId,
-          requesterId: identity.requesterId,
+          ownerId: identity.principal,
+          requesterId: identity.principal,
           state,
         };
         resolve({ kind: "created", view: { ...view, state } });
@@ -323,7 +323,7 @@ export class LeaseRequestTracker {
    * from the moment it is rejected, before the record is written, so a `GET` right after the
    * `204` already reads `cancelled`.
    */
-  async cancel(id: string, identity: TokenIdentity): Promise<CancelOutcome> {
+  async cancel(id: string, identity: Identity): Promise<CancelOutcome> {
     const before = this.get(id);
     if (before === undefined) return { kind: "not-found" };
     if (before.state.stage === "granted")

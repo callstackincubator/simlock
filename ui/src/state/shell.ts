@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import type { ConnectionPhase } from "../data/live/connection";
 import { attentionItems } from "../model/attention";
@@ -22,9 +22,44 @@ export function useTokenCheck(): void {
   }, [api]);
 }
 
+export interface SignedIn {
+  readonly name: string | undefined;
+  // why: a proxy person with no sign-out address has nowhere to go, so there is no Sign out.
+  readonly canSignOut: boolean;
+}
+
+export function useSignedIn(): SignedIn {
+  const api = useApi();
+  const session = useSession();
+  const state = useSyncExternalStore(session.subscribe, session.state, session.state);
+  const token = state.kind === "token" ? state.token : undefined;
+  const [tokenName, setTokenName] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (token === undefined) return;
+    let current = true;
+    api.getJson<{ readonly name: string }>("/v1/identity").then(
+      (identity) => current && setTokenName(identity.name),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+      setTokenName(undefined);
+    };
+  }, [api, token]);
+  if (state.kind === "proxy") {
+    return { canSignOut: state.signOutUrl !== undefined, name: state.name };
+  }
+  return { canSignOut: true, name: tokenName };
+}
+
 export function useSignOut(): () => void {
   const session = useSession();
-  return () => session.signOut();
+  return () => {
+    const state = session.state();
+    if (state.kind === "proxy") {
+      if (state.signOutUrl !== undefined) window.location.assign(state.signOutUrl);
+    } else session.signOut();
+  };
 }
 
 const PHASES: Readonly<Record<ConnectionPhase, Toned>> = {

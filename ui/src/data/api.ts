@@ -52,7 +52,7 @@ export async function send<T>(
   try {
     const response = await options.fetch(path, {
       cache: "no-store",
-      credentials: "omit",
+      credentials: "same-origin",
       headers: options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` },
       signal: controller.signal,
     });
@@ -85,10 +85,15 @@ export interface ApiClient {
   healthz(): Promise<ApiResponse<boolean>>;
 }
 
+export type ApiFailure = "unauthorized" | "not-simlock";
+
 export interface ApiClientOptions {
   readonly fetch: Fetch;
   readonly token: () => string | undefined;
-  readonly signOut: () => void;
+  // why: what a 401 does when nobody takes `onRefused`; the console's session takes it, because
+  // what a 401 means depends on whether a token or a sign-in proxy made the session.
+  readonly signOut?: () => void;
+  readonly onRefused?: (failure: ApiFailure) => void;
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
@@ -101,17 +106,37 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     };
   };
+  const refuse = (failure: ApiFailure, status?: number) => {
+    if (options.onRefused !== undefined) options.onRefused(failure);
+    else if (status === 401) options.signOut?.();
+  };
+  const watched = async <T>(
+    path: ApiPath,
+    sendOptions: SendOptions,
+    read: (response: Response) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await send(path, sendOptions, async (response) => {
+        await refuseError(response, refuse);
+        return read(response);
+      });
+    } catch (error: unknown) {
+      // why: a request that never got an answer (a redirect `fetch` cannot follow, a dropped
+      // connection) may be the sign-in proxy's session ending; a timeout or an abort is not.
+      if (isNetworkError(error, sendOptions.signal)) refuse("not-simlock");
+      throw error;
+    }
+  };
   const get = <T>(path: ApiPath) =>
-    send(path, authorized(), async (response) => {
-      await refuseError(response, options.signOut);
-      return { body: (await response.json()) as T, date: response.headers.get("Date") };
-    });
+    watched(path, authorized(), async (response) => ({
+      body: (await response.json()) as T,
+      date: response.headers.get("Date"),
+    }));
   return {
     get,
     getJson: async <T>(path: ApiPath) => (await get<T>(path)).body,
     stream: (path, signal, headTimeoutMs) =>
-      send(path, authorized(signal, headTimeoutMs), async (response) => {
-        await refuseError(response, options.signOut);
+      watched(path, authorized(signal, headTimeoutMs), async (response) => {
         if (response.body === null) throw new ApiError(response.status, undefined, "No body");
         return { body: response.body, date: response.headers.get("Date") };
       }),
@@ -123,9 +148,35 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   };
 }
 
-async function refuseError(response: Response, signOut: () => void): Promise<void> {
-  if (response.status === 401) signOut();
-  if (!response.ok) throw await apiError(response);
+function isNetworkError(error: unknown, signal: AbortSignal | undefined): boolean {
+  return (
+    !(error instanceof ApiError) &&
+    !(error instanceof RequestTimeoutError) &&
+    signal?.aborted !== true &&
+    error instanceof TypeError
+  );
+}
+
+export function hasSimlockErrorCode(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const error = (body as { error?: unknown }).error;
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string"
+  );
+}
+
+async function refuseError(
+  response: Response,
+  refuse: (failure: ApiFailure, status: number) => void,
+): Promise<void> {
+  if (response.ok) return;
+  const error = await apiError(response);
+  const status = response.status;
+  if ((status === 401 || status === 403) && error.code === undefined) refuse("not-simlock", status);
+  else if (status === 401) refuse("unauthorized", status);
+  throw error;
 }
 
 async function apiError(response: Response): Promise<ApiError> {

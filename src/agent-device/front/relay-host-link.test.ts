@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { TokenIdentity } from "../../http/token-store.js";
+import { tokenIdentity } from "../../auth/testing.js";
+import type { Identity } from "../../auth/index.js";
 import { FakeClock } from "../../ports/index.js";
 import {
   RelayHostLink,
@@ -10,7 +11,7 @@ import {
   type PlacedLease,
 } from "./relay-host-link.js";
 
-const agent: TokenIdentity = { requesterId: "tok_a", role: "agent" };
+const agent: Identity = tokenIdentity("tok_a");
 const worker: FleetWorker = { id: "w1", leaseMaxTtlMs: 1_000, platforms: ["ios"] };
 const maxTtlMs = 120_000;
 
@@ -78,7 +79,7 @@ describe("RelayHostLink", () => {
       const { index, link, relay } = setUp();
       index.set("L", { ownerId: principal, workerId: "w1" });
 
-      await link.forward(request(), { requesterId: principal, role: "agent" }, "L");
+      await link.forward(request(), tokenIdentity(principal), "L");
 
       expect(relay).toHaveBeenCalledTimes(1);
       expect(relay.mock.calls[0]?.[2]).toMatch(/^[A-Za-z0-9._-]{1,128}$/);
@@ -90,7 +91,7 @@ describe("RelayHostLink", () => {
     const principals = ["a b", "a_b", "a.b", "a:b", "t".repeat(300), `${"t".repeat(299)}u`];
     for (const principal of principals) {
       index.set("L", { ownerId: principal, workerId: "w1" });
-      await link.forward(request(), { requesterId: principal, role: "agent" }, "L");
+      await link.forward(request(), tokenIdentity(principal), "L");
     }
 
     const tenants = relay.mock.calls.map((call) => call[2]);
@@ -175,7 +176,7 @@ describe("RelayHostLink", () => {
     index.set("L", { ownerId: "tok_a", workerId: "w1" });
 
     expect(await link.status("L", agent)).toMatchObject({ leaseMaxTtlMs: 86_400_000 });
-    expect(await link.status("L", { ...agent, requesterId: "tok_b" })).not.toHaveProperty(
+    expect(await link.status("L", { ...agent, principal: "tok_b" })).not.toHaveProperty(
       "leaseMaxTtlMs",
     );
     expect(await link.status()).not.toHaveProperty("leaseMaxTtlMs");

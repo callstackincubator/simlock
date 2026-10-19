@@ -1,9 +1,17 @@
 import { existsSync } from "node:fs";
+import {
+  createServer,
+  type IncomingMessage,
+  request as httpRequest,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { test as base, expect, type Page } from "@playwright/test";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { type RawData, WebSocket } from "ws";
 
 import type { FakeDriverScript } from "../fake-driver/types.js";
@@ -76,13 +84,14 @@ export async function startDaemon(
   const home = await mkdtemp(join(tmpdir(), "simlock-console-"));
   const port = await freeLoopbackPort();
   const scriptPath = join(home, "fake-driver-script.json");
+  const { http: extraHttp, ...extraConfig } = options.config ?? {};
   await writeFile(
     join(home, "config.json"),
     JSON.stringify({
       ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      http: { enabled: true, host: "127.0.0.1", port },
+      http: { enabled: true, host: "127.0.0.1", port, ...(extraHttp as object | undefined) },
       mode,
-      ...options.config,
+      ...extraConfig,
     }),
   );
   if (options.driverScript !== undefined) {
@@ -288,11 +297,163 @@ function rawText(data: RawData): string {
   return Buffer.isBuffer(data) ? data.toString("utf8") : Buffer.from(data).toString("utf8");
 }
 
+const PROXY_ISSUER = "https://proxy.example.test";
+const PROXY_AUDIENCE = "simlock-console";
+const PROXY_HEADER = "cf-access-jwt-assertion";
+
+export type ProxyMode = "signed-in" | "expired" | "redirect" | "html";
+
+export interface ProxiedDaemon {
+  readonly url: string;
+  readonly loginUrl: string;
+  readonly signedOutUrl: string;
+  readonly daemon: RunningDaemon;
+  setMode(mode: ProxyMode): void;
+  holdIdentity(): () => void;
+  reset(): void;
+  dispose(): Promise<void>;
+}
+
+export async function startProxiedDaemon(
+  options: { readonly signOutUrl?: boolean } = {},
+): Promise<ProxiedDaemon> {
+  const { privateKey, publicKey } = await generateKeyPair("ES256");
+  const jwk = { ...(await exportJWK(publicKey)), alg: "ES256", kid: "test-key", use: "sig" };
+  const sign = (expiresAt: number) =>
+    new SignJWT({ email: "alice@example.test", name: "Alice" })
+      .setProtectedHeader({ alg: "ES256", kid: "test-key" })
+      .setIssuer(PROXY_ISSUER)
+      .setAudience(PROXY_AUDIENCE)
+      .setSubject("u1")
+      .setIssuedAt()
+      .setExpirationTime(expiresAt)
+      .sign(privateKey);
+  let mode: ProxyMode = "signed-in";
+  let held: Promise<void> | undefined;
+  let daemonPort = 0;
+  const listen = (server: Server, port: number) =>
+    new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+  const close = (server: Server) =>
+    new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    });
+
+  const idpPort = await freeLoopbackPort();
+  const idp = createServer((req, res) => {
+    const signedOut = req.url === "/signed-out";
+    res.setHeader("content-type", "text/html");
+    res.end(`<h1>${signedOut ? "Signed out of the proxy" : "Proxy login"}</h1>`);
+  });
+  await listen(idp, idpPort);
+  const loginUrl = `http://127.0.0.1:${idpPort}/login`;
+  const signedOutUrl = `http://127.0.0.1:${idpPort}/signed-out`;
+
+  const forward = async (req: IncomingMessage, res: ServerResponse) => {
+    const exp = Math.floor(Date.now() / 1000) + (mode === "expired" ? -600 : 3600);
+    const headers = {
+      ...req.headers,
+      [PROXY_HEADER]: await sign(exp),
+      host: `127.0.0.1:${daemonPort}`,
+    };
+    if (req.url === "/v1/identity" && held !== undefined) await held;
+    const upstream = httpRequest(
+      { headers, host: "127.0.0.1", method: req.method, path: req.url, port: daemonPort },
+      (answer) => {
+        res.writeHead(answer.statusCode ?? 502, answer.headers);
+        answer.pipe(res);
+      },
+    );
+    upstream.on("error", () => res.destroy());
+    res.on("close", () => upstream.destroy());
+    req.pipe(upstream);
+  };
+  const proxy = createServer((req, res) => {
+    if (req.url === "/.test/jwks") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ keys: [jwk] }));
+      return;
+    }
+    if (req.url !== "/v1/healthz" && mode === "redirect") {
+      res.writeHead(302, { location: loginUrl });
+      res.end();
+      return;
+    }
+    if (req.url !== "/v1/healthz" && mode === "html") {
+      res.writeHead(403, { "content-type": "text/html" });
+      res.end("<h1>Proxy sign-in</h1>");
+      return;
+    }
+    void forward(req, res);
+  });
+  const proxyPort = await freeLoopbackPort();
+  await listen(proxy, proxyPort);
+  let daemon: RunningDaemon;
+  try {
+    daemon = await startDaemon("worker", {
+      config: {
+        http: {
+          proxyAuth: {
+            audience: PROXY_AUDIENCE,
+            header: PROXY_HEADER,
+            issuer: PROXY_ISSUER,
+            jwksUrl: `http://127.0.0.1:${proxyPort}/.test/jwks`,
+            ...(options.signOutUrl === false ? {} : { signOutUrl: signedOutUrl }),
+          },
+        },
+      },
+    });
+  } catch (error: unknown) {
+    await Promise.all([close(proxy), close(idp)]);
+    throw error;
+  }
+  daemonPort = daemon.port;
+  return {
+    daemon,
+    dispose: async () => {
+      await Promise.all([close(proxy), close(idp)]);
+      await daemon.dispose();
+    },
+    holdIdentity() {
+      let release: () => void = () => {};
+      held = new Promise<void>((resolve) => (release = resolve));
+      return () => {
+        held = undefined;
+        release();
+      };
+    },
+    loginUrl,
+    reset() {
+      mode = "signed-in";
+      held = undefined;
+    },
+    setMode: (next) => void (mode = next),
+    signedOutUrl,
+    url: `http://127.0.0.1:${proxyPort}/`,
+  };
+}
+
 /**
  * `daemon` is a single host, shared by every test in a Playwright worker, and the base URL every
  * `page.goto` resolves against. `gateway` starts only for a test that asks for it.
  */
-export const test = base.extend<object, { daemon: RunningDaemon; gateway: RunningDaemon }>({
+export const test = base.extend<
+  { proxied: ProxiedDaemon },
+  { daemon: RunningDaemon; gateway: RunningDaemon; proxiedDaemon: ProxiedDaemon }
+>({
+  proxiedDaemon: [
+    // oxlint-disable-next-line no-empty-pattern -- as below.
+    async ({}, use) => {
+      const proxied = await startProxiedDaemon();
+      await use(proxied);
+      await proxied.dispose();
+    },
+    { scope: "worker", timeout: 60_000 },
+  ],
+  proxied: async ({ proxiedDaemon }, use) => {
+    proxiedDaemon.reset();
+    await use(proxiedDaemon);
+  },
   daemon: [
     // oxlint-disable-next-line no-empty-pattern -- Playwright requires a destructuring pattern here, even an empty one.
     async ({}, use) => {

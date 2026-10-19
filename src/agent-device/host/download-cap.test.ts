@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
+import { tokenIdentity } from "../../auth/testing.js";
 import { FakeAgentDevice } from "../testing.js";
 import { AgentDeviceHost } from "./host.js";
 
 const LIMIT = 2_147_483_648;
-const identity = { requesterId: "tok_a", role: "agent" } as const;
+const identity = tokenIdentity("tok_a");
 
 function download(): Request {
   return new Request("http://simlock.test/v1/agent-device/artifacts/a1", {

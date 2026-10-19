@@ -57,6 +57,7 @@ import type {
   UsageGetInput,
   UsageGetOutput,
   InstallComponentOnWorkersOptions,
+  IdentityOutput,
   InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
@@ -125,6 +126,7 @@ export type {
   EventsSubscribeOutput,
   EventsUnsubscribeOutput,
   InstallComponentOnWorkersOptions,
+  IdentityOutput,
   InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
@@ -195,6 +197,7 @@ export interface SimlockClient {
 
   getCatalog(input?: CatalogGetInput): Promise<CatalogGetOutput>;
   getStatus(): Promise<StatusGetOutput>;
+  identity(): Promise<IdentityOutput>;
   /**
    * ADR 0010 §8: every installed iOS simulator runtime and Android system image on the daemon's
    * machine, with its size, whether Simlock installed it, and how many devices use it.
@@ -399,6 +402,7 @@ function buildDegradedClient(
 
     getCatalog: () => rejected(),
     getStatus: () => rejected(),
+    identity: () => rejected(),
     listComponents: () => rejected(),
     requestLease: () => rejected(),
     cancelLease: () => rejected(),
@@ -514,6 +518,10 @@ class SimlockClientImpl {
 
   getStatus(): Promise<StatusGetOutput> {
     return this.#call("status.get", {});
+  }
+
+  identity(): Promise<IdentityOutput> {
+    return this.#call("identity.get", {});
   }
 
   listComponents(input: ComponentListInput = {}): Promise<ComponentListOutput> {
