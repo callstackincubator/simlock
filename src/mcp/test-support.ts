@@ -94,6 +94,7 @@ export class FakeSimlockClient implements SimlockClient {
     return this.#dead ? this.#deadConnection() : this.getCatalogImpl(input);
   }
 
+  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP exposes no identity tool of its own.
   identity(): Promise<IdentityOutput> {
     this.calls.push({ input: undefined, method: "identity" });
     return this.#dead ? this.#deadConnection() : Promise.reject(new Error("not implemented"));

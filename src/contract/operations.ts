@@ -1028,7 +1028,7 @@ export const relayCancel = defineOperation({
   output: z.object({}),
 });
 
-export const identityGet = defineOperation({
+const identityGet = defineOperation({
   name: "identity.get",
   role: "agent",
   effect: "read",
