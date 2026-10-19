@@ -77,7 +77,9 @@ prove the behaviour, each at the cheapest level that can prove it
    what its entry point exports, or through a host surface above it (a
    command, an HTTP route, a tool call). A test of an internal file earns
    its place only for pure logic with many cases (a planner, a parser) or
-   for an ordering the surface cannot force. What the module does to a port
+   for an ordering the surface cannot force, and says which in a `why:`
+   comment above its `describe`; any other goes through the surface, or is
+   deleted when a surface test already proves its claim. What the module does to a port
    (a driver call, a download, a write) is output, and a fake port's record
    of it is a fair assertion; the exact sequence of those calls is not,
    unless the order is the claim. Internal state (a claim, a reservation, a
@@ -93,9 +95,11 @@ prove the behaviour, each at the cheapest level that can prove it
    the cases it lists go in that test's body, as one table when they differ
    only in data, never one test per case. A contract several
    implementations share (the worker's and the gateway's handlers of one
-   operation) is one suite run over each of them. A claim proved at one
-   level is not proved again at another, nor through a second seam of the
-   same level:
+   operation) is one suite run over each of them. Behaviour a change keeps
+   "as today" is proved by the test that already proves it; a new test
+   only when none does, or as the control case a new group of tests needs.
+   A claim proved at one level is not proved again at another, nor through
+   a second seam of the same level:
 
    | Claim                                                      | Level                                               |
    | ---------------------------------------------------------- | --------------------------------------------------- |
@@ -115,7 +119,9 @@ prove the behaviour, each at the cheapest level that can prove it
    finds in a pull request is fixed and proven as rule 7 says: by extending
    the test that proves the behaviour next to it, and by a new test only
    when none does; the fix report then names the test it could not extend,
-   and why.
+   and why. A review asks for a test only for such a defect, or for
+   behaviour rule 3 or the spec requires: never for a case that cannot
+   happen.
 
 10. **The usual ways an assertion cannot fail.** Each of these passes
     against a broken implementation; check every test you write or change
@@ -135,6 +141,13 @@ prove the behaviour, each at the cheapest level that can prove it
       passes on a rejection; `toBeInstanceOf(Error)` passes on a
       `TypeError`; `x?.()` passes when nothing was recorded. Assert the
       exact value, or the named error and its code.
+    - **An expected value the code under test computed.** `expect(total)
+      .toBe(blocks * bsize)` with the code's own formula, or a value read
+      back through the module the test exercises, passes whatever the
+      formula gets wrong. Take expected values from a literal, a worked
+      example or the spec. Comparing two outputs of the code is fair only
+      when the claim is that they match (field order does not matter, routed
+      equals direct), and one of them is also asserted against a literal.
     - **State read from a copy taken before the act.** Read it again from
       the system after.
     - **A time boundary not straddled.** One advance past both the old and

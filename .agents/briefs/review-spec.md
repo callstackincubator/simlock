@@ -58,9 +58,11 @@ already supported remain valid; identify unresolved coverage separately.
 
 A finding is blocking only when it shows wrong behaviour or state, a false
 statement, a rule or ADR breach, or a line of the specification left
-undelivered or unproven. Testing rules and always-in-scope coverage apply
-even when the spec omits a case. Extra coverage beyond those requirements,
-a stronger assertion than its claim needs, or defensive code is no
+undelivered or unproven. A missing test is a finding only for behaviour a
+caller, user, stored record or event can see that the spec, the user docs
+or testing rule 3 requires, or for a defect this review found (testing
+rule 9). A case that cannot happen, another case of a claim a test already
+proves, a stronger assertion than its claim needs, or defensive code is no
 finding.
 `F0` is a good result: do not look for findings to have some.
 

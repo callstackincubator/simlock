@@ -252,8 +252,8 @@ the body:
 
 - **Ledger.** Every sentence in Scope, In short, Technical spec and Done
   when that states a behaviour, "as today" included, one row each: the
-  Tests line and case that prove it, and a wrong build that test would
-  fail on. A sentence with no row, a case no test covers, or a test no
+  Tests line and case that prove it, or for "as today" the existing test
+  that already does, and a wrong build that test would fail on. A sentence with no row, a case no test covers, or a test no
   wrong build would fail: fix the body.
 - Every Failure modes row has its Tests line, or says why none; every
   Shared values row the task touches reads the same in the task.
