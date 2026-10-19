@@ -62,6 +62,34 @@ the CLI's `--agent-id`/`SIMLOCK_AGENT_ID`, identity is never client-declared
 here, so the one-lease-per-requester rule keys off which token authenticated
 the request, not anything the request body says.
 
+### Signing in through a proxy
+
+With `http.proxyAuth` set (see [CONFIGURATION.md](CONFIGURATION.md#signing-in-through-a-proxy)), a request that passes through the sign-in proxy is signed in as the person the proxy names, with no Simlock token. Simlock reads the JWT the proxy adds in the configured header and checks its signature against the keys the proxy publishes at `jwksUrl`, then its issuer, audience and time window, before it believes a word of it. The daemon itself fetches those keys from `jwksUrl` (5 s limit, no redirects, at most 64 KiB), keeps them 10 minutes, and refetches at most once per 30 s for a key id it does not know. RS256 and ES256 are accepted; a JWT may be up to 8 KiB, and `exp` and `nbf` are allowed 60 s of slack.
+
+A person is a verified JWT whose `sub` is a non-empty string of at most 120 characters and whose `email` is a non-empty string. They are an `operator`: principal `proxy:<iss>#<sub>`, name the `name` claim when it is a non-empty string, else `email`, `via: "proxy"`. A verified JWT that is not a person (a service token has no `email`) is judged by its Simlock token instead. A Simlock token wins when both are sent.
+
+A JWT Simlock cannot trust is `401 UNAUTHENTICATED` with a `reason` beside `code` and `message`:
+
+```json
+{"error":{"code":"UNAUTHENTICATED","message":"Sign-in proxy identity refused: expired","reason":"expired"}}
+```
+
+| `reason` | Cause |
+|---|---|
+| `expired` | `exp` more than 60 s past |
+| `not-yet-valid` | `nbf` more than 60 s ahead |
+| `wrong-issuer` | `iss` is not the configured issuer |
+| `wrong-audience` | `aud` does not hold the configured audience |
+| `algorithm` | not RS256 or ES256 (HS256, `none`) |
+| `unknown-key` | signed by a key the key URL does not publish |
+| `bad-signature` | the signature does not match |
+| `keys-unavailable` | the key URL is down, slow, redirects, answers more than 64 KiB or no key set, and no keys were fetched in the last 10 minutes |
+| `malformed` | not a JWT, over 8 KiB, no `exp`, or a `sub` over 120 characters |
+
+A follow stream (`GET /v1/events/stream`, `GET /v1/leases/{id}/events`, `GET /v1/lease-requests/{id}/events`) opened by a person ends when their JWT expires (`exp` plus 60 s), or after 2^31-1 ms if that is sooner; the client reconnects with a fresh JWT. Command streams (exec, component install) are not ended.
+
+The proxy must let `/v1/uplink` and `/v1/healthz` through: a worker joins with its join token and a health probe sends no credential, and neither carries a proxy JWT.
+
 Three roles:
 
 | Role | Can |

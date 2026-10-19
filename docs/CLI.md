@@ -2561,6 +2561,8 @@ running daemon keeps running in the mode it started in until
 [CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for which keys
 each mode reads.
 
+An object value takes JSON: `simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://…","issuer":"https://…","audience":"…"}'`. Each `config set` checks the whole file, so the four required `http.proxyAuth` keys go in together as one object; one alone is refused (see [CONFIGURATION.md](CONFIGURATION.md#signing-in-through-a-proxy)).
+
 Switching to `gateway` is **two keys, not one**: `mode` and `http.enabled`.
 A gateway is the fleet's contact point, so it must listen on HTTP — workers
 open their uplinks there and remote agents lease through it — and
