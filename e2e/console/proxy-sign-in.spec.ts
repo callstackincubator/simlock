@@ -96,8 +96,8 @@ test.describe("signing in through a proxy", () => {
     await page.goto(proxied.url);
     await expect(page.getByText("Signed in as Alice")).toBeVisible();
 
+    // why: the console polls every second, so the next request can come before any click.
     proxied.setMode("expired");
-    await openFromNav(page, "Leases");
 
     await expect(page.getByLabel("Operator token")).toBeVisible();
     await expect(page.getByRole("alert")).toHaveText(EXPIRED_LINE);
@@ -112,7 +112,6 @@ test.describe("signing in through a proxy", () => {
     await redirected.goto(proxied.url);
     await expect(redirected.getByText("Signed in as Alice")).toBeVisible();
     proxied.setMode("redirect");
-    await openFromNav(redirected, "Leases");
     await expect(redirected).toHaveURL(proxied.loginUrl);
     await expect(redirected.getByRole("heading", { name: "Proxy login" })).toBeVisible();
     await redirected.close();
@@ -122,7 +121,6 @@ test.describe("signing in through a proxy", () => {
     await reloaded.goto(proxied.url);
     await expect(reloaded.getByText("Signed in as Alice")).toBeVisible();
     proxied.setMode("html");
-    await openFromNav(reloaded, "Leases");
     await expect(reloaded.getByRole("heading", { name: "Proxy sign-in" })).toBeVisible();
 
     proxied.setMode("signed-in");
@@ -132,7 +130,6 @@ test.describe("signing in through a proxy", () => {
       (window as unknown as { loadedOnce: boolean }).loadedOnce = true;
     });
     proxied.setMode("html");
-    await openFromNav(reloaded, "Leases");
 
     await expect(reloaded.getByText("Your sign-in has ended.")).toBeVisible();
     await expect(reloaded.getByRole("button", { name: "Sign in again" })).toBeVisible();
@@ -175,13 +172,14 @@ test.describe("signing in through a proxy", () => {
       await openFromNav(page, label);
       await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
     }
+    // why: a request the page's Content-Security-Policy refused never reaches the network, but the
+    // browser reports it as an error. Checked before the reload, which makes WebKit report the
+    // requests it cuts off as errors too.
+    expect(errors).toEqual([]);
     await page.reload();
     await expect(page.getByText("Signed in as Alice")).toBeVisible();
 
     expect(requested.length).toBeGreaterThan(0);
     expect(requested.filter((url) => new URL(url).origin !== origin)).toEqual([]);
-    // why: a request the page's Content-Security-Policy refused never reaches the network, but the
-    // browser reports it as an error.
-    expect(errors).toEqual([]);
   });
 });
