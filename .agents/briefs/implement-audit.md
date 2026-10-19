@@ -46,7 +46,10 @@ edited after its `test:` commit:
   way, return early, or swap a rule for a near one: sort by another key,
   drop the tie-break, take the first instead of the lowest, drop one side
   of an `||` or `&&`) and run its file: it fails on the assertion its
-  title names, not by timing out. Restore the code. A test that stays green
+  title names, not by timing out. Apply each break so that one which
+  does not match fails loudly (a Python `str.replace` with an assert that
+  the text was found, not `sed -i`): a break that never applied proves
+  nothing. Restore the code. A test that stays green
   is vacuous: fix it. Every test, no skipping: a probe the audit skips, a
   reviewer does on a far costlier model. Report `probed <p>/<t>` on the
   `audit:` line: `t` tests added or changed, `p` probed.

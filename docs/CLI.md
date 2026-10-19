@@ -128,7 +128,7 @@ surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
 exception, and exits `14`.
 
-The six fleet codes are placed on existing numbers rather than new
+The fleet codes are placed on existing numbers rather than new
 ones, and the numbers are fixed by the contract's error table in the PRs that
 implement them:
 
@@ -1080,7 +1080,7 @@ install <apk>` and `devicectl device install app <path>` resolve their path on t
 artifact has to be there already (a shared volume, a CI checkout on that
 machine).
 
-**Seven commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
+**These commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
 2): `simlock nuke`, `simlock cleanup`, `simlock doctor`, `simlock component
 list`, `simlock component remove`, `simlock device add` and `simlock device
 remove`. The first five act on one machine's devices or components as a

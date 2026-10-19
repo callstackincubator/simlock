@@ -79,7 +79,9 @@ Classify actual fix impact (multiple labels allowed):
 
 Test files are not automatically mechanical. Claims-only corrections need
 a focused claims check; unchanged claims need no repeat review. Use actual
-hunks, not the intended fix label, to choose follow-up.
+hunks, not the intended fix label, to choose follow-up. A lens whose input
+`fix.patch` does not touch does not run: claims needs a changed doc,
+comment, test title or printed string; code a changed code or test line.
 
 There is one full round, one targeted round 2, and one final targeted
 fix-check. Count every invocation, including that fix-check. After the cap,
