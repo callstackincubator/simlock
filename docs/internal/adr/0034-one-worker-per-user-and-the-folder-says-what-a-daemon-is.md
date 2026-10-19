@@ -99,14 +99,15 @@ flowchart LR
 ### 3. The CLI and MCP pick the daemon by folder
 
 A global `--gateway` flag sends a command to the gateway folder, and a
-global `--worker` flag to the worker's. Without either, the CLI and
+global `--local` flag to the worker's (not `--worker`: `component install`
+already takes `--worker <id>` to name fleet members). Without either, the CLI and
 `simlock mcp` choose:
 
 ```mermaid
 flowchart TD
-  A["simlock &lt;command&gt;"] --> B{--gateway or --worker?}
+  A["simlock &lt;command&gt;"] --> B{--gateway or --local?}
   B -- "--gateway" --> G[gateway folder]
-  B -- "--worker" --> W
+  B -- "--local" --> W
   B -- no --> C{"a gateway is present<br/>and ~/.simlock/instance.json does not exist?"}
   C -- yes --> G
   C -- no --> W["~/.simlock worker<br/>(auto-start as today)"]
@@ -119,15 +120,16 @@ flowchart TD
   `~/.simlock/gateway/config.json` exists. The gateway writes the first on
   its first start; `simlock --gateway config set` writes the second before
   that. An empty `gateway` folder is not a gateway.
-- Only `simlock --gateway daemon start` creates a gateway. On a machine
-  where no gateway is present, every other `--gateway` command except
-  `config set` fails before it does anything, with the new error code
+- A gateway becomes present only through `simlock --gateway daemon start`
+  or `simlock --gateway config set`. On a machine where no gateway is
+  present, every other `--gateway` command fails before it does anything, with the new error code
   `GATEWAY_NOT_PRESENT` and a message that says to run
-  `simlock --gateway daemon start`. An MCP tool call fails the same way. A
+  `simlock --gateway daemon start`. An MCP tool call fails the same way; MCP
+  checks again on every call, so a gateway started mid-session is found. A
   present gateway that is not running is auto-started like a worker. The
   code is raised only by the CLI and MCP; no daemon sends it.
-- `--worker` always reaches the worker and auto-starts it. On a machine that
-  got its gateway first, `simlock --worker daemon start` starts the worker;
+- `--local` always reaches the worker and auto-starts it. On a machine that
+  got its gateway first, `simlock --local daemon start` starts the worker;
   from its first start on, plain commands reach it.
 - "The root holds a worker" means `~/.simlock/instance.json` exists. A worker
   writes it on its first start, before anything else. `config set` alone
