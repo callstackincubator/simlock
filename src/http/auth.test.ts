@@ -120,4 +120,17 @@ describe("requireAuth over src/auth", () => {
       error: { code: "UNAUTHENTICATED", message: "Unknown bearer token" },
     });
   });
+
+  it("lets an error that is not an AuthError through as a 500, never a 401 or 403", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(options.dataDirectory);
+    await filesystem.writeFileAtomic(`${options.dataDirectory}/tokens.json`, "{ not valid json");
+
+    const response = await appWithAuthFrom(createAuth({ ...options, filesystem })).request(
+      "/resource",
+      { headers: { authorization: "Bearer slk_any" } },
+    );
+
+    expect(response.status).toBe(500);
+  });
 });

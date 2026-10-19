@@ -33,7 +33,9 @@ describe.each(authStrategies.map((definition) => ({ definition })))(
 
       expect(answer.kind).toBe("identified");
       if (answer.kind !== "identified") return;
+      expect(answer.identity.principal).toEqual(expect.any(String));
       expect(answer.identity.principal).not.toBe("");
+      expect(answer.identity.name).toEqual(expect.any(String));
       expect(answer.identity.name).not.toBe("");
       expect(answer.identity.via).toBe(definition.name);
     });

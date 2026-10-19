@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONS } from "../contract/index.js";
 import { FakeClock, MemoryFilesystem, NoopLogger, type TokenSecrets } from "../ports/index.js";
 import { AdminAuthenticationFailedError, AuthError, createAuth, type TokenRole } from "./index.js";
+import { TokenStoreError } from "./token-store.js";
 import { authStrategies } from "./strategies/index.js";
 import type { AuthConfig, AuthStrategyDefinition, StrategyAnswer } from "./strategy.js";
 import { createAuthWith } from "./testing.js";
@@ -258,6 +259,18 @@ describe("resolveHelloRole", () => {
     );
     await expect(auth.resolveHelloRole({ credential: "not-a-secret" })).rejects.toThrow(
       AdminAuthenticationFailedError,
+    );
+  });
+
+  it("checks the token store before the admin secret, so a corrupt store fails loudly even for the admin secret", async () => {
+    const opts = await options();
+    const auth = createAuth(opts);
+    await auth.adminSecret.persist();
+    const adminSecret = (await opts.filesystem.readFile(`${dataDirectory}/admin.token`)).trim();
+    await opts.filesystem.writeFileAtomic(`${dataDirectory}/tokens.json`, "{ not valid json");
+
+    await expect(auth.resolveHelloRole({ credential: adminSecret })).rejects.toThrow(
+      TokenStoreError,
     );
   });
 });
