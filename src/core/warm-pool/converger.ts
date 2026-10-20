@@ -77,6 +77,7 @@ export const WARM_POOL_TICK_MS = 30_000;
 
 /** A target boot or creation that runs beside the pass: the target's spec, and its end. */
 interface Flight {
+  readonly creation: boolean;
   readonly spec: VirtualSpec;
   done: Promise<void>;
 }
@@ -481,7 +482,7 @@ export class WarmPool {
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
       now: this.options.clock.now(),
-      onItsWay: [],
+      onItsWay: this.#onItsWay(devices),
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
       spared: this.#spared,
@@ -490,10 +491,39 @@ export class WarmPool {
     };
   }
 
+  /**
+   * why: a request waits for a device that is `provisioning`, or shut down under an ownerless
+   * `boot` claim, so the policy matches those to waiters. A creation in flight has no device until
+   * it registers, and counts once: only the flights beyond the spec's `provisioning` devices.
+   */
+  #onItsWay(devices: readonly VirtualDevice[]): { spec: VirtualSpec; deviceId?: string }[] {
+    const entries: { spec: VirtualSpec; deviceId?: string }[] = devices.flatMap((device) => {
+      const claim = this.options.claims.claim(device.id);
+      const onItsWay =
+        (device.state === "provisioning" || device.state === "shutdown") &&
+        claim?.kind === "boot" &&
+        claim.owner === undefined;
+      return onItsWay ? [{ deviceId: device.id, spec: device.spec }] : [];
+    });
+    const creations = [...this.#flights].filter((flight) => flight.creation);
+    for (const [index, flight] of creations.entries()) {
+      const earlier = creations
+        .slice(0, index)
+        .filter((other) => sameSpec(other.spec, flight.spec));
+      const registered = entries.filter(
+        (entry) =>
+          sameSpec(entry.spec, flight.spec) &&
+          devices.some((device) => device.id === entry.deviceId && device.state === "provisioning"),
+      );
+      if (earlier.length >= registered.length) entries.push({ spec: flight.spec });
+    }
+    return entries;
+  }
+
   async #act(proposal: WarmProposal): Promise<void> {
     if (this.options.acquisition.maintenanceActive) return;
     if (proposal.action === "provision") {
-      this.#launch(proposal.target, () => this.#provision(proposal.spec, proposal.target));
+      this.#launch(proposal.target, true, () => this.#provision(proposal.spec, proposal.target));
       return;
     }
     // why: a failed keep boot releases its reservation, which changes capacity and so triggers the next
@@ -513,7 +543,7 @@ export class WarmPool {
     }
     if (proposal.action === "shutdown") await this.#shutdown(proposal.deviceId);
     else if (owner === undefined) await this.#boot(proposal.deviceId, undefined);
-    else this.#launch(owner, () => this.#boot(proposal.deviceId, owner));
+    else this.#launch(owner, false, () => this.#boot(proposal.deviceId, owner));
   }
 
   #specOf(deviceId: string): VirtualSpec | undefined {
@@ -527,8 +557,8 @@ export class WarmPool {
    * an attempt was made. One that was declined (the device or the budget was gone by then) asks
    * for none: the same view would propose it again at once, and the pool would spin.
    */
-  #launch(spec: VirtualSpec, run: () => Promise<boolean>): void {
-    const flight: Flight = { done: Promise.resolve(), spec };
+  #launch(spec: VirtualSpec, creation: boolean, run: () => Promise<boolean>): void {
+    const flight: Flight = { creation, done: Promise.resolve(), spec };
     this.#flights.add(flight);
     flight.done = run()
       .catch((error: unknown) => {
