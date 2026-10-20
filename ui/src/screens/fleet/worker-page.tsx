@@ -267,6 +267,9 @@ function HostTab({ inspector }: { readonly inspector: WorkerPageView }) {
         <Facts
           facts={[
             { label: "Worker id", value: <span className="mono">{host.id}</span> },
+            ...(host.version === undefined
+              ? []
+              : [{ label: "Version", value: <span className="mono">{host.version}</span> }]),
             {
               label: "Connection",
               value: (

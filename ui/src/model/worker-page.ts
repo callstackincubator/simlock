@@ -418,6 +418,7 @@ export interface CatalogRow {
 
 export interface HostTab {
   readonly id: string;
+  readonly version?: string;
   readonly connection: Toned;
   readonly drained: boolean;
   readonly health?: Toned;
@@ -461,6 +462,7 @@ function hostTabOf(worker: WorkerView): HostTab {
     })),
     id: worker.id,
     protocol: protocolOf(worker),
+    ...(worker.version === undefined ? {} : { version: worker.version }),
     ...(worker.health === undefined ? {} : { health: healthStatus(worker.health) }),
     ...(capabilityRows === undefined ? {} : { capabilities: capabilityRows }),
     ...(host === undefined
@@ -569,7 +571,6 @@ export interface WorkerPage {
   readonly mono: boolean;
   readonly health: Toned;
   readonly system?: string;
-  readonly version?: string;
   readonly tabs: readonly { readonly value: WorkerTab; readonly label: string }[];
   readonly overview: OverviewTab;
   readonly host: HostTab;
@@ -621,7 +622,6 @@ export function workerPageOf(input: {
     tabs,
     title: workerName(worker),
     ...(host === undefined ? {} : { system: `${host.os} ${host.osVersion}` }),
-    ...(worker.version === undefined ? {} : { version: worker.version }),
     ...(starting ? {} : { warm: warmTabOf(worker, now) }),
   };
 }
