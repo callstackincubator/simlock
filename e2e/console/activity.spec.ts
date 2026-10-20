@@ -168,6 +168,19 @@ async function stubEvents(
   return queries;
 }
 
+async function firstRowInView(page: Page): Promise<{ href: string | null; top: number }> {
+  return feed(page).evaluate((box) => {
+    const edge = box.getBoundingClientRect().top;
+    const link = [...box.querySelectorAll("li")].find(
+      (item) => item.getBoundingClientRect().bottom > edge,
+    );
+    return {
+      href: link?.querySelector("a")?.getAttribute("href") ?? null,
+      top: Math.round((link?.getBoundingClientRect().top ?? 0) - edge),
+    };
+  });
+}
+
 function older(queries: readonly string[]): string[] {
   return queries.filter((query) => !query.startsWith("?since="));
 }
@@ -335,9 +348,16 @@ test.describe("the Activity page", () => {
       await page.keyboard.press("End");
       await expect.poll(() => feed(page).evaluate((box) => box.scrollTop)).toBeGreaterThan(0);
 
+      await expect
+        .poll(() =>
+          feed(page).evaluate((box) => box.scrollHeight - box.scrollTop - box.clientHeight),
+        )
+        .toBeLessThan(2);
+      const inView = await firstRowInView(page);
       await lease(host, "console-e2e-scroll-new");
       const more = page.getByRole("button", { name: /^\d+ new events?$/ });
       await expect(more).toBeVisible();
+      expect(await firstRowInView(page)).toEqual(inView);
       await more.click();
       await expect.poll(() => feed(page).evaluate((box) => box.scrollTop)).toBe(0);
       await expect(more).toHaveCount(0);
