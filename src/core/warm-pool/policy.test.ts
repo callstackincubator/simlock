@@ -454,34 +454,36 @@ describe("warm pool policy", () => {
     ]);
   });
 
-  it("boots a device only for the head of the queue, not for a request behind it", () => {
+  it("boots a shut-down device that serves a waiter behind the head before creating one, and may boot one an operator reset shut down, for the head too", () => {
+    const boot = (deviceId: string) => ({ action: "boot", deviceId, reason: "waiting-request" });
+    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
     const tablet = device("tablet", "shutdown", { endedAgo: 20 * minute, spec: spec("iPad Pro") });
-    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
-    // The head wants an Android device nothing serves; the iOS phone request is behind it.
-    const proposals = evaluate(
-      view([tablet, phone], { waiting: [classDemand("full", "android"), classDemand()] }),
-    );
-
-    expect(proposals).toEqual([]);
-  });
-
-  it("boots nothing for a request behind a head whose device work is in flight", () => {
-    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
     const busy = device("busy", "leased", { spec: spec("iPad Pro") });
-    // The head is a tablet request being served (say by an eviction); the phone waits behind it.
     const tabletHead = {
       ...classDemand("full", "ios", true),
-      requirement: {
-        ...classDemand().requirement,
-        target: { class: "tablet", kind: "class" },
-      },
+      requirement: { ...classDemand().requirement, target: { class: "tablet", kind: "class" } },
     } satisfies WaitingDemand;
+    const options = { maxConcurrentBoots: 3 };
 
-    const proposals = evaluate(
-      view([phone, busy], { limit: 5, waiting: [tabletHead, classDemand()] }),
-    );
-
-    expect(proposals).toEqual([]);
+    expect(
+      evaluate(view([phone, busy], { ...options, waiting: [tabletHead, classDemand()] })),
+    ).toEqual([boot("phone")]);
+    expect(
+      evaluate(
+        view([phone, busy], { ...options, waiting: [tabletHead, classDemand(), classDemand()] }),
+      ).map((proposal) => proposal.action),
+    ).toEqual(["boot", "provision"]);
+    expect(
+      evaluate(view([tablet, busy], { ...options, waiting: [tabletHead, classDemand()] })),
+    ).toEqual([expect.objectContaining({ action: "provision" })]);
+    expect(
+      evaluate(view([phone, tablet], { ...options, reset: ["phone"], waiting: [classDemand()] })),
+    ).toEqual([boot("phone")]);
+    expect(
+      evaluate(
+        view([phone, busy], { ...options, reset: ["phone"], waiting: [tabletHead, classDemand()] }),
+      ),
+    ).toEqual([boot("phone")]);
   });
 
   it("does not boot back a device an operator reset shut down, though it was released a moment ago", () => {
