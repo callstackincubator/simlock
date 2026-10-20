@@ -48,6 +48,6 @@ describe("helloRequestSchema", () => {
 
 describe("PROTOCOL_VERSION_RANGE", () => {
   it("is one above the base branch's, for alerts destinations in config.get", () => {
-    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 49, min: 49 });
+    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 50, min: 50 });
   });
 });

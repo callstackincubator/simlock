@@ -221,7 +221,7 @@ describe("DaemonServer", () => {
     [47, "cannot read config.get's http.proxyAuth"],
     [48, "cannot read config.get's gateway.alerts"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 49, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 50, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -231,7 +231,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 49, max: 49 } },
+          details: { client: { min: version, max: version }, daemon: { min: 50, max: 50 } },
         },
         ok: false,
       });
