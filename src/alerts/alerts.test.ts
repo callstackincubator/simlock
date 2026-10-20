@@ -346,7 +346,13 @@ describe("alerts", () => {
   it("cuts every variable part to 300 code points, then escapes &, < and >", async () => {
     const h = harness([
       slackDestination({
-        events: ["component.install-failed", "worker.drain-started", "worker.rejected"],
+        events: [
+          "component.install-failed",
+          "worker.drain-started",
+          "worker.rejected",
+          "device.quarantine-abandoned",
+          "device.stalled-transition-detected",
+        ],
       }),
     ]);
     h.labels.set("wrk_1", "<!channel>");
@@ -365,6 +371,29 @@ describe("alerts", () => {
       [
         ["worker.rejected", { reason: "forbidden", label: "<!here>" }],
         "⛔ A worker was refused (forbidden): &lt;!here&gt;.",
+      ],
+      [
+        ["worker.rejected", { reason: "<r>", label: "x" }],
+        "⛔ A worker was refused (&lt;r&gt;): x.",
+      ],
+      [
+        [
+          "device.stalled-transition-detected",
+          { workerId: "wrk_0", deviceId: "d", state: "<s>", ageMs: 1000 },
+        ],
+        "⏳ Device d on wrk_0 has been &lt;s&gt; for 1 s.",
+      ],
+      [
+        ["device.quarantine-abandoned", { workerId: "wrk_0", deviceId: "d", attempts: "<a>" }],
+        "⚠️ Device d on wrk_0 was retired after &lt;a&gt; failed clean-ups.",
+      ],
+      [
+        install(`${"e".repeat(299)}&b`),
+        `❌ Installing ios c on wrk_0 failed: ${"e".repeat(299)}&amp;….`,
+      ],
+      [
+        install(`${"e".repeat(299)}<b`),
+        `❌ Installing ios c on wrk_0 failed: ${"e".repeat(299)}&lt;….`,
       ],
       [install("e".repeat(301)), `❌ Installing ios c on wrk_0 failed: ${"e".repeat(300)}….`],
       [install("e".repeat(300)), `❌ Installing ios c on wrk_0 failed: ${"e".repeat(300)}.`],

@@ -351,7 +351,7 @@ An event a worker reports reaches the destination too, with `workerId` in its
 payload. A key not listed above is warned about and ignored, and
 `simlock config set` refuses it.
 
-**What the receiver gets.** One `POST` per event, with the event as the body: the
+**What a `generic` receiver gets.** One `POST` per event, with the event as the body: the
 same JSON `simlock events --json` prints (`id`, `seq`, `timestamp`, `event`,
 `payload`, `module`). Headers:
 
@@ -369,7 +369,7 @@ not a re-serialised copy.
 
 **Slack.** A `slack` destination gets `{"text": "<message>"}` for each event it
 lists, written for a person, through the same queue, tries and limits as
-`generic`, with only the `Content-Type` and `User-Agent` headers. Slack is the
+`generic`, with only the `Content-Type` and `User-Agent` headers (no `X-Simlock-Event`, `X-Simlock-Delivery` or `X-Simlock-Signature`, and no body but the `text`). Slack is the
 only service promised; other services that take Slack's incoming-webhook body
 may work. `<worker>` is the worker's label as the gateway knows it when the
 message is sent, or its id when it has no label. Every variable part is cut to
