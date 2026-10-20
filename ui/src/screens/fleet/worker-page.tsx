@@ -1,26 +1,14 @@
-import "./workers.css";
-
-import { useState } from "react";
-
 import {
   Card,
-  ChoiceChips,
   type Column,
   DataTable,
-  Empty,
   Facts,
   Grid,
   Id,
-  Inspector,
-  InspectorEmpty,
   Link,
-  List,
-  ListPane,
-  ListRow,
   Loaded,
-  MasterDetail,
   Meter,
-  Pager,
+  Page,
   Panel,
   SlotLegend,
   Slots,
@@ -34,138 +22,48 @@ import {
   type FigureCard,
   type InstallRow,
   type PlatformCard,
-  useWorkers,
+  useWorkerPage,
   type WarmRow,
-  WORKER_FILTERS,
-  type WorkerInspectorView,
-  type WorkerRow,
-  type WorkersPage,
-  type WorkerTab,
+  type WorkerPageView,
 } from "../../state/workers";
 
-export function WorkersScreen() {
-  const view = useWorkers();
-  return <Loaded view={view}>{(page) => <WorkersBody page={page} />}</Loaded>;
-}
-
-export function WorkersBody({
-  initialTab = "overview",
-  page,
-}: {
-  readonly page: WorkersPage;
-  readonly initialTab?: WorkerTab;
-}) {
+export function WorkerPageScreen({ id }: { readonly id: string }) {
+  const view = useWorkerPage(id);
   return (
-    <MasterDetail
-      focus={page.focus}
-      wide
-      list={<WorkerList page={page} />}
-      detail={
-        page.inspector === undefined ? (
-          <MissingWorker id={page.missing} />
-        ) : (
-          <WorkerDetail
-            key={page.inspector.id}
-            inspector={page.inspector}
-            initialTab={initialTab}
-          />
-        )
-      }
-    />
+    <Loaded view={view}>
+      {(page) => (page === undefined ? null : <WorkerPageBody page={page} />)}
+    </Loaded>
   );
 }
 
-function WorkerList({ page }: { readonly page: WorkersPage }) {
+export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
   return (
-    <ListPane
-      title="Fleet"
-      meta={page.meta}
-      toolbar={
-        <ChoiceChips
-          legend="Show workers"
-          choices={WORKER_FILTERS}
-          value={page.filter}
-          onChange={page.setFilter}
-        />
-      }
-      footer={<Pager label="Workers" paging={page.paging} />}
-    >
-      {page.rows.length === 0 ? (
-        <Empty>{page.empty ? "No workers have connected." : "No worker matches."}</Empty>
-      ) : (
-        <List label="Workers">
-          {page.rows.map((row) => (
-            <WorkerListRow key={row.id} row={row} selected={row.id === page.chosen} />
-          ))}
-        </List>
-      )}
-    </ListPane>
-  );
-}
-
-function WorkerListRow({ row, selected }: { readonly row: WorkerRow; readonly selected: boolean }) {
-  return (
-    <ListRow
-      to={row.to}
-      selected={selected}
-      mono={row.mono}
-      lead={<StatusDot tone={row.health.tone} label={row.health.word} />}
-      title={row.name}
-      aside={row.use === undefined ? "—" : `${row.use.running} / ${row.use.limit}`}
-      sub={
-        row.use === undefined ? undefined : (
-          <Meter percent={row.use.percent} tone="neutral" size="thin" />
-        )
-      }
-    />
-  );
-}
-
-function MissingWorker({ id }: { readonly id: string | undefined }) {
-  if (id === undefined) return <InspectorEmpty>Nothing to show.</InspectorEmpty>;
-  return (
-    <InspectorEmpty>
-      Worker not found. <Link to="/fleet">Back to Fleet</Link>
-    </InspectorEmpty>
-  );
-}
-
-function WorkerDetail({
-  initialTab,
-  inspector,
-}: {
-  readonly inspector: WorkerInspectorView;
-  readonly initialTab: WorkerTab;
-}) {
-  const [tab, setTab] = useState<WorkerTab>(initialTab);
-  return (
-    <Inspector
-      crumbs={[{ label: "Fleet", to: "/fleet" }, { label: inspector.title }]}
-      title={inspector.title}
-      mono={inspector.mono}
-      line={
-        <>
-          <Status tone={inspector.health.tone}>{inspector.health.word}</Status>
-          {inspector.os === undefined ? null : <span>· {inspector.os}</span>}
-          {inspector.version === undefined ? null : <span>· {inspector.version}</span>}
-        </>
-      }
-    >
-      <Tabs label="Worker" tabs={inspector.tabs} value={tab} onChange={setTab}>
-        {tab === "overview" ? <OverviewTab inspector={inspector} /> : null}
-        {tab === "host" ? <HostTab inspector={inspector} /> : null}
-        {tab === "warm-pool" ? <WarmTab inspector={inspector} /> : null}
+    <Page title={page.title}>
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <span className="crumb">
+          <Link to={page.back}>Fleet</Link>
+        </span>
+      </nav>
+      <p className="worker-line">
+        <Status tone={page.health.tone}>{page.health.word}</Status>
+        {page.system === undefined ? null : <> · {page.system}</>}
+      </p>
+      <Overview page={page} />
+      <Tabs label="Worker" tabs={page.tabs} value={page.tab} onChange={page.chooseTab}>
+        {page.tab === "devices" ? <DevicesTab page={page} /> : null}
+        {page.tab === "host" ? <HostTab inspector={page} /> : null}
+        {page.tab === "warm-pool" ? <WarmTab inspector={page} /> : null}
       </Tabs>
-    </Inspector>
+    </Page>
   );
 }
 
-function OverviewTab({ inspector }: { readonly inspector: WorkerInspectorView }) {
-  const { overview } = inspector;
+function Overview({ page }: { readonly page: WorkerPageView }) {
+  const { overview } = page;
   if (overview.incompatible) {
     return (
       <Panel title="Protocol">
-        <ProtocolFacts inspector={inspector} />
+        <ProtocolFacts inspector={page} />
       </Panel>
     );
   }
@@ -196,25 +94,28 @@ function OverviewTab({ inspector }: { readonly inspector: WorkerInspectorView })
       {overview.read === undefined ? null : (
         <p className="muted figure-read">Read {overview.read}</p>
       )}
-      {overview.starting ? (
-        <p className="muted">Devices, leases and capacity appear once startup finishes.</p>
-      ) : (
-        <>
-          <PlatformCards platforms={overview.platforms} />
-          <Panel title="Devices" flush>
-            <DataTable
-              label="Devices"
-              rows={overview.devices ?? []}
-              columns={DEVICE_COLUMNS}
-              rowId={(device) => device.id}
-              empty="No devices."
-              paging={inspector.devicesPaging}
-              wide
-            />
-          </Panel>
-        </>
-      )}
+      {overview.starting ? null : <PlatformCards platforms={overview.platforms} />}
     </>
+  );
+}
+
+function DevicesTab({ page }: { readonly page: WorkerPageView }) {
+  const { overview } = page;
+  if (overview.starting) {
+    return <p className="muted">Devices, leases and capacity appear once startup finishes.</p>;
+  }
+  return (
+    <Panel title="Devices" flush>
+      <DataTable
+        label="Devices"
+        rows={overview.devices ?? []}
+        columns={DEVICE_COLUMNS}
+        rowId={(device) => device.id}
+        empty="No devices."
+        paging={page.devicesPaging}
+        wide
+      />
+    </Panel>
   );
 }
 
@@ -319,7 +220,7 @@ const DEVICE_COLUMNS: readonly Column<DeviceRow>[] = [
   },
 ];
 
-function ProtocolFacts({ inspector }: { readonly inspector: WorkerInspectorView }) {
+function ProtocolFacts({ inspector }: { readonly inspector: WorkerPageView }) {
   const { protocol } = inspector.host;
   return protocol.compatible ? (
     <Status tone="ok">compatible</Status>
@@ -331,7 +232,7 @@ function ProtocolFacts({ inspector }: { readonly inspector: WorkerInspectorView 
   );
 }
 
-function HostTab({ inspector }: { readonly inspector: WorkerInspectorView }) {
+function HostTab({ inspector }: { readonly inspector: WorkerPageView }) {
   const { host } = inspector;
   return (
     <>
@@ -443,7 +344,7 @@ const WARM_COLUMNS: readonly Column<WarmRow>[] = [
   { cell: (target) => target.short, header: "Short", mono: true },
 ];
 
-function WarmTab({ inspector }: { readonly inspector: WorkerInspectorView }) {
+function WarmTab({ inspector }: { readonly inspector: WorkerPageView }) {
   const { warm } = inspector;
   if (warm === undefined) return null;
   return (

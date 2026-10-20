@@ -7,7 +7,7 @@ import { LeasesScreen } from "../screens/leases";
 import { OverviewScreen } from "../screens/overview";
 import { UsageScreen } from "../screens/usage";
 import { WaitingScreen } from "../screens/waiting";
-import { WorkersScreen } from "../screens/workers";
+import { FleetScreen } from "../screens/fleet";
 
 export type NavGroup = "Operate" | "Observe";
 
@@ -22,7 +22,7 @@ export interface Route {
 export const ROUTES: readonly Route[] = [
   { Screen: OverviewScreen, icon: "overview", label: "Overview", path: "/" },
   { Screen: AttentionScreen, icon: "attention", label: "Attention", path: "/attention" },
-  { Screen: WorkersScreen, group: "Operate", icon: "workers", label: "Fleet", path: "/fleet" },
+  { Screen: FleetScreen, group: "Operate", icon: "workers", label: "Fleet", path: "/fleet" },
   { Screen: LeasesScreen, group: "Operate", icon: "leases", label: "Leases", path: "/leases" },
   { Screen: WaitingScreen, group: "Operate", icon: "waiting", label: "Queue", path: "/queue" },
   { Screen: EventsScreen, group: "Observe", icon: "events", label: "Activity", path: "/activity" },

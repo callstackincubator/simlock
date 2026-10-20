@@ -84,3 +84,20 @@
   display: inline;
   max-width: none;
 }
+
+.worker-line {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.worker-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.worker-system {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}

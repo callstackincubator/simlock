@@ -49,6 +49,7 @@ export interface WorkerRow {
   readonly mono: boolean;
   readonly to: string;
   readonly health: Toned;
+  readonly system?: string;
   readonly use?: WorkerUse;
 }
 
@@ -62,14 +63,21 @@ function useOf(worker: WorkerView): WorkerUse | undefined {
   return { limit, percent: limit === 0 ? 0 : (running / limit) * 100, running };
 }
 
+function systemOf(worker: WorkerView): string | undefined {
+  const { host } = worker;
+  return host === undefined ? undefined : `${host.os} ${host.osVersion}`;
+}
+
 export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const use = useOf(worker);
+  const system = systemOf(worker);
   return {
     health: workerHealth(worker),
     id: worker.id,
     mono: worker.label === undefined,
     name: workerName(worker),
     to: `${workerPath(worker.id)}${search}`,
+    ...(system === undefined ? {} : { system }),
     ...(use === undefined ? {} : { use }),
   };
 }
@@ -470,14 +478,32 @@ function warmTabOf(worker: WorkerView, now: number): WarmTab {
   };
 }
 
-export type WorkerTab = "overview" | "host" | "warm-pool";
+export type WorkerTab = "devices" | "warm-pool" | "host" | "events";
 
-export interface WorkerInspector {
+// why: the tab lives in the URL as `?tab=`, so a reload or a shared link shows the same tab; a value
+// the page does not offer, such as a warm pool on a starting worker, is the Devices tab.
+export function readWorkerTab(
+  search: string,
+  tabs: readonly { readonly value: WorkerTab }[],
+): WorkerTab {
+  const asked = new URLSearchParams(search).get("tab");
+  return tabs.find((tab) => tab.value === asked)?.value ?? "devices";
+}
+
+// why: every other key of the query stays, the drawer's paging included.
+export function writeWorkerTab(search: string, tab: WorkerTab): string {
+  const params = new URLSearchParams(search);
+  params.set("tab", tab);
+  return `?${params.toString()}`;
+}
+
+export interface WorkerPage {
   readonly id: string;
+  readonly tab: WorkerTab;
   readonly title: string;
   readonly mono: boolean;
   readonly health: Toned;
-  readonly os?: string;
+  readonly system?: string;
   readonly version?: string;
   readonly tabs: readonly { readonly value: WorkerTab; readonly label: string }[];
   readonly overview: OverviewTab;
@@ -485,20 +511,28 @@ export interface WorkerInspector {
   readonly warm?: WarmTab;
 }
 
-export function workerInspectorOf(input: {
+export function workerPageOf(input: {
   readonly worker: WorkerView;
   readonly now: number;
+  readonly search?: string;
   readonly tokens: readonly TokenRecord[];
   readonly leaseIds?: readonly string[];
-}): WorkerInspector {
+}): WorkerPage {
   const { now, tokens, worker } = input;
   const leaseIds = new Set(input.leaseIds ?? []);
   const starting = worker.health === "starting";
   const incompatible = worker.connection === "incompatible";
   const { host } = worker;
   const leases = worker.leases;
+  const tabs: WorkerPage["tabs"] = [
+    { label: "Devices", value: "devices" },
+    ...(starting ? [] : [{ label: "Warm pool", value: "warm-pool" } as const]),
+    { label: "Host", value: "host" },
+    { label: "Events", value: "events" },
+  ];
   return {
     health: workerHealth(worker),
+    tab: readWorkerTab(input.search ?? "", tabs),
     host: hostTabOf(worker),
     id: worker.id,
     mono: worker.label === undefined,
@@ -516,13 +550,9 @@ export function workerInspectorOf(input: {
             devices: (worker.devices ?? []).map((d) => deviceRow(d, worker, now, tokens, leaseIds)),
           }),
     },
-    tabs: [
-      { label: "Overview", value: "overview" },
-      { label: "Host", value: "host" },
-      ...(starting ? [] : [{ label: "Warm pool", value: "warm-pool" } as const]),
-    ],
+    tabs,
     title: workerName(worker),
-    ...(host === undefined ? {} : { os: `${host.os} ${host.osVersion}` }),
+    ...(host === undefined ? {} : { system: `${host.os} ${host.osVersion}` }),
     ...(worker.version === undefined ? {} : { version: worker.version }),
     ...(starting ? {} : { warm: warmTabOf(worker, now) }),
   };

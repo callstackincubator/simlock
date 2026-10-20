@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { listSearch } from "./paging";
-import {
-  filterWorkers,
-  upMeta,
-  type WorkerInspector,
-  workerInspectorOf,
-  workerRow,
-} from "./worker-page";
+import { filterWorkers, upMeta, type WorkerPage, workerPageOf, workerRow } from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -85,12 +79,12 @@ const LOAD = {
 function inspect(
   view: WorkerView,
   now = NOW,
-  tokens: Parameters<typeof workerInspectorOf>[0]["tokens"] = [],
+  tokens: Parameters<typeof workerPageOf>[0]["tokens"] = [],
 ) {
-  return workerInspectorOf({ now, tokens, worker: view });
+  return workerPageOf({ now, tokens, worker: view });
 }
 
-function figure(inspector: WorkerInspector, label: string) {
+function figure(inspector: WorkerPage, label: string) {
   return inspector.overview.figures.find((card) => card.label === label);
 }
 
@@ -334,7 +328,7 @@ describe("a worker's capacity and leases", () => {
     expect(inspector.overview.devices).toBeUndefined();
     expect(inspector.overview.leases).toBeUndefined();
     expect(inspector.warm).toBeUndefined();
-    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["overview", "host"]);
+    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["devices", "host", "events"]);
     expect(inspector.host.capabilities).toBeUndefined();
     expect(inspector.health).toEqual({ tone: "warn", word: "starting" });
   });
@@ -372,8 +366,8 @@ describe("a worker's device rows", () => {
   it("links a holder to the lease's page under the id the daemon lists it by, a gateway's worker-qualified one included", () => {
     const view = worker({ devices: [device({ state: "leased" })], leases: [LEASE] });
     const holderOn = (leaseIds: readonly string[]) =>
-      workerInspectorOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]
-        ?.holder?.to;
+      workerPageOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]?.holder
+        ?.to;
 
     expect(holderOn([`${view.id}.l_1`])).toBe(`/leases/${encodeURIComponent(`${view.id}.l_1`)}/`);
     expect(holderOn(["l_1"])).toBe("/leases/l_1/");

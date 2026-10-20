@@ -16,3 +16,20 @@ export function itemIdFrom(section: Section, path: string): string | undefined {
     return rest;
   }
 }
+
+export interface FleetAddress {
+  readonly workerId?: string;
+}
+
+// why: a worker's page is `/fleet/<workerId>`, the id encoded, so a slash inside an id cannot be
+// taken for a path separator; a malformed escape is kept as typed.
+export function fleetAddress(path: string): FleetAddress {
+  if (!path.startsWith("/fleet/")) return {};
+  const [worker] = path.slice("/fleet/".length).replace(/\/$/, "").split("/");
+  if (worker === undefined || worker === "") return {};
+  try {
+    return { workerId: decodeURIComponent(worker) };
+  } catch {
+    return { workerId: worker };
+  }
+}

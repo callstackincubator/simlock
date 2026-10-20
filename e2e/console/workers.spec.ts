@@ -116,14 +116,11 @@ async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
 }
 
 function row(page: Page, name: string): Locator {
-  return page
-    .getByRole("list", { name: "Workers", exact: true })
-    .getByRole("listitem")
-    .filter({ has: page.getByText(name, { exact: true }) });
+  return page.getByRole("row").filter({ has: page.getByRole("link", { exact: true, name }) });
 }
 
 function title(page: Page, name: string): Locator {
-  return page.getByRole("heading", { level: 2, name, exact: true });
+  return page.getByRole("heading", { level: 1, name, exact: true });
 }
 
 function figures(page: Page): Locator {
@@ -328,6 +325,7 @@ test.describe("the workers page", () => {
     const host = found((await workerList(daemon))[0], "the host's worker");
     const { os, osVersion } = (await status(daemon)).host;
 
+    await answerWithoutLoad(page);
     await openConsole(page, daemon);
     await row(page, host.label ?? host.id)
       .getByRole("link")

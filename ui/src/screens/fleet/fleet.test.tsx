@@ -3,13 +3,15 @@ import { describe, expect, it } from "vitest";
 
 import type { Paging } from "../../ds";
 import {
-  type WorkersPage,
+  type FleetPage,
+  type WorkerPageView,
   type WorkerTab,
   type WorkerView,
-  workerInspectorOf,
+  workerPageOf,
   workerRow,
 } from "../../state/workers";
-import { WorkersBody } from "./index";
+import { FleetBody } from "./index";
+import { WorkerPageBody } from "./worker-page";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 const GIB = 1024 ** 3;
@@ -88,26 +90,15 @@ const PAGING: Paging = {
   total: 1,
 };
 
-function page(
-  worker: WorkerView | undefined,
-  overrides: Partial<WorkersPage> = {},
-  workers: readonly WorkerView[] = worker === undefined ? [] : [worker],
-): WorkersPage {
+function fleet(
+  workers: readonly WorkerView[],
+  overrides: Partial<FleetPage> = {},
+  filter: FleetPage["filter"] = "all",
+): FleetPage {
   return {
-    chosen: worker?.id,
     empty: workers.length === 0,
-    filter: "all",
-    focus: "detail",
-    inspector:
-      worker === undefined
-        ? undefined
-        : {
-            ...workerInspectorOf({ now: NOW, tokens: [], worker }),
-            devicesPaging: PAGING,
-            warmPaging: PAGING,
-          },
+    filter,
     meta: "1 / 1 up",
-    missing: undefined,
     paging: PAGING,
     rows: workers.map((entry) => workerRow(entry)),
     setFilter: () => {},
@@ -115,10 +106,23 @@ function page(
   };
 }
 
-function html(view: WorkersPage, tab?: WorkerTab): string {
-  return renderToStaticMarkup(
-    <WorkersBody page={view} {...(tab === undefined ? {} : { initialTab: tab })} />,
-  );
+function page(worker: WorkerView, tab?: WorkerTab): WorkerPageView {
+  return {
+    ...workerPageOf({
+      now: NOW,
+      search: tab === undefined ? "" : `?tab=${tab}`,
+      tokens: [],
+      worker,
+    }),
+    back: "/fleet",
+    chooseTab: () => {},
+    devicesPaging: PAGING,
+    warmPaging: PAGING,
+  };
+}
+
+function html(view: WorkerPageView): string {
+  return renderToStaticMarkup(<WorkerPageBody page={view} />);
 }
 
 function text(markup: string): string {
@@ -129,53 +133,28 @@ function text(markup: string): string {
     .trim();
 }
 
-describe("the workers list", () => {
-  it("shows a row as a square named by its health word, the worker's name and running over limit, with no warning word in it", () => {
-    const drained = { ...WORKER, drained: true, load: undefined };
+describe("the fleet table", () => {
+  it("shows a row as the worker's name and system", () => {
+    const markup = renderToStaticMarkup(<FleetBody page={fleet([WORKER])} />);
 
-    const markup = html(page(drained));
-    const row = markup.slice(markup.indexOf('class="list"'), markup.indexOf("</ul>"));
-
-    expect(row).toContain('aria-label="drained"');
-    expect(row).toContain("status-dot-warn");
-    expect(text(row)).toContain("worker-a 1 / 8");
-    expect(text(row)).not.toMatch(/drained|memory|disconnected/);
-  });
-
-  it("heads the list with how many workers are up and offers the three filters", () => {
-    const markup = html(page(WORKER));
-
-    expect(text(markup)).toContain("Fleet 1 / 1 up");
-    for (const label of ["All", "Issues", "Busy"]) expect(text(markup)).toContain(label);
-    expect(markup).toContain('value="issues"');
-  });
-
-  it("draws a thin neutral meter under a worker that reported its capacity and none under one that did not", () => {
-    const lost = { ...WORKER, connection: "disconnected" as const };
-
-    expect(html(page(WORKER))).toContain("load-bar-neutral meter-thin");
-    expect(html(page(lost))).not.toContain("meter-thin");
-    expect(text(html(page(lost)))).toContain("worker-a —");
-  });
-
-  it("marks the chosen row as the current page", () => {
-    expect(html(page(WORKER))).toContain('aria-current="page"');
+    expect(text(markup)).toContain("worker-a macOS 15.5");
   });
 
   it("says no workers have connected, or that none matches the filter", () => {
-    expect(text(html(page(undefined, { empty: true })))).toContain("No workers have connected.");
-    expect(text(html(page(undefined, { empty: false, filter: "issues" })))).toContain(
-      "No worker matches.",
-    );
+    const none = (empty: boolean, filter: FleetPage["filter"]) =>
+      text(renderToStaticMarkup(<FleetBody page={fleet([], { empty }, filter)} />));
+
+    expect(none(true, "all")).toContain("No workers have connected.");
+    expect(none(false, "issues")).toContain("No worker matches.");
   });
 });
 
-describe("a worker's inspector", () => {
-  it("is titled with the worker's name and reads its health word, operating system and version beneath", () => {
+describe("a worker's page", () => {
+  it("is titled with the worker's name and reads its health word and operating system beneath", () => {
     const markup = html(page(WORKER));
 
-    expect(markup).toMatch(/<h2[^>]*>worker-a<\/h2>/);
-    expect(text(markup)).toContain("memory pressure warn · macOS 15.5 · 1.4.0");
+    expect(markup).toMatch(/<h1[^>]*>worker-a<\/h1>/);
+    expect(text(markup)).toContain("memory pressure warn · macOS 15.5");
   });
 
   it("states the load in the old panel's words, each beside a meter in its tone, with swap, pressure and the reading's age", () => {
@@ -264,13 +243,6 @@ describe("a worker's inspector", () => {
     expect(shown).toContain("incompatible gateway 35–35, worker 30–30");
     expect(shown).not.toContain("Read ");
   });
-
-  it("says that no worker has the id in the URL, with a link back to the list", () => {
-    const markup = html(page(undefined, { missing: "wrk_nope" }, [WORKER]));
-
-    expect(text(markup)).toContain("Worker not found. Back to Fleet");
-    expect(markup).toContain('href="/fleet"');
-  });
 });
 
 describe("a worker's host and warm pool tabs", () => {
@@ -301,7 +273,7 @@ describe("a worker's host and warm pool tabs", () => {
       },
     };
 
-    const markup = html(page(view), "host");
+    const markup = html(page(view, "host"));
     const shown = text(markup);
 
     expect(shown).toContain("Operating system macOS 15.5");
@@ -353,7 +325,7 @@ describe("a worker's host and warm pool tabs", () => {
       },
     };
 
-    const markup = html(page(view), "warm-pool");
+    const markup = html(page(view, "warm-pool"));
     const shown = text(markup);
 
     expect(shown).toContain("Pool On");
@@ -365,7 +337,7 @@ describe("a worker's host and warm pool tabs", () => {
   });
 
   it("says Not reported. for a pool the worker has not reported and No installs in progress. for none", () => {
-    const shown = text(html(page(WORKER), "warm-pool"));
+    const shown = text(html(page(WORKER, "warm-pool")));
 
     expect(shown).toContain("Not reported.");
     expect(shown).toContain("No installs in progress.");
