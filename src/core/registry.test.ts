@@ -2539,6 +2539,64 @@ describe("Registry: state.db rows", () => {
     expect(reloaded.snapshot.leases).toEqual([renewed]);
   });
 
+  it("a grant with a fractional ttl is stored in lease_grants and read back unchanged", async () => {
+    const { open, readyDevice, registry } = await world();
+    const device = await readyDevice("fk-1");
+    await registry.createLeaseRequest({
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      request: {
+        environment: {},
+        id: "req_1",
+        timing: {
+          estimatedBootMs: 0,
+          estimatedProvisionMs: 0,
+          estimatedReadyMs: 0,
+          estimatedReclaimMs: 0,
+        },
+      },
+      requesterId: "agent-1",
+      ttlDeadline: 5_000.5,
+      ttlMs: 4_000.5,
+    });
+
+    expect(lease).toMatchObject({ ttlDeadline: 5_000.5, ttlMs: 4_000.5 });
+    const reloaded = await open({ generate: () => "unused" });
+    expect(reloaded.leaseRequests()).toEqual(registry.leaseRequests());
+    expect(reloaded.snapshot.leases).toEqual([lease]);
+  });
+
+  it("a quarantine retry at a fractional time is stored and read back unchanged", async () => {
+    const { open, readyDevice, registry } = await world();
+    const device = await readyDevice("fk-1");
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+      ttlMs: 60_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.enterQuarantine(device.id, 5_000.5, { kind: "purge-failed" });
+
+    const retried = await registry.recordQuarantineRetryFailure(
+      device.id,
+      1,
+      50_700.000_000_000_01,
+    );
+
+    expect(retried.quarantineNextRetryAt).toBe(50_700.000_000_000_01);
+    const reloaded = await open({ generate: () => "unused" });
+    expect(reloaded.snapshot.devices).toEqual([retried]);
+  });
+
   it("a grant writes the lease, the device's move to leased and the request's granted result in one transaction", async () => {
     const { clock, state } = await world();
     const timing = {

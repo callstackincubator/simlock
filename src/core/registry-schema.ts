@@ -25,7 +25,7 @@ CREATE TABLE devices (
   deferred_reclaim_lease_id TEXT,
   quarantined_at INTEGER,
   quarantine_attempts INTEGER,
-  quarantine_next_retry_at INTEGER,
+  quarantine_next_retry_at REAL,
   quarantine_cause_kind TEXT,
   quarantine_cause_stalled_state TEXT,
   quarantine_cause_message TEXT,
