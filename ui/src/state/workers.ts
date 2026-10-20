@@ -3,10 +3,11 @@ import { useState } from "react";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
 import type { LeaseList, TokenList } from "../model/leases";
-import { listSearch, TABLE_SIZES } from "../model/paging";
+import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging";
 import { fleetAddress } from "../model/paths";
 import {
   filterWorkers,
+  searchWorkers,
   upMeta,
   type WorkerFilter,
   type WorkerPage,
@@ -51,6 +52,8 @@ export interface FleetPage {
   readonly empty: boolean;
   readonly filter: WorkerFilter;
   readonly setFilter: (filter: WorkerFilter) => void;
+  readonly query: string;
+  readonly search: (query: string) => void;
   readonly rows: readonly WorkerRow[];
   readonly paging: Paging;
 }
@@ -65,7 +68,8 @@ export function useFleet(): LoadView<FleetPage> {
   const search = useSearch();
   const [filter, setFilter] = useState<WorkerFilter>("all");
   const ready = workers.kind === "ready";
-  const shown = filterWorkers(ready ? workers.data.workers : [], filter);
+  const query = readQuery(search);
+  const shown = searchWorkers(filterWorkers(ready ? workers.data.workers : [], filter), query);
   const paging = usePaging({ sizes: TABLE_SIZES, total: ready ? shown.length : undefined });
   const keep = listSearch(search);
 
@@ -76,7 +80,11 @@ export function useFleet(): LoadView<FleetPage> {
       filter,
       meta: upMeta(list.workers),
       paging,
+      query,
       rows: shown.slice(start, start + paging.size).map((worker) => workerRow(worker, keep)),
+      // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
+      // letter of the search.
+      search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
       setFilter,
     };
   });

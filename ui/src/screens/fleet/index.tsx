@@ -8,6 +8,7 @@ import {
   Loaded,
   Meter,
   Page,
+  SearchField,
   Slots,
   Status,
   Toolbar,
@@ -50,6 +51,7 @@ export function FleetBody({ page }: { readonly page: FleetPage }) {
             onChange={page.setFilter}
           />
         }
+        end={<SearchField label="Search workers" value={page.query} onChange={page.search} />}
       />
       <DataTable
         label="Workers"

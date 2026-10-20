@@ -100,6 +100,8 @@ function fleet(
     filter,
     meta: "1 / 1 up",
     paging: PAGING,
+    query: "",
+    search: () => {},
     rows: workers.map((entry) => workerRow(entry)),
     setFilter: () => {},
     ...overrides,

@@ -119,6 +119,21 @@ export function filterWorkers(
   return workers.filter((worker) => matches(worker, filter));
 }
 
+// why: the search matches any part of what a row shows to identify a worker: its name, its id and
+// its system, whatever the case.
+export function searchWorkers(
+  workers: readonly WorkerView[],
+  query: string,
+): readonly WorkerView[] {
+  const wanted = query.trim().toLowerCase();
+  if (wanted === "") return workers;
+  return workers.filter((worker) =>
+    [workerName(worker), worker.id, systemOf(worker) ?? ""].some((text) =>
+      text.toLowerCase().includes(wanted),
+    ),
+  );
+}
+
 export function upMeta(workers: readonly WorkerView[]): string {
   const up = workers.filter((worker) => worker.connection === "connected").length;
   return `${up} / ${workers.length} up`;
