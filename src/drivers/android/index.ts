@@ -1091,17 +1091,7 @@ export class AndroidDriver implements Driver {
     const { settledSerials } = await this.#scanAdbSerials();
     const serials: string[] = [];
     for (const serial of settledSerials) {
-      let answered: string | undefined;
-      try {
-        const answer = await this.#processRunner.run(
-          this.#sdk.adb,
-          ["-s", serial, "emu", "avd", "path"],
-          { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
-        );
-        if (answer.code === 0) answered = answeredAvdPath(answer.stdout);
-      } catch {
-        answered = undefined;
-      }
+      const answered = await this.#answeredAvdPathOf(serial);
       if (answered === undefined || answered === "") {
         throw new DriverCrashError(
           `Refusing to delete ${data.avdName}: could not tell which AVD the emulator on ${serial} runs`,
@@ -1127,6 +1117,20 @@ export class AndroidDriver implements Driver {
         );
       }
       await this.#delay(PORT_POLL_INTERVAL_MS);
+    }
+  }
+
+  /** why: Bounded like the ownership gate; undefined means the emulator did not say. */
+  async #answeredAvdPathOf(serial: string): Promise<string | undefined> {
+    try {
+      const answer = await this.#processRunner.run(
+        this.#sdk.adb,
+        ["-s", serial, "emu", "avd", "path"],
+        { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+      );
+      return answer.code === 0 ? answeredAvdPath(answer.stdout) : undefined;
+    } catch {
+      return undefined;
     }
   }
 
