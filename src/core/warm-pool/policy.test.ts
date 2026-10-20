@@ -486,6 +486,33 @@ describe("warm pool policy", () => {
     ).toEqual([boot("phone")]);
   });
 
+  it("proposes no boot that admit.boot refuses for ram-budget, for a waiter or a recently released device, and holds the waiter's slot", () => {
+    const serving = device("serving", "shutdown", { endedAgo: 20 * minute });
+    const recent = device("recent", "shutdown", { endedAgo: 1_000, spec: spec("iPad Pro") });
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+    const devices = [serving, recent, busy];
+    const setup = { limit: 3, waiting: [classDemand()] };
+    const refusing = (ids: readonly string[]): WarmPolicyView => {
+      const base = view(devices, setup);
+      return {
+        ...base,
+        admit: {
+          ...base.admit,
+          boot: (candidate) => (ids.includes(candidate.id) ? "ram-budget" : undefined),
+        },
+      };
+    };
+
+    expect(evaluate(refusing([]))).toEqual([
+      { action: "boot", deviceId: "serving", reason: "waiting-request" },
+    ]);
+    expect(evaluate(refusing(["serving"]))).toEqual([]);
+    expect(evaluate(view([recent], { limit: 3 }))).toEqual([
+      { action: "boot", deviceId: "recent", reason: "recently-released" },
+    ]);
+    expect(evaluate(view([recent], { limit: 3, refuseBoot: "ram-budget" }))).toEqual([]);
+  });
+
   it("does not boot back a device an operator reset shut down, though it was released a moment ago", () => {
     const reset = device("reset", "shutdown", { endedAgo: 1_000 });
     const other = device("other", "shutdown", { endedAgo: 2_000 });
