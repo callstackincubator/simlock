@@ -73,7 +73,8 @@ afterEach(async () => {
 /** `drivers: undefined` is spelled out by a caller that wants real (module-substituted)
  * discovery rather than the fake driver below. */
 async function start(
-  overrides: Partial<Omit<StartDaemonOptions, "drivers">> & {
+  overrides: Partial<Omit<StartDaemonOptions, "deviceDataTables" | "drivers">> & {
+    readonly deviceDataTables?: StartDaemonOptions["deviceDataTables"] | undefined;
     readonly drivers?: StartDaemonOptions["drivers"] | undefined;
   } = {},
 ) {
@@ -3586,4 +3587,43 @@ describe("daemon role (ADR 0034)", () => {
       expect(parseDaemonArgv(argv)).toBe(expected);
     },
   );
+});
+
+describe("startDaemon state.db", () => {
+  const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
+
+  afterEach(() => {
+    if (previousModule === undefined) {
+      delete process.env.SIMLOCK_DRIVERS_MODULE;
+    } else {
+      process.env.SIMLOCK_DRIVERS_MODULE = previousModule;
+    }
+  });
+
+  it("a worker started with state.json in its folder refuses with the old-file message and its step, and creates no state.db", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-old-file-"));
+    temporaryDirectories.push(directory);
+    const oldFile = join(directory, "state.json");
+    await writeFile(oldFile, "{}", "utf8");
+
+    await expect(start({ dataDirectory: directory })).rejects.toMatchObject({
+      message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run \`simlock nuke --delete-devices\`; then remove ${oldFile} and start again. See "Breaking: state moves to state.db" in docs/CLI.md.`,
+    });
+    expect(existsSync(join(directory, "state.db"))).toBe(false);
+  });
+
+  it("a SIMLOCK_DRIVERS_MODULE without a deviceDataTables export fails start naming it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-no-tables-"));
+    temporaryDirectories.push(directory);
+    const modulePath = join(directory, "drivers.mjs");
+    await writeFile(modulePath, "export function createDrivers() { return []; }\n", "utf8");
+    process.env.SIMLOCK_DRIVERS_MODULE = modulePath;
+
+    await expect(
+      start({ dataDirectory: directory, deviceDataTables: undefined, drivers: undefined }),
+    ).rejects.toMatchObject({
+      message: `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
+    });
+    expect(existsSync(join(directory, "state.db"))).toBe(false);
+  });
 });
