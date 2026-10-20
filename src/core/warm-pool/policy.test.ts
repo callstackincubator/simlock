@@ -289,6 +289,23 @@ describe("warm pool policy", () => {
         }),
       ),
     ).toEqual([creation("iPhone 17")]);
+    // why: the head is the first waiter no ready idle device takes: with one ready device and two
+    // waiters it serves, the second is the head and leasing creates for it.
+    expect(
+      evaluate(
+        view([ready("one")], { ...base, waiting: [waiter("iPhone 15"), waiter("iPhone 15")] }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("proposes no boot for a waiter whose spec the retry schedule holds back after a failed boot", () => {
+    const released = device("lse_15", "shutdown", { endedAgo: 90 * minute });
+    const waiting = [classDemand(), classDemand()];
+
+    expect(evaluate(view([released], { waiting }))).toEqual([
+      { action: "boot", deviceId: "lse_15", reason: "waiting-request" },
+    ]);
+    expect(evaluate(view([released], { waiting, blocked: [spec("iPhone 15")] }))).toEqual([]);
   });
 
   it("proposes a boot, not a shutdown, for a released iPhone 15 that serves a waiting class request at the running cap", () => {

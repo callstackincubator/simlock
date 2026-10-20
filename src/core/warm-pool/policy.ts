@@ -370,7 +370,7 @@ function bootsOpen(state: QueueState): boolean {
 }
 
 function bootForWaiter(state: QueueState, demand: WaitingDemand): boolean {
-  if (!bootsOpen(state)) return false;
+  if (!bootsOpen(state) || !state.view.retry.mayAttempt(demand.spec, state.view.now)) return false;
   const device = state.bootable.find(
     (candidate) =>
       !state.taken.has(candidate.id) &&
