@@ -19,7 +19,7 @@ Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-wa
 | `strategies/proxy-jwt/index.ts`     | The proxy strategy: a sign-in proxy's JWT in `http.proxyAuth.header`; owns the `proxyAuth` config schema |
 | `strategies/proxy-jwt/key-cache.ts` | `KeyCache`: the proxy's published keys, on the `Clock`                                                   |
 | `strategies/conformance.test.ts`    | Every registered strategy: `not-mine` without its credential, `via` = name                               |
-| `token-store.ts`                    | `TokenStore`: hashed tokens in `tokens.json`; re-reads the file per verify                               |
+| `token-store.ts`                    | `TokenStore`: hashed tokens in the `tokens` table of `state.db`; one read per verify; `tokensOwner`      |
 | `admin-secret.ts`                   | `AdminSecretManager`: per-start secret, `admin.token`                                                    |
 | `hello.ts`                          | `SessionRoleResolver`, `resolveAgentRole`, `AdminAuthenticationFailedError`                              |
 | `tokens.ts`                         | `TokenRole`, `TokenRecord`, `TokenOperations`                                                            |
@@ -66,5 +66,5 @@ the `KeySetFetcher` port, which never follows a redirect and caps the body at 64
 ## Facts
 
 - A worker join token is `forbidden` on HTTP and accepted only by `authenticateUplink`.
-- `tokens.json` is re-read on every verify, so `token create`/`revoke` from another process takes effect at once. Writes are serialised in `TokenStore`.
+- Every verify reads the `tokens` table, so a `token revoke` takes effect at once. `create` and `revoke` are each one transaction, so two at once never lose one another. `createAuth` takes the daemon's `SqliteDatabase`, never the state module.
 - The admin secret's hash lives in memory from construction; the plaintext is written to `admin.token` (0600, atomic) only by `persist`, after the socket claim.

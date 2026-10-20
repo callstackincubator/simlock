@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { Filesystem, IdGenerator } from "../ports/index.js";
 
 /** why: Owner-only, like the other files that hold secrets or state (`config.json`,
- * `state.db`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and the id this
+ * `state.db`, `admin.token`): the trust boundary is the OS user, and the id this
  * file holds is what every device root's ownership marker is checked against. */
 const INSTANCE_FILE_MODE = 0o600;
 

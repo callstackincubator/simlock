@@ -682,9 +682,9 @@ export const eventsUnsubscribe = defineOperation({
 
 // ---- token.create / token.list / token.revoke --------------------------------------------
 
-// why: ADR §11 makes the daemon the only owner of tokens.json, and that move has landed: both
+// why: ADR §11 makes the daemon the only owner of the tokens, and that move has landed: both
 // dispatchers handle these three, the CLI reaches them as admin round-trips from
-// `src/cli/commands/token.ts`, and no CLI code reads `tokens.json` itself. The declarations live
+// `src/cli/commands/token.ts`, and no CLI code reads the token store itself. The declarations live
 // here because the `OPERATIONS` map every dispatcher validates against is built from this file.
 
 // fallow-ignore-next-line unused-export -- reachable from outside this file only through OPERATIONS.

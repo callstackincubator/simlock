@@ -98,7 +98,7 @@ Health: `starting` → `running`, or `failed`.
 Credential resolution (`resolveHelloRole` in `src/auth`), at `hello`:
 
 1. No credential → `agent`.
-2. An `operator` token in `tokens.json` → `admin`.
+2. An `operator` token in the `tokens` table → `admin`.
 3. The per-start admin secret → `admin`.
 4. Anything else → `ADMIN_AUTHENTICATION_FAILED`, connection closed.
 

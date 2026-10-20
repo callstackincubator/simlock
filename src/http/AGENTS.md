@@ -92,9 +92,9 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
 - The listener starts right after the socket claim (`onSocketClaimed`), before startup
   convergence. Early requests park in the dispatcher. On a gateway the worker uplink
   upgrades on the same listener (`onServerCreated`).
-- `tokens.json` (data directory): `{ id: "tok_…", hash, role, label?, createdAt }`, written
-  atomically, mode `0600`. `src/auth` owns it: the dispatcher's `token.*` handlers write it through `Auth.tokens`,
-  and every verify re-reads the file. The secret is shown once, by `token.create`.
+- `tokens` table of `state.db`: `id` (`tok_…`), `hash`, `role`, `label` (NULL when absent), `created_at`.
+  `src/auth` owns it: the dispatcher's `token.*` handlers write it through `Auth.tokens`,
+  and every verify reads the table. The secret is shown once, by `token.create`.
 - `LeaseNoticeBuffer` is memory only. `HttpGateway.stop` closes the server and destroys
   every open socket.
 

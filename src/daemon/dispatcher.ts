@@ -178,8 +178,8 @@ export interface DispatcherOptions {
     readonly claims: NonNullable<StallInput["claims"]>;
   };
   /**
-   * ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
-   * owner of tokens.json." Optional so tests that don't exercise `token.*` (the overwhelming
+   * why: ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
+   * owner of the tokens." Optional so tests that don't exercise `token.*` (the overwhelming
    * majority) don't need to fabricate one -- `#tokenCreate`/`#tokenList`/`#tokenRevoke` throw a
    * clear `DispatchError` when it is missing rather than crashing on `undefined.create(...)`.
    */

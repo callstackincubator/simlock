@@ -197,7 +197,7 @@ uplink upgrades from, so a gateway without it is a process nothing can reach
 and no worker can join — quietly overriding the operator's value would be
 worse than refusing it.
 
-The gateway keeps one small file of its own beside `tokens.json`:
+The gateway keeps one small file of its own beside `state.db`:
 `workers.json`, owner-only, holding the ids of workers an operator has
 drained. Drain is a decision about a machine rather than something the machine
 reports, so it has to survive both the worker's reconnect and a gateway

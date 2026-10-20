@@ -68,7 +68,7 @@ describe("HTTP API", () => {
     const baseUrl = `http://127.0.0.1:${port}`;
 
     // why: 1. Mint an agent token via the CLI: `token create` is a daemon operation, so this
-    //    round-trips to the daemon started above -- the token lands in the tokens.json that
+    //    round-trips to the daemon started above -- the token lands in the state.db that
     //    daemon owns, which is what this test's later calls authenticate against.
     const tokenResult = await env.cli(["token", "create", "--role", "agent"]);
     expect(tokenResult.code).toBe(0);
