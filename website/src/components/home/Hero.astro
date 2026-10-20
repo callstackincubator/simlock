@@ -1,117 +1,168 @@
 ---
-import CopyCommand from '../site/CopyCommand.astro';
+// why: the hero tells the product's story in order: one Mac first, then more machines behind a
+// gateway. The copy is in content.ts and the two acts in story.ts; hero.ts plays them.
 import Dither from '../site/Dither.astro';
 import Window from '../site/Window.astro';
-import { docs, home, site } from '../../site/content';
-import { gatewayUrl, lanes, stageLabel } from './story';
+import { docs, site } from '../../site/content';
+import { acts, gatewayUrl, stageLabel } from './story';
 
-const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device":"${l.device}"}`;
+const num = (i: number) => String(i + 1).padStart(2, '0');
+// why: the server HTML is each act's finished frame (BRAND.md, Motion); hero.ts resets it
+// before it plays.
+const holder = (ai: number, slot: number) => acts[ai]!.agents.find((a) => a.slot === slot);
+const slotsBefore = (ai: number, mi: number) =>
+  acts[ai]!.machines.slice(0, mi).reduce((n, m) => n + m.slots.length, 0);
 ---
 
 <section class="hero" aria-labelledby="hero-title">
-  <div class="hero-top va-top">
-    <div class="hero-copy">
+  <div class="hero-top st-top">
+    <div class="st-copy">
       <h1 class="h1" id="hero-title">{site.headline[0]} <em>{site.headline[1]}</em></h1>
       <p class="lede">{site.lede}</p>
       <div class="actions">
         <a class="btn" href={docs.start}>Get started <span aria-hidden="true">→</span></a>
-        <CopyCommand command={site.install} />
       </div>
     </div>
-    <Window title="zsh" class="va-side">
-      <div class="term">
-        {home.setup.map((l) => ('cmd' in l ? <div class="ln"><span class="p">$</span> {l.cmd}</div> : <div class="ln dim"># {l.comment}</div>))}
-      </div>
-    </Window>
+    <div class="st-art" aria-hidden="true">
+      <Dither scene="rollout" focus={0.5} />
+    </div>
   </div>
 
-  <div class="viz va-viz" data-va-hero role="img" aria-label={stageLabel}>
-    <Dither scene="fleet" focus={0.5} />
-    <div class="va-stage">
-      {
-        lanes.map((l, i) => (
-          <Window title={`${l.where} · ${l.agent}`} class={`va-agent va-agent--${i}`}>
-            <div class="term va-term" data-lane={i}>
-              <div class="ln" data-type><span class="p">$ </span><span data-t>POST /v1/lease-requests</span></div>
-              <div class="ln out" data-step>{body(l)}</div>
-              <div class="ln out" data-step>state    <span class="va-state" data-state>granted</span></div>
-              <div class="ln out" data-step>lease    <span class="tool">{l.lease}</span></div>
-              <div class="ln ok" data-step>✓ worker {l.worker.label}</div>
-            </div>
-          </Window>
-        ))
-      }
+  <div class="viz st-viz" data-stage role="img" aria-label={stageLabel}>
+    <Dither scene="flow" />
+    <div class="st-stage">
+      <div class="st-tabs" aria-hidden="true">
+        {
+          acts.map((a, i) => (
+            <button type="button" class:list={['st-tab', { 'is-on': i === 0 }]} data-goto={i} tabindex="-1">
+              <b>[{num(i)}]</b> {a.label}
+              <i class="st-progress" />
+            </button>
+          ))
+        }
+      </div>
 
-      {
-        lanes.map((_, i) => (
-          <span class={`va-duct va-duct--up va-col-${i}`} data-up={i} aria-hidden="true">
-            <span class="pkt" />
-            <span class="pkt pkt--back" />
-          </span>
-        ))
-      }
-
-      <Window title={`gateway · ${gatewayUrl}`} class="va-gw">
-        <div class="va-table">
-          <div class="pane-row pane-head va-row">
-            <span>Agent</span><span class="va-c-dev">Device</span><span>Worker</span><span>Why</span><span class="va-c-state">State</span>
-          </div>
-          {
-            lanes.map((l, i) => (
-              <div class="pane-row va-row is-on" data-row data-gw={i}>
-                <span class="mut">{l.agent}</span>
-                <span class="va-c-dev mut">{l.device}</span>
-                <span>{l.worker.label}</span>
-                <span class="mut">{l.why}</span>
-                <span class="va-c-state va-live" data-gw-state>granted</span>
+      <div class="st-acts">
+        {
+          acts.map((a, ai) => (
+            <div class:list={['st-act', `st-act--${ai === 0 ? 'local' : 'fleet'}`, { 'is-on': ai === 0 }]} data-act={ai}>
+              <div class="st-act-head">
+                <code class="st-cmd">
+                  <span class="p">$</span> <span data-cmd>{a.cmd}</span>
+                </code>
               </div>
-            ))
-          }
-          <div class="pane-row va-foot">
-            <span>{lanes.length} workers connected · dialled out over wss · no inbound port</span>
-          </div>
-        </div>
-      </Window>
 
-      {
-        lanes.map((_, i) => (
-          <span class={`va-duct va-duct--down va-col-${i}`} data-down={i} aria-hidden="true">
-            <span class="pkt" />
-            <span class="pkt pkt--back" />
-          </span>
-        ))
-      }
+              <div class="st-row st-agents">
+                {a.agents.map((g) => (
+                  <Window title={`${g.where} · ${g.agent}`} class="st-chip">
+                    <div class="term st-term">
+                      <div class="ln">
+                        <span class="p">$ </span>
+                        <span data-t>{g.cmd}</span>
+                      </div>
+                      <div class="ln out" data-result>
+                        <span class="st-live">granted</span> {g.route?.worker ?? g.device}
+                      </div>
+                    </div>
+                  </Window>
+                ))}
+              </div>
 
-      {
-        lanes.map((l, i) => (
-          <div class={`va-worker va-col-${i}`} data-worker={i}>
-            <div class="va-whead">
-              <span class="va-wname">{l.worker.label}</span>
-              <span class="va-whost">{l.worker.host} · {l.worker.platforms}</span>
-            </div>
-            <div class="va-phone" data-phone data-state="leased">
-              <div class="va-phone-in">
-                <div class="va-screen">
-                  <span class="va-boot" />
-                  <span class="va-prov"><i /></span>
-                  <span class="va-app">
-                    <b />
-                    <span class="va-tiles"><span /><span /><span /><span /></span>
-                    <i /><i /><i /><i /><i /><i />
+              <div class="st-row st-ducts">
+                {a.agents.map((_, gi) => (
+                  <span class="st-duct" data-up={gi} aria-hidden="true">
+                    <span class="pkt" />
+                    <span class="pkt pkt--back" />
                   </span>
-                </div>
-                <span class="va-home" />
+                ))}
+              </div>
+
+              {a.agents.some((g) => g.route) && (
+                <>
+                  <Window title={`gateway · ${gatewayUrl}`} class="st-gw">
+                    <div class="st-gw-cells">
+                      {a.agents.map((g, gi) => (
+                        <div class="st-gw-cell is-on" data-route={gi}>
+                          <span class="st-gw-to">
+                            {g.agent} → <span class="st-live">{g.route?.worker}</span>
+                          </span>
+                          <span class="st-gw-why">{g.route?.why}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div class="st-gw-foot" data-gw-foot>
+                      {a.machines.length} workers connected · one URL for every agent
+                    </div>
+                  </Window>
+                  <div class="st-row st-ducts">
+                    {a.agents.map((_, gi) => (
+                      <span class="st-duct" data-down={gi} aria-hidden="true">
+                        <span class="pkt" />
+                        <span class="pkt pkt--back" />
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div class="st-row st-machines">
+                {a.machines.map((m, mi) => (
+                  <div class="st-machine" data-machine={mi} data-foot={m.foot}>
+                    <div class="st-mhead">
+                      <span class="st-mname">{m.name}</span>
+                      <span class="st-mhost">{m.host}</span>
+                    </div>
+                    <div class="st-phones">
+                      {m.slots.map((s, si) => {
+                        const n = slotsBefore(ai, mi) + si;
+                        const h = holder(ai, n);
+                        return (
+                          <div class="st-dev" data-slot={n} data-start={s.start}>
+                            <div class="st-phone" data-state={h ? 'leased' : s.start}>
+                              <div class="st-phone-in">
+                                <div class="st-screen">
+                                  <span class="st-boot" />
+                                  <span class="st-app">
+                                    <b />
+                                    <span class="st-tiles">
+                                      <span />
+                                      <span />
+                                      <span />
+                                      <span />
+                                    </span>
+                                    <i />
+                                    <i />
+                                    <i />
+                                    <i />
+                                  </span>
+                                </div>
+                                <span class="st-home" />
+                              </div>
+                            </div>
+                            <span class="st-dname">{s.device ?? ''}</span>
+                            <span class="st-dstate" data-dstate>
+                              {h ? (
+                                <>
+                                  <span class="st-live">leased</span> {h.agent}
+                                </>
+                              ) : (
+                                s.start
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div class="st-mfoot" data-mfoot>
+                      {m.foot}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-            <div class="va-wfoot">
-              <span class="va-dev">{l.device}</span>
-              <span class="va-wstate" data-wstate>
-                <span class="va-live">leased</span> {l.agent}
-              </span>
-            </div>
-          </div>
-        ))
-      }
+          ))
+        }
+      </div>
     </div>
   </div>
 </section>
@@ -119,115 +170,239 @@ const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device
 <script>
   import { whenNear } from '../site/lazy';
 
-  const root = document.querySelector<HTMLElement>('[data-va-hero]');
+  const root = document.querySelector<HTMLElement>('[data-stage]');
   if (root) whenNear(root, () => void import('./hero').then((m) => m.default(root)));
 </script>
 
 <style>
-  .va-top {
-    grid-template-columns: minmax(0, 1fr) 28.5rem;
-    align-items: center;
-    padding-block: clamp(2rem, 4.5vw, 3.75rem);
+  .st-top {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    align-items: stretch;
+    column-gap: clamp(2rem, 5vw, 4rem);
   }
-  .va-top .h1 {
+  .st-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1.25rem;
+  }
+  .st-copy .h1 {
     max-width: 16ch;
+    margin: -0.18em 0 0;
   }
-  :global(.va-side) .term {
-    font-size: 0.6875rem;
-    overflow-wrap: normal;
+  .st-copy .lede {
+    max-width: 34rem;
+    margin: 0;
+  }
+  .st-copy .actions {
+    margin-top: 0.5rem;
+  }
+  .st-art {
+    position: relative;
+    min-height: 22rem;
+    border: 1px solid var(--line);
   }
 
-  .va-stage {
+  .st-stage {
     position: relative;
+    padding: clamp(1.5rem, 4vw, 2.75rem) var(--pad) clamp(2rem, 5vw, 3.5rem);
+  }
+
+  /* why: the tabs say which act is on, and the bar under one fills while it plays. */
+  .st-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 1.25rem;
+    width: max-content;
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+  }
+  .st-tab {
+    position: relative;
+    padding: 0.625rem 1rem;
+    background: none;
+    border: 0;
+    border-right: 1px solid var(--line);
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .st-tab:last-child {
+    border-right: 0;
+  }
+  .st-tab b {
+    font-weight: 400;
+    color: var(--faint);
+  }
+  .st-tab.is-on {
+    color: var(--text);
+  }
+  .st-tab.is-on b {
+    color: var(--accent);
+  }
+  .st-progress {
+    position: absolute;
+    inset: auto 0 -1px 0;
+    height: 2px;
+    background: var(--accent);
+    transform-origin: left;
+    transform: scaleX(0);
+  }
+  .st-tab.is-playing .st-progress {
+    animation: st-progress var(--dur, 8s) steps(32) forwards;
+  }
+  @keyframes st-progress {
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  /* why: both acts share one grid cell, so the stage keeps the taller act's height and the
+     page never jumps on a cut. */
+  .st-acts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .st-act {
+    grid-area: 1 / 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .st-act.is-on {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .st-act-head {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .st-cmd {
+    padding: 0.375rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+  .st-cmd .p {
+    color: var(--accent);
+  }
+
+  .st-row {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     column-gap: clamp(0.75rem, 2vw, 1.5rem);
-    padding: clamp(2rem, 5vw, 3.5rem) var(--pad);
   }
-  .va-stage :global(.va-agent) {
-    grid-row: 1;
-  }
-  .va-stage :global(.va-agent--0) {
-    grid-column: 1;
-  }
-  .va-stage :global(.va-agent--1) {
-    grid-column: 2;
-  }
-  .va-stage :global(.va-agent--2) {
-    grid-column: 3;
-  }
-  .va-term {
-    padding: 0.75rem 0.875rem;
+  .st-term {
+    padding: 0.625rem 0.875rem;
     font-size: 0.6875rem;
+    line-height: 1.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .va-col-0 {
-    grid-column: 1;
+  .st-term .ln {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .va-col-1 {
-    grid-column: 2;
+  :global(.st-live) {
+    color: var(--accent);
   }
-  .va-col-2 {
-    grid-column: 3;
+  :global(.st-dim) {
+    color: var(--faint);
   }
 
-  .va-duct {
-    --track: rgb(255 255 255 / 0.5);
+  .st-duct {
     position: relative;
     justify-self: center;
     width: 2px;
-    height: clamp(2rem, 4vw, 3rem);
-    background: repeating-linear-gradient(180deg, var(--track) 0 4px, transparent 4px 8px);
+    height: clamp(1.75rem, 3.5vw, 2.5rem);
+    background: repeating-linear-gradient(180deg, var(--track, rgb(255 255 255 / 0.5)) 0 4px, transparent 4px 8px);
   }
-  .va-duct:global(.is-live) {
+  .st-duct:global(.is-live) {
     --track: var(--accent);
   }
-  .va-duct--up {
-    grid-row: 2;
-  }
-  .va-duct--down {
-    grid-row: 4;
-  }
-  .va-duct :global(.pkt) {
+  .st-duct :global(.pkt) {
     top: 0;
     left: 50%;
   }
 
-  .va-stage :global(.va-gw) {
-    grid-row: 3;
-    grid-column: 1 / -1;
+    .st-act--local .st-machines {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .va-table {
+  /* why: act 1 is shorter than act 2; its command stays under the tabs and the rest centres in
+     the space left. */
+  .st-act--local .st-agents {
+    margin-top: auto;
+  }
+  .st-act--local .st-machines {
+    margin-bottom: auto;
+  }
+  .st-act--local .st-phone {
+    --pw: clamp(4rem, 6vw, 5.25rem);
+  }
+  .st-act--local .st-phones {
+    justify-content: space-around;
+  }
+
+  .st-gw-cells {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     font-family: var(--font-mono);
     font-size: 0.6875rem;
   }
-  .va-row {
-    --cols: 0.8fr 1fr 1fr 1.2fr 0.9fr;
+  .st-gw-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.5rem 0.875rem;
+    border-right: 1px solid var(--line);
+    visibility: hidden;
   }
-  .va-table .pane-row:last-child {
-    border-bottom: 0;
+  .st-gw-cell:last-child {
+    border-right: 0;
   }
-  .va-foot {
-    --cols: 1fr;
+  .st-gw-cell:global(.is-on) {
+    visibility: visible;
+  }
+  /* why: one line each, cut with an ellipsis, so text that changes mid-animation never wraps
+     and pushes the stage taller. */
+  .st-gw-to,
+  .st-gw-why,
+  .st-gw-foot,
+  .st-mfoot {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .st-gw-to {
+    color: var(--muted);
+  }
+  .st-gw-why {
     color: var(--faint);
+  }
+  .st-gw-foot {
+    padding: 0.375rem 0.875rem;
+    border-top: 1px solid var(--line);
+    color: var(--faint);
+    font-family: var(--font-mono);
     font-size: 0.625rem;
     letter-spacing: var(--label-tracking);
     text-transform: uppercase;
   }
-  .mut {
-    color: var(--muted);
-  }
-  :global(.va-live) {
-    color: var(--accent);
-  }
-  :global(.va-idle) {
-    color: var(--faint);
-  }
 
-  .va-worker {
-    grid-row: 5;
+  .st-machine {
     display: flex;
     flex-direction: column;
-    align-items: center;
     gap: 0.875rem;
     min-width: 0;
     padding: 0.875rem;
@@ -236,29 +411,63 @@ const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device
     font-family: var(--font-mono);
     font-size: 0.6875rem;
   }
-  .va-whead,
-  .va-wfoot {
+  .st-machine:global(.is-joining) {
+    border-style: dashed;
+    opacity: 0.35;
+  }
+  .st-machine:global(.is-flash) {
+    border-color: var(--accent);
+  }
+  .st-mhead {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
     gap: 0.125rem 0.75rem;
-    width: 100%;
   }
-  .va-wname {
+  .st-mname {
     color: var(--text);
   }
-  .va-whost,
-  .va-dev {
+  .st-mhost,
+  .st-mfoot {
     color: var(--faint);
   }
-  .va-wstate {
+  .st-mfoot {
+    font-size: 0.625rem;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+  }
+  .st-phones {
+    display: flex;
+    justify-content: center;
+    gap: clamp(1rem, 3vw, 2.5rem);
+  }
+  /* why: a fixed width, so a label growing from "free" to "leased agent-1" never moves the phones
+     beside it. */
+  .st-dev {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    width: 6.5rem;
+    text-align: center;
+  }
+  .st-dname {
+    width: 100%;
+    min-height: 1.4em;
+    margin-top: 0.375rem;
     color: var(--muted);
     white-space: nowrap;
   }
+  .st-dstate {
+    width: 100%;
+    color: var(--faint);
+    white-space: nowrap;
+  }
 
-  /* why: square steps, not border-radius, so the frame matches the fleet scene's phones. */
-  .va-phone,
-  .va-phone-in {
+  /* why: square steps, not border-radius, so the frame matches the dithered scenes' phones. */
+  .st-phone,
+  .st-phone-in {
     clip-path: polygon(
       0 8px, 4px 8px, 4px 4px, 8px 4px, 8px 0,
       calc(100% - 8px) 0, calc(100% - 8px) 4px, calc(100% - 4px) 4px, calc(100% - 4px) 8px, 100% 8px,
@@ -267,173 +476,165 @@ const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device
       8px 100%, 8px calc(100% - 4px), 4px calc(100% - 4px), 4px calc(100% - 8px), 0 calc(100% - 8px)
     );
   }
-  .va-phone {
-    position: relative;
-    width: clamp(4.75rem, 8vw, 6.5rem);
+  .st-phone {
+    flex: none;
+    --pw: clamp(3.5rem, 5vw, 4.5rem);
+    width: var(--pw);
     aspect-ratio: 1 / 2;
     padding: 1px;
     background: #313131;
   }
-  .va-phone-in {
+  .st-phone-in {
     display: flex;
     flex-direction: column;
     height: 100%;
-    padding: 12px 6px 0;
+    padding: 10px 5px 0;
     background: #050505;
   }
-  .va-screen {
+  .st-screen {
     position: relative;
     flex: 1;
     background: var(--bg);
     border: 1px solid #1f1f1f;
     overflow: hidden;
   }
-  .va-home {
+  .st-home {
     display: flex;
-    flex: 0 0 18px;
+    flex: 0 0 14px;
     align-items: center;
     justify-content: center;
   }
-  .va-home::before {
+  .st-home::before {
     content: '';
     width: 34%;
     height: 3px;
     background: #313131;
   }
-  .va-boot,
-  .va-prov,
-  .va-app {
+  /* why: BRAND.md draws a free slot dashed, a ready one grey, a booting one hatched. */
+  .st-phone[data-state='free'] {
+    background: repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) top / 100% 1px no-repeat,
+      repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) bottom / 100% 1px no-repeat,
+      repeating-linear-gradient(180deg, #5a5a5a 0 4px, transparent 4px 8px) left / 1px 100% no-repeat,
+      repeating-linear-gradient(180deg, #5a5a5a 0 4px, transparent 4px 8px) right / 1px 100% no-repeat;
+  }
+  .st-phone[data-state='free'] .st-phone-in {
+    background: transparent;
+  }
+  .st-phone[data-state='free'] .st-screen,
+  .st-phone[data-state='free'] .st-home::before {
+    visibility: hidden;
+  }
+  .st-phone[data-state='ready'] .st-screen {
+    background: #1a1a1a;
+  }
+  .st-boot,
+  .st-app {
     position: absolute;
     inset: 0;
     display: none;
   }
-  .va-boot {
-    background: var(--accent);
+  .st-boot {
+    background: repeating-linear-gradient(135deg, rgb(var(--accent-rgb) / 0.55) 0 3px, transparent 3px 8px);
+    animation: st-hatch 0.9s steps(6) infinite;
   }
-  .va-prov {
-    align-items: center;
-    padding: 0 18%;
-  }
-  .va-prov i {
-    display: block;
-    width: 100%;
-    height: 4px;
-    background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 8px);
-    animation: va-fill 1.4s steps(8) infinite;
-  }
-  @keyframes va-fill {
-    from {
-      clip-path: inset(0 100% 0 0);
-    }
+  @keyframes st-hatch {
     to {
-      clip-path: inset(0 0 0 0);
+      background-position: 0 -34px;
     }
   }
-  .va-app {
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 9px;
-  }
-  .va-app b {
+  .st-phone[data-state='booting'] .st-boot {
     display: block;
-    flex: 0 0 14px;
+  }
+  .st-app {
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 7px;
+  }
+  .st-phone[data-state='leased'] .st-app {
+    display: flex;
+  }
+  .st-app b {
+    display: block;
+    flex: 0 0 12px;
     background: var(--accent);
   }
-  .va-tiles {
+  .st-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    margin-bottom: 4px;
+    gap: 3px;
+    margin-bottom: 3px;
   }
-  .va-tiles span {
+  .st-tiles span {
     aspect-ratio: 1;
     background: rgb(var(--accent-rgb) / 0.3);
   }
-  .va-tiles span:first-child {
+  .st-tiles span:first-child {
     background: rgb(var(--accent-rgb) / 0.7);
   }
-  .va-app i {
+  .st-app i {
     display: block;
     height: 4px;
     background: rgb(var(--accent-rgb) / 0.45);
   }
-  .va-app i:nth-of-type(2n) {
+  .st-app i:nth-of-type(2n) {
     width: 70%;
     background: rgb(255 255 255 / 0.3);
   }
-  .va-app i:nth-of-type(3) {
-    width: 85%;
-  }
-  .va-phone[data-state='provisioning'] .va-prov {
-    display: flex;
-  }
-  .va-phone[data-state='booting'] .va-boot {
-    display: block;
-  }
-  .va-phone[data-state='leased'] .va-app {
-    display: flex;
-  }
 
   @media (max-width: 64rem) {
-    .va-top {
+    .st-top {
       grid-template-columns: minmax(0, 1fr);
     }
-    :global(.va-side) {
-      display: none;
-    }
-    .va-stage :global(.va-agent) {
-      grid-column: 1 / -1;
-    }
-    .va-stage :global(.va-agent--1) {
-      grid-row: 2;
-    }
-    .va-stage :global(.va-agent--2) {
-      grid-row: 3;
-    }
-    .va-stage :global(.va-agent--0),
-    .va-stage :global(.va-agent--1) {
-      margin-bottom: 0.75rem;
-    }
-    .va-duct--up {
-      grid-row: 4;
-    }
-    .va-stage :global(.va-gw) {
-      grid-row: 5;
-    }
-    .va-duct--down {
-      grid-row: 6;
-    }
-    .va-worker {
-      grid-row: 7;
+    .st-art {
+      min-height: 16rem;
     }
   }
   @media (max-width: 48rem) {
-    .va-table {
-      font-size: 0.625rem;
+    .st-dev {
+      width: 3.75rem;
     }
-    .va-row {
-      --cols: 7ch 12ch minmax(0, 1fr);
-      gap: 0.625rem;
-      padding-inline: 0.75rem;
+    .st-dname,
+    .st-dstate {
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .va-foot {
-      white-space: normal;
-      padding-inline: 0.75rem;
-    }
-    .va-c-dev,
-    .va-c-state {
+    /* why: three machines with two slots each do not fit a phone; the leased slot tells the story. */
+    .st-act--fleet .st-dev:nth-child(2) {
       display: none;
     }
-    .va-worker {
-      padding: 0.625rem 0.5rem;
-      gap: 0.625rem;
-      font-size: 0.625rem;
+    .st-term .ln:first-child {
+      display: none;
     }
-    .va-whead,
-    .va-wfoot {
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
+    .st-term {
+      font-size: 0.5625rem;
+      padding: 0.5rem;
+    }
+    :global(.st-chip .window-tag),
+    :global(.st-chip .window-controls) {
+      display: none;
+    }
+    .st-act--fleet .st-machines {
+      column-gap: 0.5rem;
+    }
+    .st-act--fleet .st-machine {
+      padding: 0.5rem;
+      font-size: 0.5625rem;
+    }
+    .st-act--fleet .st-mhost,
+    .st-act--fleet .st-dname,
+    .st-gw-why {
+      display: none;
+    }
+    .st-phone {
+      --pw: 2.75rem;
+    }
+    .st-phones {
+      gap: 0.5rem;
+    }
+    .st-cmd {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-size: 0.625rem;
     }
   }
 </style>

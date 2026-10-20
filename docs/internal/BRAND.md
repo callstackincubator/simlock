@@ -53,7 +53,7 @@ orange and nothing else.
 - Switzer (ITF Free Font License) and Geist Mono (OFL) are self-hosted from
   `website/src/fonts/`.
 - Headlines have two beats, the second in the accent, with no italics. The
-  motto: "Your own simulator cloud. *One device per agent.*"
+  motto: "Turn your Mac into a simulator cloud *that manages itself.*"
 - Mono is for labels, commands, ids and metadata, never for sentences.
 - Platforms always run iOS, then Android. Hosts run macOS, then Linux.
 
@@ -108,10 +108,15 @@ on top of it have solid `bg` fills. Never use photos, gradients, landscapes or
   A leased phone's screen shows app-like rows at full accent. A free phone's
   screen is dark. Slow waves move in toward the focus, leasing and releasing
   phones, and a phone flashes full accent for a moment as it boots. Phone size
-  follows the scene's shorter side. It sits behind the hero, the social card
-  and the banner.
+  follows the scene's shorter side. It sits behind the social card and the
+  banner.
+- **Rollout.** The hero's picture, beside the headline. One fleet phone at
+  the focus boots and is leased; then the view pulls back while rings of
+  phones join around it, each dissolving in over four Bayer steps and
+  flashing as it boots, until it is one phone of a fleet; then the view closes
+  back in. A 16-second loop.
 - **Flow.** Soft diagonal bands, capped near the midtone. The quiet backdrop
-  behind code, tabs and the drawn console.
+  behind code, tabs, the hero's stage and the drawn console.
 - **Hollow.** The fleet with the phone at the focus missing: a dark socket
   with a dashed stepped outline that pulses. Only on the 404 page.
 
@@ -130,7 +135,8 @@ The scenes are generated in `website/src/components/site/dither.ts`.
 
 - Short and plain, one colleague to another. Name the reader: "your agents",
   "you". No marketing adjectives, and no "just", "simply" or "easy".
-- Lead with the self-hosted simulator cloud. One machine is where it starts.
+- Lead with one Mac, then the cloud it grows into: Simlock on one machine
+  first, more machines behind a gateway second.
 - Page titles: `Simlock: Self-hosted simulator cloud for coding agents` on
   the home page, `Page title | Simlock` everywhere else, 60 characters at most.
   Built only by `website/src/site/meta.ts`.
@@ -157,10 +163,14 @@ The scenes are generated in `website/src/components/site/dither.ts`.
 - **Home** (`src/pages/index.astro`): nav, hero, marquee, then [01] How it
   works, [02] Fleet, [03] Console, [04] What you get, [05] Safe by default,
   [06] FAQ, closing. The hero (`src/components/home/Hero.astro`, `hero.ts`,
-  `story.ts`) shows three agents sending one lease request to one gateway URL,
-  the gateway's table of where each went and why, and the three workers'
-  phones lighting up. The console section draws the console's Overview
-  (`ConsoleView.astro`).
+  `story.ts`) is the headline, the lede and one button beside the rollout
+  scene, then a stage that plays two acts in turn, with tabs to jump between
+  them: [01] One Mac, where three agents on your Mac lease their own devices
+  from it; [02] More machines, where two machines join a gateway and agents
+  anywhere lease through its one URL, each sent to a different machine. Both
+  acts share one grid cell and every changing label has a fixed width, so
+  nothing moves while they play. The console section draws the console's
+  Overview (`ConsoleView.astro`).
 - **404** (`src/pages/404.astro`): the hollow scene behind a card, "This
   device was never leased. *The rest of Simlock is.*"
 - **Docs:** Starlight, dark by default. The reference pages are copied from

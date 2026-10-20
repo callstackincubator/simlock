@@ -17,14 +17,14 @@ export const site = {
   // why: the home page title is "Name: subtitle" (src/site/meta.ts), and it must stay within
   // 60 characters in all.
   subtitle: "Self-hosted simulator cloud for coding agents",
-  headline: ["Your own simulator cloud.", "One device per agent."],
-  lede: "Simlock leases iOS simulators and Android emulators to your coding agents, one device each, booted and checked. Start on one Mac, then put your Macs and Linux machines behind one URL.",
+  headline: ["Turn your Mac into a simulator cloud", "that manages itself."],
+  lede: "Simlock leases, serves and manages iOS and Android devices for your coding agents. Start on one Mac, then add machines behind a gateway when you need more. Free and open source.",
   // why: 160 characters at most, so search results show it whole.
   description:
     "Simlock leases iOS simulators and Android emulators to parallel coding agents, from one Mac or a self-hosted fleet of Macs and Linux machines behind one URL.",
   install: "npm i -g simlock",
   skill: undefined as string | undefined,
-  ogAlt: "Simlock by Callstack. Your own simulator cloud. One device per agent.",
+  ogAlt: "Simlock by Callstack. Turn your Mac into a simulator cloud that manages itself.",
   owner: "Callstack",
   callstack: "https://callstack.com/?utm_source=simlock&utm_medium=referral",
   license: {
@@ -149,12 +149,6 @@ simlock release --all`,
 };
 
 export const home = {
-  setup: [
-    { cmd: site.install },
-    { cmd: 'simlock lease --platform ios --device "iPhone 16"' },
-    { comment: "a booted device, yours until you release it" },
-  ] as ({ cmd: string } | { comment: string })[],
-
   how: {
     label: "How it works",
     headline: ["Start on one Mac.", "Grow into a fleet."],
