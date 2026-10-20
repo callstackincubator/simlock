@@ -6053,6 +6053,37 @@ describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
     },
   );
 
+  it.each([
+    [["--local", "mcp"], 0, "local"],
+    [["mcp", "--local"], 0, "local"],
+    [["--local=yes", "mcp"], 2, "--local takes no value"],
+    [["--local", "--gateway", "mcp"], 2, "--gateway and --local cannot be used together"],
+    [["mcp", "--gateway", "--local"], 2, "--gateway and --local cannot be used together"],
+  ] as const)(
+    "--local is taken from anywhere in the argv; --local=<x> and --local with --gateway are usage errors (%j)",
+    async (argv, exitCode, expected) => {
+      const output = outputCapture();
+      const seen: string[] = [];
+
+      const code = await runCli(
+        argv,
+        output.environmentWith({
+          runMcpStdio: async (options) => {
+            seen.push(options.daemonFlag ?? "none");
+          },
+        }),
+      );
+
+      expect(code).toBe(exitCode);
+      if (exitCode === 0) {
+        expect(seen).toEqual([expected]);
+      } else {
+        expect(JSON.parse(output.stderr)).toEqual({ error: { code: "USAGE", message: expected } });
+        expect(seen).toEqual([]);
+      }
+    },
+  );
+
   it("does not load the MCP stdio module unless the mcp command runs", async () => {
     const output = outputCapture();
     let loaded = false;
