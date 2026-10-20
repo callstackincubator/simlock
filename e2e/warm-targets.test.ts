@@ -128,7 +128,7 @@ describe("warm pool targets", () => {
     ).toEqual([]);
   });
 
-  it("keeps a targeted device ready past idle.shutdownAfterMs, shuts a leased non-targeted one down through cleanup-reaper and a never-leased non-targeted one down as warm-pool", async () => {
+  it("keeps a targeted device and a leased non-targeted kind ready past idle.shutdownAfterMs, and shuts a never-leased non-targeted one down as warm-pool", async () => {
     const env = await withDaemon({
       configOverrides: { idle: { shutdownAfterMs: 500 }, warmPool: { targets: [IPHONE_17] } },
       driverScript: { ios: IOS },
@@ -149,27 +149,6 @@ describe("warm pool targets", () => {
     const other = await lease(env, "other", "iPhone 16");
     expect((await env.cli(["release", other.lease.id])).code).toBe(0);
 
-    await waitFor(
-      async () => {
-        await env.cli(["cleanup"]);
-        return (await devices(env)).some(
-          (row) => row.driverDeviceId === other.device.driverDeviceId && row.state === "shutdown",
-        );
-      },
-      { interval: 50, label: "cleanup shuts the idle iPhone 16 down", timeout: 20_000 },
-    );
-
-    const after = await devices(env);
-    expect(after.find((row) => row.id === targeted.device.id)?.state).toBe("ready");
-    const shutdowns = await named(env, "device.shutdown");
-    expect(shutdowns).toContainEqual(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          deviceId: other.device.id,
-          initiator: "cleanup-reaper",
-        }),
-      }),
-    );
     // The extra iPhone 17 was never leased and no target counts it: the pool shuts that one down.
     await waitFor(
       async () =>
@@ -180,7 +159,15 @@ describe("warm pool targets", () => {
         ),
       { label: "the pool shuts the never-leased replacement down", timeout: 45_000 },
     );
-    expect((await devices(env)).find((row) => row.id === targeted.device.id)?.state).toBe("ready");
+    expect((await env.cli(["cleanup"])).code).toBe(0);
+    const kept = await devices(env);
+    expect(kept.find((row) => row.id === targeted.device.id)?.state).toBe("ready");
+    expect(kept.find((row) => row.id === other.device.id)?.state).toBe("ready");
+    expect(
+      (await named(env, "device.shutdown")).filter(
+        (entry) => (entry.payload as { deviceId: string }).deviceId === other.device.id,
+      ),
+    ).toEqual([]);
   });
 
   it("with a driver that fails every boot, logs the target short with boot-failed after the first creation and holds the next one back", async () => {
