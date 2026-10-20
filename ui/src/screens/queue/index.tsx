@@ -16,7 +16,7 @@ import {
   Status,
   StatusDot,
 } from "../../ds";
-import { useListDrawer } from "../../state/drawer";
+import { useItemId, useListDrawer } from "../../state/drawer";
 import {
   useWaiting,
   type WaitingPage,
@@ -26,7 +26,7 @@ import {
 
 export function QueueScreen() {
   const view = useWaiting();
-  const urlId = view.kind === "ready" ? view.data.urlId : undefined;
+  const urlId = useItemId("/queue");
   const { close, fromList } = useListDrawer("/queue", urlId);
   return (
     <Page

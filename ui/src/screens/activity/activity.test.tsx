@@ -172,7 +172,7 @@ describe("the events page", () => {
   });
 });
 
-describe("the events page's inspector", () => {
+describe("the events page's drawer", () => {
   it("says when and what the event was", () => {
     const html = drawer();
 

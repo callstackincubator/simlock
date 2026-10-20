@@ -1,7 +1,7 @@
 import { useRef } from "react";
 
-import type { Section } from "../model/paths";
-import { navigate, useSearch } from "./router";
+import { itemIdFrom, type Section } from "../model/paths";
+import { navigate, usePath, useSearch } from "./router";
 
 export interface ListDrawerState {
   readonly fromList: boolean;
@@ -24,4 +24,10 @@ export function useListDrawer(section: Section, urlId: string | undefined): List
     },
     fromList,
   };
+}
+
+// why: the address names the open item before any data has arrived, so a screen reads it here and
+// not from its data, and a drawer loaded directly is known as such from the first render.
+export function useItemId(section: Section): string | undefined {
+  return itemIdFrom(section, usePath());
 }

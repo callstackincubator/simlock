@@ -60,7 +60,7 @@ function startOfDay(timestamp: number): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
-// why: the feed holds an hour, so an event can be from before midnight, and "today" would then be
+// why: the feed holds days of history, so an event can be from before midnight, and "today" would then be
 // false.
 export function dayWord(timestamp: number, now: number): string {
   const days = Math.round((startOfDay(now) - startOfDay(timestamp)) / DAY);

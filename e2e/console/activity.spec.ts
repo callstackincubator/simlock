@@ -273,7 +273,7 @@ test.describe("the Activity page", () => {
     }
   });
 
-  test("choosing a row puts the event in the URL and its payload whole in the inspector", async ({
+  test("choosing a row puts the event in the URL and its payload whole in the drawer", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -309,6 +309,26 @@ test.describe("the Activity page", () => {
             "This event is not among those loaded. Older events load as you scroll the list, or with Load older events.",
           ),
       ).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("loaded directly at an event's address, closing the drawer replaces the address with /activity and focus goes to the heading", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openEvents(page, host, "/activity/evt_not_there");
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toBeVisible();
+      const entries = await page.evaluate(() => window.history.length);
+
+      await page.keyboard.press("Escape");
+
+      await expect(drawer).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe("/activity");
+      expect(await page.evaluate(() => window.history.length)).toBe(entries);
     } finally {
       await host.dispose();
     }

@@ -18,7 +18,7 @@ import {
   SearchField,
   Toolbar,
 } from "../../ds";
-import { useListDrawer } from "../../state/drawer";
+import { useItemId, useListDrawer } from "../../state/drawer";
 import {
   type EventDetail,
   type EventRow,
@@ -37,7 +37,7 @@ const ROW_PX = 60;
 
 export function ActivityScreen() {
   const view = useEvents();
-  const urlId = view.kind === "ready" ? view.data.urlId : undefined;
+  const urlId = useItemId("/activity");
   const { close, fromList } = useListDrawer("/activity", urlId);
   return (
     <ActivityContent

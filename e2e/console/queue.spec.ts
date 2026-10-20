@@ -199,6 +199,26 @@ test.describe("the Queue page", () => {
     }
   });
 
+  test("loaded directly at a request's address, closing the drawer replaces the address with /queue", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
+    try {
+      await openWaiting(page, host, "/queue/req_none");
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toBeVisible();
+      const entries = await page.evaluate(() => window.history.length);
+
+      await page.keyboard.press("Escape");
+
+      await expect(drawer).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe("/queue");
+      expect(await page.evaluate(() => window.history.length)).toBe(entries);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("the Queue page has no horizontal scroll at 360px wide", async ({ page }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
