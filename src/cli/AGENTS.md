@@ -63,7 +63,8 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    None, or a rejected one → an `agent` session and one stderr `notice` line.
 3. **Auto-launch** (`AutoLaunchAdminConnector`) — when nothing listens: load the config
    first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
-   for `DAEMON_STARTUP_TIMEOUT_MS`. After a launch, `status.get` probes the connection
+   for `DAEMON_STARTUP_TIMEOUT_MS`; a launched daemon that exits fails the command at once
+   with `startErrorFrom`'s text, unless another daemon answers a last connect. After a launch, `status.get` probes the connection
    before handing it to a command, within that same deadline. A connection loss during this
    probe becomes `DAEMON_STARTUP_FAILED`; a silent probe times out with that code and starts closing
    its client without waiting for the daemon to end its side. An answered probe ends the window, including a `starting` status: subsequent
