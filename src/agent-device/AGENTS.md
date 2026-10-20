@@ -8,29 +8,29 @@ Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no
 
 ## Files
 
-| File                                                          | Role                                                                             |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on |
-| `worker.ts`                                                   | `createWorker`: supervisor, edge parts, capability, relay target, mount, hooks   |
-| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop the daemon; availability state                          |
-| `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                         |
-| `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                                 |
-| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`                                       |
-| `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                      |
-| `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap             |
-| `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant)              |
-| `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                     |
-| `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                               |
-| `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                  |
-| `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                    |
-| `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                             |
-| `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                              |
-| `front/host-link.ts`                                          | `HostLink` port; `InProcessHostLink` (worker)                                    |
-| `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                           |
-| `front/edge-parts.ts`                                         | Front parts, dispose and cancel steps, `createAgentDeviceFront`                  |
-| `gateway.ts`                                                  | Gateway side: `FleetPort` from the gateway context, the mount, `beforeDrain`     |
-| `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope     |
-| `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                    |
+| File                                                          | Role                                                                                                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on                                                               |
+| `worker.ts`                                                   | `createWorker`: supervisor, edge parts, capability, relay target, mount, hooks                                                                 |
+| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop the daemon; availability state                                                                                        |
+| `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                                                                                       |
+| `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                                                                                               |
+| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`                                                                                                     |
+| `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                                                                                    |
+| `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap                                                                           |
+| `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant)                                                                            |
+| `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                                                                                   |
+| `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                                                                                             |
+| `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                                                                                |
+| `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                                                                                  |
+| `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                                                                                           |
+| `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                                                                                            |
+| `front/host-link.ts`                                          | `HostLink` port (`stillHeld`: gateway only, a lease its `lease.list` omits is ended only when the index lost it); `InProcessHostLink` (worker) |
+| `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                                                                                         |
+| `front/edge-parts.ts`                                         | Front parts, dispose and cancel steps, `createAgentDeviceFront`                                                                                |
+| `gateway.ts`                                                  | Gateway side: `FleetPort` from the gateway context, the mount, `beforeDrain`                                                                   |
+| `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope                                                                   |
+| `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                                                                                  |
 
 ## How it works
 

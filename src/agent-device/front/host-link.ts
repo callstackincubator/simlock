@@ -35,6 +35,8 @@ export interface HostLink {
   adoptable?(identity: Identity): readonly AdoptableLease[];
   // why: a lease the front asked for in this process is its allocate's to keep or release, never to adopt.
   asked?(leaseId: string): void;
+  // why: only a link that serves many hosts can tell a lease its list left out for a moment from one the host ended; a worker's list is the source, so a lease missing there is final.
+  stillHeld?(leaseId: string): boolean;
   dispose?(): void;
 }
 

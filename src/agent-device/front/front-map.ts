@@ -112,7 +112,10 @@ export class FrontMap {
     held.releasing = false;
   }
 
-  async refresh(list: (identity: Identity) => Promise<readonly ListedLease[]>): Promise<void> {
+  async refresh(
+    list: (identity: Identity) => Promise<readonly ListedLease[]>,
+    stillHeld: (leaseId: string) => boolean = () => false,
+  ): Promise<void> {
     this.#prune();
     const now = this.clock.now();
     const byPrincipal = new Map<string, { identity: Identity; oldest: number; ids: string[] }>();
@@ -145,8 +148,9 @@ export class FrontMap {
           const held = this.#held.get(id);
           if (held === undefined) continue;
           const found = listed.find((lease) => lease.id === id);
-          if (found === undefined) this.markEnded(id);
-          else held.deadline = found.ttlDeadline;
+          if (found === undefined) {
+            if (!stillHeld(id)) this.markEnded(id);
+          } else held.deadline = found.ttlDeadline;
         }
       }),
     );

@@ -23,7 +23,10 @@ export async function renewLease(
   try {
     const { leases } = await context.dispatch("lease.list", {}, session);
     const listed = leases.find((lease) => lease.id === leaseId);
-    if (listed === undefined) return { kind: "gone" };
+    if (listed === undefined) {
+      if (context.link.stillHeld?.(leaseId) !== true) return { kind: "gone" };
+      return { kind: "failed", message: "the gateway's lease list left the lease out; will retry" };
+    }
     if (context.clock.now() + ttlMs > listed.ttlDeadline) {
       await context.dispatch("lease.renew", { leaseId, ttlMs }, session);
     }

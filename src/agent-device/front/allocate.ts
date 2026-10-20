@@ -274,7 +274,10 @@ export async function allocate(
   const refused = refusalFor(call.params);
   if (refused !== undefined) return frontReply(refused, call);
   const plan = planOf(call.params, context.leaseTtlCapMs);
-  await context.map.refresh((who) => listLeases(context, who));
+  await context.map.refresh(
+    (who) => listLeases(context, who),
+    (leaseId) => context.link.stillHeld?.(leaseId) === true,
+  );
   if (request.signal.aborted) return undefined;
   const outcome = await requestLease(context, identity, plan, request.signal);
   if (outcome.kind === "gone") return undefined;

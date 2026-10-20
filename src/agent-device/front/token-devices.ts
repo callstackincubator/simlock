@@ -22,8 +22,11 @@ export async function tokenDevices(
   } catch {
     throw new LeaseCheckFailed();
   }
+  const unlisted = new Set<string>();
   for (const entry of held) {
-    if (!listed.some((lease) => lease.id === entry.leaseId)) context.map.markEnded(entry.leaseId);
+    if (listed.some((lease) => lease.id === entry.leaseId)) continue;
+    if (context.link.stillHeld?.(entry.leaseId) === true) unlisted.add(entry.leaseId);
+    else context.map.markEnded(entry.leaseId);
   }
-  return context.map.liveOf(identity.principal);
+  return context.map.liveOf(identity.principal).filter((entry) => !unlisted.has(entry.leaseId));
 }

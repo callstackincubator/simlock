@@ -231,6 +231,10 @@ export class RelayHostLink implements HostLink {
     return this.options.fleet.relay(worker.id, request, tenant);
   }
 
+  stillHeld(leaseId: string): boolean {
+    return this.options.fleet.leaseOf(leaseId) !== undefined;
+  }
+
   #place(leaseId: string): PlacedLease | undefined {
     this.#expire();
     return this.options.fleet.leaseOf(leaseId) ?? this.#kept.get(leaseId);
