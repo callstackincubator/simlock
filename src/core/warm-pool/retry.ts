@@ -38,6 +38,10 @@ export class RetrySchedule {
     this.#failures.push({ count, retryAt: now + delay, spec });
   }
 
+  failures(_spec: VirtualSpec): number {
+    return 0;
+  }
+
   succeeded(spec: VirtualSpec): void {
     this.#failures = this.#failures.filter((failure) => !sameSpec(failure.spec, spec));
   }
