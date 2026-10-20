@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import type { ApiPath } from "../data/api";
+import { type DaemonMode, type ModeStore, watchMode } from "../data/mode";
 import { useApi, useSession } from "./services";
 import { browserClock, documentVisibility } from "../data/live/browser";
 import {
@@ -27,6 +28,7 @@ export interface Now {
 
 interface Live {
   readonly connection: LiveConnection;
+  readonly mode: ModeStore;
   readonly ticker: Ticker;
 }
 
@@ -44,7 +46,7 @@ export function LiveProvider({ children }: { readonly children: ReactNode }) {
       whenLost: session.lost,
     });
     const ticker = createTicker(browserClock, () => connection.serverNow());
-    setLive({ connection, ticker });
+    setLive({ connection, mode: watchMode({ api, connection }), ticker });
     return () => {
       ticker.dispose();
       connection.dispose();
@@ -68,6 +70,12 @@ export function useLiveResource<T>(path: ApiPath): ResourceState<T> {
   );
   const snapshot = useCallback(() => connection.resource<T>(path), [connection, path]);
   return useSyncExternalStore(subscribe, snapshot);
+}
+
+// why: `undefined` until a read of `GET /v1/status` has said which kind of daemon this is.
+export function useDaemonMode(): DaemonMode | undefined {
+  const { mode } = useLive();
+  return useSyncExternalStore(mode.subscribe, mode.mode);
 }
 
 export function useConnection(): ConnectionState {
