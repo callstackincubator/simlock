@@ -112,3 +112,9 @@ export function timeOfDay(timestamp: number): string {
     .map((part) => String(part).padStart(2, "0"))
     .join(":");
 }
+
+export function textField(payload: unknown, key: string): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}

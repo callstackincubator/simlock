@@ -5,6 +5,7 @@ import {
   payloadPairs,
   type Subject,
   subjectOf,
+  textField,
   timeOfDay,
   workerIdOf,
 } from "./events";
@@ -118,12 +119,6 @@ export interface EventPlaces {
   readonly workers: readonly WorkerView[];
   readonly leases: readonly LeaseRecord[];
   readonly requests: readonly WaitingRequest[];
-}
-
-function textField(payload: unknown, key: string): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const value = (payload as Record<string, unknown>)[key];
-  return typeof value === "string" && value !== "" ? value : undefined;
 }
 
 // why: a link goes only where the console has a page now: a released lease, an answered request or

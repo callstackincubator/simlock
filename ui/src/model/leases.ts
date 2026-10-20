@@ -2,7 +2,7 @@ import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
 import { defined } from "./defined";
-import type { ConsoleEvent } from "./events";
+import { type ConsoleEvent, textField, workerIdOf } from "./events";
 import { formatDuration } from "./time";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
@@ -318,9 +318,19 @@ function leaseWorker(
   return worker === undefined ? { name } : { name, to: workerPath(worker.id) };
 }
 
+// why: a worker names its lease `lse_x` in its events, and a gateway lists the same lease as
+// `<workerId>.lse_x`, so a relayed event matches under both spellings; the gateway's own events
+// name the lease as listed.
 export function eventsOfLease(
-  _events: readonly ConsoleEvent[],
-  _leaseId: string,
+  events: readonly ConsoleEvent[],
+  leaseId: string,
 ): readonly ConsoleEvent[] {
-  return [];
+  return events
+    .filter((event) => {
+      const named = textField(event.payload, "leaseId");
+      if (named === undefined) return false;
+      const workerId = workerIdOf(event);
+      return named === leaseId || (workerId !== undefined && `${workerId}.${named}` === leaseId);
+    })
+    .toSorted((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
 }
