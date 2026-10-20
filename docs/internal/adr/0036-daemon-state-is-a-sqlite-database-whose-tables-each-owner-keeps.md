@@ -9,14 +9,16 @@
   Narrows [ADR 0001](0001-simlock-owned-device-roots.md) §1's layout
   (`state.json` becomes `state.db`), and the words "one `state.json` write"
   in [ADR 0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md)
-  §2 and [ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md)
+  §1 and [ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md)
   (Context, §4), which now read "one `state.db` transaction". What those
   sections decide stays. Supersedes the storage paragraph of [ADR
   0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
   §1 (physical records in their own `physicalDevices` list, so an older
   Simlock never sees them): a physical device is a `devices` row with
   `physical = 1`, and an older Simlock reads no `state.db` at all. The rest
-  of §1 stays.
+  of §1 stays. Narrows [ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md)
+  §4 once more: a replayed grant answers with the device as it is now, not
+  as it was granted (section 4 below).
 
 ## Context
 
@@ -87,9 +89,12 @@ A device is one row in `devices`, which holds what every driver shares
 (id, platform, physical, state, spec, timestamps, quarantine fields,
 address). What only a driver knows (today's `driverData`) is one row in
 that driver's own table, keyed by `device_id`: `ios_device_data`,
-`android_device_data`, and later e.g. `vega_device_data`. `devices.platform`
-and `devices.physical` say which table holds a device's row. A physical
-device has no driver row today; its driver data is `{}`.
+`android_device_data`, and later e.g. `vega_device_data`. The registry picks
+the table by the device's platform (`devices.platform`), through a map from
+platform to table that the daemon gives it. A physical device
+(`devices.physical = 1`) has no driver row; its driver data is `{}`. The
+fake test driver keeps one table, `fake_device_data`, and the test map
+points both `android` and `ios` at it.
 
 Each owner creates its own tables and keeps its own schema version. It
 ships one SQL migration step per version change. The code outside an owner
@@ -119,21 +124,24 @@ other change can run between its read and its write.
 A granted lease request keeps its answer in a `grants` row: the lease
 fields as granted, the four timing estimates, and its environment as a
 child table. The row names the device by id. A replayed answer reads the
-device as it is at replay time. A replay later than the lease can show the
-device in a later state, but its lease part still names the lease that was
-granted.
+device as it is at replay time: the current device record, not the one
+recorded at the grant. This narrows ADR 0019 §4, which answers the grant as
+recorded. A replay later than the lease can show the device in a later
+state, but its lease part still names the lease that was granted.
 
 ### 5. Start: refuse old files, damage and newer versions
 
 ```mermaid
 stateDiagram-v2
-  [*] --> OldFiles: daemon start
+  [*] --> Probe: daemon start
+  Probe --> Refuse: socket answers (already running)
+  Probe --> OldFiles: no answer
   OldFiles --> Refuse: state.json, tokens.json or workers.json present
   OldFiles --> Open: none present
   Open --> Refuse: quick_check fails or file will not open
   Open --> Migrate: ok
   Migrate --> Refuse: a stored version is newer, or a migration fails
-  Migrate --> Ready
+  Migrate --> Ready: claim the socket
   Ready --> [*]
 ```
 
@@ -150,6 +158,12 @@ stateDiagram-v2
   will not open, refuses to start on both daemon kinds, naming the file.
   Nothing is set aside or deleted. A lock held by another process waits up
   to 5 s and is never taken for damage.
+- **Order.** The daemon first checks whether its socket answers; if it
+  does, it refuses with `DaemonAlreadyRunningError` before it opens
+  anything. Only then does it run the old-file check, then open `state.db`
+  (with its damage check) and migrate, and last claim its socket. A newer binary started beside a
+  running daemon therefore never migrates that daemon's live file. Two
+  daemons starting at the same moment are still caught by the socket claim.
 - **Versions.** A stored version newer than the code's (a downgrade), or a
   migration that fails, refuses to start, naming the owner and the version,
   as `history.db` does.
@@ -178,7 +192,10 @@ stateDiagram-v2
   helper.
 - Upgrading from a Simlock that wrote JSON takes an operator step:
   release, nuke, remove the old files, create tokens again, add physical
-  devices again.
+  devices again. The component records are lost too, so `simlock component
+  remove` refuses every component installed before the upgrade ("Simlock
+  has no record of installing it"). The operator removes those by hand or
+  leaves them.
 - `docs/CONFIGURATION.md`, `docs/CLI.md`, ARCHITECTURE.md, the startup
   flow and the core, auth, gateway and daemon manuals stop naming the JSON
   files.

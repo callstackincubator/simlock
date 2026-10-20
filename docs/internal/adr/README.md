@@ -39,7 +39,7 @@ the status is stale.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034 |
+| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034; §1's layout narrowed by 0036 (`state.db`) |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
@@ -56,8 +56,8 @@ the status is stale.
 | [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted; §3 narrowed by 0022 for physical devices; §3–5 narrowed by 0025 on Android |
 | [0016](0016-usage-figures-are-derived-on-read-from-the-event-history.md) | Usage figures are derived on read from the event history | Accepted — partly implemented: the event and retention parts are built, the reader (§1, §5–§8) is not; §6's fleet join and a Consequence superseded by 0021; §1 and §4 superseded by 0032 |
 | [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — partly implemented: §3 (the release path still calls into the pool) |
-| [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — partly implemented: §3 and §4's warm-pool name rule; §4's path rules superseded by 0027 |
-| [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted; §1–2 narrowed by 0022 for physical devices |
+| [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — partly implemented: §3 and §4's warm-pool name rule; §4's path rules superseded by 0027; §1's one-write wording narrowed by 0036 |
+| [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted; §1–2 narrowed by 0022 for physical devices; §4 narrowed by 0036 (a replay reads the current device) |
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — partly implemented: §5 (usage figures) is not built |
 | [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off) |
@@ -69,7 +69,7 @@ the status is stale.
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
 | [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Accepted — not yet implemented |
 | [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted |
-| [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented |
+| [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented; §1 narrowed by 0036 |
 | [0033](0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md) | A sign-in proxy is a second way to sign in, and auth is one module | Accepted — not yet implemented |
 | [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted — not yet implemented |
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
