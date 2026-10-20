@@ -38,8 +38,8 @@ export class RetrySchedule {
     this.#failures.push({ count, retryAt: now + delay, spec });
   }
 
-  failures(_spec: VirtualSpec): number {
-    return 0;
+  failures(spec: VirtualSpec): number {
+    return this.#failureOf(spec)?.count ?? 0;
   }
 
   succeeded(spec: VirtualSpec): void {
