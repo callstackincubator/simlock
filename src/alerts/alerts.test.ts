@@ -136,6 +136,22 @@ describe("alerts", () => {
     },
   );
 
+  it('a slack destination posts {"text": message} with only the Content-Type and User-Agent headers', async () => {
+    const { secret: _secret, ...rest } = destination({ format: "slack" });
+    const h = harness([rest]);
+    h.emit("worker.connected", connected("wrk_1"));
+    await settle();
+
+    expect(h.poster.requests).toHaveLength(1);
+    expect(h.poster.requests[0]?.headers).toEqual({
+      "Content-Type": "application/json",
+      "User-Agent": "simlock/9.9.9",
+    });
+    expect(JSON.parse(h.poster.requests[0]?.body ?? "")).toEqual({
+      text: "🟢 Worker wrk_1 connected.",
+    });
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());

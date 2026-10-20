@@ -1117,7 +1117,7 @@ export const configSchema = z.object({
       destinations: z.array(
         z.object({
           name: z.string(),
-          format: z.enum(["generic"]),
+          format: z.enum(["generic", "slack"]),
           url: z.string(),
           events: z.array(z.string()),
           secret: z.string().optional(),

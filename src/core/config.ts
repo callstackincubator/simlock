@@ -112,12 +112,13 @@ export type AlertEventName = (typeof ALERT_EVENTS)[number];
 /**
  * why: re-declared in the contract's `configSchema`, which imports nothing from core; a test checks the two agree.
  */
-export const ALERT_FORMATS = ["generic"] as const;
+export const ALERT_FORMATS = ["generic", "slack"] as const;
 export type AlertFormatName = (typeof ALERT_FORMATS)[number];
 
 /** why: checked at config load, which cannot import the alerts module. */
 const ALERT_FORMAT_SECRET: Record<AlertFormatName, "required" | "refused"> = {
   generic: "required",
+  slack: "refused",
 };
 
 export interface AlertDestination {
