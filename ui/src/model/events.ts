@@ -118,3 +118,11 @@ export function textField(payload: unknown, key: string): string | undefined {
   const value = (payload as Record<string, unknown>)[key];
   return typeof value === "string" && value !== "" ? value : undefined;
 }
+
+export function eventsOfWorker(
+  _events: readonly ConsoleEvent[],
+  _workerId: string,
+  _mode: "gateway" | "worker" | undefined,
+): readonly ConsoleEvent[] {
+  return [];
+}

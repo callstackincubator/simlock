@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   type ConsoleEvent,
+  eventsOfWorker,
   mergeEvents,
   payloadPairs,
   readEvent,
@@ -129,5 +130,27 @@ describe("an event's time", () => {
       if (zone === undefined) delete process.env.TZ;
       else process.env.TZ = zone;
     }
+  });
+});
+
+describe("the events of one worker", () => {
+  const events = [
+    event("lease.granted", { workerId: "wrk_1" }, 1),
+    event("worker.drained", { workerId: "wrk_2" }, 3),
+    event("lease.granted", { leaseId: "lse_1" }, 2),
+    event("worker.rejected", { workerId: "wrk_1" }, 4),
+  ];
+  const ids = (list: readonly ConsoleEvent[]) => list.map((entry) => entry.id);
+
+  it("are those whose payload names the worker, newest first, on a gateway and until the mode is known, and every event on a single host", () => {
+    expect(ids(eventsOfWorker(events, "wrk_1", "gateway"))).toEqual(["evt_1"]);
+    expect(ids(eventsOfWorker(events, "wrk_1", undefined))).toEqual(["evt_1"]);
+    expect(ids(eventsOfWorker(events, "wrk_2", "gateway"))).toEqual(["evt_3"]);
+    expect(ids(eventsOfWorker(events, "wrk_1", "worker"))).toEqual([
+      "evt_4",
+      "evt_3",
+      "evt_2",
+      "evt_1",
+    ]);
   });
 });
