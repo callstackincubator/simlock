@@ -421,17 +421,24 @@ test.describe("the workers page", () => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
+      { driverScript: { ios: IOS }, label: "worker-c" },
     ]);
     try {
       const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
       const drained = found(b, "worker-b").id;
       expect((await fleet.gateway.cli(["worker", "drain", drained])).code).toBe(0);
+      await (fleet.workers[2] as RunningDaemon).stop();
+      await untilTheGatewaySays(
+        fleet.gateway,
+        (views) => views.find((view) => view.label === "worker-c")?.connection === "disconnected",
+      );
       await answerWithoutLoad(page);
       await openConsole(page, fleet.gateway);
       await expect(row(page, "worker-a")).toBeVisible();
 
       await page.getByLabel("Issues").check();
       await expect(row(page, "worker-b")).toBeVisible();
+      await expect(row(page, "worker-c")).toBeVisible();
       await expect(row(page, "worker-a")).toHaveCount(0);
 
       await page.getByLabel("Busy").check();
@@ -440,6 +447,7 @@ test.describe("the workers page", () => {
       await page.getByLabel("All", { exact: true }).check();
       await expect(row(page, "worker-a")).toBeVisible();
       await expect(row(page, "worker-b")).toBeVisible();
+      await expect(row(page, "worker-c")).toBeVisible();
     } finally {
       await disposeFleet(fleet);
     }
