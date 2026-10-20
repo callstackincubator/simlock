@@ -797,6 +797,18 @@ describe("alerts", () => {
     ]);
   });
 
+  it("test after stop resolves stopped and posts nothing", async () => {
+    const h = harness();
+    expect(await h.alerts.test("audit")).toEqual({ ok: true, status: 200 });
+    h.alerts.stop();
+
+    await expect(h.alerts.test("audit")).resolves.toEqual({ ok: false, reason: "stopped" });
+    await h.advance(60_000);
+
+    expect(h.poster.requests).toHaveLength(1);
+    expect(h.clock.pendingTimerCount).toBe(0);
+  });
+
   it("the bus handler returns before the post settles, and a poster that throws reaches neither the emitter nor other subscribers", async () => {
     const h = harness();
     const seen: string[] = [];
