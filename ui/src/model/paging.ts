@@ -62,15 +62,30 @@ export function rangeOf(at: PageAt, total: number): string {
   return `${formatCount(first)}–${formatCount(last)} of ${formatCount(total)}`;
 }
 
-// why: choosing a row must not throw the list back to its first page, but the inspector's own
-// pagers (devices, warm pool) belong to one worker and are left behind.
+// why: choosing a row must not throw the list back to its first page or its search, but the
+// inspector's own pagers (devices, warm pool) belong to one worker and are left behind.
 export function listSearch(search: string): string {
   const query = new URLSearchParams(search);
   const kept = new URLSearchParams();
-  for (const key of ["page", "size"]) {
+  for (const key of ["page", "size", "q"]) {
     const value = query.get(key);
     if (value !== null) kept.set(key, value);
   }
   const written = kept.toString();
+  return written === "" ? "" : `?${written}`;
+}
+
+export function readQuery(search: string): string {
+  return new URLSearchParams(search).get("q") ?? "";
+}
+
+// why: a new search starts at the first page, since the page the operator was on may not exist for
+// it; the other keys of the query stay.
+export function writeQuery(search: string, query: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("page");
+  if (query === "") params.delete("q");
+  else params.set("q", query);
+  const written = params.toString();
   return written === "" ? "" : `?${written}`;
 }

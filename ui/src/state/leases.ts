@@ -14,16 +14,17 @@ import {
   type LeaseRowView,
   leaseInspection,
   leaseRows,
+  searchLeaseRows,
   type TokenList,
 } from "../model/leases";
-import { listSearch, TABLE_SIZES } from "../model/paging";
+import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
 import { useRecentEvents } from "./events";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { usePath, useSearch } from "./router";
+import { setSearch, usePath, useSearch } from "./router";
 
 export { type EventRow } from "../model/event-list";
 export {
@@ -42,6 +43,8 @@ export interface Leases {
   readonly view: LoadView<LeasesPage>;
   readonly filter: LeaseFilter;
   readonly choose: (filter: LeaseFilter) => void;
+  readonly query: string;
+  readonly search: (query: string) => void;
   readonly paging: Paging;
   // why: the id in the URL stands even before the list has loaded, so the drawer can ask for it.
   readonly urlId: string | undefined;
@@ -59,7 +62,9 @@ export function useLeases(): Leases {
   const all = mapView(leases, (list) =>
     leaseRows({ leases: list.leases, now: now.server, tokens, workers }),
   );
-  const shown = all.kind === "ready" ? filterLeaseRows(all.data, filter) : [];
+  const query = readQuery(useSearch());
+  const shown =
+    all.kind === "ready" ? searchLeaseRows(filterLeaseRows(all.data, filter), query) : [];
   const paging = usePaging({
     sizes: TABLE_SIZES,
     total: all.kind === "ready" ? shown.length : undefined,
@@ -76,6 +81,10 @@ export function useLeases(): Leases {
     },
     filter,
     paging,
+    query,
+    // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
+    // letter of the search.
+    search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
     urlId,
     view,
   };

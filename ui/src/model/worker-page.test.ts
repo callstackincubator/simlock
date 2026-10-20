@@ -126,6 +126,7 @@ describe("a worker's row in the list", () => {
   it("keeps the list's page and size on the link, and nothing of a worker's own pagers", () => {
     expect(listSearch("?page=2&size=50&devices-page=3&warm-pool-size=50")).toBe("?page=2&size=50");
     expect(listSearch("?devices-page=3")).toBe("");
+    expect(listSearch("?q=ci&page=2&size=50")).toBe("?page=2&size=50&q=ci");
     expect(workerRow(worker(), "?page=2").to).toBe("/workers/wrk_1?page=2");
   });
 });

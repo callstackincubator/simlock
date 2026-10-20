@@ -15,6 +15,7 @@ export { Pager, type Paging } from "./pager";
 export { DesignProvider } from "./provider";
 export { Card, Empty, Grid, Id, Panel, Row } from "./panel";
 export { AppFrame, Page, Sidebar, Wordmark } from "./sidebar";
+export { SearchField } from "./search-field";
 export { ShareBar, SlotLegend, Slots } from "./slots";
 export { StatRow, StatTile } from "./stat";
 export { Status, StatusDot } from "./status";

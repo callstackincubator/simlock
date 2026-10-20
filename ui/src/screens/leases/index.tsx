@@ -11,6 +11,7 @@ import {
   Meter,
   Page,
   type Paging,
+  SearchField,
   Toolbar,
 } from "../../ds";
 import { navigate, useSearch } from "../../state/router";
@@ -18,8 +19,8 @@ import { LEASE_FILTERS, type LeaseFilter, type LeaseRowView, useLeases } from ".
 import { LeaseDrawer } from "./drawer";
 
 export function LeasesScreen() {
-  const { choose, filter, paging, urlId, view } = useLeases();
-  const search = useSearch();
+  const { choose, filter, paging, query, search: setQuery, urlId, view } = useLeases();
+  const address = useSearch();
   const fromList = useOpenedFromList(urlId);
   return (
     <Page
@@ -35,6 +36,7 @@ export function LeasesScreen() {
             onChange={choose}
           />
         }
+        end={<SearchField label="Search leases" value={query} onChange={setQuery} />}
       />
       <Loaded view={view}>
         {(page) => <LeaseTable rows={page.rows} filter={filter} paging={paging} />}
@@ -43,7 +45,7 @@ export function LeasesScreen() {
         <LeaseDrawer
           key={urlId}
           id={urlId}
-          onClose={() => closeDrawer(fromList, `/leases${search}`)}
+          onClose={() => closeDrawer(fromList, `/leases${address}`)}
           finalFocus={() => focusAfterClosing(fromList, urlId)}
         />
       )}
