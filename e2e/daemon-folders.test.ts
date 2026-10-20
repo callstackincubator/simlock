@@ -226,6 +226,25 @@ describe("daemon folders (ADR 0034)", () => {
     }
   });
 
+  it("on a machine that got its gateway first, simlock --local daemon start starts a worker in <root>, and plain status reaches it afterwards", async () => {
+    const env = await withDaemon({ mode: "auto" });
+
+    try {
+      await makeGatewayPresent(env);
+      expect(existsSync(join(env.home, "instance.json"))).toBe(false);
+
+      const started = await env.cli(["--local", "daemon", "start"]);
+      const status = await env.cli(["status", "--json"]);
+
+      expect(started.code, started.stderr).toBe(0);
+      expect(existsSync(join(env.home, "instance.json"))).toBe(true);
+      expect(status.code, status.stderr).toBe(0);
+      expect(daemonMode(status)).toBe("worker");
+    } finally {
+      await stopGateway(env);
+    }
+  });
+
   describe("MCP", () => {
     it("simlock --gateway mcp lists the gateway's catalog, plain simlock mcp lists the worker's", async () => {
       const env = await withDaemon();
