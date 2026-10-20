@@ -342,10 +342,10 @@ receiver hears about them without anyone watching the console. Set
 | Field    | Rule |
 |---|---|
 | `name`   | Lowercase letters, digits and dashes, starting with a letter, at most 32 characters; no two destinations share one. |
-| `format` | `generic`, the only format so far. |
+| `format` | `generic` (the signed JSON envelope) or `slack` (a written message for Slack). |
 | `url`    | `https://`, or `http://` to `localhost`, `127.0.0.1` or `[::1]`; no user name or password in it. |
 | `events` | A non-empty list, each event once, from: `worker.connected`, `worker.disconnected`, `worker.rejected`, `worker.drain-started`, `worker.drain-ended`, `device.quarantine-abandoned`, `device.quarantine-stranded`, `device.recovery-failed`, `device.stalled-transition-detected`, `disk.pressure-detected`, `component.install-failed`. |
-| `secret` | A non-empty string the gateway signs each message with. |
+| `secret` | A `generic` destination needs a non-empty string the gateway signs each message with. A `slack` destination takes none; a `secret` key on it is refused. |
 
 An event a worker reports reaches the destination too, with `workerId` in its
 payload. A key not listed above is warned about and ignored, and
@@ -366,6 +366,36 @@ same JSON `simlock events --json` prints (`id`, `seq`, `timestamp`, `event`,
 To check a message, compute the HMAC-SHA256 of the bytes you received with the
 secret and compare it to the header value in constant time. Use the raw body,
 not a re-serialised copy.
+
+**Slack.** A `slack` destination gets `{"text": "<message>"}` for each event it
+lists, written for a person, through the same queue, tries and limits as
+`generic`, with only the `Content-Type` and `User-Agent` headers. Slack is the
+only service promised; other services that take Slack's incoming-webhook body
+may work. `<worker>` is the worker's label as the gateway knows it when the
+message is sent, or its id when it has no label. Every variable part is cut to
+300 characters (`…` added) and has `&`, `<` and `>` written as `&amp;`, `&lt;`
+and `&gt;`, so a label like `<!channel>` never pings a channel. A field a worker
+left out prints as `undefined`, and a size or age that is not a number prints as
+`?`.
+
+| Event | Message |
+|---|---|
+| `worker.connected` | `🟢 Worker <worker> connected (simlock <version>).`, or `🟢 Worker <worker> connected.` without a version |
+| `worker.disconnected` | `🔴 Worker <worker> disconnected.`, or `… disconnected while holding 1 lease.`, or `… while holding <n> leases.` |
+| `worker.rejected` | `⛔ A worker was refused (<reason>): <claimed>.` and, when `count` is above 1, ` <count> more refusals like it came before this one.` `<claimed>` is the label the connection claimed, else its worker id, else `an unknown worker`. |
+| `worker.drain-started` | `⏸ Worker <worker> is drained: it takes no new leases.` |
+| `worker.drain-ended` | `▶️ Worker <worker> takes new leases again.` |
+| `device.quarantine-abandoned` | `⚠️ Device <deviceId> on <worker> was retired after <attempts> failed clean-ups.` |
+| `device.quarantine-stranded` | `🛑 Device <deviceId> on <worker> could not be cleaned up or deleted after <attempts> tries: <error>. It needs a person.` |
+| `device.recovery-failed` | `⚠️ Device <deviceId> on <worker> crashed during lease <leaseId> and could not be brought back: <reason>.` |
+| `device.stalled-transition-detected` | `⏳ Device <deviceId> on <worker> has been <state> for <age>.` |
+| `disk.pressure-detected` | `💾 Worker <worker> is low on disk: <freeBytes> free (threshold <threshold>).` |
+| `component.install-failed` | `❌ Installing <platform> <componentId> on <worker> failed: <error>.` |
+
+`<age>` reads `45 s`, `14 min` or `1 h 5 min` (`2 h` when no minutes are left),
+rounded down. `<freeBytes>` and `<threshold>` are in GiB (1024³ bytes), or MiB
+under 1 GiB, with one decimal rounded half up and `.0` dropped: `8.2 GiB`,
+`10 GiB`, `512 MiB`.
 
 **Delivery.** Each destination sends one message at a time, in the order the
 gateway saw the events, and a slow destination never delays another. A try
