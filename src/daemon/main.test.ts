@@ -50,6 +50,8 @@ import {
   deviceModeWiring,
   modelPreferenceWiring,
   discoverDrivers,
+  productionDeviceDataTables,
+  resolveDeviceDataTables,
   emitSlimDiagnostic,
   parseDaemonArgv,
   processRunnerFor,
@@ -3625,5 +3627,23 @@ describe("startDaemon state.db", () => {
       message: `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
     });
     expect(existsSync(join(directory, "state.db"))).toBe(false);
+  });
+
+  it("resolveDeviceDataTables answers the option's map when given, else the drivers module's export, else the production map", async () => {
+    expect(await resolveDeviceDataTables({ deviceDataTables: fakeDeviceDataTables })).toBe(
+      fakeDeviceDataTables,
+    );
+
+    delete process.env.SIMLOCK_DRIVERS_MODULE;
+    expect(await resolveDeviceDataTables({})).toEqual(productionDeviceDataTables());
+    expect(productionDeviceDataTables().size).toBe(0);
+
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      "export function createDrivers() { return []; }",
+    );
+    const fromModule = await resolveDeviceDataTables({});
+    expect([...fromModule.keys()].sort()).toEqual(["android", "ios"]);
+    expect(fromModule.get("ios")?.name).toBe("fake-device-data");
+    expect(fromModule).not.toBe(fakeDeviceDataTables);
   });
 });
