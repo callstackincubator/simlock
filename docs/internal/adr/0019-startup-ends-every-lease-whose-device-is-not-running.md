@@ -2,7 +2,8 @@
 
 - **Status:** Accepted. §1–2 are narrowed by [ADR
   0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md):
-  a restart alone never ends a physical device's lease.
+  a restart alone never ends a physical device's lease. §4 is narrowed by
+  [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md): a replayed grant reads the current device.
 - **Date:** 2026-10-05
 - **Issue:** [#358](https://github.com/callstackincubator/simlock/issues/358)
 - **Supersedes:** nothing. Narrows [ADR

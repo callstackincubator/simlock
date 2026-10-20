@@ -2616,7 +2616,9 @@ A worker keeps its devices, leases, lease requests and installed components in
 `state.db` in its data directory (`~/.simlock`), one row per record, instead of
 in `state.json`. A change writes only the rows it touches, so a renew writes
 one lease row however many lease requests are stored. Nothing is imported from
-`state.json`.
+`state.json`. The upgrade therefore loses the record of which components
+Simlock installed, so `simlock component remove` refuses a component
+installed before it (`Simlock has no record of installing …`).
 
 A daemon whose folder still holds `state.json` does not start. To upgrade:
 

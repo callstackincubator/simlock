@@ -3773,6 +3773,34 @@ describe("startDaemon state.db", () => {
     expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
   });
 
+  it("a second startDaemon on a folder whose daemon runs leaves state.db's schema_versions and bytes unchanged", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-live-state-"));
+    temporaryDirectories.push(directory);
+    await start({ dataDirectory: directory });
+    const versions = () => queryState(directory, "SELECT owner, version FROM schema_versions");
+    const before = await versions();
+    const bytesBefore = await readFile(join(directory, "state.db"));
+    // why: a newer binary brings a newer version of an owner the live daemon's state.db has; opening would migrate it in.
+    const newerTable = {
+      ...fakeDeviceDataTable,
+      migrations: [
+        ...fakeDeviceDataTable.migrations,
+        "CREATE TABLE newer_fake_data (id TEXT) STRICT",
+      ],
+      version: 2,
+    };
+
+    await expect(
+      start({
+        dataDirectory: directory,
+        deviceDataTables: new Map([["ios", newerTable]]),
+      }),
+    ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
+
+    expect(await versions()).toEqual(before);
+    expect(await readFile(join(directory, "state.db"))).toEqual(bytesBefore);
+  });
+
   it("a SIMLOCK_DRIVERS_MODULE without a deviceDataTables export fails start naming it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-no-tables-"));
     temporaryDirectories.push(directory);
