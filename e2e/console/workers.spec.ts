@@ -398,7 +398,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("on a single host, the list has one worker, and with no id in the URL it shows that worker in the inspector", async ({
+  test("on a single host Fleet shows one row, the host, and its page works", async ({
     daemon,
     page,
   }) => {
@@ -407,16 +407,19 @@ test.describe("the workers page", () => {
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
 
-    await expect(
-      page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem"),
-    ).toHaveCount(1);
+    await expect(page.getByRole("row")).toHaveCount(2);
     await expect(page).toHaveURL(/\/fleet$/);
-    await expect(title(page, host.id)).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(host.id);
+    await expect(page.getByText("1 / 1 up")).toBeVisible();
     await row(page, host.id).getByRole("link").click();
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
-    await expect(page.locator(".inspector-line")).toContainText(host.version ?? "");
-    await expect(page.locator(".inspector-line")).toContainText("connected");
+    await expect(title(page, host.id)).toBeVisible();
+    await expect(page.locator(".worker-line")).toContainText("connected");
+    await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await openTab(page, "Host");
+    await expect(fact(page.locator("#main"), "Version")).toHaveText(host.version ?? "");
   });
 
   test("an unknown worker id shows This worker is not in the fleet. and a link to Fleet, and an unknown device id shows This device is gone.", async ({
