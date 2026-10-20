@@ -679,13 +679,17 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     expect(poster.requests.filter((request) => request.url.includes("quick"))).toEqual([]);
   }, 30_000);
 
-  it("a worker joining a gateway with a generic destination makes a loopback receiver get one signed worker.connected naming that worker", async () => {
-    const received: Array<{ headers: Record<string, unknown>; body: string }> = [];
+  it("a worker joining a gateway with a generic destination makes a loopback receiver get one signed worker.connected naming that worker, and with a slack destination one message naming the worker's label", async () => {
+    const received: Array<{ url: string; headers: Record<string, unknown>; body: string }> = [];
     const receiver: Server = createHttpServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
-        received.push({ headers: request.headers, body: Buffer.concat(chunks).toString("utf8") });
+        received.push({
+          url: request.url ?? "",
+          headers: request.headers,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
         response.writeHead(200).end();
       });
     });
@@ -695,6 +699,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       const gateway = await startGateway({
         destinations: [
           destinationFor({ url: `http://127.0.0.1:${port}/hook`, events: ["worker.connected"] }),
+          {
+            name: "chat",
+            format: "slack",
+            url: `http://127.0.0.1:${port}/slack`,
+            events: ["worker.connected"],
+          },
         ],
       });
       await startWorker({
@@ -704,8 +714,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         stdout: "a",
       });
 
-      await vi.waitFor(() => expect(received).toHaveLength(1));
-      const [message] = received;
+      await vi.waitFor(() => expect(received).toHaveLength(2));
+      const message = received.find((each) => each.url === "/hook");
+      const chat = received.find((each) => each.url === "/slack");
       expect(message?.headers["x-simlock-signature"]).toBe(
         `sha256=${createHmac("sha256", "e2e-secret")
           .update(message?.body ?? "")
@@ -716,6 +727,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
       expect(body.payload.workerId).toBe(workers[0]?.id);
       expect(body.payload.label).toBe("worker-a");
+      expect(JSON.parse(chat?.body ?? "")).toEqual({
+        text: "🟢 Worker worker-a connected (simlock 1.0.0-e2e).",
+      });
     } finally {
       receiver.closeAllConnections();
       await new Promise<void>((resolve) => receiver.close(() => resolve()));
