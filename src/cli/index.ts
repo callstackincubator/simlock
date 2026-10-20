@@ -43,6 +43,14 @@ resolution order.
 Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.
 Pass --local anywhere on the command line to reach this machine's worker even when only a gateway has run here.`;
 
+function daemonFlagNamed(arg: string): "gateway" | "local" | undefined {
+  for (const name of ["gateway", "local"] as const) {
+    if (arg === `--${name}`) return name;
+    if (arg.startsWith(`--${name}=`)) throw new UsageError(`--${name} takes no value`);
+  }
+  return undefined;
+}
+
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
   readonly daemonFlag: DaemonFlag;
@@ -64,16 +72,14 @@ function extractGlobalFlags(argv: readonly string[]): {
       token = arg.slice("--token=".length);
       continue;
     }
-    if (arg === "--gateway" || arg === "--local") {
-      const flag = arg === "--gateway" ? "gateway" : "local";
-      if (daemonFlag !== undefined && daemonFlag !== flag) {
+    const named = daemonFlagNamed(arg);
+    if (named !== undefined) {
+      if (daemonFlag !== undefined && daemonFlag !== named) {
         throw new UsageError("--gateway and --local cannot be used together");
       }
-      daemonFlag = flag;
+      daemonFlag = named;
       continue;
     }
-    if (arg.startsWith("--gateway=")) throw new UsageError("--gateway takes no value");
-    if (arg.startsWith("--local=")) throw new UsageError("--local takes no value");
     rest.push(arg);
   }
   return { token, daemonFlag, rest };
