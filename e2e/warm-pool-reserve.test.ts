@@ -104,6 +104,38 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     expect(status.json).toMatchObject({ capacity: { ios: { warm: 2 } } });
   });
 
+  it("five detached leases of one kind queued behind a booting device, with maxConcurrentBoots 3, start three makeReady calls at once, not four, then the fourth once one is ready, and every lease is granted with no device left idle", async () => {
+    const env = await withDaemon({
+      configOverrides: {
+        limits: { maxRunning: 10, ios: { maxDevices: 10, maxRunning: 10 } },
+        warmPool: { maxConcurrentBoots: 3 },
+      },
+      driverScript: { ios: { ...IOS, reclaimResult: "shutdown" } },
+    });
+    const warm = await lease(env, "warm");
+    await env.driverScript.merge({ ios: { latencyMs: { makeReady: 4_000 } } });
+    expect((await env.cli(["release", warm.lease.id])).code).toBe(0);
+    await waitFor(async () => (await makeReadyCalls(env)) === 2, {
+      label: "the warm pool's boot of the released device has started",
+    });
+
+    const grants = ["a1", "a2", "a3", "a4", "a5"].map((agent) =>
+      lease(env, agent, ["--timeout", "60s"]),
+    );
+    await waitFor(async () => (await makeReadyCalls(env)) === 5, {
+      label: "three more boots are running",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await makeReadyCalls(env)).toBe(5);
+
+    const granted = await Promise.all(grants);
+    await untilQuiet(env);
+
+    expect(new Set(granted.map((grant) => grant.device.id)).size).toBe(5);
+    expect(await makeReadyCalls(env)).toBe(6);
+    expect(await deviceStates(env)).toEqual(["leased", "leased", "leased", "leased", "leased"]);
+  });
+
   describe("while the warm pool boots a released device", () => {
     async function releasedAndBooting(env: TestEnv): Promise<Grant> {
       const first = await lease(env, "holder");

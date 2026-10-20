@@ -909,33 +909,41 @@ describe("LeaseAcquisitionCoordinator", () => {
     harness.driver.hangMakeReady();
     const first = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
     await settle();
-    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
-    let secondDeviceId: string | undefined;
-    void second.then((grant) => {
-      secondDeviceId = grant.device.id;
-    });
+    const granted: Record<string, string> = {};
+    for (const agent of ["b", "c"]) {
+      void harness.coordinator
+        .request(request, { ownerId: agent, requesterId: agent })
+        .then((grant) => {
+          granted[agent] = grant.device.id;
+        });
+    }
     await settle();
     expect(harness.coordinator.waitingDemand()).toMatchObject([
       { inFlight: true, spec: request },
       { inFlight: false, spec: request },
+      { inFlight: false, spec: request },
     ]);
 
-    const created = harness.provisioner.provision(request, {
-      claim: { kind: "boot" },
-      reservation: { release: () => undefined },
-    });
+    const reservation = { release: () => undefined };
+    const created = [
+      harness.provisioner.provision(request, { claim: { kind: "boot" }, reservation }),
+      harness.provisioner.provision(request, { claim: { kind: "boot" }, reservation }),
+    ];
     await settle();
     harness.driver.releaseMakeReady();
-    const [firstGrant, handoff] = await Promise.all([first, created]);
-    handoff.claim.release();
+    const [firstGrant, ...handoffs] = await Promise.all([first, ...created]);
+    for (const handoff of handoffs) handoff.claim.release();
     harness.coordinator.kick();
     await settle();
 
     expect({
+      distinct: new Set([firstGrant.device.id, ...Object.values(granted)]).size,
+      granted: Object.keys(granted).sort(),
       provisioned: harness.driver.calls.filter((call) => call.operation === "provision").length,
-      sameDevice: secondDeviceId === firstGrant.device.id,
-      secondGotPoolDevice: secondDeviceId === handoff.device.id,
-    }).toEqual({ provisioned: 2, sameDevice: false, secondGotPoolDevice: true });
+    }).toEqual({ distinct: 3, granted: ["b", "c"], provisioned: 3 });
+    expect(Object.values(granted).sort()).toEqual(
+      handoffs.map((handoff) => handoff.device.id).sort(),
+    );
   });
 
   it("grants a request queued behind another request booting a shut-down device once that device is granted, with no release", async () => {

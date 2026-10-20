@@ -69,7 +69,9 @@ async function named(env: TestEnv, ...names: string[]) {
 describe("warm pool targets", () => {
   it("with a target of two iPhone 17 and no devices, keeps two ready one boot after the other, and grants the first lease without a boot", async () => {
     const env = await withDaemon({
-      configOverrides: { warmPool: { targets: [{ ...IPHONE_17, count: 2 }] } },
+      configOverrides: {
+        warmPool: { maxConcurrentBoots: 1, targets: [{ ...IPHONE_17, count: 2 }] },
+      },
       driverScript: { ios: { ...IOS, latencyMs: { makeReady: 300 } } },
     });
 
