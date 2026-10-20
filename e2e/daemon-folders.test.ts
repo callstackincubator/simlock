@@ -203,6 +203,29 @@ describe("daemon folders (ADR 0034)", () => {
     }
   });
 
+  it("with a worker and a present gateway, a plain worker drain exits 2 with the worker's message and the --gateway hint; with --gateway the gateway answers UNKNOWN_WORKER (exit 12) for the worker's id", async () => {
+    const env = await withDaemon();
+
+    try {
+      await startGateway(env);
+      const workerId = JSON.parse(await readFile(join(env.home, "instance.json"), "utf8")).id;
+
+      const plain = await env.cli(["worker", "drain", workerId]);
+      const viaGateway = await env.cli(["--gateway", "worker", "drain", workerId]);
+
+      expect(plain.code).toBe(2);
+      expect(plain.error).toEqual({
+        code: "UNSUPPORTED_IN_WORKER_MODE",
+        message:
+          "worker.drain acts on a gateway's workers, and this daemon is not a gateway. A gateway also runs on this machine: run the command again with --gateway.",
+      });
+      expect(viaGateway.code).toBe(12);
+      expect(viaGateway.error?.code).toBe("UNKNOWN_WORKER");
+    } finally {
+      await stopGateway(env);
+    }
+  });
+
   describe("MCP", () => {
     it("simlock --gateway mcp lists the gateway's catalog, plain simlock mcp lists the worker's", async () => {
       const env = await withDaemon();
