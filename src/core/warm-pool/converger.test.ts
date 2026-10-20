@@ -797,6 +797,7 @@ describe("warm pool converger", () => {
       ["device.shutdown", { deviceId: "d", initiator: "test" }],
       ["device.deleted", { deviceId: "d", initiator: "test", physical: false }],
       ["cleanup.executed", { action: "shutdown", reason: "r", ruleName: "n", target: "d" }],
+      ["lease.queued", { queuePosition: 2, requestId: "r" }],
     ] as const;
     const rig = harness([]);
     rig.pool.start();
