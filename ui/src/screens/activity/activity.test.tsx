@@ -154,7 +154,7 @@ describe("the events page", () => {
     ).toContain("No events yet.");
     expect(
       text(ready({ chosen: { kind: "none" }, held: 5, rows: [], subject: "device" })),
-    ).toContain("No events of this kind.");
+    ).toContain("No device events among those loaded.");
   });
 
   it("says it is loading, or why it could not load", () => {

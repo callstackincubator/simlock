@@ -115,7 +115,18 @@ function EventList({ page }: { readonly page: EventsPage }) {
       <EndRow end={page.end} onRetry={page.loadOlder} />
     );
   }
-  if (rows.length === 0) return <Empty>No events of this kind.</Empty>;
+  if (rows.length === 0) {
+    return (
+      <>
+        <Empty>
+          {page.query === ""
+            ? `No ${page.subject} events among those loaded.`
+            : `No events match ${page.query} among those loaded.`}
+        </Empty>
+        <Footer page={page} narrowed />
+      </>
+    );
+  }
   return (
     <Feed
       key={`${page.subject}/${page.query}`}
