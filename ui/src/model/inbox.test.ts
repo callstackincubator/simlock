@@ -171,6 +171,43 @@ describe("the Inbox items", () => {
   });
 });
 
+describe("the Inbox items of an absent phone", () => {
+  it("hold an absent phone titled with its model and why, and not a phone in another state", () => {
+    const phone = (
+      id: string,
+      state: WorkerDevice["state"],
+      absentReason?: "locked" | "untrusted" | "not-present",
+    ) =>
+      Object.assign(
+        device(id, {
+          class: "phone",
+          physical: true,
+          servesDefaultMode: false,
+          spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
+          state,
+        }),
+        absentReason === undefined ? {} : { absentReason },
+      );
+    const workers = [
+      worker({
+        devices: [
+          phone("dev_locked", "absent", "locked"),
+          phone("dev_untrusted", "absent", "untrusted"),
+          phone("dev_gone", "absent", "not-present"),
+          phone("dev_ready", "ready"),
+          phone("dev_shut", "shutdown"),
+        ],
+      }),
+    ];
+
+    expect(pageOf(workers).rows.map((row) => [row.key, row.word, row.tone, row.subject])).toEqual([
+      ["wrk_1/dev_locked/absent", "absent", "warn", "iPhone 15 Pro is absent (locked)"],
+      ["wrk_1/dev_untrusted/absent", "absent", "warn", "iPhone 15 Pro is absent (untrusted)"],
+      ["wrk_1/dev_gone/absent", "absent", "warn", "iPhone 15 Pro is absent (not-present)"],
+    ]);
+  });
+});
+
 describe("the Inbox page", () => {
   it("lists a row per item, naming the worker or the device on its worker", () => {
     const page = pageOf([
