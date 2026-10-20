@@ -367,7 +367,8 @@ test.describe("the workers page", () => {
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
     await row(page, host.label ?? host.id)
-      .getByRole("link")
+      .getByRole("cell")
+      .nth(3)
       .click();
 
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
@@ -877,6 +878,11 @@ test.describe("the workers page", () => {
 
       await openTab(page, "Events");
       await expect(page).toHaveURL(/\?tab=events$/);
+      await expect(
+        page
+          .getByRole("list", { name: "Events for this worker" })
+          .or(page.getByText("No events for this worker in the last hour.")),
+      ).toBeVisible();
 
       for (const tab of ["Events", "Host", "Warm pool", "Devices"]) {
         await openTab(page, tab);
@@ -902,7 +908,7 @@ test.describe("the workers page", () => {
       await openConsole(page, fleet.gateway);
       await expect(running()).toHaveText(/^0 \/ \d+$/);
       await row(page, "worker-a").getByRole("link").click();
-      await expect(figure(page, "Leases")).toContainText("0");
+      await expect(figure(page, "Leases").locator(".figure-count")).toHaveText("0");
 
       await lease(fleet.gateway, "console-e2e");
       await untilTheGatewaySays(
@@ -910,7 +916,9 @@ test.describe("the workers page", () => {
         (views) => views.find((view) => view.label === "worker-a")?.leases.length === 1,
       );
 
-      await expect(figure(page, "Leases")).toContainText("1", { timeout: 1_000 });
+      await expect(figure(page, "Leases").locator(".figure-count")).toHaveText("1", {
+        timeout: 1_000,
+      });
       await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
       await expect(running()).toHaveText(/^1 \/ \d+$/, { timeout: 1_000 });
     } finally {

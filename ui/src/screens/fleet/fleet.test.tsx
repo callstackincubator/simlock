@@ -228,6 +228,7 @@ describe("a worker's page", () => {
     expect(shown).toContain("Devices, leases and capacity appear once startup finishes.");
     expect(shown).not.toContain("Warm pool");
     expect(shown).not.toContain("No devices.");
+    expect(shown).not.toContain("Capacity not reported.");
   });
 
   it("shows an incompatible worker's protocol ranges on its Host tab, and no devices or load", () => {
@@ -341,9 +342,10 @@ describe("a worker's host and warm pool tabs", () => {
   });
 
   it("says Not reported. for a pool the worker has not reported and No installs in progress. for none", () => {
-    const shown = text(html(page(WORKER, "warm-pool")));
+    const markup = html(page(WORKER, "warm-pool"));
+    const shown = text(markup);
 
-    expect(shown).toContain("Not reported.");
+    expect(markup).toContain('<p class="muted">Not reported.</p>');
     expect(shown).toContain("No installs in progress.");
   });
 });
