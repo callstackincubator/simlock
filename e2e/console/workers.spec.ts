@@ -24,6 +24,7 @@ interface WorkerView {
   readonly label?: string;
   readonly connection: string;
   readonly drained: boolean;
+  readonly lastSeenAt: number;
   readonly health?: string;
   readonly version?: string;
   readonly host?: { readonly os: string; readonly osVersion: string };
@@ -502,6 +503,59 @@ test.describe("the workers page", () => {
       await expect(row(page, "worker-a")).toBeVisible();
       await expect(row(page, "worker-b")).toBeVisible();
       await expect(page).toHaveURL(/\/fleet$/);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("a disconnected worker's page shows the banner Disconnected · last seen … ago, and a drained worker's shows Drained", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+      { driverScript: { ios: IOS }, label: "worker-c" },
+    ]);
+    try {
+      const views = await workerList(fleet.gateway);
+      const idOf = (label: string) =>
+        found(
+          views.find((view) => view.label === label),
+          label,
+        ).id;
+      expect((await fleet.gateway.cli(["worker", "drain", idOf("worker-b")])).code).toBe(0);
+      await (fleet.workers[2] as RunningDaemon).stop();
+      await untilTheGatewaySays(
+        fleet.gateway,
+        (listed) => listed.find((view) => view.label === "worker-c")?.connection === "disconnected",
+      );
+      const lost = found(
+        (await workerList(fleet.gateway)).find((view) => view.label === "worker-c"),
+        "worker-c",
+      );
+      const banner = (text: RegExp) => page.locator("#main").getByText(text);
+
+      await answerWithoutLoad(page);
+      await openConsole(page, fleet.gateway);
+      await page.goto(new URL(`/fleet/${encodeURIComponent(lost.id)}`, fleet.gateway.url).href);
+      await expect(banner(/^Disconnected · last seen \d+ (s|min)/)).toBeVisible();
+      const shown = await banner(/^Disconnected/).textContent();
+      expect(shown).toMatch(/ ago$/);
+      const seconds = Number.parseInt(/last seen (\d+) s/.exec(shown ?? "")?.[1] ?? "", 10);
+      expect(Math.abs(seconds - (Date.now() - lost.lastSeenAt) / 1000)).toBeLessThanOrEqual(5);
+      await expect(banner(/^Drained$/)).toHaveCount(0);
+
+      await page.goto(
+        new URL(`/fleet/${encodeURIComponent(idOf("worker-b"))}`, fleet.gateway.url).href,
+      );
+      await expect(banner(/^Drained$/)).toBeVisible();
+      await expect(banner(/^Disconnected/)).toHaveCount(0);
+
+      await page.goto(
+        new URL(`/fleet/${encodeURIComponent(idOf("worker-a"))}`, fleet.gateway.url).href,
+      );
+      await expect(title(page, "worker-a")).toBeVisible();
+      await expect(banner(/^Drained$|^Disconnected/)).toHaveCount(0);
     } finally {
       await disposeFleet(fleet);
     }
