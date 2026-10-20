@@ -279,16 +279,21 @@ async function buildEnv(
     expectEvents: (names, expectOptions) => expectEvents(env, names, expectOptions, gatewayFlag),
     async startDaemon() {
       const started = await cli([...gatewayFlag, "daemon", "start"], env);
-      // `daemon start` exits once the daemon answers `status.get`, which it does from its socket
+      // why: `daemon start` exits once the daemon answers `status.get`, which it does from its socket
       // claim on, but the daemon writes `admin.token` only after that claim (ADR 0003 §5). A CLI
       // that reads the file before it lands connects as agent, so an admin command run next
       // (`token create`, the teardown's `daemon stop`) fails FORBIDDEN. After a first start,
       // waiting for the file orders later CLI calls after the write; after a restart the previous
-      // run's file may still be there and passes the wait at once.
+      // run's file may still be there and passes the wait at once. A daemon that stops right after
+      // its claim (its HTTP port taken, `withHttpDaemon`) removes the file with its socket
+      // (`AdminSecretManager#remove`) before this poll can see it, so a gone socket ends the wait too.
       if (started.code === 0) {
-        await waitFor(() => existsSync(join(dataDirectory, "admin.token")), {
-          label: "admin.token written",
-        });
+        await waitFor(
+          () => existsSync(join(dataDirectory, "admin.token")) || !existsSync(socketPath),
+          {
+            label: "admin.token written",
+          },
+        );
       }
       return started;
     },
