@@ -825,6 +825,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
           .first(),
       ).toBeVisible();
       await expect(page.locator("#main")).not.toContainText("Loading…");
+      if (path.startsWith("/leases/")) await expect(page.getByRole("dialog")).toBeVisible();
       if (path === "/activity") {
         await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
         await feed(page).evaluate((box) => {

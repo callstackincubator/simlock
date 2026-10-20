@@ -243,6 +243,7 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
+        if (path === pages.lease) await expect(page.getByRole("dialog")).toBeVisible();
         const chart = page.locator(".chart svg").first();
         if ((await chart.count()) > 0) {
           await chart.hover();
