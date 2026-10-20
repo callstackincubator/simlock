@@ -40,7 +40,8 @@ Pass --token <secret> anywhere on the command line to connect as admin
 explicitly; see https://github.com/callstackincubator/simlock for the default
 resolution order.
 
-Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.`;
+Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.
+Pass --local anywhere on the command line to reach this machine's worker even when only a gateway has run here.`;
 
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
@@ -63,11 +64,16 @@ function extractGlobalFlags(argv: readonly string[]): {
       token = arg.slice("--token=".length);
       continue;
     }
-    if (arg === "--gateway") {
-      daemonFlag = "gateway";
+    if (arg === "--gateway" || arg === "--local") {
+      const flag = arg === "--gateway" ? "gateway" : "local";
+      if (daemonFlag !== undefined && daemonFlag !== flag) {
+        throw new UsageError("--gateway and --local cannot be used together");
+      }
+      daemonFlag = flag;
       continue;
     }
     if (arg.startsWith("--gateway=")) throw new UsageError("--gateway takes no value");
+    if (arg.startsWith("--local=")) throw new UsageError("--local takes no value");
     rest.push(arg);
   }
   return { token, daemonFlag, rest };
