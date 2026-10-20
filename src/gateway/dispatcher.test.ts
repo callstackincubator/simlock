@@ -1090,6 +1090,21 @@ describe("GatewayDispatcher", () => {
       }
     });
 
+    it("alerts.test answers BAD_REQUEST for a destination of no characters or more than 32, and looks up one of 32", async () => {
+      const { dispatcher, poster } = harness({ alertDestinations: [generic] });
+      const longest = "n".repeat(32);
+
+      for (const destination of ["", "n".repeat(33)]) {
+        await expect(
+          dispatcher.dispatch("alerts.test", { destination }, session()),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      }
+      await expect(
+        dispatcher.dispatch("alerts.test", { destination: longest }, session()),
+      ).rejects.toMatchObject({ code: "UNKNOWN_ALERT_DESTINATION" });
+      expect(poster.requests).toEqual([]);
+    });
+
     it("stop during a test answers DAEMON_STOPPING", async () => {
       const { alerts, dispatcher, poster } = harness({ alertDestinations: [generic] });
       poster.respond = () => new Promise(() => {});
