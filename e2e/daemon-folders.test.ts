@@ -48,6 +48,7 @@ describe("daemon folders (ADR 0034)", () => {
     ["daemon logs", ["daemon", "logs"]],
     ["events --since 1h", ["events", "--since", "1h"]],
     ["config get", ["config", "get"]],
+    ["adb shell ls -h", ["adb", "shell", "ls", "-h"]],
   ])(
     "with no gateway present, every --gateway command but daemon start and config set exits 2 with GATEWAY_NOT_PRESENT and starts nothing (%s)",
     async (_name, argv) => {
