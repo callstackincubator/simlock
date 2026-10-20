@@ -2134,10 +2134,8 @@ function iosDriverData(device: DriverDevice): IosDriverData {
     name: value.name,
     runtimeId: value.runtimeId,
     udid: value.udid,
-    // why: Both are optional and post-date registries written before slim mode
-    // shipped -- absent or wrong-typed is tolerated (ignored) rather than rejected, so an old
-    // registry keeps loading (compatibility requirement). A `full` key an older daemon stamped
-    // here is not read: the spec's mode is the only record of it (ADR 0007 §7).
+    // why: Both are optional: absent or wrong-typed is ignored rather than rejected. A `full` key
+    // an older daemon stamped here is not read: the spec's mode is the only record of it (ADR 0007 §7).
     ...(typeof value.slimSignature === "string" ? { slimSignature: value.slimSignature } : {}),
     ...(typeof value.slimMarkToken === "string" ? { slimMarkToken: value.slimMarkToken } : {}),
   };

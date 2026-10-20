@@ -23,8 +23,7 @@ export type DeviceMode = "slim" | "full";
 
 /**
  * why: A simulator's or emulator's spec. `physical` is always `false` here, in memory and on every
- * spec a driver resolves; a spec read from the `devices` table has no `physical` column
- * for a virtual device and gains it on load.
+ * spec a driver resolves; the `devices` row stores it as 0 for a virtual device.
  */
 export interface VirtualSpec {
   readonly physical: false;

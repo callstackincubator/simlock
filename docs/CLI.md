@@ -1190,35 +1190,6 @@ that lost its grant and asks again without an `idempotencyKey` gets a new
 lease, not a refusal naming the lost one; the lost lease stays until its TTL
 runs out.
 
-### Breaking: state moves to state.db
-
-A worker keeps its devices, leases, lease requests and installed components in
-`state.db` in its data directory (`~/.simlock`), one row per record, instead of
-in `state.json`. A change writes only the rows it touches, so a renew writes
-one lease row however many lease requests are stored. Nothing is imported from
-`state.json`.
-
-A daemon whose folder still holds `state.json` does not start. To upgrade:
-
-1. With the older Simlock, release every lease and run
-   `simlock nuke --delete-devices`, so no simulator, emulator or lease is left
-   that the new Simlock would not know about.
-2. Remove `state.json`.
-3. Start the new Simlock, then add physical devices again with
-   `simlock device add`.
-
-A daemon also does not start when `state.db` is damaged, when another Simlock
-daemon holds it locked for more than five seconds, or when it was written by a
-newer Simlock (the message names the file and what to do). The reason is
-logged as `Daemon failed to start` and exits `1`; read it with
-`simlock daemon logs`, which works with no daemon up. A damaged `state.db` is
-never repaired or deleted for you: move it away to start with empty state, and
-know that every device and lease it held is forgotten.
-
-To go back to an older Simlock, release every lease and run
-`simlock nuke --delete-devices` first: the older Simlock does not read
-`state.db`.
-
 ## `simlock worker <list|drain|undrain|remove>`
 
 Operator commands for the workers connected to a **gateway**. All four need
@@ -2634,6 +2605,35 @@ The wording and fields of a line can change in any release; don't parse them
 as a contract. Growth is bounded: once the file passes `log.rotateBytes` it is
 rotated to `daemon.log.1` (replacing any previous generation), so `logs` always
 shows the current file with the immediately preceding one prepended.
+
+### Breaking: state moves to state.db
+
+A worker keeps its devices, leases, lease requests and installed components in
+`state.db` in its data directory (`~/.simlock`), one row per record, instead of
+in `state.json`. A change writes only the rows it touches, so a renew writes
+one lease row however many lease requests are stored. Nothing is imported from
+`state.json`.
+
+A daemon whose folder still holds `state.json` does not start. To upgrade:
+
+1. With the older Simlock, release every lease and run
+   `simlock nuke --delete-devices`, so no simulator, emulator or lease is left
+   that the new Simlock would not know about.
+2. Remove `state.json`.
+3. Start the new Simlock, then add physical devices again with
+   `simlock device add`.
+
+A daemon also does not start when `state.db` is damaged, when another Simlock
+daemon holds it locked for more than five seconds, or when it was written by a
+newer Simlock (the message names the file and what to do). The reason is
+logged as `Daemon failed to start` and exits `1`; read it with
+`simlock daemon logs`, which works with no daemon up. A damaged `state.db` is
+never repaired or deleted for you: move it away to start with empty state, and
+know that every device and lease it held is forgotten.
+
+To go back to an older Simlock, release every lease and run
+`simlock nuke --delete-devices` first: the older Simlock does not read
+`state.db`.
 
 ## `simlock worker <list|drain|undrain|remove>`
 
