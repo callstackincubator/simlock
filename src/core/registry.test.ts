@@ -1,11 +1,27 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import {
+  FakeClock,
+  MemoryFilesystem,
+  NodeFilesystem,
+  NodeSqliteOpener,
+  NoopLogger,
+} from "../ports/index.js";
+import { openStateDatabase } from "../state/index.js";
+import { fakeDeviceDataTable } from "./testing.js";
+import {
+  type DeviceDataTable,
   type DeviceRecord,
+  type DeviceTransitionUpdate,
+  type Platform,
   type VirtualSpec,
   Registry,
+  registryOwner,
   RegistryEventError,
   UnknownDeviceError,
   UnknownLeaseError,
@@ -174,27 +190,270 @@ describe("Registry", () => {
     ]);
   });
 
-  it("restores persisted device records after a reload", async () => {
-    const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
-    const options = {
-      clock,
-      eventBus: new EventBus(clock),
-      filesystem,
-      idGenerator: { generate: () => "test" },
-      statePath,
-    };
-    const registry = await Registry.load(options);
-    await registry.registerDevice({
-      driverData: { driverOnly: "value" },
-      driverDeviceId: "driver_test",
-      provisionDuration: 25,
-      spec,
-    });
+  it("a registry restarted on the same state.db returns every record as committed, optional fields set and absent", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
+    try {
+      const clock = new FakeClock(1_000);
+      let next = 0;
+      const deviceData = new Map<Platform, DeviceDataTable>([
+        ["android", fakeDeviceDataTable],
+        ["ios", fakeDeviceDataTable],
+      ]);
+      const openState = () =>
+        openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [registryOwner, fakeDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+      const first = await openState();
+      const registry = await Registry.load({
+        clock,
+        deviceData,
+        eventBus: new EventBus(clock),
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => String((next += 1)) },
+        state: first,
+        statePath,
+      });
+      const timing = {
+        estimatedBootMs: 2,
+        estimatedProvisionMs: 1,
+        estimatedReadyMs: 4,
+        estimatedReclaimMs: 3,
+      };
+      const register = (driverDeviceId: string, deviceSpec: VirtualSpec, fakeDeviceId: string) =>
+        registry.registerDevice({
+          driverData: { fakeDeviceId },
+          driverDeviceId,
+          provisionDuration: 5,
+          spec: deviceSpec,
+        });
+      const ready = (id: string, update?: DeviceTransitionUpdate) =>
+        registry.transitionDevice(
+          id,
+          "ready",
+          { event: "device.ready", payload: { bootDuration: 7, deviceId: id } },
+          update,
+        );
 
-    const reloaded = await Registry.load(options);
+      const plain = await register("drv-plain", spec, "fk-plain");
+      const full = await register(
+        "drv-full",
+        { ...spec, imageTag: "default", mode: "slim" },
+        "fk-full",
+      );
+      await ready(full.id, {
+        address: "127.0.0.1:5554",
+        driverData: { fakeDeviceId: "fk-full-booted" },
+        mode: "slim",
+      });
+      clock.advance(10);
+      await registry.markForeignStateDetected(full.id, 1_011);
+      await registry.markForeignProvenanceDetected(full.id, 1_012);
+      await registry.markRecoveryAttempt(full.id, 1_013);
+      const stalled = await register("drv-stalled", spec, "fk-stalled");
+      await registry.enterQuarantine(stalled.id, 9_000, {
+        kind: "stalled",
+        message: "stuck booting",
+        stalledState: "provisioning",
+      });
+      const deferred = await register("drv-deferred", spec, "fk-deferred");
+      await ready(deferred.id);
+      const deferredLease = await registry.createLease({
+        deviceId: deferred.id,
+        ownerId: "agent-2",
+        requesterId: "agent-2",
+        ttlDeadline: 5_000,
+        ttlMs: 4_000,
+      });
+      clock.advance(10);
+      await registry.beginRelease(deferredLease.id, { deferReclaim: true });
 
-    expect(reloaded.snapshot).toEqual(registry.snapshot);
+      const apps = ["com.b", "com.a", "com.c"];
+      const physicalInput = {
+        apps,
+        class: "tablet",
+        driverDeviceId: "udid-1",
+        model: "iPad",
+        osVersion: "26.5",
+        platform: "ios",
+      } as const;
+      const physical = await registry.enrollPhysical(physicalInput);
+      const absent = await registry.enrollPhysical({ ...physicalInput, driverDeviceId: "udid-2" });
+      await registry.transitionDevice(
+        absent.id,
+        "absent",
+        {
+          event: "device.absence-detected",
+          payload: { absentReason: "locked", deviceId: absent.id, previousState: "ready" },
+        },
+        { absentReason: "locked" },
+      );
+      const returning = await registry.enrollPhysical({
+        ...physicalInput,
+        apps: [],
+        driverDeviceId: "udid-3",
+      });
+      const returningLease = await registry.createLease({
+        deviceId: returning.id,
+        ownerId: "agent-3",
+        requesterId: "agent-3",
+        ttlDeadline: 5_000,
+        ttlMs: 4_000,
+      });
+      await registry.beginRelease(returningLease.id);
+
+      await registry.createLeaseRequest({
+        ownerId: "agent-0",
+        request: { platform: "ios" },
+        requesterId: "agent-0",
+      });
+      await registry.createLeaseRequest({
+        fleetRequestId: "fleet-1",
+        id: "req_full",
+        idempotencyKey: "key-1",
+        leaseId: "lse_chosen",
+        ownerId: "agent-1",
+        request: {
+          class: "phone",
+          imageTag: "default",
+          mode: "slim",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          physical: true,
+          platform: "ios",
+        },
+        requesterId: "requester-1",
+      });
+      await registry.createLeaseRequest({
+        id: "req_granted",
+        ownerId: "agent-1",
+        request: { platform: "ios" },
+        requesterId: "agent-1",
+      });
+      const lease = await registry.createLease({
+        deviceId: full.id,
+        leaseId: "lse_chosen",
+        ownerId: "agent-1",
+        request: { environment: { SIMLOCK_UDID: "abc", OTHER: "x" }, id: "req_granted", timing },
+        requesterId: "requester-1",
+        ttlDeadline: 2_000,
+        ttlMs: 60_000,
+      });
+      await registry.createLeaseRequest({
+        id: "req_failed",
+        ownerId: "agent-1",
+        request: { platform: "android" },
+        requesterId: "agent-1",
+      });
+      await registry.settleLeaseRequest("req_failed", {
+        failure: { code: "no-capacity", message: "no room" },
+        state: "failed",
+      });
+      await registry.createLeaseRequest({
+        id: "req_cancelled",
+        ownerId: "agent-1",
+        request: { platform: "android" },
+        requesterId: "agent-1",
+      });
+      await registry.settleLeaseRequest("req_cancelled", { state: "cancelled" });
+      await registry.recordComponent({
+        installedAt: 1_005,
+        platform: "ios",
+        receipt: { image: "IMG", stamp: "s1" },
+        version: "26.5",
+      });
+      await registry.recordComponent({
+        installedAt: 1_006,
+        platform: "android",
+        receipt: {},
+        version: "35",
+      });
+      first.close();
+
+      const second = await openState();
+      const reloaded = await Registry.load({
+        clock,
+        deviceData,
+        eventBus: new EventBus(clock),
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "unused" },
+        state: second,
+        statePath,
+      });
+
+      expect(reloaded.snapshot).toEqual(registry.snapshot);
+      expect(reloaded.leaseRequests()).toEqual(registry.leaseRequests());
+      expect(reloaded.snapshot.devices.find((device) => device.id === plain.id)).toEqual({
+        createdAt: 1_000,
+        driverData: { fakeDeviceId: "fk-plain" },
+        driverDeviceId: "drv-plain",
+        id: plain.id,
+        leaseIdentity: "reusable",
+        mode: "full",
+        physical: false,
+        spec,
+        state: "provisioning",
+      });
+      expect(reloaded.snapshot.devices.find((device) => device.id === full.id)).toEqual({
+        address: "127.0.0.1:5554",
+        createdAt: 1_000,
+        driverData: { fakeDeviceId: "fk-full-booted" },
+        driverDeviceId: "drv-full",
+        foreignProvenanceDetectedAt: 1_012,
+        foreignStateDetectedAt: 1_011,
+        id: full.id,
+        leaseIdentity: "reusable",
+        mode: "slim",
+        physical: false,
+        readyAt: 1_000,
+        recoveringSince: 1_013,
+        recoveryAttempts: 1,
+        spec: { ...spec, imageTag: "default", mode: "slim" },
+        state: "leased",
+      });
+      expect(reloaded.snapshot.devices.find((device) => device.id === physical.id)).toMatchObject({
+        enrolledApps: apps,
+        physical: true,
+        spec: { class: "tablet", physical: true },
+      });
+      expect(reloaded.snapshot.leases).toContainEqual(lease);
+      expect(reloaded.leaseRequests().find((request) => request.id === "req_full")).toEqual({
+        createdAt: 1_020,
+        fleetRequestId: "fleet-1",
+        id: "req_full",
+        idempotencyKey: "key-1",
+        leaseId: "lse_chosen",
+        ownerId: "agent-1",
+        request: {
+          class: "phone",
+          imageTag: "default",
+          mode: "slim",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          physical: true,
+          platform: "ios",
+        },
+        requesterId: "requester-1",
+        state: "open",
+      });
+      expect(reloaded.snapshot.components).toEqual([
+        {
+          installedAt: 1_005,
+          platform: "ios",
+          receipt: { image: "IMG", stamp: "s1" },
+          version: "26.5",
+        },
+        { installedAt: 1_006, platform: "android", receipt: {}, version: "35" },
+      ]);
+      second.close();
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("writes state.json owner-only, mode 0o600, as the daemon's local-state guarantee says", async () => {

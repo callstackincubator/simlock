@@ -1,6 +1,7 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import { quarantineCauseSchema } from "../contract/index.js";
 import type { Clock, Filesystem, IdGenerator } from "../ports/index.js";
+import type { StateDatabase } from "../state/index.js";
 import {
   DEFAULT_LEASE_MAX_REQUEST_RECORDS,
   DEFAULT_LEASE_REQUEST_RETENTION_MS,
@@ -33,7 +34,7 @@ import {
   type VirtualSpec,
   type VirtualState,
 } from "./domain.js";
-import type { ComponentReceipt, DeviceRequest } from "./driver.js";
+import type { ComponentReceipt, DeviceDataTable, DeviceRequest } from "./driver.js";
 import {
   type LeaseRequestLimits,
   type LeaseRequestOutcome,
@@ -54,6 +55,8 @@ export interface RegistryOptions {
   readonly idGenerator: IdGenerator;
   readonly eventBus: EventBus;
   readonly statePath?: string;
+  readonly state?: StateDatabase;
+  readonly deviceData?: ReadonlyMap<Platform, DeviceDataTable>;
   /**
    * The width a lease record written before ADR 0004 loads with, since it has none of its own
    * (`lease.defaultTtlMs`; the daemon passes the configured value, and `DEFAULT_LEASE_TTL_MS`
@@ -196,7 +199,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   readonly #unknownLeaseFields = new Map<string, Record<string, unknown>>();
   readonly #unknownLeaseRequestFields = new Map<string, Record<string, unknown>>();
 
-  private constructor(private readonly options: Required<RegistryOptions>) {}
+  private constructor(
+    private readonly options: Required<Omit<RegistryOptions, "deviceData" | "state">> &
+      Pick<RegistryOptions, "deviceData" | "state">,
+  ) {}
 
   static async load(options: RegistryOptions): Promise<Registry> {
     const registry = new Registry({

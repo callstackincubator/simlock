@@ -1,5 +1,5 @@
 import type { EventMap } from "../bus/index.js";
-import type { Filesystem } from "../ports/index.js";
+import type { Filesystem, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
 import type { ScreenCapture } from "./screen.js";
 import type {
@@ -15,6 +15,11 @@ import type {
   VirtualDevice,
   VirtualSpec,
 } from "./domain.js";
+
+export interface DeviceDataTable extends SqliteSchemaOwner {
+  write(database: SqliteDatabase, deviceId: string, driverData: unknown): void;
+  read(database: SqliteDatabase, deviceId: string): unknown;
+}
 
 export interface ExactDeviceRequest {
   readonly platform: Platform;

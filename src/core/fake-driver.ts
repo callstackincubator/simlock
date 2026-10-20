@@ -13,6 +13,7 @@ import {
   type ComponentReceipt,
   type ComponentRemoval,
   type ExactDeviceRequest,
+  type DeviceDataTable,
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
@@ -823,3 +824,11 @@ function readPhysical(device: FakePhysicalDevice, id: string): PhysicalInspectio
     osVersion: device.osVersion ?? "1.0",
   };
 }
+
+export const fakeDeviceDataTable: DeviceDataTable = {
+  migrations: [],
+  name: "fake-device-data",
+  read: () => undefined,
+  version: 0,
+  write: () => undefined,
+};
