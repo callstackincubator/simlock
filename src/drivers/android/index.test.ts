@@ -3889,6 +3889,15 @@ describe("AndroidDriver emulator registration", () => {
   });
 });
 
+function recordKillTimeout(
+  into: (number | undefined)[],
+  command: string,
+  args: readonly string[],
+  timeoutMs: number | undefined,
+): void {
+  if (command === binaries.adb && args.slice(2).join(" ") === "emu kill") into.push(timeoutMs);
+}
+
 describe("AndroidDriver console ports across a restart", () => {
   it("stops a discovered running emulator before deleting its AVD after a restart", async () => {
     const filesystem = await androidFilesystem();
@@ -3898,9 +3907,11 @@ describe("AndroidDriver console ports across a restart", () => {
     const running = await before.makeReady(await before.provision(spec));
     const inner = host.runner();
     const runningAtDeletion: (string | undefined)[] = [];
+    const killTimeouts: (number | undefined)[] = [];
     const runner: ProcessRunner = {
       ...inner,
       run: async (command, args, options) => {
+        recordKillTimeout(killTimeouts, command, args, options?.timeoutMs);
         if (
           command === binaries.adb &&
           args[2] === "shell" &&
@@ -3926,6 +3937,7 @@ describe("AndroidDriver console ports across a restart", () => {
     expect(runningAtDeletion, "the emulator must have exited before AVD deletion").toEqual([
       undefined,
     ]);
+    expect(killTimeouts, "the kill must be bounded").toEqual([5_000]);
     expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}.avd`)).toBe(false);
   });
 
