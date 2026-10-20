@@ -51,7 +51,7 @@ test.describe("behind a real sign-in proxy", () => {
     expect(body["role"]).toBe("admin");
   });
 
-  test("a worker with gateway.url ws://127.0.0.1:4180 joins through /v1/uplink and appears on the console's Workers page", async ({
+  test("a worker with gateway.url ws://127.0.0.1:4180 joins through /v1/uplink and appears on the console's Fleet page", async ({
     page,
   }) => {
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -60,7 +60,7 @@ test.describe("behind a real sign-in proxy", () => {
     const worker = await startWorker({ gatewayUrl: "ws://127.0.0.1:4180", token });
     try {
       await logInAsAlice(page);
-      await page.getByRole("link", { name: "Workers", exact: true }).click();
+      await page.getByRole("link", { name: "Fleet", exact: true }).click();
 
       await expect(
         page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem"),

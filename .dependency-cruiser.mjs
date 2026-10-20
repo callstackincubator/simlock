@@ -255,7 +255,7 @@ export default {
     direction(
       "ui-base-ui-in-ds-only",
       "only the console's design system imports Base UI; everything else uses its wrapped parts",
-      "^ui/src/(app|screens|state|data|model)/",
+      "^ui/src/(?!ds/)",
       { path: "(^|node_modules/)@base-ui/react(/|$)" },
     ),
     direction(

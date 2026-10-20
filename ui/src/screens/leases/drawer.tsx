@@ -33,6 +33,7 @@ export function LeaseDrawer(props: {
             inspection === undefined ? null : (
               <DrawerTabs
                 defaultValue="details"
+                label="Lease"
                 tabs={[
                   {
                     content: <LeaseDetail lease={inspection} />,

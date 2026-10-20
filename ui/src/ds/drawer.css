@@ -21,7 +21,7 @@
   overflow-y: auto;
   border-left: 1px solid var(--border-strong);
   background: var(--bg);
-  animation: drawer-in 200ms ease-out;
+  animation: drawer-in var(--duration-move) var(--ease);
 }
 
 @keyframes drawer-in {

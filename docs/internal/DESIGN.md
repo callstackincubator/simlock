@@ -259,7 +259,7 @@ put together from them and draws nothing of its own that one of them already dra
 Short, and only where it says where something came from. Colour changes on hover take 120ms
 (`--duration`). Moves take 220ms (`--duration-move`) on one easing (`--ease`): the sidebar
 widens and narrows; a page rises 10px as it opens; a list slides in from the left and an
-inspector from the right, again each time another thing is chosen; the chosen row's bar and a
+inspector from the right, again each time another thing is chosen; a drawer from the right, once, when it opens; the chosen row's bar and a
 meter or share bar slide to their new place. Nothing loops, nothing moves on its own, and
 charts never animate. With `prefers-reduced-motion: reduce`, there are no transitions and no
 animations at all.

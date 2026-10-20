@@ -679,7 +679,7 @@ test.describe("the leases page", () => {
       await follow(rowLink(page, granted.id));
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
       await page.keyboard.press("Escape");
-      expect(new URL(page.url()).pathname).toBe("/leases");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/leases");
     } finally {
       await host.dispose();
     }

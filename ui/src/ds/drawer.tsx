@@ -56,11 +56,12 @@ export interface DrawerTab {
 export function DrawerTabs(props: {
   readonly tabs: readonly DrawerTab[];
   readonly defaultValue: string;
+  readonly label: string;
 }) {
-  const { defaultValue, tabs } = props;
+  const { defaultValue, label, tabs } = props;
   return (
     <Tabs.Root className="drawer-tabs" defaultValue={defaultValue}>
-      <Tabs.List className="drawer-tab-list" aria-label="Lease">
+      <Tabs.List className="drawer-tab-list" aria-label={label}>
         {tabs.map((tab) => (
           <Tabs.Tab key={tab.value} value={tab.value} className="drawer-tab">
             {tab.label}
