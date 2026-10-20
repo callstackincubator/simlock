@@ -50,7 +50,7 @@ async function untilTheDaemonSays(
 async function openWaiting(page: Page, daemon: RunningDaemon, path = "/queue"): Promise<void> {
   await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Waiting" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
 }
 
 function row(page: Page, requester: string): Locator {
@@ -253,7 +253,7 @@ test.describe("the Waiting page", () => {
       await page.keyboard.press(tab);
       await page.keyboard.type(host.tokens.operator);
       await page.keyboard.press("Enter");
-      await expect(page.getByRole("heading", { level: 1, name: "Waiting" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
 
       await follow(row(page, "agent-b"));
       await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();

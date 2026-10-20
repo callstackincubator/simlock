@@ -22,8 +22,8 @@ const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
   await page.goto(daemon.url);
   await signIn(page, daemon.tokens.operator);
-  await page.getByRole("link", { name: "Workers", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+  await page.getByRole("link", { name: "Fleet", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 }
 
 function workerRows(page: Page): Locator {
@@ -106,7 +106,7 @@ test.describe("the workers page response helper against a gateway whose listener
       // why: once the helper drops the re-read the page's own promise settles (0 when aborted);
       // a rejection escaping the helper fails the test at its `route.fetch()` line instead.
       await asked;
-      await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
     } finally {
       await disposeFleet(fleet).catch(() => undefined);
     }

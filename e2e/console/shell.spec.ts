@@ -31,11 +31,11 @@ test.describe("the shell", () => {
 
     await signIn(page, daemon.tokens.operator);
     const nav = page.getByRole("navigation", { name: "Console" });
-    await expect(nav.getByRole("link", { name: "Workers" })).toBeHidden();
+    await expect(nav.getByRole("link", { name: "Fleet" })).toBeHidden();
     for (const label of NAV_LABELS) {
       await openFromNav(page, label);
       await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
-      await expect(nav.getByRole("link", { name: "Workers" })).toBeHidden();
+      await expect(nav.getByRole("link", { name: "Fleet" })).toBeHidden();
       expect(await hasHorizontalScroll(page)).toBe(false);
     }
     await page.goto("/no-such-page");
@@ -146,12 +146,12 @@ test.describe("the shell", () => {
     await page.goto("/");
     await signIn(page, daemon.tokens.operator);
     const nav = page.getByRole("navigation", { name: "Console" });
-    const label = nav.getByText("Workers", { exact: true });
+    const label = nav.getByText("Fleet", { exact: true });
     await expect(label).toBeVisible();
 
     await nav.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect(label).toBeHidden();
-    await expect(nav.getByRole("link", { name: "Workers" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Fleet" })).toBeVisible();
     await expect(nav.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
       "aria-expanded",
       "false",

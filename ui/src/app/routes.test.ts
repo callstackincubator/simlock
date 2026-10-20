@@ -5,9 +5,9 @@ import { ROUTES, routeFor } from "./routes";
 describe("the console's routes", () => {
   it("opens the overview at the root and each section at its path and the pages under it", () => {
     expect(routeFor("/")?.label).toBe("Overview");
-    expect(routeFor("/fleet")?.label).toBe("Workers");
-    expect(routeFor("/fleet/wrk_1")?.label).toBe("Workers");
-    expect(routeFor("/activity/e1")?.label).toBe("Events");
+    expect(routeFor("/fleet")?.label).toBe("Fleet");
+    expect(routeFor("/fleet/wrk_1")?.label).toBe("Fleet");
+    expect(routeFor("/activity/e1")?.label).toBe("Activity");
     expect(routeFor("/usage")?.label).toBe("Usage");
   });
 
@@ -19,10 +19,10 @@ describe("the console's routes", () => {
   it("lists the sections in the sidebar's order, the overview first", () => {
     expect(ROUTES.map((route) => route.path)).toEqual([
       "/",
+      "/attention",
       "/fleet",
       "/leases",
       "/queue",
-      "/attention",
       "/activity",
       "/usage",
     ]);

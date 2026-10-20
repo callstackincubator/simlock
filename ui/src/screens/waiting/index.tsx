@@ -41,7 +41,7 @@ export function WaitingBody({ page }: { readonly page: WaitingPage }) {
       wide
       list={
         <ListPane
-          title="Waiting"
+          title="Queue"
           meta={page.meta}
           footer={
             page.paging.total > page.paging.size ? (

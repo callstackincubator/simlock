@@ -399,7 +399,7 @@ test.describe("long lists page", () => {
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
 
     expect(await deviceIds()).toEqual(ids(51, 60, "dev"));
-    expect(await rowIds(pane(page, "Workers"), "/fleet")).toEqual(ids(26, 30, "wrk"));
+    expect(await rowIds(pane(page, "Fleet"), "/fleet")).toEqual(ids(26, 30, "wrk"));
     expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
       "devices-page": "3",
       page: "2",
@@ -424,7 +424,7 @@ test.describe("long lists page", () => {
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
     await open(page, daemon, "/fleet");
-    const rows = pane(page, "Workers").getByRole("list", { name: "Workers" });
+    const rows = pane(page, "Fleet").getByRole("list", { name: "Workers" });
     const range = pager(page, "Workers").locator(".pager-range");
 
     expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 25, "wrk"));

@@ -50,7 +50,7 @@ async function cliEvents(daemon: RunningDaemon): Promise<readonly Envelope[]> {
 async function openEvents(page: Page, daemon: RunningDaemon, path = "/activity"): Promise<void> {
   await page.goto(new URL(path, daemon.url).href);
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
 }
 
 function feed(page: Page): Locator {
@@ -330,13 +330,13 @@ async function keyboardOnly(page: Page, host: RunningDaemon, tab: string): Promi
   await page.keyboard.press("Enter");
   await expect(page.getByRole("navigation").first()).toBeVisible();
 
-  const nav = page.getByRole("link", { name: "Events", exact: true });
+  const nav = page.getByRole("link", { name: "Activity", exact: true });
   for (let step = 0; step < 30 && !(await isFocused(nav)); step += 1) {
     await page.keyboard.press(tab);
   }
   await expect(nav).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   await expect(rows(page).filter({ hasText: "lease.granted" })).not.toHaveCount(0);
 
   const all = page.getByRole("radio", { name: "All" });

@@ -162,7 +162,7 @@ test.describe("every view", () => {
         ["/", "Leases held, last hour", 0],
         ["/", "Requests in the queue, last hour", 1],
         ["/", "Device slots in use, last hour", 2],
-        ["/activity", "Events", 0],
+        ["/activity", "Activity", 0],
       ] as const) {
         await visit(page, host, path);
         if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(3);

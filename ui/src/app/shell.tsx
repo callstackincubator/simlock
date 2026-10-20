@@ -26,6 +26,7 @@ export function Shell() {
 
   const entries = ROUTES.map((entry) => ({
     current: entry === route,
+    ...(entry.group === undefined ? {} : { group: entry.group }),
     icon: entry.icon,
     label: entry.label,
     to: entry.path,

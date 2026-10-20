@@ -47,7 +47,7 @@ export function EventsContent(props: {
         wide
         focus="list"
         list={
-          <ListPane title="Events">
+          <ListPane title="Activity">
             <Loaded view={view}>{() => null}</Loaded>
           </ListPane>
         }
@@ -78,7 +78,7 @@ function EventList(props: {
   const chosenId = page.chosen.kind === "event" ? page.chosen.detail.id : undefined;
   return (
     <ListPane
-      title="Events"
+      title="Activity"
       meta="live"
       toolbar={
         <>

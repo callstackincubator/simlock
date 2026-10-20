@@ -78,7 +78,7 @@ export function WorkersBody({
 function WorkerList({ page }: { readonly page: WorkersPage }) {
   return (
     <ListPane
-      title="Workers"
+      title="Fleet"
       meta={page.meta}
       toolbar={
         <ChoiceChips

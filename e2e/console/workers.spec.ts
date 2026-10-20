@@ -111,8 +111,8 @@ async function untilTheGatewaySays(
 async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
   await page.goto(daemon.url);
   await signIn(page, daemon.tokens.operator);
-  await page.getByRole("link", { name: "Workers", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+  await page.getByRole("link", { name: "Fleet", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 }
 
 function row(page: Page, name: string): Locator {
@@ -873,8 +873,8 @@ test.describe("the workers page", () => {
     await page.keyboard.press(tab);
     await page.keyboard.type(daemon.tokens.operator);
     await page.keyboard.press("Enter");
-    await follow(page.getByRole("link", { name: "Workers", exact: true }));
-    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await follow(page.getByRole("link", { name: "Fleet", exact: true }));
+    await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 
     await follow(row(page, name).getByRole("link"));
     await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(name)}$`));

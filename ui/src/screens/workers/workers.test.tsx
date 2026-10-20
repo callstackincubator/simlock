@@ -145,7 +145,7 @@ describe("the workers list", () => {
   it("heads the list with how many workers are up and offers the three filters", () => {
     const markup = html(page(WORKER));
 
-    expect(text(markup)).toContain("Workers 1 / 1 up");
+    expect(text(markup)).toContain("Fleet 1 / 1 up");
     for (const label of ["All", "Issues", "Busy"]) expect(text(markup)).toContain(label);
     expect(markup).toContain('value="issues"');
   });
