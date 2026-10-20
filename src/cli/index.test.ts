@@ -3876,6 +3876,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
 describe("CLI: alerts test (ADR 0035 §1)", () => {
   const USAGE = "Usage: simlock alerts test <destination> [--json]\n";
+  const errorLine = (stderr: string): unknown => JSON.parse(stderr.trim().split("\n").at(-1) ?? "");
 
   async function runAlerts(argv: string[], overrides: Partial<SimlockAdminClient> = {}) {
     const output = outputCapture();
@@ -3929,6 +3930,36 @@ describe("CLI: alerts test (ADR 0035 §1)", () => {
       expect(refused.connected).toBe(false);
       expect(JSON.parse(refused.stderr)).toEqual({ error: { code: "USAGE", message } });
     }
+  });
+
+  it("simlock alerts test exits 1 on ALERT_SEND_FAILED and 12 on UNKNOWN_ALERT_DESTINATION with the error line", async () => {
+    const failed = await runAlerts(["alerts", "test", "ops-slack"], {
+      testAlertDestination: () =>
+        Promise.reject(
+          new SimlockError("ALERT_SEND_FAILED", "transport", "ops-slack answered HTTP 404", {
+            destination: "ops-slack",
+            status: 404,
+          }),
+        ),
+    });
+    expect([failed.code, failed.stdout, errorLine(failed.stderr)]).toEqual([
+      1,
+      "",
+      { error: { code: "ALERT_SEND_FAILED", message: "ops-slack answered HTTP 404" } },
+    ]);
+
+    const unknown = await runAlerts(["alerts", "test", "nope"], {
+      testAlertDestination: () =>
+        Promise.reject(
+          new SimlockError("UNKNOWN_ALERT_DESTINATION", "domain", "No alert destination named", {
+            destination: "nope",
+          }),
+        ),
+    });
+    expect([unknown.code, errorLine(unknown.stderr)]).toEqual([
+      12,
+      { error: { code: "UNKNOWN_ALERT_DESTINATION", message: "No alert destination named" } },
+    ]);
   });
 });
 
