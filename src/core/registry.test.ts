@@ -2812,4 +2812,22 @@ describe("Registry: state.db rows", () => {
       { device_id: virtual.id },
     ]);
   });
+
+  it("two transitions of two devices started in one tick both persist, in memory and after a restart", async () => {
+    const { open, readyDevice, registry } = await world();
+    const first = await readyDevice("fk-first");
+    const second = await readyDevice("fk-second");
+    const shutdown = (id: string) =>
+      registry.transitionDevice(id, "shutdown", {
+        event: "device.shutdown",
+        payload: { deviceId: id, initiator: "idle" },
+      });
+
+    await Promise.all([shutdown(first.id), shutdown(second.id)]);
+
+    const restarted = await open({ generate: () => "later" });
+    for (const view of [registry, restarted]) {
+      expect(view.snapshot.devices.map((device) => device.state)).toEqual(["shutdown", "shutdown"]);
+    }
+  });
 });
