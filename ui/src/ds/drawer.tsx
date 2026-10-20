@@ -4,6 +4,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { Tabs } from "@base-ui/react/tabs";
 import type { ReactNode } from "react";
 
+import { IconButton } from "./button";
 import { Icon } from "./icon";
 
 // why: a drawer is a modal dialog drawn at the right edge: the rest of the console, sidebar
@@ -28,9 +29,13 @@ export function Drawer(props: {
         <Dialog.Popup className="drawer" finalFocus={finalFocus}>
           <header className="drawer-head">
             <Dialog.Title className="drawer-title mono">{title}</Dialog.Title>
-            <Dialog.Close className="icon-button" aria-label="Close">
-              <Icon name="close" />
-            </Dialog.Close>
+            <Dialog.Close
+              render={
+                <IconButton aria-label="Close">
+                  <Icon name="close" />
+                </IconButton>
+              }
+            />
           </header>
           {children}
         </Dialog.Popup>
