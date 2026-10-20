@@ -496,23 +496,29 @@ export class WarmPool {
       this.#launch(proposal.target, () => this.#provision(proposal.spec, proposal.target));
       return;
     }
-    // A failed keep boot releases its reservation, which changes capacity and so triggers the next
+    // why: a failed keep boot releases its reservation, which changes capacity and so triggers the next
     // pass at once; without a pause that would retry a broken one in a loop. A failed shutdown
     // frees nothing, but any other trigger that comes soon would propose it again, so it is held
-    // back the same way. A target's boot is held back by the retry schedule instead, which the
-    // policy reads before it proposes one.
+    // back the same way. A target's or a waiter's boot is held back by the retry schedule instead,
+    // which the policy reads before it proposes one.
+    const owner =
+      proposal.action === "boot" && proposal.reason === "waiting-request"
+        ? this.#specOf(proposal.deviceId)
+        : proposal.target;
     if (
-      proposal.target === undefined &&
+      owner === undefined &&
       (this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()
     ) {
       return;
     }
     if (proposal.action === "shutdown") await this.#shutdown(proposal.deviceId);
-    else if (proposal.target === undefined) await this.#boot(proposal.deviceId, undefined);
-    else {
-      const target = proposal.target;
-      this.#launch(target, () => this.#boot(proposal.deviceId, target));
-    }
+    else if (owner === undefined) await this.#boot(proposal.deviceId, undefined);
+    else this.#launch(owner, () => this.#boot(proposal.deviceId, owner));
+  }
+
+  #specOf(deviceId: string): VirtualSpec | undefined {
+    return this.options.registry.snapshot.virtualDevices.find((device) => device.id === deviceId)
+      ?.spec;
   }
 
   /**

@@ -1017,7 +1017,9 @@ describe("warm pool targets", () => {
     const rig = harness(shutDown, {
       boot: async (target) => {
         await gate.gate;
-        return { ...target, state: "ready" };
+        const ready = { ...target, state: "ready" as const };
+        rig.state.devices = rig.state.devices.map((item) => (item.id === target.id ? ready : item));
+        return ready;
       },
       maxConcurrentBoots: 3,
       waiting: () => shutDown.map((item) => waiter(item.spec)),
