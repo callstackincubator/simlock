@@ -1810,8 +1810,9 @@ them:
 has the same name as a built-in one, the built-in profile wins and the model
 is not custom. Simlock's own models are listed first, then the SDK's, then
 the custom ones. If `devices.xml` cannot be read, the built-in models are still
-listed and the daemon logs a warning with the path and the reason. A custom model is marked `(custom)` in the human view of `simlock
-catalog` and listed in `customModels` in `--json`.
+listed and the daemon logs a warning with the path and the reason. A custom
+model is marked `(custom)` in the human view of `simlock catalog` and listed
+in `customModels` in `--json`.
 
 ## `simlock component install <ios|android> <version> [--worker <id>... | --all-workers]`
 

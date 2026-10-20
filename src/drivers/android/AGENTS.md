@@ -146,5 +146,3 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 - **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
   between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
 - **Port checks are partial.** A port handed out but not yet booted reads free to another instance.
-- **Android diagnostics are dropped.** `onDiagnostic` (`snapshot-cold-boot`, unreadable
-  devices.xml) is not wired in `daemon/main.ts`.
