@@ -173,8 +173,10 @@ async function createHarness(
     readonly warmPoolEnabled?: boolean;
     /** Replaces keys of the `warmPool` block, `targets` and `maxConcurrentBoots` among them. */
     readonly warmPool?: Partial<Config["warmPool"]>;
-    /** `0` leaves no device recently released, so the pool boots none back unasked. */
+    /** why: how long a ready device may idle before the pool shuts it down. */
     readonly idleShutdownAfterMs?: number;
+    /** why: starts the warm pool as the daemon's startup does, so it learns from the leases and reacts to events. */
+    readonly startPool?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -229,6 +231,7 @@ async function createHarness(
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
 
+  if (options.startPool === true) await engine.convergeRunningCapacity();
   return { bus, clock, decisions: wiring.decisions, driver, engine, registry, state };
 }
 
@@ -3056,7 +3059,7 @@ describe("createLeasing warm pool", () => {
       platform: "ios",
       reclaimResult: "shutdown",
     });
-    const harness = await createHarness({ driver });
+    const harness = await createHarness({ driver, startPool: true });
     const granting = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
     await flush();
     clock.advance(50);
@@ -3089,6 +3092,7 @@ describe("createLeasing warm pool", () => {
         reclaimResult: "shutdown",
       });
       const harness = await createHarness({
+        startPool: true,
         driver,
         limits: {
           android: { maxDevices: 1, maxRunning: 1 },
@@ -3296,7 +3300,7 @@ describe("createLeasing warm pool", () => {
       platform: "ios",
       reclaimResult: "shutdown",
     });
-    const harness = await createHarness({ driver });
+    const harness = await createHarness({ driver, startPool: true });
     const first = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
 
     await harness.engine.release(first.lease.id, "explicit");
@@ -4524,6 +4528,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       reclaimResult: "shutdown",
     });
     const harness = await createHarness({
+      startPool: true,
       driver,
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },

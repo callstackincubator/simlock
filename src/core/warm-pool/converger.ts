@@ -100,7 +100,7 @@ interface Flight {
 export class WarmPool {
   readonly #logger: Logger;
   readonly #unsubscribe: (() => void)[] = [];
-  /** When a device whose keep boot or shutdown failed may be tried again, by device id. */
+  /** why: when a device whose shutdown failed may be tried again, by device id. */
   readonly #retryAfter = new Map<string, number>();
   /** When a target's spec whose boot or creation failed may be tried again. */
   readonly #schedule = new RetrySchedule();
@@ -559,21 +559,14 @@ export class WarmPool {
       this.#launch(proposal.target, true, () => this.#provision(proposal.spec, proposal.target));
       return;
     }
-    // why: a failed keep boot releases its reservation, which changes capacity and so triggers the next
-    // pass at once; without a pause that would retry a broken one in a loop. A failed shutdown
-    // frees nothing, but any other trigger that comes soon would propose it again, so it is held
-    // back the same way. A target's or a waiter's boot is held back by the retry schedule instead,
-    // which the policy reads before it proposes one.
-    const owner = this.#ownerOf(proposal);
-    if (
-      owner === undefined &&
-      (this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()
-    ) {
+    if (proposal.action === "shutdown") {
+      // why: a failed shutdown frees nothing, but any other trigger that comes soon would propose it again, so it is held back for a tick. A boot is held back by the retry schedule, which the policy reads before it proposes one.
+      if ((this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()) return;
+      await this.#shutdown(proposal.deviceId);
       return;
     }
-    if (proposal.action === "shutdown") await this.#shutdown(proposal.deviceId);
-    else if (owner === undefined) await this.#boot(proposal.deviceId, undefined);
-    else this.#launch(owner, false, () => this.#boot(proposal.deviceId, owner));
+    const owner = this.#ownerOf(proposal);
+    if (owner !== undefined) this.#launch(owner, false, () => this.#boot(proposal.deviceId, owner));
   }
 
   /** why: the spec a boot or creation is held back by, when it is one of a target's or a waiter's. */
@@ -621,16 +614,16 @@ export class WarmPool {
       const done = await this.options.lifecycle.shutdown(device, "warm-pool", "cleanup");
       if (done === undefined) return;
     } catch (error: unknown) {
-      this.#logFailure(device, "shutdown", error, true);
+      this.#logFailure(device, "shutdown", error);
     }
     this.options.acquisition.kick();
   }
 
   /**
-   * Boots a shut-down device; for a target, also reports the outcome to the failure schedule.
+   * why: boots a shut-down device and reports the outcome to the failure schedule of its owner.
    * Whether a boot was attempted: not when the device is no longer there to boot.
    */
-  async #boot(deviceId: string, target: VirtualSpec | undefined): Promise<boolean> {
+  async #boot(deviceId: string, target: VirtualSpec): Promise<boolean> {
     const held = await this.options.decisions.run(() => {
       const device = this.#unleased(deviceId, "shutdown");
       if (device === undefined) return undefined;
@@ -650,10 +643,10 @@ export class WarmPool {
     try {
       const done = await this.options.lifecycle.bootWarm(held.device, held.claim);
       if (done === undefined) return false;
-      if (target !== undefined) this.#schedule.succeeded(target);
+      this.#schedule.succeeded(target);
     } catch (error: unknown) {
-      this.#logFailure(held.device, "boot", error, target === undefined);
-      if (target !== undefined) this.#failed(target);
+      this.#logFailure(held.device, "boot", error);
+      this.#failed(target);
     } finally {
       await this.options.decisions.run(() => {
         held.claim.release();
@@ -717,17 +710,10 @@ export class WarmPool {
     return device;
   }
 
-  /**
-   * Logs a failed step. Only a keep boot or a shutdown pauses its device: a target's boot is held
-   * back by the retry schedule alone, so a keep boot of that device is not dropped for it.
-   */
-  #logFailure(
-    device: VirtualDevice,
-    step: "shutdown" | "boot",
-    error: unknown,
-    pause: boolean,
-  ): void {
-    if (pause) this.#retryAfter.set(device.id, this.options.clock.now() + WARM_POOL_TICK_MS);
+  /** why: only a shutdown pauses its device; a boot is held back by the retry schedule alone. */
+  #logFailure(device: VirtualDevice, step: "shutdown" | "boot", error: unknown): void {
+    if (step === "shutdown")
+      this.#retryAfter.set(device.id, this.options.clock.now() + WARM_POOL_TICK_MS);
     this.#logger.warn(`warm pool ${step} of a device failed`, {
       deviceId: device.id,
       step,

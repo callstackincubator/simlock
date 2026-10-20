@@ -28,7 +28,6 @@ export type WarmProposal =
         | "over-budget"
         | "disabled"
         | "waiting-request"
-        | "recently-released"
         | "displaced"
         | "target"
         | "never-leased-idle";
@@ -171,7 +170,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const bootable = view.devices.filter(
     (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
-  const queued = boots(view, running, bootable, room, held);
+  const queued = boots(view, running, bootable, room);
   const keeps = queued.proposals;
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
@@ -247,12 +246,6 @@ function hasRoom(room: Slots, device: VirtualDevice): boolean {
   return room.global >= 1 && room[device.spec.platform] >= 1;
 }
 
-/** Whether an idle warm device may take a slot: one beyond what the reserve holds back. */
-function hasWarmRoom(room: Slots, held: Slots, device: VirtualDevice): boolean {
-  const platform = device.spec.platform;
-  return room.global - held.global >= 1 && room[platform] - held[platform] >= 1;
-}
-
 /** Whether `device` is one a waiting request would be granted: it fits and is in the pool mode. */
 function serves(device: VirtualDevice, demand: WaitingDemand): boolean {
   return mayBeGranted(device) && servesSpec(device.spec, demand);
@@ -310,16 +303,13 @@ interface QueueState {
  * why: the queue is served in order, one device per waiter. A waiter behind the head gets a
  * shut-down device booted or a new one created, within `maxConcurrentBoots` counting the pool's
  * flights, each in-flight waiter and the head's own work; the head's creation stays leasing's.
- * Then the shut-down devices released less than `idle.shutdownAfterMs` ago, most recently
- * released first. Slots a waiting request no idle device serves is about to take are held back
- * from the second kind, and so are the slots the reserve holds.
+ * Slots a waiting request no idle device serves is about to take are held back from the targets.
  */
 function boots(
   view: WarmPolicyView,
   running: readonly VirtualDevice[],
   bootable: readonly VirtualDevice[],
   room: Slots,
-  held: Slots,
 ): QueuePass {
   const state: QueueState = {
     bootable,
@@ -349,7 +339,6 @@ function boots(
       holdSlot(room, demand.platform);
     }
   }
-  bootRecentlyReleased(state, held);
   return { proposals: state.proposals, started: state.started, stuck: state.stuck };
 }
 
@@ -359,26 +348,6 @@ function onItsWayFor(
   demand: WaitingDemand,
 ): WarmPolicyView["onItsWay"][number] | undefined {
   return view.onItsWay.find((entry) => !matched.has(entry) && servesSpec(entry.spec, demand));
-}
-
-function bootRecentlyReleased(state: QueueState, held: Slots): void {
-  const { room, view } = state;
-  const recent = state.bootable
-    .filter(
-      (device) =>
-        !state.taken.has(device.id) &&
-        !view.resetDevices.has(device.id) &&
-        view.now - (device.lastLeaseEndedAt ?? Number.NEGATIVE_INFINITY) <
-          view.config.shutdownAfterMs,
-    )
-    .sort((left, right) => compareLeastRecentlyUsed(right, left));
-  for (const device of recent) {
-    if (hasWarmRoom(room, held, device) && view.admit.boot(device) === undefined) {
-      claim(room, device);
-      state.started += 1;
-      state.proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
-    }
-  }
 }
 
 function holdSlot(room: Slots, platform: Platform): void {
