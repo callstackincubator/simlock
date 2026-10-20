@@ -79,21 +79,19 @@ export function useFleet(): LoadView<FleetPage> {
   const paging = usePaging({ sizes: TABLE_SIZES, total: ready ? shown.length : undefined });
   const keep = listSearch(search);
 
-  return mapView(workers, (list) => {
-    const start = (paging.page - 1) * paging.size;
-    return {
-      empty: list.workers.length === 0,
-      filter,
-      meta: upMeta(list.workers),
-      paging,
-      query,
-      rows: shown.slice(start, start + paging.size).map((worker) => workerRow(worker, keep)),
-      // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
-      // letter of the search.
-      search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
-      setFilter,
-    };
-  });
+  // why: the table cuts the page out of every row it is given.
+  return mapView(workers, (list) => ({
+    empty: list.workers.length === 0,
+    filter,
+    meta: upMeta(list.workers),
+    paging,
+    query,
+    rows: shown.map((worker) => workerRow(worker, keep)),
+    // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
+    // letter of the search.
+    search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
+    setFilter,
+  }));
 }
 
 // why: the holders' labels come from the token records and their lease links from the lease list;

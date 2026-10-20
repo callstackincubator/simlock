@@ -146,10 +146,6 @@ function pad(n: number): string {
   return String(n).padStart(4, "0");
 }
 
-function pane(page: Page, title: string): Locator {
-  return page.getByRole("region", { name: title, exact: true });
-}
-
 function rowIds(list: Locator, section: string): Promise<string[]> {
   return list.getByRole("link").evaluateAll(
     (links, prefix) =>
@@ -366,7 +362,7 @@ test.describe("long lists page", () => {
     await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
   });
 
-  test("the worker list and the devices table in its inspector keep their own page in the URL", async ({
+  test("the Fleet table and the devices table on a worker's page keep their own page in the URL", async ({
     daemon,
     page,
   }) => {
@@ -385,7 +381,7 @@ test.describe("long lists page", () => {
       label: `worker-${pad(index + 1)}`,
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/fleet/wrk_0001");
+    await open(page, daemon, "/fleet");
     const devicesTable = page.getByRole("region", { name: "Devices" }).locator("table");
     const deviceIds = async () =>
       (await devicesTable.locator("tbody tr td:first-child").allTextContents()).map(
@@ -394,21 +390,23 @@ test.describe("long lists page", () => {
 
     await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
     await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
+    await expect(page.locator("main tbody").getByRole("link").first()).toHaveText("worker-0026");
+    expect(await rowIds(page.locator("main tbody"), "/fleet")).toEqual(ids(26, 30, "wrk"));
+    await page.getByRole("link", { exact: true, name: "worker-0026" }).click();
     await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
     await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
 
     expect(await deviceIds()).toEqual(ids(51, 60, "dev"));
-    expect(await rowIds(pane(page, "Fleet"), "/fleet")).toEqual(ids(26, 30, "wrk"));
     expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
       "devices-page": "3",
       page: "2",
     });
 
-    // A reload opens both where they were.
     await page.reload();
-    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
+    await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
+    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
   });
 
   test("the worker list pages at 25 like the others and keeps a new size in the URL", async ({
@@ -424,13 +422,14 @@ test.describe("long lists page", () => {
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
     await open(page, daemon, "/fleet");
-    const rows = pane(page, "Fleet").getByRole("list", { name: "Workers" });
+    const rows = page.locator("main tbody");
     const range = pager(page, "Workers").locator(".pager-range");
 
     expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 25, "wrk"));
     await expect(range).toHaveText("1–25 of 30");
     await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
     await expect(range).toHaveText("26–30 of 30");
+    await expect(rows.getByRole("link").first()).toHaveText("worker-0026");
     expect(await rowIds(rows, "/fleet")).toEqual(ids(26, 30, "wrk"));
     await expect(pager(page, "Workers").getByLabel("Per page").locator("option")).toHaveText([
       "25",

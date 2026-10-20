@@ -27,7 +27,10 @@ async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
 }
 
 function workerRows(page: Page): Locator {
-  return page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem");
+  return page
+    .getByRole("table")
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell") });
 }
 
 async function askForWorkerList(page: Page, daemon: RunningDaemon): Promise<number> {

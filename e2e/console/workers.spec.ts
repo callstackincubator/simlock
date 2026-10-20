@@ -880,7 +880,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("a granted lease shows on the worker's row and inspector within a second, without a reload", async ({
+  test("a granted lease shows on the worker's page and on its Fleet row within a second, without a reload", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -888,9 +888,10 @@ test.describe("the workers page", () => {
       { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
     ]);
     try {
+      const running = () => row(page, "worker-a").getByRole("cell").nth(3);
       await openConsole(page, fleet.gateway);
+      await expect(running()).toHaveText(/^0 \/ \d+$/);
       await row(page, "worker-a").getByRole("link").click();
-      await expect(row(page, "worker-a")).toHaveText(/0 \/ \d+$/);
       await expect(figure(page, "Leases")).toContainText("0");
 
       await lease(fleet.gateway, "console-e2e");
@@ -899,8 +900,9 @@ test.describe("the workers page", () => {
         (views) => views.find((view) => view.label === "worker-a")?.leases.length === 1,
       );
 
-      await expect(row(page, "worker-a")).toHaveText(/1 \/ \d+$/, { timeout: 1_000 });
       await expect(figure(page, "Leases")).toContainText("1", { timeout: 1_000 });
+      await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
+      await expect(running()).toHaveText(/^1 \/ \d+$/, { timeout: 1_000 });
     } finally {
       await disposeFleet(fleet);
     }
@@ -1077,7 +1079,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("a disconnected worker's square and load say so within a second", async ({ page }) => {
+  test("a disconnected worker's state word and load say so within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
@@ -1094,12 +1096,13 @@ test.describe("the workers page", () => {
         (views) => views.find((view) => view.label === "worker-b")?.connection === "disconnected",
       );
 
-      await expect(row(page, "worker-b").getByRole("img", { name: "disconnected" })).toBeVisible({
-        timeout: 1_000,
-      });
+      await expect(page.locator(".worker-line")).toContainText("disconnected", { timeout: 1_000 });
       await expect(page.getByText("No reading while disconnected")).toBeVisible({ timeout: 1_000 });
-      await expect(row(page, "worker-a").getByRole("img", { name: "disconnected" })).toHaveCount(0);
-      await expect(page.locator(".list-meta")).toHaveText("1 / 2 up");
+
+      await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
+      await expect(row(page, "worker-b").getByRole("cell").nth(1)).toHaveText("disconnected");
+      await expect(row(page, "worker-a").getByRole("cell").nth(1)).not.toHaveText("disconnected");
+      await expect(page.getByText("1 / 2 up")).toBeVisible();
     } finally {
       await disposeFleet(fleet);
     }
@@ -1151,13 +1154,15 @@ test.describe("the workers page", () => {
       await lease(fleet.workers[0] as RunningDaemon, "console-e2e");
       await answerWithoutLoad(page);
       await openConsole(page, fleet.gateway);
-      await expect(
-        row(page, "old-worker").getByRole("img", { name: "incompatible" }),
-      ).toBeVisible();
-      await expect(row(page, "worker-b").getByRole("img", { name: "drained" })).toBeVisible();
+      await expect(row(page, "old-worker")).toContainText("incompatible");
+      await expect(row(page, "worker-b")).toContainText("drained");
 
       for (const colorScheme of ["light", "dark"] as const) {
         await page.emulateMedia({ colorScheme });
+        await page
+          .getByRole("navigation", { name: "Console" })
+          .getByRole("link", { name: "Fleet" })
+          .click();
         await expectSquareColours(page, `list ${colorScheme}`, [
           "connected",
           "drained",
@@ -1170,8 +1175,8 @@ test.describe("the workers page", () => {
           "running",
           "compatible",
         ]);
-        await openTab(page, "Overview");
-        await expectSquareColours(page, `overview ${colorScheme}`, ["connected", "leased"]);
+        await openTab(page, "Devices");
+        await expectSquareColours(page, `devices ${colorScheme}`, ["connected", "leased"]);
       }
     } finally {
       hangUp();
@@ -1179,7 +1184,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("the workers page has no horizontal scroll at 360px wide, in the list and in the inspector", async ({
+  test("the fleet pages have no horizontal scroll at 360px wide, in the table and on a worker's page", async ({
     page,
   }) => {
     const host = await startDaemon("worker", {
@@ -1196,17 +1201,15 @@ test.describe("the workers page", () => {
       await page.goto(new URL("/fleet", host.url).href);
       await signIn(page, host.tokens.operator);
       const [view] = await workerList(host);
-      await expect(page.getByRole("list", { name: "Workers", exact: true })).toBeVisible();
-      await expect(page.getByRole("heading", { level: 2 })).toBeHidden();
+      await expect(row(page, view?.id ?? "")).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
 
       await row(page, view?.id ?? "")
         .getByRole("link")
         .click();
       await expect(page.locator("tbody tr").first()).toBeVisible();
-      await expect(page.getByRole("list", { name: "Workers", exact: true })).toBeHidden();
       expect(await hasHorizontalScroll(page)).toBe(false);
-      for (const tab of ["Host", "Warm pool"]) {
+      for (const tab of ["Host", "Warm pool", "Events"]) {
         await openTab(page, tab);
         expect(await hasHorizontalScroll(page), tab).toBe(false);
       }
