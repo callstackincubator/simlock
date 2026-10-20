@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
 import { defined } from "./defined";
+import type { ConsoleEvent } from "./events";
 import { formatDuration } from "./time";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
@@ -315,4 +316,11 @@ function leaseWorker(
   const name = workerNameOfLease(named, workers);
   if (name === undefined) return undefined;
   return worker === undefined ? { name } : { name, to: workerPath(worker.id) };
+}
+
+export function eventsOfLease(
+  _events: readonly ConsoleEvent[],
+  _leaseId: string,
+): readonly ConsoleEvent[] {
+  return [];
 }

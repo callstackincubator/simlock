@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  eventsOfLease,
   filterLeaseRows,
   holderOf,
   type LeaseDetails,
@@ -12,6 +13,7 @@ import {
   streamOffer,
   type TokenRecord,
 } from "./leases";
+import type { ConsoleEvent } from "./events";
 import { itemIdFrom } from "./paths";
 import type { WorkerView } from "./workers";
 
@@ -371,5 +373,24 @@ describe("a lease's holder on a worker a gateway feeds", () => {
     });
     expect(holderOf("gw:03787a13-4eac:claude-ios-3", tokens)).toEqual({ id: "claude-ios-3" });
     expect(holderOf("claude-ios-3", tokens)).toEqual({ id: "claude-ios-3" });
+  });
+});
+
+function heldEvent(seq: number, event: string, payload: unknown): ConsoleEvent {
+  return { event, id: `evt_${seq}`, payload, seq, timestamp: NOW + seq * 1_000 };
+}
+
+describe("a lease's events", () => {
+  it("lists the held events whose payload.leaseId is the lease's id, newest first", () => {
+    const events = [
+      heldEvent(1, "lease.granted", { leaseId: "lse_1" }),
+      heldEvent(2, "lease.granted", { leaseId: "lse_2" }),
+      heldEvent(3, "lease.renewed", { leaseId: "lse_1" }),
+      heldEvent(4, "worker.connected", { workerId: "wrk_1" }),
+      heldEvent(5, "lease.expired", "lse_1"),
+    ];
+
+    expect(eventsOfLease(events, "lse_1").map((event) => event.id)).toEqual(["evt_3", "evt_1"]);
+    expect(eventsOfLease(events, "lse_9")).toEqual([]);
   });
 });
