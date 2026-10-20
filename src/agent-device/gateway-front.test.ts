@@ -1691,6 +1691,37 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     ]);
   });
 
+  it("through the gateway, `devices` leaves out a lease that was released, and a lease the gateway's `lease.list` omits from that one answer while still holding it", async () => {
+    const rig = await setUp({ workers: [{ label: "w1", maxRunning: 3 }] });
+    for (const n of [1, 2, 3]) await granted(rig, n);
+    await listedByGateway(rig, 3);
+    first(rig).fake.listDevices(
+      [1, 2, 3].map((n) => ({ id: addressOfLease(rig, n), name: `lease-${String(n)}` })),
+    );
+    expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({ ok: true });
+    const listing = leaveOutOfNextListing(rig.gateway, hex(2));
+
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["lease-3"]);
+    expect(listing.cut()).toBe(1);
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual([
+      "lease-2",
+      "lease-3",
+    ]);
+  });
+
+  it("through the gateway, `devices` after `simlock release --all` on the gateway leaves the ended lease out and ends it for the front, so the next heartbeat answers the ended-by-simlock reply without reaching the worker", async () => {
+    const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
+    await granted(rig, 1);
+    await listedByGateway(rig, 1);
+    first(rig).fake.listDevices([{ id: addressOfLease(rig, 1), name: "lease-1" }]);
+    await rig.gateway.dispatch("lease.release-all", {}, adminSession);
+
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual([]);
+    const received = heartbeatsReceived(first(rig));
+    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+    expect(heartbeatsReceived(first(rig))).toBe(received);
+  });
+
   it("through the gateway, `devices` when W2's agent-device answers an error passes that error on; when W2 answers a body with no list, it answers `could not read the device list from the worker holding lease <id>` with status 502", async () => {
     const rig = await twoLeasesOnTwoWorkers();
     holderOf(rig, 1).fake.listDevices([{ id: addressOfLease(rig, 1), name: "first" }]);

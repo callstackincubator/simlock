@@ -26,5 +26,7 @@ export async function tokenDevices(
     if (listed.some((lease) => lease.id === entry.leaseId)) continue;
     if (context.link.stillHeld?.(entry.leaseId) !== true) context.map.markEnded(entry.leaseId);
   }
-  return context.map.liveOf(identity.principal);
+  return context.map
+    .liveOf(identity.principal)
+    .filter((entry) => listed.some((lease) => lease.id === entry.leaseId));
 }
