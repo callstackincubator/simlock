@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   capacityChangedPayload,
   FakeDriver,
+  loadTestRegistry,
+  openTestState,
   testComponentWiring,
   type FakeDriverOptions,
 } from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
@@ -29,7 +32,6 @@ import {
   type LatestPresence,
   Nuke,
   PassthroughRefusedError,
-  Registry,
   SerializedDecision,
   RuntimeMissingError,
   type CatalogReader,
@@ -207,6 +209,42 @@ function withHttp(config: Config, http: Config["http"] | undefined): Config {
   return http === undefined ? config : { ...config, http };
 }
 
+interface SeededPhysicalDevice {
+  readonly createdAt: number;
+  readonly driverDeviceId: string;
+  readonly enrolledApps: readonly string[];
+  readonly id: string;
+  readonly lastLeaseEndedAt?: number;
+  readonly reclaimingSince?: number;
+  readonly spec: { readonly class: string; readonly model: string; readonly osVersion: string };
+  readonly state: string;
+}
+
+function seedPhysicalDevices(state: StateDatabase, devices: readonly SeededPhysicalDevice[]): void {
+  for (const device of devices) {
+    state.database
+      .prepare(
+        "INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version, class, created_at, last_lease_ended_at, reclaiming_since) VALUES (?, 'ios', 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        device.id,
+        device.driverDeviceId,
+        device.state,
+        device.spec.model,
+        device.spec.osVersion,
+        device.spec.class,
+        device.createdAt,
+        device.lastLeaseEndedAt ?? null,
+        device.reclaimingSince ?? null,
+      );
+    device.enrolledApps.forEach((app, position) => {
+      state.database
+        .prepare("INSERT INTO device_enrolled_apps (device_id, position, app) VALUES (?, ?, ?)")
+        .run(device.id, position, app);
+    });
+  }
+}
+
 // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function buildDispatcher(
   overrides: {
@@ -256,8 +294,7 @@ async function buildDispatcher(
     readonly otherStallDrivers?: readonly FakeDriver[];
     /** Extra leasing options, such as `defaultModes` (a platform's default device mode). */
     readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
-    /** A `state.json` the registry loads, for a test that starts from records already on disk. */
-    readonly state?: object;
+    readonly physicalDevices?: readonly SeededPhysicalDevice[];
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
     readonly load?: DispatcherOptions["load"];
@@ -266,15 +303,13 @@ async function buildDispatcher(
   const clock = overrides.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const filesystem = new MemoryFilesystem();
-  if (overrides.state !== undefined) {
-    await filesystem.writeFileAtomic("/state.json", JSON.stringify(overrides.state));
-  }
-  const registry = await Registry.load({
+  const state = await openTestState();
+  seedPhysicalDevices(state, overrides.physicalDevices ?? []);
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: sequence(),
-    statePath: "/state.json",
+    state,
   });
   const driver = new FakeDriver({
     availableOsVersions: ["26.5"],
@@ -1454,28 +1489,20 @@ describe("Dispatcher: device mode on every surface", () => {
 
   it("lease.request grants a physical device with physical true and its class on the device", async () => {
     const { dispatcher, driver, engine } = await buildDispatcher({
-      state: {
-        devices: [],
-        leases: [],
-        physicalDevices: [
-          {
-            createdAt: 1,
-            driverData: {},
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            enrolledApps: [],
-            id: "dev_phys",
-            physical: true,
-            spec: {
-              class: "tablet",
-              model: "iPad Pro",
-              osVersion: "18.4",
-              physical: true,
-              platform: "ios",
-            },
-            state: "ready",
+      physicalDevices: [
+        {
+          createdAt: 1,
+          driverDeviceId: "00008110-001A2B3C4D5E",
+          enrolledApps: [],
+          id: "dev_phys",
+          spec: {
+            class: "tablet",
+            model: "iPad Pro",
+            osVersion: "18.4",
           },
-        ],
-      },
+          state: "ready",
+        },
+      ],
     });
     await engine.convergeRunningCapacity();
     driver.setPhysicalPresence("00008110-001A2B3C4D5E", true);
@@ -1491,28 +1518,20 @@ describe("Dispatcher: device mode on every surface", () => {
 
   it("status.get and list.get show a physical record with physical, its class and no mode or enrolledApps, and count nothing of it in the capacity figures", async () => {
     const { dispatcher, engine } = await buildDispatcher({
-      state: {
-        devices: [],
-        leases: [],
-        physicalDevices: [
-          {
-            createdAt: 1,
-            driverData: {},
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            enrolledApps: ["com.example.kept"],
-            id: "dev_phys",
-            physical: true,
-            spec: {
-              class: "tablet",
-              model: "iPad Pro",
-              osVersion: "18.4",
-              physical: true,
-              platform: "ios",
-            },
-            state: "ready",
+      physicalDevices: [
+        {
+          createdAt: 1,
+          driverDeviceId: "00008110-001A2B3C4D5E",
+          enrolledApps: ["com.example.kept"],
+          id: "dev_phys",
+          spec: {
+            class: "tablet",
+            model: "iPad Pro",
+            osVersion: "18.4",
           },
-        ],
-      },
+          state: "ready",
+        },
+      ],
     });
     await engine.convergeRunningCapacity();
     const lease = await dispatcher.dispatch("lease.request", request, session());
@@ -1539,7 +1558,6 @@ describe("Dispatcher: device mode on every surface", () => {
   it("status.get and list.get carry the latest presence read as presence on a physical device; a virtual device, and a physical device not yet read, carry none", async () => {
     const physical = (id: string, driverDeviceId: string) => ({
       createdAt: 1,
-      driverData: {},
       driverDeviceId,
       enrolledApps: [],
       id,
@@ -1563,15 +1581,11 @@ describe("Dispatcher: device mode on every surface", () => {
         driverDeviceId === "UDID-UNREAD"
           ? undefined
           : (reads.get(driverDeviceId) ?? { present: true }),
-      state: {
-        devices: [],
-        leases: [],
-        physicalDevices: [
-          physical("dev_read", "UDID-READ"),
-          physical("dev_present", "UDID-PRESENT"),
-          physical("dev_unread", "UDID-UNREAD"),
-        ],
-      },
+      physicalDevices: [
+        physical("dev_read", "UDID-READ"),
+        physical("dev_present", "UDID-PRESENT"),
+        physical("dev_unread", "UDID-UNREAD"),
+      ],
     });
     await engine.convergeRunningCapacity();
     const lease = await dispatcher.dispatch("lease.request", request, session());
@@ -1594,30 +1608,22 @@ describe("Dispatcher: device mode on every surface", () => {
 
   it("a reclaiming physical device's status entry has no reclaimingSince", async () => {
     const { dispatcher } = await buildDispatcher({
-      state: {
-        devices: [],
-        leases: [],
-        physicalDevices: [
-          {
-            createdAt: 1,
-            driverData: {},
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            enrolledApps: [],
-            id: "dev_phys",
-            lastLeaseEndedAt: 200,
-            physical: true,
-            reclaimingSince: 600,
-            spec: {
-              class: "phone",
-              model: "iPhone 15 Pro",
-              osVersion: "18.4",
-              physical: true,
-              platform: "ios",
-            },
-            state: "reclaiming",
+      physicalDevices: [
+        {
+          createdAt: 1,
+          driverDeviceId: "00008110-001A2B3C4D5E",
+          enrolledApps: [],
+          id: "dev_phys",
+          lastLeaseEndedAt: 200,
+          reclaimingSince: 600,
+          spec: {
+            class: "phone",
+            model: "iPhone 15 Pro",
+            osVersion: "18.4",
           },
-        ],
-      },
+          state: "reclaiming",
+        },
+      ],
     });
 
     const status = await dispatcher.dispatch("status.get", {}, session());
@@ -1702,7 +1708,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
     const granted = await dispatcher.dispatch("lease.request", request, session());
     const provisioning = await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver-provisioning" },
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
       spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -1736,7 +1742,7 @@ describe("Dispatcher: device mode on every surface", () => {
       });
       const register = (driverDeviceId: string, slim: boolean) =>
         registry.registerDevice({
-          driverData: {},
+          driverData: { fakeDeviceId: driverDeviceId },
           driverDeviceId,
           provisionDuration: 0,
           spec: {
@@ -1773,7 +1779,7 @@ describe("Dispatcher: device mode on every surface", () => {
     const leased = await dispatcher.dispatch("lease.request", request, session());
     const register = (driverDeviceId: string) =>
       registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: driverDeviceId },
         driverDeviceId,
         provisionDuration: 0,
         spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -1813,7 +1819,7 @@ describe("Dispatcher: device mode on every surface", () => {
       claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
     });
     const device = await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver-booting" },
       driverDeviceId: "driver-booting",
       provisionDuration: 0,
       spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -1839,7 +1845,7 @@ describe("Dispatcher: device mode on every surface", () => {
     });
     const { clock, dispatcher, registry } = await buildDispatcher({ otherStallDrivers: [android] });
     const device = await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver-ios-stuck" },
       driverDeviceId: "driver-ios-stuck",
       provisionDuration: 0,
       spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -2846,7 +2852,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       session({ principal: "tok_other" }),
     );
     await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver-provisioning" },
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
       spec: { ...ios, mode: "slim", physical: false },
@@ -2887,7 +2893,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       });
       for (let index = 0; index < count; index += 1) {
         await built.registry.registerDevice({
-          driverData: {},
+          driverData: { fakeDeviceId: `driver-${index}` },
           driverDeviceId: `driver-${index}`,
           provisionDuration: 0,
           spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -4155,7 +4161,7 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
   it("status.get on a worker whose health is starting returns daemon, history and host and no other field", async () => {
     const { dispatcher, registry } = await buildDispatcher({ health: "starting" });
     await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver-unchecked" },
       driverDeviceId: "driver-unchecked",
       provisionDuration: 0,
       spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -4173,7 +4179,7 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
     async (health) => {
       const { dispatcher, registry } = await buildDispatcher({ health });
       await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "driver-known" },
         driverDeviceId: "driver-known",
         provisionDuration: 0,
         spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },

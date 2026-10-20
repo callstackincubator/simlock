@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AlertDestination, PassthroughCommand } from "../core/index.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { Filesystem, IpcConnector, IpcListenerFactory } from "../ports/index.js";
 import {
   FakeHostInfo,
@@ -150,7 +150,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo(GATEWAY_HOST),
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
       ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
     });
@@ -183,7 +182,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       dataDirectory: directory,
       filesystem,
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(daemon);
@@ -242,11 +240,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         },
       },
       dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
       drivers: [driver],
       filesystem,
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
       ...(options.alerts === undefined ? {} : { webhookPoster: options.alerts.poster }),
     });
@@ -507,7 +505,6 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       dataDirectory: directory,
       filesystem,
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(restartedGateway);

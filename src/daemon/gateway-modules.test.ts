@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { agentDeviceModuleWith } from "../agent-device/testing.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayModule, OptionalModuleDefinition } from "../modules/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
@@ -73,7 +73,6 @@ function gatewayOptions(
     hostLoadProbe: null,
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: modules,
-    statePath: join(directory, "state.json"),
     version: "1.2.3",
   } as StartDaemonOptions;
 }
@@ -131,7 +130,7 @@ async function joinWorker(
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
     optionalModules: modules,
-    statePath: join(directory, "state.json"),
+    deviceDataTables: fakeDeviceDataTables,
     version: "1.2.3",
   } as StartDaemonOptions);
   daemons.push(worker);

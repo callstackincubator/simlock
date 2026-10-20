@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { encodeScreenFrame, encodeScreenMeta, SCREEN_FRAME_TAG } from "../core/index.js";
 import type { ScreenCapture } from "../core/index.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -95,7 +95,6 @@ describe("a screen stream through a gateway", () => {
       dataDirectory: gatewayDirectory,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
-      statePath: join(gatewayDirectory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(gateway);
@@ -124,7 +123,7 @@ describe("a screen stream through a gateway", () => {
       ],
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
-      statePath: join(workerDirectory, "state.json"),
+      deviceDataTables: fakeDeviceDataTables,
       version: "1.0.0-e2e",
     });
     daemons.push(worker);

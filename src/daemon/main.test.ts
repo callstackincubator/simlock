@@ -13,11 +13,17 @@ import {
   OWNED_ROOT_MARKER_FILE,
   type OwnedRootError,
   REDACTED_VALUE,
-  Registry,
+  registryOwner,
 } from "../core/index.js";
 import { agentDeviceModule } from "../agent-device/definition.js";
 import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/testing.js";
-import { FakeDriver } from "../core/testing.js";
+import {
+  FakeDriver,
+  fakeDeviceDataTable,
+  fakeDeviceDataTables,
+  loadTestRegistry,
+} from "../core/testing.js";
+import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
@@ -35,6 +41,8 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  NodeSqliteOpener,
+  NoopLogger,
   ScriptedProcessRunner,
   type IdGenerator,
 } from "../ports/index.js";
@@ -78,10 +86,10 @@ async function start(
     clock,
     dataDirectory: directory,
     drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+    deviceDataTables: fakeDeviceDataTables,
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
     logger,
-    statePath: join(directory, "state.json"),
     version: "1.2.3",
     ...overrides,
   } as StartDaemonOptions);
@@ -114,7 +122,6 @@ describe("interrupted writes", () => {
       dataDirectory: directory,
       filesystem,
       processSupervisor,
-      statePath: join(directory, "state.json"),
     });
     await daemon.dispatch(
       "doctor.run",
@@ -169,7 +176,6 @@ describe("interrupted root assembly", () => {
       drivers: [driver],
       filesystem,
       processSupervisor,
-      statePath: join(directory, "state.json"),
     });
     return { ...result, devices };
   }
@@ -281,7 +287,6 @@ describe("the version a daemon reports", () => {
       hostLoadProbe: null,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
       socketPath,
-      statePath: join(directory, "state.json"),
     });
     runningDaemons.push(daemon);
     const packageJson = JSON.parse(
@@ -328,6 +333,20 @@ describe("the event history", () => {
   });
 });
 
+async function queryState(
+  directory: string,
+  sql: string,
+): Promise<readonly Record<string, unknown>[]> {
+  const database = await new NodeSqliteOpener().open(join(directory, "state.db"), {
+    readOnly: true,
+  });
+  try {
+    return database.prepare(sql).all();
+  } finally {
+    database.close();
+  }
+}
+
 /** A gateway URL on a port just released. Nothing listens there, so a worker's uplink dial
  * fails fast, and the fake clock never fires its retry. */
 async function unreachableGatewayUrl(): Promise<string> {
@@ -338,11 +357,38 @@ async function unreachableGatewayUrl(): Promise<string> {
   return `ws://127.0.0.1:${port}`;
 }
 
+// why: a drivers module must export the device-data tables of its platforms, and the module file
+// cannot import the repo's TypeScript, so this is the fake driver's table spelled out in plain JS.
+const MODULE_DEVICE_DATA_TABLES = `
+const table = {
+  migrations: [
+    "CREATE TABLE fake_device_data (device_id TEXT PRIMARY KEY, fake_device_id TEXT NOT NULL) STRICT",
+  ],
+  name: "fake-device-data",
+  read(database, deviceId) {
+    const row = database
+      .prepare("SELECT fake_device_id FROM fake_device_data WHERE device_id = ?")
+      .get(deviceId);
+    if (row === undefined) throw new Error("No fake driver data for device " + deviceId);
+    return { fakeDeviceId: row.fake_device_id };
+  },
+  version: 1,
+  write(database, deviceId, driverData) {
+    database
+      .prepare(
+        "INSERT INTO fake_device_data (device_id, fake_device_id) VALUES (?, ?) ON CONFLICT (device_id) DO UPDATE SET fake_device_id = excluded.fake_device_id",
+      )
+      .run(deviceId, driverData.fakeDeviceId);
+  },
+};
+export const deviceDataTables = new Map([["android", table], ["ios", table]]);
+`;
+
 async function writeModule(contents: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-drivers-module-"));
   temporaryDirectories.push(directory);
   const modulePath = join(directory, "drivers.mjs");
-  await writeFile(modulePath, contents, "utf8");
+  await writeFile(modulePath, `${contents}\n${MODULE_DEVICE_DATA_TABLES}`, "utf8");
   return modulePath;
 }
 
@@ -523,12 +569,9 @@ describe("startDaemon", () => {
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
-    const filesystem = new MemoryFilesystem();
     const { daemon, directory } = await start({
       configOverrides: { lease: { maxRequestRecords: 1 } },
-      filesystem,
     });
-    const statePath = join(directory, "state.json");
     const missingRuntime = {
       model: "iPhone 16",
       osVersion: "99.0",
@@ -550,13 +593,8 @@ describe("startDaemon", () => {
     // With the default cap both failures stay stored; with an unclassified failure the code
     // would be INTERNAL.
     await expect
-      .poll(async () => {
-        const state = JSON.parse(await filesystem.readFile(statePath)) as {
-          readonly leaseRequests: readonly unknown[];
-        };
-        return state.leaseRequests;
-      })
-      .toMatchObject([{ failure: { code: "RUNTIME_MISSING" }, requesterId: "second" }]);
+      .poll(() => queryState(directory, "SELECT requester_id, failure_code FROM lease_requests"))
+      .toEqual([{ failure_code: "RUNTIME_MISSING", requester_id: "second" }]);
   });
 
   it("establishes the instance identity once, and reuses it on the next start", async () => {
@@ -598,6 +636,7 @@ describe("startDaemon", () => {
           new Error("adb server would not die"),
         ),
       ],
+      deviceDataTables: fakeDeviceDataTables,
     });
 
     await daemon.stop("test");
@@ -670,6 +709,7 @@ describe("startDaemon", () => {
           Promise.resolve([{ name: "emulator", version: "35.4.9" }]),
         ),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     });
 
@@ -694,6 +734,7 @@ describe("startDaemon", () => {
           ]),
         ),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     });
 
@@ -712,6 +753,7 @@ describe("startDaemon", () => {
           return Promise.resolve([]);
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     });
 
@@ -889,31 +931,38 @@ describe("startDaemon wires core and leasing together", () => {
 
   it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
     const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    const statePath = join(directory, "state.json");
     // The previous process's registry: one request still open when it stopped.
-    const previous = await Registry.load({
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const previous = await loadTestRegistry({
       clock,
       eventBus: new EventBus(clock),
-      filesystem,
       idGenerator: { generate: () => "1" },
-      statePath,
+      state,
     });
     await previous.createLeaseRequest({
       ownerId: "agent-1",
       request: ios,
       requesterId: "agent-1",
     });
+    state.close();
 
     const daemon = await startDaemon({
       clock,
       dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-      filesystem,
+      filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath,
       version: "1.2.3",
     });
     runningDaemons.push(daemon);
@@ -925,140 +974,32 @@ describe("startDaemon wires core and leasing together", () => {
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
   });
 
-  it("finishes leasing's startup before core's convergence re-arms a quarantined device's retry", async () => {
+  it("ends the lease whose device is not running before it is up, so a restart no longer holds it", async () => {
     const clock = new FakeClock(1_000);
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    const statePath = join(directory, "state.json");
-    let holdWrites = false;
-    let releaseWrite: () => void = () => undefined;
-    const writeHeld = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let reachWrite: () => void = () => undefined;
-    const writeReached = new Promise<void>((resolve) => {
-      reachWrite = resolve;
-    });
-    class HoldingFilesystem extends MemoryFilesystem {
-      async writeFileAtomic(
-        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
-      ): Promise<void> {
-        if (holdWrites && arguments_[0] === statePath) {
-          reachWrite();
-          await writeHeld;
-        }
-        return super.writeFileAtomic(...arguments_);
-      }
-    }
-    const filesystem = new HoldingFilesystem();
-    const options = (driver: FakeDriver) =>
-      ({
-        clock,
-        dataDirectory: directory,
-        drivers: [driver],
-        filesystem,
-        hostLoadProbe: null,
-        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-        statePath,
-        version: "1.2.3",
-      }) as StartDaemonOptions;
-    const failing = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    failing.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
-    const first = await startDaemon(options(failing));
-    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
-    await first.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
-    await first.stop("test");
-    const previous = await Registry.load({
-      clock,
-      eventBus: new EventBus(clock),
-      filesystem,
-      idGenerator: { generate: () => "open-request" },
-      statePath,
-    });
-    await previous.createLeaseRequest({
-      ownerId: "agent-1",
-      request: ios,
-      requesterId: "agent-1",
-    });
-    holdWrites = true;
-
-    const starting = startDaemon(
-      options(new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })),
-    );
-    // Waits on the write itself, not on real time: how long startup takes to reach it depends on
-    // the machine's load. The race lets a startup that never writes fail on the count below.
-    await Promise.race([writeReached, starting]);
-    const timersWhileLeasingStartupPending = clock.pendingTimerCount;
-    releaseWrite();
-    runningDaemons.push(await starting);
-    const timersAfterStartup = clock.pendingTimerCount;
-
-    expect(timersWhileLeasingStartupPending).toBe(1);
-    expect(timersAfterStartup).toBeGreaterThan(timersWhileLeasingStartupPending);
-  });
-
-  it("stays starting until leasing has ended the lease whose device is not running, and no longer holds the lease once it is up", async () => {
-    const clock = new FakeClock(1_000);
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
-    temporaryDirectories.push(directory);
-    const statePath = join(directory, "state.json");
-    let holdWrites = false;
-    let releaseWrite: () => void = () => undefined;
-    const writeHeld = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let reachWrite: () => void = () => undefined;
-    const writeReached = new Promise<void>((resolve) => {
-      reachWrite = resolve;
-    });
-    class HoldingFilesystem extends MemoryFilesystem {
-      async writeFileAtomic(
-        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
-      ): Promise<void> {
-        if (holdWrites && arguments_[0] === statePath) {
-          reachWrite();
-          await writeHeld;
-        }
-        return super.writeFileAtomic(...arguments_);
-      }
-    }
-    const filesystem = new HoldingFilesystem();
     const options = () =>
       ({
         clock,
         dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-        filesystem,
+        filesystem: new MemoryFilesystem(),
         logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-        statePath,
         version: "1.2.3",
       }) as StartDaemonOptions;
     const first = await startDaemon(options());
     const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
     await first.stop("test");
     // The restarted process's driver knows no device, so the leased one is gone from its platform.
-    holdWrites = true;
 
-    let started = false;
-    const starting = startDaemon(options()).then((daemon) => {
-      started = true;
-      return daemon;
-    });
-    // Waits on the write, not on real time: the steps before it include real I/O, so under load
-    // they outlast any fixed sleep. From the write on, a startup that did not wait for it only
-    // has in-memory work left, which finishes before the next macrotask.
-    await Promise.race([writeReached, starting]);
-    await new Promise((resolve) => setImmediate(resolve));
-    const startedWhileEndingPending = started;
-    releaseWrite();
-    const daemon = await starting;
+    const daemon = await startDaemon(options());
     runningDaemons.push(daemon);
 
-    expect(startedWhileEndingPending).toBe(false);
-    const state = JSON.parse(await filesystem.readFile(statePath)) as {
-      readonly leases: readonly { readonly id: string }[];
-    };
-    expect(state.leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    const leases = (await daemon.dispatch("list.get", { kind: "leases" }, admin)) as readonly {
+      readonly id: string;
+    }[];
+    expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
   });
 
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
@@ -1097,16 +1038,10 @@ describe("startDaemon wires core and leasing together", () => {
   it("cancels the expiry timer of an outstanding lease on shutdown, so nothing expires after it", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    const filesystem = new MemoryFilesystem();
-    const { daemon, directory } = await start({ clock, drivers: [driver], filesystem });
-    const statePath = join(directory, "state.json");
+    const { daemon, directory } = await start({ clock, drivers: [driver] });
     await daemon.dispatch("lease.request", { ...ios, ttlMs: 10_000 }, agent);
     const leaseIds = async () =>
-      (
-        JSON.parse(await filesystem.readFile(statePath)) as {
-          readonly leases: readonly { readonly id: string }[];
-        }
-      ).leases.map((lease) => lease.id);
+      (await queryState(directory, "SELECT id FROM leases")).map((row) => row.id);
     const before = await leaseIds();
     expect(before).toHaveLength(1);
 
@@ -1232,9 +1167,9 @@ describe("startDaemon startup readiness", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem: new MemoryFilesystem(),
       socketPath,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -1295,10 +1230,10 @@ describe("startDaemon stopped while starting", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem,
       hostLoadProbe: null,
       socketPath,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     });
 
@@ -1358,8 +1293,8 @@ describe("startDaemon HTTP gateway startup readiness", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -1414,7 +1349,6 @@ describe("startDaemon stop with a warm target", () => {
       drivers: [driver],
       filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     });
     runningDaemons.push(daemon);
@@ -1468,10 +1402,10 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+        deviceDataTables: fakeDeviceDataTables,
         filesystem,
         logger,
         socketPath,
-        statePath: join(directory, "state.json"),
         version: "1.2.3",
       } as StartDaemonOptions);
       // `stop()` is idempotent, so it is safe for `afterEach` to also stop whatever this
@@ -1544,7 +1478,6 @@ describe("startDaemon socket race with HTTP enabled", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-socket-race-"));
     temporaryDirectories.push(directory);
     const filesystem = new MemoryFilesystem();
-    const statePath = join(directory, "state.json");
     const options = (port: number): StartDaemonOptions =>
       ({
         clock: new FakeClock(1_000),
@@ -1557,13 +1490,13 @@ describe("startDaemon socket race with HTTP enabled", () => {
             platform: "ios",
           }),
         ],
+        deviceDataTables: fakeDeviceDataTables,
         filesystem,
         logger: new JsonLinesLogger({
           clock: new FakeClock(1_000),
           level: "debug",
           sink: new MemoryLogSink(),
         }),
-        statePath,
         version: "1.2.3",
       }) as StartDaemonOptions;
 
@@ -1614,13 +1547,13 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
             platform: "ios",
           }),
         ],
+        deviceDataTables: fakeDeviceDataTables,
         filesystem,
         logger: new JsonLinesLogger({
           clock: new FakeClock(1_000),
           level: "debug",
           sink: new MemoryLogSink(),
         }),
-        statePath: join(directory, "state.json"),
         version: "1.2.3",
       }) as StartDaemonOptions;
 
@@ -1682,9 +1615,9 @@ describe("startDaemon HTTP gateway bind failure", () => {
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
           filesystem,
           logger,
-          statePath: join(directory, "state.json"),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow(/EADDRINUSE|address already in use/i);
@@ -1744,7 +1677,6 @@ describe("startDaemon HTTP status for a quarantined device", () => {
       drivers: [driver],
       filesystem,
       hostLoadProbe: null,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions);
     runningDaemons.push(daemon);
@@ -2832,6 +2764,7 @@ describe("startDaemon with the agent-device edge", () => {
       clock,
       dataDirectory: setup.directory,
       ...(ports.role === undefined ? {} : { role: ports.role }),
+      deviceDataTables: fakeDeviceDataTables,
       drivers: ports.drivers ?? [
         new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
       ],
@@ -2846,7 +2779,6 @@ describe("startDaemon with the agent-device edge", () => {
       ],
       processRunner: ports.processRunner,
       processSupervisor: ports.processSupervisor,
-      statePath: join(setup.directory, "state.json"),
       tcpProbe: new FakeTcpProbe(),
       version: "1.2.3",
     });
@@ -3286,7 +3218,6 @@ describe("startDaemon host load", () => {
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
       ...overrides,
     } as StartDaemonOptions);
@@ -3323,10 +3254,10 @@ describe("startDaemon host load", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: new FakeHostLoadProbe(COUNTERS),
       socketPath,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -3467,10 +3398,10 @@ describe("startDaemon host load", () => {
           clock,
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
           filesystem: new SecretRefusingFilesystem(),
           hostLoadProbe,
           socketPath: join(directory, "daemon.sock"),
-          statePath: join(directory, "state.json"),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow("disk is read-only");
@@ -3535,7 +3466,6 @@ describe("startDaemon in gateway mode host load", () => {
       drivers: [],
       filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
       ...rest,
     } as StartDaemonOptions);
@@ -3599,9 +3529,9 @@ describe("startDaemon in gateway mode host load", () => {
           role: "gateway",
           dataDirectory: first.directory,
           drivers: [],
+          deviceDataTables: fakeDeviceDataTables,
           filesystem: new MemoryFilesystem(),
           hostLoadProbe,
-          statePath: join(first.directory, "state.json"),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow();
@@ -3629,6 +3559,7 @@ describe("daemon role (ADR 0034)", () => {
           http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         },
         drivers: [],
+        deviceDataTables: fakeDeviceDataTables,
         role: "gateway",
       });
       runningDaemons.push(daemon);

@@ -4,9 +4,9 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
 import { type FakePhysicalDevice } from "./fake-driver.js";
 import type { PhysicalDevice } from "./domain.js";
-import { createCore, loadConfig, Registry } from "./index.js";
+import { createCore, loadConfig } from "./index.js";
 import { PhysicalEnrollment } from "./physical-enrollment.js";
-import { FakeDriver, testComponentWiring } from "./testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring } from "./testing.js";
 
 const UDID = "00008110-001A2B3C4D5E";
 const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
@@ -26,12 +26,10 @@ async function build(physicalDevices: readonly FakePhysicalDevice[] = [IPHONE]) 
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: { generate: () => `${next++}` },
-    statePath: "/state.json",
   });
   const core = createCore({
     clock,

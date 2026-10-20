@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "./testing.js";
+import { loadTestRegistry, testComponentWiring } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -10,13 +10,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import {
-  automaticCleanupRules,
-  CleanupReaper,
-  type CleanupRule,
-  type Config,
-  Registry,
-} from "./index.js";
+import { automaticCleanupRules, CleanupReaper, type CleanupRule, type Config } from "./index.js";
 import { FakeDriver } from "./fake-driver.js";
 import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -26,7 +20,6 @@ import { SerializedDecision } from "./serialized-decision.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 /**
@@ -145,12 +138,10 @@ async function createHarness(
     platform: "ios",
   });
   let nextId = 1;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
   });
   const cleanupConfig = options.cleanupConfig ?? config();
   const engine = createTestEngine({
@@ -567,7 +558,7 @@ describe("CleanupReaper", () => {
     // discovery refused. The ready one exercises the shutdown path, the shut-down one the
     // destroy path; a healthy device follows each.
     const ghostReady = await harness.registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "ghost-ready-android" },
       driverDeviceId: "ghost-ready-android",
       provisionDuration: 0,
       spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },
@@ -590,7 +581,7 @@ describe("CleanupReaper", () => {
     });
     const idleReady = await seedReleased(harness, "ready");
     const ghostShutdown = await harness.registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "ghost-shutdown-android" },
       driverDeviceId: "ghost-shutdown-android",
       provisionDuration: 0,
       spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },

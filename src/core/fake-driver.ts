@@ -826,9 +826,29 @@ function readPhysical(device: FakePhysicalDevice, id: string): PhysicalInspectio
 }
 
 export const fakeDeviceDataTable: DeviceDataTable = {
-  migrations: [],
+  migrations: [
+    "CREATE TABLE fake_device_data (device_id TEXT PRIMARY KEY, fake_device_id TEXT NOT NULL) STRICT",
+  ],
   name: "fake-device-data",
-  read: () => undefined,
-  version: 0,
-  write: () => undefined,
+  read(database, deviceId) {
+    const row = database
+      .prepare("SELECT fake_device_id FROM fake_device_data WHERE device_id = ?")
+      .get(deviceId);
+    if (row === undefined) throw new Error(`No fake driver data for device ${deviceId}`);
+    return { fakeDeviceId: row.fake_device_id };
+  },
+  version: 1,
+  write(database, deviceId, driverData) {
+    const fakeDeviceId = (driverData as { fakeDeviceId?: unknown } | null | undefined)
+      ?.fakeDeviceId;
+    if (typeof fakeDeviceId !== "string") {
+      throw new Error(`Invalid fake driver data for device ${deviceId}`);
+    }
+    database
+      .prepare(
+        `INSERT INTO fake_device_data (device_id, fake_device_id) VALUES (?, ?)
+         ON CONFLICT (device_id) DO UPDATE SET fake_device_id = excluded.fake_device_id`,
+      )
+      .run(deviceId, fakeDeviceId);
+  },
 };

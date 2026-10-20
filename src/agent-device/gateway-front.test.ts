@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { readHistoryEvents } from "../history/testing.js";
@@ -242,7 +242,6 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       },
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
       optionalModules: [agentDeviceModuleWith({})],
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions);
     runningDaemons.push(started);
@@ -285,6 +284,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         lease: { defaultTtlMs, maxTtlMs: workerMaxTtlMs },
       },
       dataDirectory: workerDirectory,
+      deviceDataTables: fakeDeviceDataTables,
       drivers: [driver],
       filesystem: workerFilesystem,
       logger: new JsonLinesLogger({
@@ -293,7 +293,6 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         sink: new MemoryLogSink(),
       }),
       optionalModules: [agentDeviceModuleWith({ upstream: fake })],
-      statePath: join(workerDirectory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);

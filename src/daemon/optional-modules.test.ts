@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { OptionalModuleDefinition, WorkerHooks } from "../modules/index.js";
 import { readHistoryEvents } from "../history/testing.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
@@ -135,7 +135,7 @@ async function prepare(options: RigOptions) {
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: options.modules,
     socketPath: join(directory, "daemon.sock"),
-    statePath: join(directory, "state.json"),
+    deviceDataTables: fakeDeviceDataTables,
     version: "1.2.3",
     ...options.extra,
   } as StartDaemonOptions;
@@ -654,7 +654,7 @@ describe("optional modules: afterSocketClaimed", () => {
           sink: new MemoryLogSink(),
         }),
         optionalModules: modules,
-        statePath: join(directory, "state.json"),
+        deviceDataTables: fakeDeviceDataTables,
         version: "1.2.3",
       }) as StartDaemonOptions;
     const first = await startDaemon(options([]));

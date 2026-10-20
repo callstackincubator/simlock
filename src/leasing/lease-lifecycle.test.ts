@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem, type Filesystem } from "../ports/index.js";
+import { FakeClock } from "../ports/index.js";
+import { loadTestRegistry, openTestState } from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
-import { Registry } from "../core/index.js";
 
 const noTiming = {
   estimatedBootMs: 0,
@@ -13,23 +14,20 @@ const noTiming = {
   estimatedReclaimMs: 0,
 };
 
-const statePath = "/home/agent/.simlock/state.json";
-
 async function createHarness(
-  options: { readonly filesystem?: Filesystem; readonly platform?: "ios" | "android" } = {},
+  options: { readonly state?: StateDatabase; readonly platform?: "ios" | "android" } = {},
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem: options.filesystem ?? new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
+    state: options.state,
   });
   const device = await registry.registerDevice({
-    driverData: {},
+    driverData: { fakeDeviceId: "driver_1" },
     driverDeviceId: "driver_1",
     provisionDuration: 0,
     spec:
@@ -184,8 +182,8 @@ describe("LeaseLifecycle", () => {
   });
 
   it("restores the renewed deadline (not the grant-time one) after a restart", async () => {
-    const filesystem = new MemoryFilesystem();
-    const before = await createHarness({ filesystem });
+    const state = await openTestState();
+    const before = await createHarness({ state });
     const grant = await before.lifecycle.grant({
       environment: {},
       timing: noTiming,
@@ -205,12 +203,11 @@ describe("LeaseLifecycle", () => {
     // same persisted registry state and restore timers from it.
     const afterClock = new FakeClock(1_005);
     const afterEventBus = new EventBus(afterClock);
-    const afterRegistry = await Registry.load({
+    const afterRegistry = await loadTestRegistry({
       clock: afterClock,
       eventBus: afterEventBus,
-      filesystem,
       idGenerator: { generate: () => "unused" },
-      statePath,
+      state,
     });
     let afterLifecycle!: LeaseLifecycle;
     const afterScheduler = new LeaseExpiryScheduler(afterClock, async (leaseId) => {

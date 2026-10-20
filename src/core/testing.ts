@@ -1,9 +1,19 @@
 import type { EventBus } from "../bus/index.js";
-import { type Clock, MemoryFilesystem } from "../ports/index.js";
+import {
+  type Clock,
+  MemoryFilesystem,
+  NodeSqliteOpener,
+  NoopLogger,
+  type SqliteOpener,
+} from "../ports/index.js";
+import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import { ComponentInstaller } from "./component-installer.js";
-import { DiskSpaceGuard, type Driver } from "./driver.js";
+import { type DeviceDataTable, DiskSpaceGuard, type Driver } from "./driver.js";
+import { fakeDeviceDataTable } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import type { Registry } from "./registry.js";
+import type { Platform } from "./domain.js";
+import { Registry, type RegistryOptions } from "./registry.js";
+import { registryOwner } from "./registry-schema.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 /**
@@ -59,33 +69,36 @@ export function testComponentWiring<
   };
 }
 
-export class HeldWritesFilesystem extends MemoryFilesystem {
-  holding = false;
-  readonly #held: (() => void)[] = [];
+export const fakeDeviceDataTables: ReadonlyMap<Platform, DeviceDataTable> = new Map([
+  ["android", fakeDeviceDataTable],
+  ["ios", fakeDeviceDataTable],
+]);
 
-  override async writeFileAtomic(path: string, contents: string): Promise<void> {
-    if (this.holding) await new Promise<void>((resolve) => this.#held.push(resolve));
-    await super.writeFileAtomic(path, contents);
-  }
+// why: the real adapter on SQLite's in-memory database, whatever path the state module asks for.
+const memorySqlite: SqliteOpener = {
+  open: (_path, options) => new NodeSqliteOpener().open(":memory:", options),
+};
 
-  async held(count: number): Promise<void> {
-    for (let turn = 0; this.#held.length < count; turn++) {
-      if (turn === 100) throw new Error(`Only ${String(this.#held.length)} writes were held`);
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  }
+export function openTestState(): Promise<StateDatabase> {
+  return openStateDatabase({
+    dataDirectory: "/memory",
+    filesystem: new MemoryFilesystem(),
+    logger: new NoopLogger(),
+    oldFiles: [],
+    owners: [registryOwner, fakeDeviceDataTable],
+    sqlite: memorySqlite,
+    upgradeStep: "",
+  });
+}
 
-  async releaseUntil(done: Promise<unknown>): Promise<void> {
-    let settled = false;
-    const settle = () => {
-      settled = true;
-    };
-    done.then(settle, settle);
-    for (let turn = 0; !settled; turn++) {
-      if (turn === 100) throw new Error("The held writes never settled");
-      await new Promise((resolve) => setImmediate(resolve));
-      this.#held.shift()?.();
-    }
-    await done;
-  }
+export async function loadTestRegistry(
+  options: Omit<RegistryOptions, "deviceData" | "state"> & {
+    readonly state?: StateDatabase | undefined;
+  },
+): Promise<Registry> {
+  return Registry.load({
+    ...options,
+    deviceData: fakeDeviceDataTables,
+    state: options.state ?? (await openTestState()),
+  });
 }

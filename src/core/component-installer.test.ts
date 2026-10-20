@@ -28,11 +28,11 @@ import {
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
 import type { DeviceRecord } from "./domain.js";
-import { Registry } from "./registry.js";
+import type { Registry } from "./registry.js";
+import { loadTestRegistry, openTestState } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const timeoutMs = 60_000;
 
 /** A clock whose timers fire only when a test fires them, one at a time, by creation order. */
@@ -78,14 +78,13 @@ async function createHarness(
   const drivers = options.drivers?.(clock) ?? [
     new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
   ];
-  const stateFilesystem = new MemoryFilesystem();
+  const state = await openTestState();
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem: stateFilesystem,
     idGenerator: { generate: () => `id${String((nextId += 1))}` },
-    statePath,
+    state,
   });
   // Every reservation the installer takes, and whether it gave it back.
   const guard = new DiskSpaceGuard();
@@ -121,7 +120,7 @@ async function createHarness(
     ios,
     registry,
     reservations,
-    stateFilesystem,
+    state,
   };
 }
 
@@ -639,12 +638,11 @@ describe("ComponentInstaller", () => {
     harness.clock.advance(2_000);
 
     await harness.installer.install(ios("27.0"));
-    const reloaded = await Registry.load({
+    const reloaded = await loadTestRegistry({
       clock: harness.clock,
       eventBus: harness.bus,
-      filesystem: harness.stateFilesystem,
       idGenerator: { generate: () => "id" },
-      statePath,
+      state: harness.state,
     });
 
     const expected = [
@@ -1149,9 +1147,10 @@ async function addDevice(
   platform: "ios" | "android",
   osVersion: string,
 ): Promise<string> {
+  const driverDeviceId = `${platform}-${osVersion}-${String(registry.snapshot.devices.length)}`;
   const device = await registry.registerDevice({
-    driverData: {},
-    driverDeviceId: `${platform}-${osVersion}-${String(registry.snapshot.devices.length)}`,
+    driverData: { fakeDeviceId: driverDeviceId },
+    driverDeviceId,
     provisionDuration: 0,
     spec: { physical: false, model: "Phone", osVersion, platform },
   });

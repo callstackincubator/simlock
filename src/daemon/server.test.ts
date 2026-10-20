@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FakeDriver, testComponentWiring } from "../core/testing.js";
+import {
+  FakeDriver,
+  loadTestRegistry,
+  openTestState,
+  testComponentWiring,
+} from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
 
 import { EventBus } from "../bus/index.js";
 import { removeUsageRigs, ringEventHistory, usageRig, type UsageRig } from "../history/testing.js";
@@ -13,7 +19,6 @@ import {
   type DriverRejection,
   type PassthroughCommand,
   PassthroughRefusedError,
-  Registry,
   RuntimeMissingError,
 } from "../core/index.js";
 import { PROTOCOL_VERSION_RANGE, type ProtocolRange } from "../contract/index.js";
@@ -1034,7 +1039,9 @@ describe("DaemonServer", () => {
     // ADR 0004 §3: a stop ends connections, not leases -- they persist, and the next daemon
     // judges each by its device (ADR 0019) and restores the timers of those it keeps.
     expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
-    await expect(harness.stateFilesystem.readFile("/state.json")).resolves.toContain(leaseId);
+    expect(harness.state.database.prepare("SELECT id FROM leases").all()).toEqual([
+      { id: leaseId },
+    ]);
     expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");
     expect(harness.eventBus.replay().map((event) => event.event)).not.toContain("lease.released");
   });
@@ -2127,7 +2134,7 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
       clock: new FakeClock(1_010),
       driver: first.driver,
       lease: leaseOverrides,
-      stateFilesystem: first.stateFilesystem,
+      state: first.state,
     });
     await second.engine.convergeRunningCapacity();
 
@@ -2163,7 +2170,7 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
       clock: new FakeClock(2_000),
       driver: first.driver,
       lease: leaseOverrides,
-      stateFilesystem: first.stateFilesystem,
+      state: first.state,
     });
     await second.engine.convergeRunningCapacity();
 
@@ -2230,7 +2237,7 @@ describe("DaemonServer decorations", () => {
   it("surfaces a derived transitionAgeMs for a mid-transition device in status and list --devices", async () => {
     const harness = await createHarness();
     const device = await harness.registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver_provisioning" },
       driverDeviceId: "driver_provisioning",
       provisionDuration: 0,
       spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
@@ -3292,7 +3299,7 @@ async function createHarness(
     readonly settle?: () => Promise<void>;
     readonly physicalDeviceWatcher?: Pick<PhysicalDeviceWatcher, "dispose" | "start">;
     readonly beginStop?: () => void;
-    readonly stateFilesystem?: MemoryFilesystem;
+    readonly state?: StateDatabase;
     readonly stopAuxiliary?: () => Promise<void>;
     readonly adminSecret?: Auth["adminSecret"];
     readonly resolveRole?: SessionRoleResolver;
@@ -3312,15 +3319,14 @@ async function createHarness(
   const socketPath = options.socketPath ?? join(directory as string, "daemon.sock");
   const clock = options.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const stateFilesystem = options.stateFilesystem ?? new MemoryFilesystem();
+  const state = options.state ?? (await openTestState());
   const history = options.withHistory === true ? await usageRig() : undefined;
   if (history !== undefined) usageRigs.push(history);
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem: stateFilesystem,
     idGenerator: sequence(),
-    statePath: "/state.json",
+    state,
   });
   const driver =
     options.driver ??
@@ -3415,7 +3421,7 @@ async function createHarness(
     await daemon.start();
   }
 
-  return { clock, config, daemon, driver, engine, eventBus, registry, socketPath, stateFilesystem };
+  return { clock, config, daemon, driver, engine, eventBus, registry, socketPath, state };
 }
 
 /**

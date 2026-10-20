@@ -6,18 +6,16 @@ import {
   NoDriverError,
   type Config,
   type PhysicalDevice,
-  Registry,
   UnknownModelError,
 } from "../core/index.js";
-import { FakeDriver, testComponentWiring } from "../core/testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring } from "../core/testing.js";
 import { EventBus, type EventMap } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, FakeSystemStats } from "../ports/index.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 
 const physicalRequest = {
   model: "iPhone 15 Pro",
@@ -122,12 +120,10 @@ async function createHarness(
     platform: "ios",
   });
   let nextId = 1;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
   });
   const wiring = testComponentWiring({ clock, drivers: [driver], eventBus: bus, registry });
   const engine = createTestEngine({

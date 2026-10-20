@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, type Logger, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, type Logger } from "../ports/index.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import type {
   DeviceRecord,
@@ -14,7 +14,8 @@ import type {
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog, NoDriverError } from "./driver-catalog.js";
 import { QuarantineCoordinator, type QuarantinePurgeFailure } from "./quarantine-coordinator.js";
-import { Registry, type ReleasedLease } from "./registry.js";
+import type { ReleasedLease } from "./registry.js";
+import { loadTestRegistry, openTestState } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import {
   ReclaimCoordinator,
@@ -625,45 +626,32 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
         platform: "ios",
         reclaimResult: "ready",
       });
-    const filesystem = new MemoryFilesystem();
-    await filesystem.writeFileAtomic(
-      "/state.json",
-      JSON.stringify({
-        devices: [],
-        leases: [],
-        physicalDevices: [
-          {
-            createdAt: 1,
-            driverData: {},
-            driverDeviceId: PHYSICAL_ID,
-            enrolledApps: [],
-            id: "dev_physical",
-            lastLeaseEndedAt: 900,
-            physical: true,
-            spec: {
-              class: "phone",
-              model: "iPhone 15 Pro",
-              osVersion: "18.4",
-              physical: true,
-              platform: "ios",
-            },
-            state,
-            ...(state === "absent" ? { absentReason: "not-present" } : {}),
-          },
-        ],
-      }),
-    );
-    const loaded = await Registry.load({
+    const testState = await openTestState();
+    const seeding = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "physical" },
+      state: testState,
+    });
+    await seeding.enrollPhysical({
+      apps: [],
+      class: "phone",
+      driverDeviceId: PHYSICAL_ID,
+      model: "iPhone 15 Pro",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+    testState.database
+      .prepare(
+        "UPDATE devices SET created_at = 1, last_lease_ended_at = 900, ready_at = NULL, state = ?, absent_reason = ?",
+      )
+      .run(state, state === "absent" ? "not-present" : null);
+    const registry = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator: { generate: () => "id" },
-      statePath: "/state.json",
-    }).catch((error: unknown) => error);
-    expect(loaded, `a state.json holding a physical device in state ${state} loads`).toBeInstanceOf(
-      Registry,
-    );
-    const registry = loaded as Registry;
+      state: testState,
+    });
     const drivers = options.drivers?.(driver) ?? new DriverCatalog([driver]);
     const claims = new DeviceOperationClaims();
     const decisions = new SerializedDecision();

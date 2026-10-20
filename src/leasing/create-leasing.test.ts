@@ -8,11 +8,18 @@ import {
   DriverCrashError,
   type VirtualSpec,
   type LeaseProgress,
-  Registry,
+  type Registry,
   UnknownLeaseError,
 } from "../core/index.js";
 import { type CapacityLimits, type ResourceStrategyOptions } from "../core/testing.js";
-import { capacityChangedPayload, testComponentWiring, FakeDriver } from "../core/testing.js";
+import {
+  capacityChangedPayload,
+  FakeDriver,
+  loadTestRegistry,
+  openTestState,
+  testComponentWiring,
+} from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
 
 import { EventBus, type EventMap } from "../bus/index.js";
 import {
@@ -20,7 +27,6 @@ import {
   FakeSystemStats,
   JsonLinesLogger,
   type Logger,
-  MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
 import { createLeasing } from "./create-leasing.js";
@@ -30,7 +36,6 @@ import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const request = {
   model: "iPhone 16",
   osVersion: "26.5",
@@ -155,7 +160,7 @@ async function createHarness(
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
     /** The state directory of an earlier harness: loading it again is a daemon restart. */
-    readonly filesystem?: MemoryFilesystem;
+    readonly state?: StateDatabase;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]> & { readonly maxPerRequester?: number };
     readonly capacity?: Config["capacity"];
@@ -173,18 +178,17 @@ async function createHarness(
   } = {},
 ) {
   const clock = new FakeClock(1_000);
-  const filesystem = options.filesystem ?? new MemoryFilesystem();
+  const state = options.state ?? (await openTestState());
   const bus = new EventBus(clock);
   const driver =
     options.driver ?? new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  let nextId = options.filesystem === undefined ? 1 : 1_000;
-  const registry = await Registry.load({
+  let nextId = options.state === undefined ? 1 : 1_000;
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem,
     idGenerator: { generate: () => `${nextId++}` },
     ...(options.identity === undefined ? {} : { leaseIdentity: options.identity }),
-    statePath,
+    state,
   });
   const baseConfig = config(
     {
@@ -224,7 +228,7 @@ async function createHarness(
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
 
-  return { bus, clock, decisions: wiring.decisions, driver, engine, filesystem, registry };
+  return { bus, clock, decisions: wiring.decisions, driver, engine, registry, state };
 }
 
 async function seedReady(
@@ -357,34 +361,25 @@ describe("createLeasing", () => {
   });
 
   it("gives no reclaiming stage to a waiter queued while the only reclaiming device of its model and OS is physical", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leases: [],
-        physicalDevices: [
-          {
-            createdAt: 1,
-            driverData: {},
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            enrolledApps: [],
-            id: "dev_physical",
-            lastLeaseEndedAt: 1_000,
-            physical: true,
-            spec: {
-              class: "phone",
-              model: "iPhone 16",
-              osVersion: "26.5",
-              physical: true,
-              platform: "ios",
-            },
-            state: "reclaiming",
-          },
-        ],
-      }),
-    );
+    const state = await openTestState();
+    const seedClock = new FakeClock(1_000);
+    const seeding = await loadTestRegistry({
+      clock: seedClock,
+      eventBus: new EventBus(seedClock),
+      idGenerator: { generate: () => "physical" },
+      state,
+    });
+    const physical = await seeding.enrollPhysical({
+      apps: [],
+      class: "phone",
+      driverDeviceId: "00008110-001A2B3C4D5E",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    state.database
+      .prepare("UPDATE devices SET state = 'reclaiming', last_lease_ended_at = 1000 WHERE id = ?")
+      .run(physical.id);
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
@@ -392,7 +387,7 @@ describe("createLeasing", () => {
       estimateMs: { reclaim: 34_000 },
       platform: "ios",
     });
-    const harness = await createHarness({ driver, filesystem });
+    const harness = await createHarness({ driver, state });
     await harness.engine.request(request, { ownerId: "holder", requesterId: "holder" });
     const progress: LeaseProgress[] = [];
     void harness.engine.request(request, {
@@ -405,7 +400,7 @@ describe("createLeasing", () => {
     // The request is held up by the simulator limit; the physical device reclaiming beside it is
     // nobody's erase to wait for, so no reclaiming stage is quoted.
     expect(progress).toEqual([{ queuePosition: 1, stage: "queued" }]);
-    expect(harness.registry.snapshot.devices.map((device) => device.id)).toContain("dev_physical");
+    expect(harness.registry.snapshot.devices.map((device) => device.id)).toContain(physical.id);
   });
 
   it("a release whose reclaim leaves the device ready, with running capacity over its limit, has the pool shut the least recently used idle device down", async () => {
@@ -1460,7 +1455,7 @@ describe("createLeasing RAM budget by mode", () => {
   it("counts a slim-spec device quarantined from provisioning at the full size", async () => {
     const harness = await createHarness({ limits: roomy, ramBudget, totalRamBytes: 9 * gibibyte });
     const registered = await harness.registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "driver-stalled" },
       driverDeviceId: "driver-stalled",
       provisionDuration: 0,
       spec: { ...slimRequest, physical: false },
@@ -1536,7 +1531,7 @@ describe("createLeasing RAM budget by mode", () => {
     // Restarted at 2 GiB slim: the three slim devices use 6 GiB of 5.
     const after = await createHarness({
       driver,
-      filesystem: before.filesystem,
+      state: before.state,
       idleShutdownAfterMs: 0,
       limits: roomy,
       ramBudget: { ...ramBudget, iosSlimBytesPerDevice: 2 * gibibyte },
@@ -1700,8 +1695,7 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
   });
 
   it("recovers a background reclaim interrupted by a daemon crash on the next start", async () => {
-    const filesystem = new MemoryFilesystem();
-    const restartStatePath = "/home/agent/.simlock/restart-state.json";
+    const state = await openTestState();
     let nextId = 1;
     const idGenerator = { generate: () => `${nextId++}` };
     const systemStats = () =>
@@ -1721,12 +1715,11 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
 
     const clock1 = new FakeClock(1_000);
     const bus1 = new EventBus(clock1);
-    const registry1 = await Registry.load({
+    const registry1 = await loadTestRegistry({
       clock: clock1,
       eventBus: bus1,
-      filesystem,
       idGenerator,
-      statePath: restartStatePath,
+      state,
     });
     const engine1 = createTestEngine({
       ...testComponentWiring({
@@ -1758,18 +1751,17 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
     // ...and the process is abandoned before the driver's 34s reclaim resolves --
     // exactly like a crashed daemon. Nothing here ever settles that promise.
 
-    // Next start: a fresh process reads the same persisted registry (state.json
+    // why: next start: a fresh process reads the same persisted registry (state.db
     // survives the crash) and reconnects to the same physical driver, but its
     // in-memory claim tracking starts empty -- there is no live claim for this
     // device, because the process that held it is gone.
     const clock2 = new FakeClock(clock1.now());
     const bus2 = new EventBus(clock2);
-    const registry2 = await Registry.load({
+    const registry2 = await loadTestRegistry({
       clock: clock2,
       eventBus: bus2,
-      filesystem,
       idGenerator,
-      statePath: restartStatePath,
+      state,
     });
     const engine2 = createTestEngine({
       ...testComponentWiring({
@@ -1981,7 +1973,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
   });
 
   it("still deletes a device created under fresh after the configuration changes to reusable", async () => {
-    const filesystem = new MemoryFilesystem();
+    const state = await openTestState();
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);
     let nextId = 1;
@@ -1991,13 +1983,12 @@ describe("createLeasing fresh lease identity (#75)", () => {
       cpuCount: 8,
       totalRamBytes: 32 * gibibyte,
     });
-    const beforeRegistry = await Registry.load({
+    const beforeRegistry = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator,
       leaseIdentity: freshIos,
-      statePath,
+      state,
     });
     const before = createTestEngine({
       clock,
@@ -2014,13 +2005,12 @@ describe("createLeasing fresh lease identity (#75)", () => {
 
     // The operator switches iOS back to reusable and restarts the daemon mid-lease.
     const reusable = { android: "reusable", ios: "reusable" } as const;
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator,
       leaseIdentity: reusable,
-      statePath,
+      state,
     });
     const after = createTestEngine({
       ...testComponentWiring({
@@ -2069,20 +2059,19 @@ describe("createLeasing fresh lease identity (#75)", () => {
   });
 
   async function restartAfterCrash(crashedIn: "reclaiming" | "shutdown") {
-    const filesystem = new MemoryFilesystem();
+    const state = await openTestState();
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);
     let nextId = 1;
     const idGenerator = { generate: () => `${nextId++}` };
     // One driver across both processes: the simulator outlives the daemon.
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    const crashed = await Registry.load({
+    const crashed = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator,
       leaseIdentity: freshIos,
-      statePath,
+      state,
     });
     const driverDevice = await driver.makeReady(
       await driver.provision({ ...request, physical: false }),
@@ -2114,13 +2103,12 @@ describe("createLeasing fresh lease identity (#75)", () => {
       await crashed.completeReclaimWithoutPurge(device.id);
     }
 
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator,
       leaseIdentity: freshIos,
-      statePath,
+      state,
     });
     const engine = createTestEngine({
       ...testComponentWiring({
@@ -2267,7 +2255,9 @@ describe("createLeasing logger wiring", () => {
     await harness.engine.release(first.lease.id, "explicit");
     // The release has committed and the erase is still running. A disk that refuses the write
     // makes the reclaim's own commit throw, with no caller left to reject to.
-    harness.filesystem.defineFailure(statePath, "EIO");
+    vi.spyOn(harness.state, "transaction").mockImplementation(() => {
+      throw new Error("EIO");
+    });
 
     clock.advance(20);
     await harness.engine.settle();
@@ -2300,7 +2290,7 @@ describe("createLeasing restart recovery of stored lease requests", () => {
       .poll(() => before.registry.leaseRequests().find((record) => record.requesterId === "agent"))
       .toMatchObject({ state: "open" });
 
-    const after = await createHarness({ filesystem: before.filesystem });
+    const after = await createHarness({ state: before.state });
     await after.engine.convergeRunningCapacity();
     return after;
   }
@@ -2355,7 +2345,7 @@ describe("createLeasing a grant and its request's result", () => {
     const grant = await before.engine.request(request, asker);
     await flush();
 
-    const after = await createHarness({ driver: before.driver, filesystem: before.filesystem });
+    const after = await createHarness({ driver: before.driver, state: before.state });
     await after.engine.convergeRunningCapacity();
     const repeat = await after.engine.request(request, asker);
 
@@ -2380,7 +2370,7 @@ describe("createLeasing a grant and its request's result", () => {
     expect(harness.registry.leaseRequests()).toMatchObject([{ grant, state: "granted" }]);
   });
 
-  it("answers a repeat of a granted request whose lease was released since with the grant as recorded, and a renew of that lease with UnknownLeaseError", async () => {
+  it("answers a repeat of a granted request whose lease was released since with the lease as recorded and the device as it is now, and a renew of that lease with UnknownLeaseError", async () => {
     const harness = await createHarness();
     await seedReady(harness);
     const grant = await harness.engine.request(request, asker);
@@ -2390,7 +2380,9 @@ describe("createLeasing a grant and its request's result", () => {
     const repeat = await harness.engine.request(request, asker);
 
     expect(repeat.lease.id).toBe(grant.lease.id);
-    expect(repeat).toEqual(grant);
+    expect(grant.device.state).toBe("leased");
+    expect(repeat).toEqual({ ...grant, device: harness.registry.snapshot.devices[0] });
+    expect(repeat.device.state).toBe("ready");
     await expect(harness.engine.renew(grant.lease.id)).rejects.toBeInstanceOf(UnknownLeaseError);
   });
 });
@@ -2514,7 +2506,7 @@ describe("createLeasing: capacity.changed and queue.changed", () => {
     );
 
     await harness.registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "sim-1" },
       driverDeviceId: "sim-1",
       provisionDuration: 0,
       spec: { ...request, physical: false },
@@ -2727,7 +2719,7 @@ describe("createLeasing: lease.rejected names its request", () => {
         .catch(() => undefined);
       await expect.poll(() => admittedId(before, "agent")).toEqual(expect.stringMatching(/^req_/));
       const requestId = await admittedId(before, "agent");
-      const harness = await createHarness({ filesystem: before.filesystem });
+      const harness = await createHarness({ state: before.state });
       await harness.engine.convergeRunningCapacity();
       return { harness, requestId, requester: "agent" };
     },
@@ -3822,7 +3814,7 @@ describe("createLeasing a lease ID chosen by the requester", () => {
   it("after a daemon restart, an ID held only by a waiting request is accepted again", async () => {
     const before = await withWaiting("agent-2", "myid");
     // Started again with room to spare, so the only thing that could refuse "myid" is the ID.
-    const after = await createHarness({ filesystem: before.filesystem, limits: roomy });
+    const after = await createHarness({ state: before.state, limits: roomy });
     await after.engine.convergeRunningCapacity();
 
     await expect(after.engine.request(request, asking("agent-3", "myid"))).resolves.toMatchObject({
@@ -4022,7 +4014,7 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
 
     const after = await createHarness({
       driver,
-      filesystem: before.filesystem,
+      state: before.state,
       lease: { maxPerRequester: 1 },
       limits: roomy,
     });
@@ -4212,7 +4204,7 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
       .toMatchObject({ fleetRequestId: "req_gw1", state: "open" });
     const requestId = await admittedId(before, "gw:open");
 
-    const after = await createHarness({ filesystem: before.filesystem });
+    const after = await createHarness({ state: before.state });
     await after.engine.convergeRunningCapacity();
 
     expect(payloads(after, "lease.declined")).toEqual([

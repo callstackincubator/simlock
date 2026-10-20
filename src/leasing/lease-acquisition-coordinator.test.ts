@@ -9,6 +9,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
+import type { StateDatabase } from "../state/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import {
@@ -32,10 +33,15 @@ import {
   specMode,
   type CatalogReader,
   ManagedDeviceLifecycle,
-  Registry,
+  type Registry,
   SerializedDecision,
 } from "../core/index.js";
-import { createCapacityStrategy, readyTransitionUpdate } from "../core/testing.js";
+import {
+  createCapacityStrategy,
+  loadTestRegistry,
+  openTestState,
+  readyTransitionUpdate,
+} from "../core/testing.js";
 import { FakeDriver } from "../core/testing.js";
 import { QuarantineCoordinator } from "../core/testing.js";
 import {
@@ -53,7 +59,6 @@ import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { type LeaseRequestOptions, RequesterAlreadyLeasedError, WaitQueue } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const request = {
   physical: false,
   model: "iPhone 16",
@@ -169,13 +174,12 @@ async function createHarness(
     new FakeDriver({ clock, platform: "ios", availableOsVersions: ["26.5"] });
   const drivers = options.drivers ?? [driver];
   let nextId = 0;
-  const filesystem = new MemoryFilesystem();
-  const registry = await Registry.load({
+  const state = await openTestState();
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem,
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
+    state,
   });
   const decisions = new SerializedDecision();
   const claims = new DeviceOperationClaims();
@@ -297,11 +301,42 @@ async function createHarness(
     components,
     coordinator,
     driver,
-    filesystem,
     queue,
     registry,
     requestIds,
+    state,
   };
+}
+
+interface StoredByCommit {
+  readonly leaseRequesters: readonly string[];
+  readonly requestRequesters: readonly string[];
+}
+
+/**
+ * why: runs `inspect` inside every registry commit, once its rows are written and before it commits: it
+ * sees what the commit stores, and throwing from it rolls that commit back.
+ */
+function inspectCommits(
+  harness: { readonly state: StateDatabase },
+  inspect: (stored: StoredByCommit) => void,
+): void {
+  const original = harness.state.transaction.bind(harness.state);
+  vi.spyOn(harness.state, "transaction").mockImplementation((work) =>
+    original(() => {
+      const result = work();
+      const requesters = (table: string) =>
+        harness.state.database
+          .prepare(`SELECT requester_id FROM ${table}`)
+          .all()
+          .map((row) => String(row["requester_id"]));
+      inspect({
+        leaseRequesters: requesters("leases"),
+        requestRequesters: requesters("lease_requests"),
+      });
+      return result;
+    }),
+  );
 }
 
 async function seedReady(
@@ -1213,19 +1248,15 @@ describe("LeaseAcquisitionCoordinator", () => {
       queueDepth: harness.coordinator.queueDepth,
     }).toEqual({ now: 1_000, outcome: "pending", queueDepth: 1 });
 
-    const write = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
     let deadlineFellDueDuringTheGrantWrite = false;
-    harness.filesystem.writeFileAtomic = (path, contents) => {
-      // why: a real clock keeps turning while a commit is in flight, so the only faithful way to
-      // put this waiter's timeout inside the grant's write is to advance it from the write itself.
-      const inFlight = write(path, contents);
-      const leases = (JSON.parse(contents) as { leases?: { requesterId: string }[] }).leases ?? [];
-      if (leases.some((lease) => lease.requesterId === "waiter")) {
+    // why: a real clock keeps turning while a commit is in flight, so the only faithful way to
+    // put this waiter's timeout inside the grant's write is to advance it from the commit itself.
+    inspectCommits(harness, ({ leaseRequesters }) => {
+      if (leaseRequesters.includes("waiter")) {
         harness.clock.advance(100);
         deadlineFellDueDuringTheGrantWrite = harness.clock.now() >= 1_100;
       }
-      return inFlight;
-    };
+    });
 
     await harness.registry.beginRelease(held.lease.id);
     await harness.registry.transitionDevice(held.device.id, "ready", {
@@ -1266,16 +1297,13 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness({ logger });
     const device = await seedReady(harness);
     let failing = true;
-    const write = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
-    harness.filesystem.writeFileAtomic = (path, contents) => {
-      // why: the grant is one registry commit, so failing the write that stores this waiter's
-      // lease is how a dead disk looks to the coordinator; the registry keeps its old state.
-      const stored = (JSON.parse(contents) as { leases?: { requesterId: string }[] }).leases ?? [];
-      if (failing && stored.some((lease) => lease.requesterId === "retrying")) {
-        return Promise.reject(new Error("state.json write refused"));
+    // why: the grant is one registry commit, so failing the commit that stores this waiter's
+    // lease is how a dead disk looks to the coordinator; the registry keeps its old state.
+    inspectCommits(harness, ({ leaseRequesters }) => {
+      if (failing && leaseRequesters.includes("retrying")) {
+        throw new Error("state write refused");
       }
-      return write(path, contents);
-    };
+    });
 
     const acquisition = harness.coordinator.request(request, {
       ownerId: "retrying",
@@ -1290,7 +1318,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         level: "warn",
         fields: {
           deviceId: device.id,
-          error: "Error: state.json write refused",
+          error: "Error: state write refused",
           requesterId: "retrying",
           step: "grant",
         },
@@ -1331,17 +1359,13 @@ describe("LeaseAcquisitionCoordinator", () => {
       // booted one would leave a provisioned grant free to orphan its waiter again.
       if (path === "booted") await seedShutdown(harness);
       let failing = true;
-      const write = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
-      harness.filesystem.writeFileAtomic = (statePathArg, contents) => {
-        // why: the grant is one registry commit, so failing the write that stores this waiter's
-        // lease is how a dead disk looks to the coordinator; the registry keeps its old state.
-        const stored =
-          (JSON.parse(contents) as { leases?: { requesterId: string }[] }).leases ?? [];
-        if (failing && stored.some((lease) => lease.requesterId === "orphaned")) {
-          return Promise.reject(new Error("state.json write refused"));
+      // why: the grant is one registry commit, so failing the commit that stores this waiter's
+      // lease is how a dead disk looks to the coordinator; the registry keeps its old state.
+      inspectCommits(harness, ({ leaseRequesters }) => {
+        if (failing && leaseRequesters.includes("orphaned")) {
+          throw new Error("state write refused");
         }
-        return write(statePathArg, contents);
-      };
+      });
 
       const acquisition = harness.coordinator.request(request, {
         ownerId: "orphaned",
@@ -1358,7 +1382,7 @@ describe("LeaseAcquisitionCoordinator", () => {
           level: "warn",
           fields: {
             deviceId: device?.id,
-            error: "Error: state.json write refused",
+            error: "Error: state write refused",
             requesterId: "orphaned",
             step: "grant",
           },
@@ -1978,7 +2002,7 @@ describe("LeaseAcquisitionCoordinator", () => {
 
   it.each([
     ["answers that another operation owns the device", async (): Promise<boolean> => false],
-    ["throws", async (): Promise<boolean> => Promise.reject(new Error("state.json write failed"))],
+    ["throws", async (): Promise<boolean> => Promise.reject(new Error("state write failed"))],
   ] as const)(
     "A failed boot whose destroy throws frees the waiter's running slot and leaves no fence, even when quarantine %s.",
     async (_label, enterFromStalledTransition) => {
@@ -2122,16 +2146,12 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     expect(heard).toEqual([{ queuePosition: 1, stage: "queued" }]);
   });
 
-  it("writes a request to disk before the wait queue sees it", async () => {
+  it("stores a request before the wait queue sees it", async () => {
     const harness = await createHarness();
     const order: string[] = [];
-    const write = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
-    harness.filesystem.writeFileAtomic = async (path, contents) => {
-      await write(path, contents);
-      const stored = (JSON.parse(contents) as { leaseRequests?: { requesterId: string }[] })
-        .leaseRequests;
-      if (stored?.some((record) => record.requesterId === "agent")) order.push("on disk");
-    };
+    inspectCommits(harness, ({ requestRequesters }) => {
+      if (requestRequesters.includes("agent") && !order.includes("stored")) order.push("stored");
+    });
     const create = harness.queue.create.bind(harness.queue);
     harness.queue.create = (...args) => {
       order.push("queued");
@@ -2140,7 +2160,7 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
 
     await harness.coordinator.request(request, keyed);
 
-    expect(order.slice(0, 2)).toEqual(["on disk", "queued"]);
+    expect(order.slice(0, 2)).toEqual(["stored", "queued"]);
   });
 
   it("keeps a capacity failure terminal under the same key after capacity frees up", async () => {

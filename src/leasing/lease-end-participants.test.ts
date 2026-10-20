@@ -5,23 +5,23 @@ import {
   type DeviceRequest,
   type DriverDevice,
   type LeaseGrant,
-  Registry,
+  type Registry,
   UnknownLeaseError,
 } from "../core/index.js";
-import { FakeDriver, type FakeDriverOptions, testComponentWiring } from "../core/testing.js";
 import {
-  FakeClock,
-  FakeSystemStats,
-  JsonLinesLogger,
-  MemoryFilesystem,
-  MemoryLogSink,
-} from "../ports/index.js";
+  FakeDriver,
+  type FakeDriverOptions,
+  loadTestRegistry,
+  openTestState,
+  testComponentWiring,
+} from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
+import { FakeClock, FakeSystemStats, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import type { EndedLease, LeaseEndParticipant } from "./lease-ports.js";
 import { createTestEngine, type TestEngine } from "./testing.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const END_WAIT_MS = 600_000;
 const PROBE_MS = 30_000;
 
@@ -79,12 +79,12 @@ interface World {
   readonly bus: EventBus;
   readonly clock: FakeClock;
   readonly driver: FakeDriver;
-  readonly filesystem: MemoryFilesystem;
+  readonly state: StateDatabase;
   readonly ids: { next: number };
   readonly sink: MemoryLogSink;
 }
 
-function createWorld(driverOptions: Partial<FakeDriverOptions> = {}): World {
+async function createWorld(driverOptions: Partial<FakeDriverOptions> = {}): Promise<World> {
   const clock = new FakeClock(1_000);
   return {
     bus: new EventBus(clock),
@@ -95,9 +95,9 @@ function createWorld(driverOptions: Partial<FakeDriverOptions> = {}): World {
       platform: "ios",
       ...driverOptions,
     }),
-    filesystem: new MemoryFilesystem(),
     ids: { next: 1 },
     sink: new MemoryLogSink(),
+    state: await openTestState(),
   };
 }
 
@@ -196,14 +196,13 @@ afterEach(() => {
 });
 
 async function startEngine(options: EngineOptions = {}): Promise<Harness> {
-  const world = options.world ?? createWorld();
-  const { bus, clock, driver, filesystem, ids, sink } = world;
-  const registry = await Registry.load({
+  const world = options.world ?? (await createWorld());
+  const { bus, clock, driver, ids, sink, state } = world;
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem,
     idGenerator: { generate: () => `${ids.next++}` },
-    statePath,
+    state,
   });
   const engine = createTestEngine({
     ...testComponentWiring({ clock, drivers: [driver], eventBus: bus, registry }),
@@ -313,7 +312,7 @@ async function endStartupLease(options: {
   readonly participant: TestParticipant;
   readonly ttlMs?: number;
 }) {
-  const world = createWorld();
+  const world = await createWorld();
   const first = await startEngine({ world });
   const grant = await first.engine.request(request, {
     ...asking("agent"),
@@ -955,7 +954,7 @@ describe("lease-end participants (#469)", () => {
   });
 
   it("with no participant, the reclaim starts without the clock advancing and the device record carries no deferred-reclaim marker", async () => {
-    const world = createWorld({ latencyMs: { reclaim: 20 } });
+    const world = await createWorld({ latencyMs: { reclaim: 20 } });
     const harness = await startEngine({ world });
     const grant = await harness.engine.request(request, asking("agent"));
 
@@ -1017,7 +1016,7 @@ describe("lease-end participants (#469)", () => {
   });
 
   it("a daemon stopped during the wipe that follows the wait also gets a full wipe at the next start", async () => {
-    const world = createWorld({ latencyMs: { reclaim: 20 } });
+    const world = await createWorld({ latencyMs: { reclaim: 20 } });
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant], world });
     const grant = await harness.engine.request(request, asking("agent"));

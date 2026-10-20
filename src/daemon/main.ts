@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { type Alerts, createAlerts } from "../alerts/index.js";
@@ -17,9 +17,11 @@ import {
   type ConfigOverrides,
   type DaemonMode,
   type DeviceClass,
+  type DeviceDataTable,
   type DeviceMode,
   type Driver,
   type DriverRejection,
+  type Platform,
   type ModelPreferences,
   type PrerequisiteCheck,
   CleanupReaper,
@@ -34,11 +36,13 @@ import {
   loadInstanceId,
   OwnedRootError,
   Registry,
+  registryOwner,
   Nuke,
   SerializedDecision,
   sweepWriteLeftovers,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
+import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import {
   AdbServerUnavailableError,
   AndroidDriver,
@@ -130,6 +134,7 @@ export interface StartDaemonOptions {
   readonly configPath?: string;
   readonly dataDirectory?: string;
   readonly defaultRequesterId?: string;
+  readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable>;
   readonly drivers?: readonly Driver[];
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
@@ -148,7 +153,6 @@ export interface StartDaemonOptions {
   readonly processRunner?: ProcessRunner;
   readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
-  readonly statePath?: string;
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
@@ -171,7 +175,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const processSupervisor = options.processSupervisor ?? new NodeProcessSupervisor();
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
-  const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
@@ -218,6 +221,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
   });
+  const deviceDataTables = await resolveDeviceDataTables(options);
+  const state = await openStateDatabase({
+    dataDirectory,
+    // why: node:sqlite writes the real disk, so the state never goes through a daemon's injected filesystem
+    filesystem: new NodeFilesystem(),
+    logger: logger.child("state"),
+    oldFiles: role === "gateway" ? [] : ["state.json"],
+    owners: role === "gateway" ? [] : [registryOwner, ...new Set(deviceDataTables.values())],
+    sqlite: new NodeSqliteOpener(),
+    upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
+  });
   // why: both modes check the same credentials, so the checks are built once, before the mode branch.
   const auth = createAuth({
     clock,
@@ -251,25 +265,22 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       logger,
       optionalModules: moduleDefinitions,
       socketPath,
+      state,
       version: version,
       ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
     });
   }
-  // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
-  // written before it has no stored width of its own, and takes the configured default rather
-  // than a guess derived from its deadline.
   const registry = await Registry.load({
     clock,
-    defaultTtlMs: config.lease.defaultTtlMs,
+    deviceData: deviceDataTables,
     eventBus,
-    filesystem,
     idGenerator,
     leaseIdentity: config.lease.identity,
     leaseRequestLimits: {
       maxRecords: config.lease.maxRequestRecords,
       retentionMs: config.lease.requestRetentionMs,
     },
-    statePath,
+    state,
   });
   // Before discovery, because every root a driver validates is checked against it, and it
   // is written exactly once per home and never regenerated (ADR 0001, decision 2).
@@ -473,7 +484,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const convergeStartup = async (): Promise<void> => {
     await sweepWriteLeftovers({
       deviceRoots: deviceRoots(drivers),
-      directories: [dataDirectory, dirname(statePath)],
+      directories: [dataDirectory],
       filesystem,
       logger,
       processSupervisor,
@@ -567,6 +578,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         }
       }
       await eventHistory.stop();
+      state.close();
     },
     // Review finding S5: waits for the concurrently-started gateway to either finish binding
     // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
@@ -683,7 +695,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // even if `stopAuxiliary`'s own path already ran one.
     await daemon.stop("http-start-failed").catch(() => undefined);
   }
-  if (daemonResult.status === "rejected") throw daemonResult.reason;
+  if (daemonResult.status === "rejected") {
+    state.close();
+    throw daemonResult.reason;
+  }
   if (gatewayResult.status === "rejected") throw gatewayResult.reason;
   return daemon;
 }
@@ -706,6 +721,7 @@ interface GatewayDaemonOptions {
   readonly logger: Logger;
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
+  readonly state: StateDatabase;
   readonly version: string;
   readonly webhookPoster?: WebhookPoster;
 }
@@ -733,6 +749,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     filesystem,
     idGenerator,
     logger,
+    state,
   } = options;
   // The gateway's own identity, used to namespace the principal it announces to each worker
   // (ADR 0005 §27's shape) so a worker's logs attribute what the gateway did to the gateway.
@@ -907,6 +924,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       gatewayOwnerRoutedFacts.dispose();
       await gatewayService.stop();
       await eventHistory.stop();
+      state.close();
     },
     stopAuxiliary: async () => {
       // why: before the HTTP gateway closes the worker uplinks, so this gateway's own stop sends no worker.disconnected (ADR 0035 §4).
@@ -1080,6 +1098,38 @@ export interface DriverDiscovery {
   readonly drivers: readonly Driver[];
   readonly prerequisiteChecks: readonly PrerequisiteCheck[];
   readonly rejections: readonly DriverRejection[];
+}
+
+const WORKER_UPGRADE_STEP =
+  "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.";
+const GATEWAY_UPGRADE_STEP =
+  "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.";
+
+/** why: the drivers' table code, which the production map fills in once the real drivers have tables. */
+export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTable> {
+  return new Map();
+}
+
+/**
+ * why: one function picks the map -- the option, else the `SIMLOCK_DRIVERS_MODULE` module's
+ * `deviceDataTables` export, else the production tables -- so the state open and `Registry.load`
+ * always see the same one.
+ */
+export async function resolveDeviceDataTables(
+  options: Pick<StartDaemonOptions, "deviceDataTables">,
+): Promise<ReadonlyMap<Platform, DeviceDataTable>> {
+  if (options.deviceDataTables !== undefined) return options.deviceDataTables;
+  const modulePath = process.env.SIMLOCK_DRIVERS_MODULE;
+  if (modulePath === undefined) return productionDeviceDataTables();
+  const imported = (await import(pathToFileURL(resolve(modulePath)).href)) as {
+    deviceDataTables?: unknown;
+  };
+  if (!(imported.deviceDataTables instanceof Map)) {
+    throw new Error(
+      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
+    );
+  }
+  return imported.deviceDataTables as ReadonlyMap<Platform, DeviceDataTable>;
 }
 
 export async function discoverDrivers(options: DriverDiscoveryContext): Promise<DriverDiscovery> {

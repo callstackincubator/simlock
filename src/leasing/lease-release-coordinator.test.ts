@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import {
   DeviceOperationClaims,
   type DeviceRecord,
   type LeaseRecord,
-  Registry,
   UnknownLeaseError,
   type ReleasedLease,
   SerializedDecision,
 } from "../core/index.js";
+import { loadTestRegistry } from "../core/testing.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
@@ -22,8 +22,6 @@ const noTiming = {
   estimatedReclaimMs: 0,
 };
 
-const statePath = "/home/agent/.simlock/state.json";
-
 async function flush(): Promise<void> {
   for (let count = 0; count < 10; count += 1) {
     await Promise.resolve();
@@ -34,12 +32,10 @@ async function createHarness() {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
   });
   const scheduler = new LeaseExpiryScheduler(clock, () => undefined);
   const lifecycle = new LeaseLifecycle({
@@ -91,7 +87,7 @@ async function grant(
   harness: Awaited<ReturnType<typeof createHarness>>,
 ): Promise<{ readonly device: DeviceRecord; readonly lease: LeaseRecord }> {
   const device = await harness.registry.registerDevice({
-    driverData: {},
+    driverData: { fakeDeviceId: `driver_${harness.registry.snapshot.devices.length}` },
     driverDeviceId: `driver_${harness.registry.snapshot.devices.length}`,
     provisionDuration: 0,
     spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -292,14 +288,14 @@ describe("LeaseReleaseCoordinator", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
   });
 
-  it("preserves concurrent releaseAll behavior: overlapping snapshots can reject", async () => {
+  it("a releaseAll that overlaps another finds nothing left to release", async () => {
     const harness = await createHarness();
     await grant(harness);
 
     const first = harness.coordinator.releaseAll("killed");
     const second = harness.coordinator.releaseAll("killed");
 
-    await expect(Promise.all([first, second])).rejects.toBeInstanceOf(UnknownLeaseError);
+    await expect(Promise.all([first, second])).resolves.toEqual([[expect.any(String)], []]);
   });
 
   describe("backgrounded reclaim", () => {

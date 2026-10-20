@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { UnknownLeaseError, Registry, SerializedDecision } from "../core/index.js";
+import { UnknownLeaseError, SerializedDecision } from "../core/index.js";
+import { loadTestRegistry, openTestState } from "../core/testing.js";
 import {
   NoCapacityError,
   RequesterAlreadyLeasedError,
@@ -1022,23 +1023,28 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
 describe("GET /v1/lease-requests/:id across a daemon restart", () => {
   it("answers from the core record a previous daemon process stored", async () => {
     const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
+    const state = await openTestState();
     const load = () =>
-      Registry.load({
+      loadTestRegistry({
         clock,
         eventBus: new EventBus(clock),
-        filesystem,
         idGenerator: sequenceIdGenerator("stored"),
-        statePath: "/home/agent/.simlock/state.json",
+        state,
       });
     const before = await load();
+    const device = await before.registerDevice({
+      driverData: { fakeDeviceId: "fake-1" },
+      driverDeviceId: "fake-1",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", physical: false, platform: "ios" },
+    });
     const stored = await before.createLeaseRequest({
       ownerId: "tok_agent",
       request: { model: "iPhone 17 Pro", platform: "ios" },
       requesterId: "tok_agent",
     });
     await before.settleLeaseRequest(stored.id, {
-      grant: makeGrant({ lease: { id: "lse_before_restart" } }),
+      grant: makeGrant({ device: { id: device.id }, lease: { id: "lse_before_restart" } }),
       state: "granted",
     });
 
@@ -1072,12 +1078,10 @@ describe("GET /v1/lease-requests/:id across a daemon restart", () => {
 describe("GET /v1/lease-requests/:id/events for a request nothing is driving", () => {
   it("ends the stream after the current state when the request has no live wait to report on", async () => {
     const clock = new FakeClock(1_000);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus: new EventBus(clock),
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequenceIdGenerator("stored"),
-      statePath: "/home/agent/.simlock/state.json",
     });
     // Stored open by a previous process; this one has not settled it yet.
     const stored = await registry.createLeaseRequest({

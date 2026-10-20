@@ -10,8 +10,8 @@ import { testComponentWiring } from "../core/testing.js";
 
 import { EventBus } from "../bus/index.js";
 import { ringEventHistory, seedHistory } from "../history/testing.js";
-import { CleanupReaper, type Config, Registry } from "../core/index.js";
-import { FakeDriver } from "../core/testing.js";
+import { CleanupReaper, type Config } from "../core/index.js";
+import { FakeDriver, loadTestRegistry } from "../core/testing.js";
 import {
   CryptoTokenSecrets,
   FakeClock,
@@ -7134,12 +7134,10 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const filesystem = new MemoryFilesystem();
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: sequence(),
-    statePath: "/state.json",
   });
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   const config = testConfig();
@@ -7247,12 +7245,10 @@ async function startInMemoryDaemon(options: {
   const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: sequence(),
-    statePath: "/state.json",
   });
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   const config = testConfig();

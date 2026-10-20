@@ -20,10 +20,9 @@ import { DriverCatalog } from "./driver-catalog.js";
 import { DriverCrashError, BootTimeoutError, DiskSpaceGuard } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
-import { Registry } from "./registry.js";
+import { loadTestRegistry } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
-const statePath = "/home/agent/.simlock/state.json";
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 function reservation(): CapacityReservation & { readonly releaseCount: () => number } {
@@ -47,12 +46,10 @@ async function createHarness(
     ...(latencyMs === undefined ? {} : { latencyMs }),
   });
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
   });
   const decisions = new SerializedDecision();
   const claims = new DeviceOperationClaims();

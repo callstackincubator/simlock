@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock } from "../ports/index.js";
+import { loadTestRegistry, openTestState } from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
 import {
   IdempotencyConflictError,
   InMemoryLeaseRequestStore,
@@ -10,12 +12,10 @@ import {
 import {
   type LeaseRequestLimits,
   type LeaseRequestStore,
-  Registry,
   SerializedDecision,
 } from "../core/index.js";
 import { RequestCancelledError } from "./wait-queue.js";
 
-const statePath = "/home/agent/.simlock/state.json";
 const request = {
   model: "iPhone 16",
   osVersion: "26.5",
@@ -26,29 +26,26 @@ const failure = { code: "NO_CAPACITY", message: "No device capacity is currently
 async function loadRegistry(
   options: {
     readonly clock?: FakeClock;
-    readonly filesystem?: MemoryFilesystem;
+    readonly state?: StateDatabase;
     readonly limits?: LeaseRequestLimits;
   } = {},
 ) {
   const clock = options.clock ?? new FakeClock(1_000);
-  const filesystem = options.filesystem ?? new MemoryFilesystem();
+  const state = options.state ?? (await openTestState());
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus: new EventBus(clock),
-    filesystem,
     idGenerator: { generate: () => `${nextId++}` },
     ...(options.limits === undefined ? {} : { leaseRequestLimits: options.limits }),
-    statePath,
+    state,
   });
-  return { clock, filesystem, registry };
+  return { clock, registry, state };
 }
 
-async function storedRequestIds(filesystem: MemoryFilesystem): Promise<string[]> {
-  const state = JSON.parse(await filesystem.readFile(statePath)) as {
-    readonly leaseRequests: readonly { readonly id: string }[];
-  };
-  return state.leaseRequests.map((record) => record.id);
+async function storedRequestIds(clock: FakeClock, state: StateDatabase): Promise<string[]> {
+  const { registry } = await loadRegistry({ clock, state });
+  return registry.leaseRequests().map((record) => record.id);
 }
 
 function newRequest(requesterId: string) {
@@ -56,8 +53,8 @@ function newRequest(requesterId: string) {
 }
 
 describe("Registry lease requests", () => {
-  it("drops a settled record from reads once the retention window passes, and from disk at the next write", async () => {
-    const { clock, filesystem, registry } = await loadRegistry({
+  it("drops a settled record from reads once the retention window passes, and from the stored state at the next write", async () => {
+    const { clock, registry, state } = await loadRegistry({
       limits: { maxRecords: 100, retentionMs: 60_000 },
     });
     const settled = await registry.createLeaseRequest(newRequest("first"));
@@ -69,7 +66,7 @@ describe("Registry lease requests", () => {
     clock.advance(1);
     expect(registry.leaseRequests()).toEqual([]);
     const next = await registry.createLeaseRequest(newRequest("second"));
-    expect(await storedRequestIds(filesystem)).toEqual([next.id]);
+    expect(await storedRequestIds(clock, state)).toEqual([next.id]);
   });
 
   it("keeps an open record past the retention window", async () => {
@@ -85,7 +82,7 @@ describe("Registry lease requests", () => {
   });
 
   it("evicts the oldest settled record at the cap, and never an open one", async () => {
-    const { filesystem, registry } = await loadRegistry({
+    const { clock, registry, state } = await loadRegistry({
       limits: { maxRecords: 3, retentionMs: 60_000 },
     });
     const open = await registry.createLeaseRequest(newRequest("open"));
@@ -95,36 +92,24 @@ describe("Registry lease requests", () => {
     await registry.settleLeaseRequest(newerSettled.id, { failure, state: "failed" });
 
     const fourth = await registry.createLeaseRequest(newRequest("fourth"));
-    expect(await storedRequestIds(filesystem)).toEqual([open.id, newerSettled.id, fourth.id]);
+    expect(await storedRequestIds(clock, state)).toEqual([open.id, newerSettled.id, fourth.id]);
 
     // Every other record left is open or newer: the cap evicts the last settled one, then
     // admits past the cap rather than touch an open record.
     const fifth = await registry.createLeaseRequest(newRequest("fifth"));
     const sixth = await registry.createLeaseRequest(newRequest("sixth"));
-    expect(await storedRequestIds(filesystem)).toEqual([open.id, fourth.id, fifth.id, sixth.id]);
-  });
-
-  it("loads a state file written before lease requests were stored", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(statePath, JSON.stringify({ devices: [], leases: [] }));
-
-    const { registry } = await loadRegistry({ filesystem });
-    expect(registry.leaseRequests()).toEqual([]);
-
-    const created = await registry.createLeaseRequest(newRequest("agent"));
-    expect(await storedRequestIds(filesystem)).toEqual([created.id]);
+    expect(await storedRequestIds(clock, state)).toEqual([open.id, fourth.id, fifth.id, sixth.id]);
   });
 
   it("loads a stored class request after a reload, with its class and no model", async () => {
-    const { clock, filesystem, registry } = await loadRegistry();
+    const { clock, registry, state } = await loadRegistry();
     const created = await registry.createLeaseRequest({
       ownerId: "agent",
       request: { class: "phone", platform: "ios" },
       requesterId: "agent",
     });
 
-    const { registry: reloaded } = await loadRegistry({ clock, filesystem });
+    const { registry: reloaded } = await loadRegistry({ clock, state });
 
     expect(reloaded.leaseRequests().map((record) => [record.id, record.request])).toEqual([
       [created.id, { class: "phone", platform: "ios" }],
@@ -132,14 +117,14 @@ describe("Registry lease requests", () => {
   });
 
   it("reads a stored request back after a reload, result included", async () => {
-    const { clock, filesystem, registry } = await loadRegistry();
+    const { clock, registry, state } = await loadRegistry();
     const created = await registry.createLeaseRequest({
       ...newRequest("agent"),
       idempotencyKey: "key-1",
     });
     await registry.settleLeaseRequest(created.id, { failure, state: "failed" });
 
-    const { registry: reloaded } = await loadRegistry({ clock, filesystem });
+    const { registry: reloaded } = await loadRegistry({ clock, state });
 
     expect(reloaded.leaseRequests()).toEqual([
       {
@@ -156,104 +141,6 @@ describe("Registry lease requests", () => {
     ]);
   });
 
-  it("loads a granted record stored before mode existed with its grant's device as full, without featureProfile", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const grant = (id: string, device: Record<string, unknown>) => ({
-      createdAt: 1_000,
-      grant: {
-        device: {
-          driverDeviceId: "udid",
-          id: "dev_1",
-          spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-          ...device,
-        },
-        environment: {},
-        lease: { id: "lse_1" },
-        timing: {},
-      },
-      id,
-      ownerId: "agent",
-      request,
-      requesterId: "agent",
-      settledAt: 1_000,
-      state: "granted",
-    });
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leaseRequests: [
-          grant("req_legacy", { featureProfile: "reduced" }),
-          grant("req_slim", { mode: "slim" }),
-          grant("req_unknown", { mode: "reduced" }),
-        ],
-        leases: [],
-      }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-
-    const devices = registry.leaseRequests().map((record) => [record.id, record.grant?.device]);
-    expect(devices.map(([id]) => id)).toEqual(["req_legacy", "req_slim"]);
-    expect(devices[0]?.[1]).toMatchObject({ mode: "full" });
-    expect(devices[0]?.[1]).not.toHaveProperty("featureProfile");
-    expect(devices[1]?.[1]).toMatchObject({ mode: "slim" });
-  });
-
-  it("drops a full key stored before ADR 0007 from a request and from its grant's device spec, and does not write it back", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" };
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leaseRequests: [
-          {
-            createdAt: 1_000,
-            grant: {
-              device: {
-                physical: false,
-                driverDeviceId: "udid",
-                id: "dev_1",
-                mode: "full",
-                spec: { ...spec, full: true },
-              },
-              environment: {},
-              lease: { id: "lse_1" },
-              timing: {},
-            },
-            id: "req_legacy",
-            ownerId: "agent",
-            request: { ...request, full: true },
-            requesterId: "agent",
-            settledAt: 1_000,
-            state: "granted",
-          },
-        ],
-        leases: [],
-      }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-    const [loaded] = registry.leaseRequests();
-    expect(loaded?.request).toEqual(request);
-    expect(loaded?.grant?.device.spec).toEqual(spec);
-
-    await registry.createLeaseRequest(newRequest("other"));
-    const written = JSON.parse(await filesystem.readFile(statePath)) as {
-      readonly leaseRequests: readonly {
-        readonly id: string;
-        readonly request: unknown;
-        readonly grant?: { readonly device: { readonly spec: unknown } };
-      }[];
-    };
-    const stored = written.leaseRequests.find((record) => record.id === "req_legacy");
-    expect(stored?.request).toEqual(request);
-    expect(stored?.grant?.device.spec).toEqual(spec);
-  });
-
   it("settles every open record as failed, leaving settled ones alone", async () => {
     const { registry } = await loadRegistry();
     const open = await registry.createLeaseRequest(newRequest("open"));
@@ -268,104 +155,6 @@ describe("Registry lease requests", () => {
       [open.id, "failed"],
       [done.id, "cancelled"],
     ]);
-  });
-});
-
-describe("Registry lease-request load", () => {
-  const valid = {
-    createdAt: 1_000,
-    id: "req_valid",
-    ownerId: "agent",
-    request,
-    requesterId: "agent",
-    state: "open",
-  };
-
-  async function loadWith(leaseRequests: unknown) {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({ devices: [], leaseRequests, leases: [] }),
-    );
-    return loadRegistry({ filesystem });
-  }
-
-  it.each([
-    ["a granted record without its grant", { state: "granted" }],
-    ["a failed record whose failure has no code", { failure: { message: "x" }, state: "failed" }],
-    ["a settled record without its settlement time", { settledAt: undefined, state: "cancelled" }],
-    ["a request whose mode is neither slim nor full", { request: { ...request, mode: "fast" } }],
-  ])("drops %s and loads the rest", async (_label, broken) => {
-    const { registry } = await loadWith([
-      { ...valid, id: "req_broken", settledAt: 1_000, ...broken },
-      valid,
-    ]);
-
-    expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
-  });
-
-  it.each([
-    [
-      "class is one of the seven: it is kept",
-      { class: "watch", platform: "ios" },
-      { class: "watch", platform: "ios" },
-    ],
-    [
-      "class is not one of the seven: it is dropped",
-      { class: "phablet", platform: "ios" },
-      undefined,
-    ],
-    [
-      "physical is true: it is kept as physical",
-      { model: "iPhone 15 Pro", physical: true, platform: "ios" },
-      { model: "iPhone 15 Pro", physical: true, platform: "ios" },
-    ],
-    [
-      "physical is missing: it is loaded as virtual",
-      { model: "iPhone 16", platform: "ios" },
-      { model: "iPhone 16", platform: "ios" },
-    ],
-    [
-      "physical is false: it is loaded as virtual",
-      { model: "iPhone 16", physical: false, platform: "ios" },
-      { model: "iPhone 16", platform: "ios" },
-    ],
-    [
-      "physical is anything but true: it is loaded as virtual",
-      { model: "iPhone 16", physical: "yes", platform: "ios" },
-      { model: "iPhone 16", platform: "ios" },
-    ],
-    [
-      "image tag is a string: it is kept",
-      { ...request, imageTag: "google_apis" },
-      { ...request, imageTag: "google_apis" },
-    ],
-    ["image tag is not a string: it is dropped", { ...request, imageTag: 7 }, undefined],
-  ])("reads a stored request whose %s, and loads the rest", async (_label, stored, loaded) => {
-    const { registry } = await loadWith([{ ...valid, id: "req_row", request: stored }, valid]);
-
-    expect(registry.leaseRequests().map((record) => [record.id, record.request])).toEqual([
-      ...(loaded === undefined ? [] : [["req_row", loaded]]),
-      ["req_valid", request],
-    ]);
-  });
-
-  it("loads with no requests, rather than failing the load, when the stored list is not a list", async () => {
-    const { registry } = await loadWith({ not: "a list" });
-
-    expect(registry.leaseRequests()).toEqual([]);
-  });
-
-  it("writes back a field it does not know on a stored request", async () => {
-    const { filesystem, registry } = await loadWith([{ ...valid, fromANewerDaemon: 7 }]);
-
-    await registry.createLeaseRequest(newRequest("other"));
-
-    const state = JSON.parse(await filesystem.readFile(statePath)) as {
-      readonly leaseRequests: readonly Record<string, unknown>[];
-    };
-    expect(state.leaseRequests[0]).toMatchObject({ fromANewerDaemon: 7, id: "req_valid" });
   });
 });
 

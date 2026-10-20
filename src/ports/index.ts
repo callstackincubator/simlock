@@ -134,5 +134,11 @@ export {
   passesQuickCheck,
   SqliteUnavailableError,
 } from "./sqlite.js";
-export type { SqliteDatabase, SqliteOpener, SqliteSchemaOwner, SqliteStatement } from "./sqlite.js";
+export type {
+  SqliteDatabase,
+  SqliteOpener,
+  SqliteSchemaOwner,
+  SqliteStatement,
+  SqliteValue,
+} from "./sqlite.js";
 export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";

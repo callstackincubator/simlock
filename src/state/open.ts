@@ -45,8 +45,13 @@ export function configure(database: SqliteDatabase): void {
 }
 
 export function stateDatabase(database: SqliteDatabase): StateDatabase {
+  let closed = false;
   return {
-    close: () => database.close(),
+    close: () => {
+      if (closed) return;
+      closed = true;
+      database.close();
+    },
     database,
     transaction: (work) => inTransaction(database, work),
   };

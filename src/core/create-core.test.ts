@@ -18,11 +18,10 @@ import {
   DriverCrashError,
   loadConfig,
   type PrerequisiteCheck,
-  Registry,
 } from "./index.js";
 import { type FakePhysicalDevice } from "./fake-driver.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
-import { FakeDriver, testComponentWiring } from "./testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring } from "./testing.js";
 import { WarmPool } from "./warm-pool/index.js";
 
 async function build(
@@ -55,15 +54,13 @@ async function build(
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: { generate: () => `${next++}` },
     ...(options.fresh === true
       ? { leaseIdentity: { android: "fresh", ios: "fresh" } as const }
       : {}),
-    statePath: "/state.json",
   });
   const core = createCore({
     clock,
@@ -615,7 +612,7 @@ describe("createCore", () => {
       rig.core.connect(ports());
 
       const ghost = await rig.registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "ghost-android" },
         driverDeviceId: "ghost-android",
         provisionDuration: 0,
         spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },

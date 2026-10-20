@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
+import { NodeSqliteOpener } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
 import {
@@ -88,7 +89,7 @@ interface Rig {
   readonly filesystem: MemoryFilesystem;
   readonly logs: MemoryLogSink;
   readonly origin: string;
-  readonly statePath: string;
+  readonly stateDbPath: string;
   readonly started: Promise<DaemonServer>;
   readonly restart: (between?: () => void) => Promise<Rig>;
 }
@@ -164,7 +165,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const port = await freeLoopbackPort();
   const fake = options.upstream ?? new FakeAgentDevice();
   const drivers = options.drivers?.(clock) ?? [iosDriver(clock)];
-  const statePath = join(directory, "state.json");
+  const stateDbPath = join(directory, "state.db");
   const logs = new MemoryLogSink();
   const launch = () =>
     startDaemon({
@@ -192,11 +193,11 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       },
       ...(options.gatewayMode === true ? { role: "gateway" as const } : {}),
       dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
       drivers,
       filesystem,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
       optionalModules: [agentDeviceModuleWith({ upstream: fake })],
-      statePath,
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -216,7 +217,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       origin,
       restart: () => Promise.reject(new Error("restart needs a started daemon")),
       started,
-      statePath,
+      stateDbPath,
     };
   }
   const rigFor = (daemon: DaemonServer, running: Promise<DaemonServer>): Rig => ({
@@ -234,7 +235,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       return rigFor(next, Promise.resolve(next));
     },
     started: running,
-    statePath,
+    stateDbPath,
   });
   return rigFor(await started, started);
 }
@@ -1032,7 +1033,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await waiting(rig)).toEqual([]);
   });
 
-  it("stopping the daemon while an allocate waits ends with no simlock lease, and the lease request it waited on is cancelled, not open, in state.json", async () => {
+  it("stopping the daemon while an allocate waits ends with no simlock lease, and the lease request it waited on is cancelled, not open, in state.db", async () => {
     const rig = await setUp({ maxRunning: 1 });
     await granted(rig, 1, {}, { token: secrets.two });
     const second = track(allocate(rig, 2));
@@ -1041,16 +1042,19 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await rig.daemon.stop("test");
     await second.promise.catch(() => undefined);
 
-    const state = await rig.filesystem.readFile(rig.statePath);
-    expect(second.done()).toBe(true);
-    expect(state).toContain(hex(1));
-    const records = JSON.parse(state ?? "{}") as {
-      leaseRequests?: readonly { leaseId?: string; state: string }[];
-    };
-    expect(records.leaseRequests?.filter((record) => record.leaseId === hex(2))).toEqual([
-      expect.objectContaining({ state: "cancelled" }),
-    ]);
-    expect(records.leaseRequests?.some((record) => record.state === "open")).toBe(false);
+    const database = await new NodeSqliteOpener().open(rig.stateDbPath, { readOnly: true });
+    try {
+      const leaseIds = database.prepare("SELECT id FROM leases").all();
+      const requests = database.prepare("SELECT lease_id, state FROM lease_requests").all();
+      expect(second.done()).toBe(true);
+      expect(leaseIds).toEqual([{ id: hex(1) }]);
+      expect(requests.filter((row) => row.lease_id === hex(2))).toEqual([
+        expect.objectContaining({ state: "cancelled" }),
+      ]);
+      expect(requests.some((row) => row.state === "open")).toBe(false);
+    } finally {
+      database.close();
+    }
   });
 
   it("an allocate still waiting 330 s after the front admitted it answers `timed out waiting for a device; nothing was leased`, and simlock's queue is empty", async () => {
