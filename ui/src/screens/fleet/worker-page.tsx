@@ -39,12 +39,22 @@ export function WorkerPageScreen(props: {
   return (
     <>
       <Loaded view={view}>
-        {(page) => (page === undefined ? null : <WorkerPageBody page={page} />)}
+        {(page) => (page === undefined ? <MissingWorker /> : <WorkerPageBody page={page} />)}
       </Loaded>
       {deviceId === undefined ? null : (
         <DeviceDrawer key={deviceId} workerId={id} deviceId={deviceId} />
       )}
     </>
+  );
+}
+
+function MissingWorker() {
+  return (
+    <Page title="Worker">
+      <p className="muted">
+        This worker is not in the fleet. <Link to="/fleet">Back to Fleet</Link>
+      </p>
+    </Page>
   );
 }
 
