@@ -201,9 +201,15 @@ export function filterLeaseRows(
 
 export function searchLeaseRows(
   rows: readonly LeaseRowView[],
-  _query: string,
+  query: string,
 ): readonly LeaseRowView[] {
-  return rows;
+  const wanted = query.toLowerCase();
+  if (wanted === "") return rows;
+  return rows.filter((row) =>
+    [row.holder, row.model, row.worker, row.id].some((field) =>
+      field?.toLowerCase().includes(wanted),
+    ),
+  );
 }
 
 export interface StreamOffer {
