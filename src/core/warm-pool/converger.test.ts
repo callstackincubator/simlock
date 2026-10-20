@@ -97,6 +97,7 @@ function harness(
     /** The budget's reservation call throws, which no refusal does. */
     reserveThrows?: boolean;
     refusedPlatforms?: readonly ("ios" | "android")[];
+    provisioning?: Promise<void>;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -207,6 +208,7 @@ function harness(
       },
     },
     claims: {
+      claim: (id) => claims.claim(id),
       isClaimed: (id) => claims.isClaimed(id),
       operationFor: (id) => claims.operationFor(id),
       tryClaim: (id, operation) =>
@@ -269,7 +271,7 @@ function harness(
           mode: "full",
           readyAt: clock.now(),
           spec,
-          state: "ready",
+          state: options.provisioning === undefined ? "ready" : "provisioning",
         };
         state.devices = [...state.devices, created];
         const claim = claims.tryClaim(
@@ -280,6 +282,12 @@ function harness(
         if (claim === undefined) throw new Error("the new device is already claimed");
         provisionOptions.reservation.release();
         record.deviceId = id;
+        if (options.provisioning !== undefined) {
+          await options.provisioning;
+          state.devices = state.devices.map((item) =>
+            item.id === id ? { ...item, state: "ready" } : item,
+          );
+        }
         return { claim, device: created };
       },
     },
@@ -1037,6 +1045,49 @@ describe("warm pool targets", () => {
     await Promise.all([first, second]);
     await rig.pool.settle();
     expect(rig.bootCalls).toContain("d");
+  });
+
+  it("builds onItsWay with one entry per on-its-way device and one per creation flight not yet registered, never two for one creation and never one short", async () => {
+    const x = device("shut-x", "shutdown", 20 * minute).spec;
+    const head = waiter({ ...kind, model: "iPad Pro" }, true);
+    const x2 = waiter(x);
+    const x3 = waiter(x);
+    const x4 = waiter(x);
+    const run = async (
+      devices: readonly VirtualDevice[],
+      first: readonly WaitingDemand[],
+      provisioning?: Promise<void>,
+    ) => {
+      let waiting: readonly WaitingDemand[] = first;
+      const gate = held();
+      const rig = harness(devices, {
+        boot: async () => gate.gate.then(() => undefined),
+        maxConcurrentBoots: 10,
+        provision: async () => gate.gate,
+        ...(provisioning === undefined ? {} : { provisioning }),
+        waiting: () => waiting,
+      });
+      const counts = () => [rig.bootCalls.length, rig.provisionCalls.length];
+      void rig.pool.pass();
+      await flush();
+      const started = counts();
+      void rig.pool.pass();
+      await flush();
+      const again = counts();
+      waiting = [...first, x4];
+      void rig.pool.pass();
+      await flush();
+      return { again, later: counts(), started };
+    };
+
+    const unregistered = await run([], [head, x2]);
+    expect(unregistered).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
+
+    const registered = await run([], [head, x2], new Promise<void>(() => undefined));
+    expect(registered).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
+
+    const bootAndCreation = await run([device("shut-x", "shutdown", 20 * minute)], [head, x2, x3]);
+    expect(bootAndCreation).toEqual({ again: [1, 1], later: [1, 2], started: [1, 1] });
   });
 
   it("does not return from a pass for a creation it started, and settle waits for it", async () => {

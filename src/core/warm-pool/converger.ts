@@ -54,7 +54,7 @@ export interface WarmPoolOptions {
     CapacityCoordinator,
     "canBoot" | "canProvision" | "runningCapacity" | "tryReserveBoot" | "tryReserveProvisioning"
   >;
-  readonly claims: Pick<DeviceOperationClaims, "isClaimed" | "operationFor" | "tryClaim">;
+  readonly claims: Pick<DeviceOperationClaims, "claim" | "isClaimed" | "operationFor" | "tryClaim">;
   readonly clock: Clock;
   readonly config: WarmPoolConfig;
   readonly decisions: Pick<SerializedDecision, "run">;
