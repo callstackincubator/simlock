@@ -950,6 +950,69 @@ describe("GatewayDispatcher", () => {
         "User-Agent": "simlock/9.9.9",
       });
     });
+
+    it("alerts.test fails with ALERT_SEND_FAILED on a non-2xx status, a rejection and no answer within 10 s, and tries once", async () => {
+      const refused = () =>
+        Promise.reject(
+          Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }),
+        );
+      const statusCases = [404, 301, 503] as const;
+      for (const status of statusCases) {
+        const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
+        poster.respond = () => Promise.resolve({ status });
+
+        await expect(
+          dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+        ).rejects.toMatchObject({
+          code: "ALERT_SEND_FAILED",
+          message: `ops answered HTTP ${status}`,
+          details: { destination: "ops", status },
+        });
+        clock.advance(60_000);
+        expect(poster.requests).toHaveLength(1);
+      }
+
+      for (const [respond, error] of [
+        [refused, "ECONNREFUSED"],
+        [() => Promise.reject(new TypeError("fetch failed")), "network-error"],
+      ] as const) {
+        const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
+        poster.respond = respond;
+
+        await expect(
+          dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+        ).rejects.toMatchObject({
+          code: "ALERT_SEND_FAILED",
+          message: `ops could not be reached: ${error}`,
+          details: { destination: "ops", error },
+        });
+        clock.advance(60_000);
+        expect(poster.requests).toHaveLength(1);
+      }
+
+      const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
+      poster.respond = () => new Promise(() => {});
+      let outcome: unknown = "pending";
+      void dispatcher.dispatch("alerts.test", { destination: "ops" }, session()).then(
+        (value) => (outcome = value),
+        (error: unknown) => (outcome = error),
+      );
+      clock.advance(9_999);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(outcome).toBe("pending");
+      expect(poster.requests[0]?.signal.aborted).toBe(false);
+
+      clock.advance(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(outcome).toMatchObject({
+        code: "ALERT_SEND_FAILED",
+        message: "ops did not answer within 10 s",
+        details: { destination: "ops", error: "timeout" },
+      });
+      expect(poster.requests[0]?.signal.aborted).toBe(true);
+      clock.advance(60_000);
+      expect(poster.requests).toHaveLength(1);
+    });
   });
 
   describe("worker.install-component (ADR 0010 §7)", () => {
