@@ -12,29 +12,42 @@ export interface SweepWriteLeftoversOptions {
 }
 
 export async function sweepWriteLeftovers(options: SweepWriteLeftoversOptions): Promise<void> {
-  const { filesystem, logger, processSupervisor } = options;
-  const uid = process.getuid?.();
   for (const directory of new Set(options.directories)) {
     let names: string[];
     try {
-      names = await filesystem.readdir(directory);
+      names = await options.filesystem.readdir(directory);
     } catch {
       continue;
     }
     for (const name of names) {
-      const match = LEFTOVER_NAME.exec(name);
-      if (match === null) continue;
-      const pid = Number(match[1]);
-      if (processSupervisor.isAlive(pid)) continue;
-      const path = join(directory, name);
-      try {
-        const details = await filesystem.lstat(path);
-        if (details.kind !== "file" || (uid !== undefined && details.uid !== uid)) continue;
-        await filesystem.rm(path);
-        logger.info("removed an interrupted write's leftover", { path, pid });
-      } catch (error: unknown) {
-        logger.warn("could not remove an interrupted write's leftover", { error, path });
-      }
+      const pid = abandonedWriterPid(name, options.processSupervisor);
+      if (pid !== undefined) await removeLeftover(join(directory, name), pid, options);
     }
+  }
+}
+
+function abandonedWriterPid(
+  name: string,
+  processSupervisor: ProcessSupervisor,
+): number | undefined {
+  const match = LEFTOVER_NAME.exec(name);
+  if (match === null) return undefined;
+  const pid = Number(match[1]);
+  return processSupervisor.isAlive(pid) ? undefined : pid;
+}
+
+async function removeLeftover(
+  path: string,
+  pid: number,
+  { filesystem, logger }: SweepWriteLeftoversOptions,
+): Promise<void> {
+  const uid = process.getuid?.();
+  try {
+    const details = await filesystem.lstat(path);
+    if (details.kind !== "file" || (uid !== undefined && details.uid !== uid)) return;
+    await filesystem.rm(path);
+    logger.info("removed an interrupted write's leftover", { path, pid });
+  } catch (error: unknown) {
+    logger.warn("could not remove an interrupted write's leftover", { error, path });
   }
 }
