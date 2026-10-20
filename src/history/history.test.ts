@@ -274,6 +274,28 @@ describe("createEventHistory", () => {
     expect(start).toEqual({ events: [rows[0]], kind: "events" });
   });
 
+  it("replayPage pages two events with the same timestamp and seq from different runs in row order, each once", async () => {
+    const earlierRun = await rig();
+    const earlierWriter = earlierRun.history();
+    await earlierWriter.start();
+    const first = relayed(earlierRun.bus, "evt_tie_first", NOW);
+    await earlierWriter.stop();
+    const laterRun = await rig({ directory: earlierRun.directory });
+    const laterWriter = laterRun.history();
+    await laterWriter.start();
+    const second = relayed(laterRun.bus, "evt_tie_second", NOW);
+    relayed(laterRun.bus, "evt_tie_last", NOW + 1);
+
+    const newest = await laterWriter.replayPage({ beforeId: "evt_tie_last", limit: 1 });
+    const older = await laterWriter.replayPage({ beforeId: "evt_tie_second", limit: 1 });
+    await laterWriter.stop();
+    expect(first.seq).toBe(second.seq);
+    expect([newest, older]).toEqual([
+      { events: [second], kind: "events" },
+      { events: [first], kind: "events" },
+    ]);
+  });
+
   it("a second insert of an event with an id already stored adds no row and runs no projection step", async () => {
     const rigged = await rig();
     const projection = recordingProjection();
