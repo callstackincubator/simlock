@@ -145,8 +145,7 @@ Reads only: the user's AVD home, devices.xml, the SDK.
   server with no record is `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
 - **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
   between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
-- **Port checks are partial.** After a restart `shutdown` sends `emu kill` to the stored serial
-  unchecked; reclaim's `snapshot load` goes to the serial before readiness checks it. A port
-  handed out but not yet booted reads free to another instance.
+- **Port checks are partial.** A port handed out but not yet booted reads free to another
+  instance.
 - **Android diagnostics are dropped.** `onDiagnostic` (`snapshot-cold-boot`, unreadable
   devices.xml) is not wired in `daemon/main.ts`.
