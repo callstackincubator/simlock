@@ -2459,3 +2459,66 @@ describe("Registry: quarantineCause", () => {
     });
   });
 });
+
+describe("Registry: state.db rows", () => {
+  async function world(
+    options: { readonly leaseRequestLimits?: { maxRecords: number; retentionMs: number } } = {},
+  ) {
+    const clock = new FakeClock(1_000);
+    const state = await openTestState();
+    let next = 0;
+    const open = (idGenerator: { generate: () => string }) =>
+      loadTestRegistry({
+        clock,
+        eventBus: new EventBus(clock),
+        idGenerator,
+        state,
+        ...options,
+      });
+    const registry = await open({ generate: () => String((next += 1)) });
+    const readyDevice = async (fakeDeviceId: string) => {
+      const device = await registry.registerDevice({
+        driverData: { fakeDeviceId },
+        driverDeviceId: `drv-${fakeDeviceId}`,
+        provisionDuration: 0,
+        spec,
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      return device;
+    };
+    return { clock, open, readyDevice, registry, state };
+  }
+
+  it("a renew with 1,000 settled requests stored changes exactly one row", async () => {
+    const { readyDevice, registry, state } = await world();
+    const device = await readyDevice("fk-1");
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 5_000,
+      ttlMs: 4_000,
+    });
+    for (let index = 0; index < 1_000; index += 1) {
+      await registry.createLeaseRequest({
+        id: `req_${String(index)}`,
+        ownerId: "agent-1",
+        request: { platform: "ios" },
+        requesterId: "agent-1",
+      });
+      await registry.settleLeaseRequest(`req_${String(index)}`, { state: "cancelled" });
+    }
+    expect(state.database.prepare("SELECT COUNT(*) AS n FROM lease_requests").get()?.n).toBe(1_000);
+
+    const before = totalChanges(state);
+    await registry.renewLease(lease.id, 9_000, 8_000);
+
+    expect(Number(totalChanges(state)) - Number(before)).toBe(1);
+    expect(state.database.prepare("SELECT ttl_deadline, ttl_ms FROM leases").all()).toEqual([
+      { ttl_deadline: 9_000, ttl_ms: 8_000 },
+    ]);
+  });
+});
