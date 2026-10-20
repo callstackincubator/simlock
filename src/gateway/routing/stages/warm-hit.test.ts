@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { catalogFixture, deviceFixture, statusFixture } from "../../test-support.js";
+import {
+  catalogFixture,
+  deviceFixture,
+  physicalDeviceFixture,
+  statusFixture,
+} from "../../test-support.js";
 import type { WorkerView } from "../../worker-registry.js";
 import { warmHit } from "./warm-hit.js";
 
@@ -345,5 +350,32 @@ describe("warm-hit", () => {
       expect(warmHit.score(view({}), { ...exact, osVersion: "<26" })).toBe(0);
       expect(warmHit.score(view({ model: "iPhone 15" }), { ...exact, osVersion: ">=18" })).toBe(0);
     });
+  });
+});
+
+describe("warm-hit's zero reason", () => {
+  const worker: WorkerView = {
+    capacity: statusFixture().capacity,
+    catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+      .platforms,
+    connection: "connected",
+    devices: [],
+    drained: false,
+    id: "wrk_a",
+    lastSeenAt: 1,
+    leases: [],
+  };
+
+  it("gives no-free-physical for a physical request the worker has no pickable device for, and nothing for a virtual one", () => {
+    const physical = { model: "iPhone 17", physical: true as const, platform: "ios" as const };
+    const virtual = { model: "iPhone 17", platform: "ios" as const };
+    const pickable = {
+      ...worker,
+      devices: [physicalDeviceFixture("dev_p", "ready", { model: "iPhone 17" })],
+    };
+
+    expect(warmHit.zeroReason?.(worker, physical)).toEqual({ reason: "no-free-physical" });
+    expect(warmHit.zeroReason?.(pickable, physical)).toBeUndefined();
+    expect(warmHit.zeroReason?.(worker, virtual)).toBeUndefined();
   });
 });

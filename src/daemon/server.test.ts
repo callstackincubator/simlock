@@ -5,7 +5,8 @@ import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeDriver, testComponentWiring } from "../core/testing.js";
 
-import { EventBus, EventHistory } from "../bus/index.js";
+import { EventBus } from "../bus/index.js";
+import { removeUsageRigs, ringEventHistory, usageRig, type UsageRig } from "../history/testing.js";
 import {
   CleanupReaper,
   type Config,
@@ -24,6 +25,7 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -39,7 +41,12 @@ import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
 import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
-import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
+import {
+  AdminAuthenticationFailedError,
+  type Auth,
+  createAuth,
+  type SessionRoleResolver,
+} from "../auth/index.js";
 import { DaemonServer } from "./server.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
 import { linkPair } from "../link/testing.js";
@@ -47,7 +54,6 @@ import { connectSimlockClient } from "../simlock-client/client.js";
 import { SimlockWire } from "../simlock-client/wire.js";
 import type { RelayTargets } from "./relay.js";
 import * as relaySupport from "./test-relay-support.js";
-import { AdminSecretManager } from "./admin-secret.js";
 import { type PhysicalDeviceWatcher } from "../leasing/index.js";
 import { createTestEngine } from "../leasing/testing.js";
 
@@ -81,12 +87,15 @@ interface ServerFrame {
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
+const usageRigs: UsageRig[] = [];
 
 afterEach(async () => {
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
   );
+  await Promise.all(usageRigs.splice(0).map((rig) => rig.close()));
+  await removeUsageRigs();
 });
 
 describe("DaemonServer", () => {
@@ -205,8 +214,13 @@ describe("DaemonServer", () => {
     [33, "cannot send relay.request's channel, or read a relayed body from its byte channel"],
     [34, "cannot read status.get's load block"],
     [35, "cannot read a worker view's load"],
+    [36, "cannot read the module-unavailable finding in doctor.run"],
+    [37, "cannot read config.get's capabilities"],
+    [38, "cannot read agent-device's section under config.get's capabilities"],
+    [46, "cannot call identity.get"],
+    [47, "cannot read config.get's http.proxyAuth"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 36, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 48, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -216,7 +230,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 36, max: 36 } },
+          details: { client: { min: version, max: version }, daemon: { min: 48, max: 48 } },
         },
         ok: false,
       });
@@ -451,6 +465,19 @@ describe("DaemonServer", () => {
     );
     await expect(client.request("lease.release", { leaseId })).resolves.toMatchObject({ ok: true });
     expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+
+  it("routes usage.get to the dispatcher with the window the frame carries", async () => {
+    const harness = await createHarness({ withHistory: true });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const answer = await client.request("usage.get", { from: 0, to: 3_600_000 });
+
+    expect(answer).toMatchObject({
+      ok: true,
+      payload: { totals: { requests: 0 }, window: { from: 0, to: 3_600_000 } },
+    });
   });
 
   it("serves the device catalog, omitting platforms with no registered driver", async () => {
@@ -879,7 +906,7 @@ describe("DaemonServer", () => {
     expect(first.daemon.socketPath).toBe(socketPath);
   });
 
-  // Review finding S1: `AdminSecretManager`'s own doc (`admin-secret.ts`) asserts "a daemon
+  // why: review finding S1: `AdminSecretManager`'s own doc (`src/auth`) asserts "a daemon
   // that loses the start race never calls `persist()` at all ... so the file an
   // already-running daemon wrote is never touched by the loser" -- untested anywhere before
   // this. Mirrors the "recovers a stale socket file" test above (two harnesses racing for the
@@ -901,11 +928,7 @@ describe("DaemonServer", () => {
     // for `afterEach` to stop, and this test only needs the winner alive on `socketPath` (so
     // the loser's own `start()` below actually loses) plus its filesystem.
     await createHarness({
-      adminSecret: new AdminSecretManager({
-        filesystem: winnerFilesystem,
-        path: "/admin.token",
-        secrets,
-      }),
+      adminSecret: adminAuth(winnerFilesystem, secrets).adminSecret,
       socketPath,
     });
     // The winner (the only one whose `start()` actually reached `host.start()`'s success path)
@@ -914,11 +937,7 @@ describe("DaemonServer", () => {
 
     const loserFilesystem = new MemoryFilesystem();
     const second = await createHarness({
-      adminSecret: new AdminSecretManager({
-        filesystem: loserFilesystem,
-        path: "/admin.token",
-        secrets,
-      }),
+      adminSecret: adminAuth(loserFilesystem, secrets).adminSecret,
       socketPath,
       start: false,
     });
@@ -936,6 +955,66 @@ describe("DaemonServer", () => {
     await hello(client);
     await client.close();
   });
+
+  it.each([false, true])(
+    "preserves the replacement daemon's admin credential and still releases the endpoint when it starts as the old endpoint is released (credential removal fails: %s)",
+    async (removalFails) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-admin-restart-"));
+      temporaryDirectories.push(directory);
+      const socketPath = join(directory, "daemon.sock");
+      const filesystem = new MemoryFilesystem();
+      const secrets = new CryptoTokenSecrets();
+      const oldSecret = adminAuth(filesystem, secrets);
+      const replacementSecret = adminAuth(filesystem, secrets);
+      const replacement = await createHarness({
+        adminSecret: replacementSecret.adminSecret,
+        socketPath,
+        start: false,
+      });
+      const host = new DaemonEndpointHost({
+        connector: new NodeIpcTransport(),
+        endpoint: socketPath,
+        filesystem: new NodeFilesystem(),
+        listenerFactory: new NodeIpcTransport(),
+      });
+      let replacementToken: string | undefined;
+      const old = await createHarness({
+        adminSecret: oldSecret.adminSecret,
+        host: {
+          endpoint: socketPath,
+          start: (accept) => host.start(accept),
+          async stop() {
+            await host.stop();
+            // why: endpoint release lets a new process start before the old stop resumes.
+            await replacement.daemon.start();
+            replacementToken = await filesystem.readFile("/admin.token");
+            await expect(
+              replacementSecret.resolveHelloRole({ credential: replacementToken.trim() }),
+            ).resolves.toBe("admin");
+          },
+        },
+        socketPath,
+      });
+      await expect(
+        oldSecret.resolveHelloRole({
+          credential: (await filesystem.readFile("/admin.token")).trim(),
+        }),
+      ).resolves.toBe("admin");
+
+      if (removalFails) {
+        vi.spyOn(filesystem, "rm").mockRejectedValueOnce(new Error("EACCES"));
+        await expect(old.daemon.stop("restart")).rejects.toThrow("EACCES");
+        // why: the failed stop is settled; teardown must not stop it again.
+        runningDaemons.splice(runningDaemons.indexOf(old.daemon), 1);
+      } else {
+        await old.daemon.stop("restart");
+      }
+
+      // why: the replacement could only start because the old stop released the endpoint.
+      expect(replacementToken).toBeDefined();
+      await expect(filesystem.readFile("/admin.token")).resolves.toBe(replacementToken);
+    },
+  );
 
   it("gracefully stops without touching leases, persisting them with their deadlines", async () => {
     const harness = await createHarness();
@@ -1141,7 +1220,13 @@ describe("DaemonServer", () => {
 
     harness.eventBus.emit(
       "device.recovered",
-      { attempts: 2, deviceId: deviceId as string, duration: 30_000, leaseId },
+      {
+        attempts: 2,
+        deviceId: deviceId as string,
+        duration: 30_000,
+        leaseId,
+        platform: "ios",
+      },
       "test",
     );
     await expect(
@@ -1167,7 +1252,13 @@ describe("DaemonServer", () => {
     );
     harness.eventBus.emit(
       "device.recovered",
-      { attempts: 1, deviceId: "device-x", duration: 1_000, leaseId: "lease-x" },
+      {
+        attempts: 1,
+        deviceId: "device-x",
+        duration: 1_000,
+        leaseId: "lease-x",
+        platform: "ios",
+      },
       "test",
     );
 
@@ -1234,7 +1325,11 @@ describe("DaemonServer startup readiness", () => {
       ok: true,
       payload: { daemon: { health: "starting", mode: "worker" } },
     });
-    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual(["daemon", "host"]);
+    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual([
+      "daemon",
+      "history",
+      "host",
+    ]);
 
     converge.resolve();
     await startPromise;
@@ -3048,6 +3143,40 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await local.close();
   });
 
+  it("identity.get answers the declared principal as principal and name over a socket: agent with no credential, admin with the admin secret, admin with an operator token", async () => {
+    const harness = await createHarness({
+      resolveRole: {
+        resolve: (payload) =>
+          payload.credential === "admin-secret" || payload.credential === "slk_operator"
+            ? "admin"
+            : "agent",
+      },
+    });
+    const cases = [
+      { credential: undefined, principal: "claude-1", role: "agent" },
+      { credential: "admin-secret", principal: "claude-2", role: "admin" },
+      { credential: "slk_operator", principal: "claude-3", role: "admin" },
+    ];
+
+    for (const { credential, principal, role } of cases) {
+      const client = await createClient(harness.socketPath);
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          principal,
+          ...(credential === undefined ? {} : { credential }),
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      await expect(client.request("identity.get", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { name: principal, principal, role, via: "socket" },
+      });
+      await client.close();
+    }
+  });
+
   it("negotiates the protocol range over an uplink exactly as over the socket (ADR 0005 §31)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const pair = linkPair();
@@ -3146,6 +3275,7 @@ async function helloAs(
 async function createHarness(
   options: {
     readonly estimateMs?: Partial<Record<"boot" | "provision", number>>;
+    readonly withHistory?: boolean;
     readonly latencyMs?: Partial<Record<"makeReady" | "provision", number>>;
     readonly lease?: Partial<Config["lease"]>;
     readonly socketPath?: string;
@@ -3163,7 +3293,7 @@ async function createHarness(
     readonly beginStop?: () => void;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
-    readonly adminSecret?: AdminSecretManager;
+    readonly adminSecret?: Auth["adminSecret"];
     readonly resolveRole?: SessionRoleResolver;
     readonly downloads?: Partial<Config["downloads"]>;
     readonly processRunner?: ProcessRunner;
@@ -3182,6 +3312,8 @@ async function createHarness(
   const clock = options.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const stateFilesystem = options.stateFilesystem ?? new MemoryFilesystem();
+  const history = options.withHistory === true ? await usageRig() : undefined;
+  if (history !== undefined) usageRigs.push(history);
   const registry = await Registry.load({
     clock,
     eventBus,
@@ -3248,12 +3380,8 @@ async function createHarness(
       : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: history?.history ?? ringEventHistory(eventBus),
+    ...(history === undefined ? {} : { historyPath: history.historyPath }),
     host:
       options.host ??
       new DaemonEndpointHost({
@@ -3569,8 +3697,8 @@ function testConfig(
   iosMaxDevices = 1,
 ): Config {
   return {
+    capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     gateway: {
@@ -3626,10 +3754,10 @@ function testConfig(
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -3643,4 +3771,17 @@ function testConfig(
       },
     },
   };
+}
+
+function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): Auth {
+  return createAuth({
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
+    filesystem,
+    secrets,
+    idGenerator: { generate: () => "id" },
+    clock: new FakeClock(1_000),
+    logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
+  });
 }

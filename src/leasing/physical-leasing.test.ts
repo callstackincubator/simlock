@@ -11,14 +11,7 @@ import {
 } from "../core/index.js";
 import { FakeDriver, testComponentWiring } from "../core/testing.js";
 import { EventBus, type EventMap } from "../bus/index.js";
-import {
-  FakeClock,
-  FakeSystemStats,
-  JsonLinesLogger,
-  type Logger,
-  MemoryFilesystem,
-  MemoryLogSink,
-} from "../ports/index.js";
+import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
@@ -40,8 +33,8 @@ const virtualRequest = {
 
 function config(leaseOverrides: object = {}): Config {
   return {
+    capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     gateway: {
@@ -92,10 +85,10 @@ function config(leaseOverrides: object = {}): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: false,
       maxConcurrentBoots: 1,
@@ -114,7 +107,6 @@ function config(leaseOverrides: object = {}): Config {
 async function createHarness(
   options: {
     readonly reclaimEstimateMs?: number;
-    readonly logger?: Logger;
     readonly lease?: { readonly maxPerRequester?: number };
   } = {},
 ) {
@@ -144,7 +136,6 @@ async function createHarness(
     drivers: [driver],
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
   });
@@ -240,35 +231,6 @@ async function queuedLines() {
 }
 
 describe("createLeasing with physical devices", () => {
-  it("carries requestSpec.physical true on lease.requested of a physical request, lease.rejected of one nothing could match, and lease.declined of a probe nothing could match", async () => {
-    const harness = await createHarness();
-
-    const refused = harness.engine.request(physicalRequest, asking("agent"));
-    const probe = harness.engine.request(
-      physicalRequest,
-      asking("gateway", { fleetRequestId: "fleet_1", noWait: true }),
-    );
-    await outcome(refused);
-    await outcome(probe);
-
-    expect(eventsNamed(harness, "lease.requested")).toMatchObject([
-      { payload: { requestSpec: { physical: true } } },
-      { payload: { requestSpec: { physical: true } } },
-    ]);
-    expect(eventsNamed(harness, "lease.rejected")).toMatchObject([
-      { payload: { reason: "unresolvable-spec", requestSpec: { physical: true } } },
-    ]);
-    expect(eventsNamed(harness, "lease.declined")).toMatchObject([
-      {
-        payload: {
-          fleetRequestId: "fleet_1",
-          reason: "unresolvable-spec",
-          requestSpec: { physical: true },
-        },
-      },
-    ]);
-  });
-
   it("ends a physical request for a platform with no driver NO_DRIVER, lease.rejected unresolvable-spec", async () => {
     const harness = await createHarness();
 
@@ -430,7 +392,7 @@ describe("createLeasing with physical devices", () => {
     const killed = await waiterMidPresenceRead();
     expect(claimKind(killed.harness, killed.device)).toBe("grant");
     const nuking = killed.harness.engine.nuke(false);
-    expect(await outcome(killed.promise)).toBeInstanceOf(Error);
+    expect(await outcome(killed.promise)).toMatchObject({ name: "NukeCancelledError" });
     killed.harness.driver.releasePresenceReads();
     await nuking;
     expect(killed.harness.registry.snapshot.leases).toEqual([]);
@@ -504,7 +466,38 @@ describe("createLeasing with physical devices", () => {
     expect(await outcome(next)).toMatchObject({ device: { id: device.id } });
   });
 
-  it("releases the grant claim and leaves the device ready when the lease write of a physical grant throws", async () => {
+  it("cancelling a queued physical request makes the one held for it plan again and list its own reason", async () => {
+    const harness = await createHarness();
+    const device = await enrollIphone(harness, "UDID-A");
+    const blocker = harness.engine.core.claims.tryClaim(device.id, "boot", "blocker");
+    expect(blocker).toBeDefined();
+    const older = harness.engine.request(physicalRequest, asking("older"));
+    void harness.engine.request(physicalRequest, asking("newer"));
+    await flush();
+    expect(harness.engine.waitingRequests()).toMatchObject([
+      { reason: "no-free-physical", requesterId: "older", stage: "queued" },
+      { reason: "behind-earlier-request", requesterId: "newer", stage: "queued" },
+    ]);
+
+    expect(await harness.engine.cancelPending("older")).toBe("cancelled");
+    await flush();
+
+    expect(await outcome(older)).toBeInstanceOf(RequestCancelledError);
+    expect(harness.engine.waitingRequests()).toMatchObject([
+      { reason: "no-free-physical", requesterId: "newer", stage: "queued" },
+    ]);
+  });
+
+  it("lists no reason for a physical request held in its presence read", async () => {
+    const { harness } = await waiterMidPresenceRead();
+
+    expect(harness.engine.waitingRequests()).toMatchObject([
+      { requesterId: "agent", stage: "starting" },
+    ]);
+    expect(harness.engine.waitingRequests()[0]).not.toHaveProperty("reason");
+  });
+
+  it("releases the grant claim, leaves the device ready, keeps the waiter queued and says no-free-physical when the lease write of a physical grant throws", async () => {
     const harness = await createHarness();
     const device = await enrollIphone(harness, "UDID-A");
     const createLease = vi
@@ -515,10 +508,14 @@ describe("createLeasing with physical devices", () => {
     await flush();
 
     expect(createLease).toHaveBeenCalledWith(expect.objectContaining({ deviceId: device.id }));
-    expect(result).not.toMatchObject({ lease: expect.anything() });
+    expect(result).toBe("pending");
+    expect(harness.engine.physicalQueueDepth).toBe(1);
     expect(harness.engine.core.claims.isClaimed(device.id)).toBe(false);
     expect(stateOf(harness, device)).toBe("ready");
     expect(harness.registry.snapshot.leases).toEqual([]);
+    expect(harness.engine.waitingRequests()).toMatchObject([
+      { reason: "no-free-physical", requesterId: "agent", stage: "queued" },
+    ]);
   });
 
   it("a physical lease counts toward lease.maxPerRequester like a virtual one", async () => {
@@ -555,12 +552,23 @@ describe("createLeasing with physical devices", () => {
     );
 
     expect(unmatched).toBeInstanceOf(UnknownModelError);
+    expect(eventsNamed(none, "lease.requested")).toMatchObject([
+      { payload: { requestSpec: { physical: true } } },
+    ]);
     expect(eventsNamed(none, "lease.declined")).toMatchObject([
-      { payload: { fleetRequestId: "fleet_1", reason: "unresolvable-spec" } },
+      {
+        payload: {
+          fleetRequestId: "fleet_1",
+          reason: "unresolvable-spec",
+          requestSpec: { physical: true },
+        },
+      },
     ]);
     expect(leased).toBeInstanceOf(NoCapacityError);
     expect(eventsNamed(busy, "lease.declined")).toMatchObject([
-      { payload: { fleetRequestId: "fleet_2", reason: "no-wait" } },
+      {
+        payload: { fleetRequestId: "fleet_2", reason: "no-wait", requestSpec: { physical: true } },
+      },
     ]);
   });
 });
@@ -605,13 +613,18 @@ describe("createLeasing with a physical and a virtual line", () => {
     ]).toEqual([1, 2, 1, 2]);
   });
 
-  it("lists a waiting physical request with physical true and a waiting virtual one without it", async () => {
+  it("lists a waiting physical request with physical true and a waiting virtual one without it, each with why it waits", async () => {
     const { harness } = await queuedLines();
 
     expect(harness.engine.waitingRequests().map((waiting) => waiting.spec)).toEqual([
       { model: "iPhone 15 Pro", physical: true, platform: "ios" },
       { model: "iPhone 15 Pro", physical: true, platform: "ios" },
       { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    ]);
+    expect(harness.engine.waitingRequests()).toMatchObject([
+      { requesterId: "physical-1", reason: "no-free-physical", stage: "queued" },
+      { requesterId: "physical-2", reason: "no-free-physical", stage: "queued" },
+      { requesterId: "virtual-1", reason: "device-limit", stage: "queued" },
     ]);
   });
 });
@@ -633,15 +646,6 @@ async function enrollPhone(
   });
   harness.driver.setPhysicalPresence(driverDeviceId, true);
   return device;
-}
-
-function warnings(sink: MemoryLogSink) {
-  return sink.records.filter((record) => record.level === "warn");
-}
-
-function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogSink } {
-  const sink = new MemoryLogSink();
-  return { logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }), sink };
 }
 
 describe("createLeasing: which physical device a request is granted", () => {
@@ -868,39 +872,5 @@ describe("createLeasing: a physical grant that goes wrong", () => {
     expect(await outcome(older)).toBe("pending");
     expect(await outcome(newer)).toBe("pending");
     expect(presenceReads(harness)).toEqual([["UDID-A"]]);
-  });
-
-  it("logs a failed presence read as a presence warning and does not grant the device", async () => {
-    const { logger, sink } = capturingLogger();
-    const harness = await createHarness({ logger });
-    const device = await enrollIphone(harness, "UDID-A");
-    harness.driver.failOn("listPresentPhysical", 1, new Error("adb: device offline"));
-
-    await outcome(harness.engine.request(physicalRequest, asking("agent", { noWait: true })));
-
-    expect(warnings(sink)).toMatchObject([
-      {
-        fields: { deviceId: device.id, requesterId: "agent", step: "presence" },
-        message: "reading a physical device's presence failed",
-      },
-    ]);
-  });
-
-  it("logs a failed lease write as a grant warning and puts the waiter back in the queue", async () => {
-    const { logger, sink } = capturingLogger();
-    const harness = await createHarness({ logger });
-    const device = await enrollIphone(harness, "UDID-A");
-    vi.spyOn(harness.registry, "createLease").mockRejectedValueOnce(new Error("disk full"));
-
-    const result = await outcome(harness.engine.request(physicalRequest, asking("agent")));
-
-    expect(result).toBe("pending");
-    expect(warnings(sink)).toMatchObject([
-      {
-        fields: { deviceId: device.id, requesterId: "agent", step: "grant" },
-        message: "granting a physical device failed",
-      },
-    ]);
-    expect(harness.engine.physicalQueueDepth).toBe(1);
   });
 });

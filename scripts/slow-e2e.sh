@@ -15,8 +15,8 @@
 # when it ends. Exits 75 without starting when another worktree's run holds the lock: real
 # simulators and emulators share one machine, and two lanes at once make timeouts that look
 # like bugs. Exits 69 without starting when the machine is not fit to run it: too little free
-# disk, or SIMLOCK_E2E_AGENT_DEVICE naming a checkout at another commit than vendor/README.md
-# or one never built. The lock is a directory holding the runner's pid; a lock whose pid is
+# disk, or SIMLOCK_E2E_AGENT_DEVICE naming an agent-device of another version than package.json
+# pins for @agent-device/proxy, or a checkout never built. The lock is a directory holding the runner's pid; a lock whose pid is
 # gone is stale and is taken over.
 #
 # Before a run it sources `.slow-lane.env` from the main checkout's root, if there is one: this
@@ -36,7 +36,7 @@ root=$(git rev-parse --show-toplevel)
 
 helper() {
   python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$@" <<'EOF'
-import os, re, shutil, signal, subprocess, sys, time
+import json, os, re, shutil, signal, subprocess, sys, time
 lock, lane_tmp, root, min_free, command = sys.argv[1:6]
 
 def read(path, default=""):
@@ -112,13 +112,13 @@ elif command == "check":
             problems.append(f"{free_gib(path):.1f} GiB free on the volume of {path}; the lane needs {min_free}")
     agent_device = os.environ.get("SIMLOCK_E2E_AGENT_DEVICE")
     if agent_device:
-        checkout = os.path.dirname(os.path.dirname(agent_device))
-        pinned = re.search(r"\b[0-9a-f]{40}\b", read(os.path.join(root, "vendor", "README.md")))
-        head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        if pinned and head != pinned.group(0):
-            problems.append(f"SIMLOCK_E2E_AGENT_DEVICE is a checkout at {head[:9] or 'no commit'}; vendor/README.md pins {pinned.group(0)[:9]}")
-        if not os.path.isdir(os.path.join(checkout, "dist")):
-            problems.append(f"SIMLOCK_E2E_AGENT_DEVICE's checkout {checkout} has no dist/: build it first")
+        install = os.path.dirname(os.path.dirname(agent_device))
+        pinned = json.loads(read(os.path.join(root, "package.json"), "{}")).get("dependencies", {}).get("@agent-device/proxy")
+        found = json.loads(read(os.path.join(install, "package.json"), "{}")).get("version")
+        if pinned and found != pinned:
+            problems.append(f"SIMLOCK_E2E_AGENT_DEVICE is agent-device {found or 'of no version'}; package.json pins {pinned}")
+        if not os.path.isdir(os.path.join(install, "dist")):
+            problems.append(f"SIMLOCK_E2E_AGENT_DEVICE's install {install} has no dist/: build it first")
     for problem in problems:
         print(f"unfit: {problem}", file=sys.stderr)
     sys.exit(69 if problems else 0)

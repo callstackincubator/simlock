@@ -41,3 +41,16 @@ describe("ram-budget", () => {
     });
   });
 });
+
+describe("ram-budget's zero reason", () => {
+  it("gives full with ram-budget for a worker it scores zero, and nothing for one under its budget", () => {
+    const capacity = statusFixture().capacity;
+    const atBudget = { ...capacity, ios: { ...capacity.ios, atRamBudget: true } };
+
+    expect(ramBudget.zeroReason?.(view(atBudget), REQUEST)).toEqual({
+      capacityReason: "ram-budget",
+      reason: "full",
+    });
+    expect(ramBudget.zeroReason?.(view(capacity), REQUEST)).toBeUndefined();
+  });
+});

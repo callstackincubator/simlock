@@ -17,11 +17,11 @@ function call(input: object): { status: number | null; stderr: string } {
   return { status: result.status, stderr: result.stderr };
 }
 
-function bash(command: string, agentId: string | null = "a1") {
+function bash(command: string, agentId: string | null = "a1", agentType = "reviewer") {
   return call({
     tool_name: "Bash",
     tool_input: { command },
-    ...(agentId && { agent_id: agentId }),
+    ...(agentId && { agent_id: agentId, agent_type: agentType }),
   });
 }
 
@@ -46,6 +46,9 @@ describe("tool-guard.mjs", () => {
     "pnpm --workspace check",
     "pnpm -C . run lint",
     "(FORCE_COLOR=0 pnpm lint | tail -3)",
+    "pnpm mutate origin/main",
+    "node scripts/mutate.mjs origin/main",
+    "pnpm exec stryker run",
   ])("refuses a sub-agent's check: %s", (command) => {
     const result = bash(command);
 
@@ -83,7 +86,7 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("skips the git hooks");
   });
 
-  it("lets the red stage skip Fallow alone on its push", () => {
+  it("lets a build stage skip Fallow alone on a push", () => {
     expect(bash("LEFTHOOK_EXCLUDE=fallow git push -u origin task/1")).toEqual({
       status: 0,
       stderr: "",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { DeviceClass } from "../../core/index.js";
 import { MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import {
   BuiltinDeviceProfileSource,
@@ -9,6 +10,7 @@ import {
   UserDeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
 } from "./device-profile-source.js";
+import { LibraryDeviceProfileSource } from "./profiles/index.js";
 
 const avdmanager = "/android-sdk/cmdline-tools/latest/bin/avdmanager";
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
@@ -867,6 +869,75 @@ describe("device classes", () => {
     const classes = await modelClasses(entry("pixel_8", "Pixel 8"), devicesXml());
 
     expect(classes).toEqual({ "My Custom Phone": "phone", "Pixel 8": "phone" });
+  });
+
+  it("classes a listed model by the profile its name resolves to, not the one it was listed from", async () => {
+    // why: the three devices.xml profiles are named after profile ids the library or the SDK
+    // ships -- `tv_1080p` and `wearos_large_round` resolve to the library's TV and Wear OS
+    // profiles, `tv_720p` to an SDK-only one -- so a lease of each name creates that TV or
+    // Wear OS device; the class the catalog lists must follow the profile the name resolves
+    // to, not the untagged devices.xml entry the name was listed from.
+    const collidingDevicesXml = `<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
+      <d:device><d:name>tv_1080p</d:name><d:hardware><d:ram unit="MiB">2048</d:ram></d:hardware></d:device>
+      <d:device><d:name>tv_720p</d:name></d:device>
+      <d:device><d:name>wearos_large_round</d:name></d:device>
+      <d:device><d:name>My Custom Phone</d:name></d:device>
+    </d:devices>`;
+    const sdkTelevision =
+      'id: 58 or "tv_1080p"\n    Name: Television (1080p)\n    OEM : Google\n    Tag : android-tv\n';
+    const sdk720 =
+      'id: 60 or "tv_720p"\n    Name: Television (720p)\n    OEM : Google\n    Tag : android-tv\n';
+    const sdkWear =
+      'id: 61 or "wearos_large_round"\n    Name: Wear OS Large Round\n    OEM : Google\n    Tag : android-wear\n';
+    const sdkOutput =
+      `Available devices:\n${sdkTelevision}---------\n${sdk720}---------\n${sdkWear}---------\n` +
+      `id: 43 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n---------\n`;
+    // why: `avdmanager list device` is read once for the catalog and once more for each resolve
+    // of a name the library lacks (`Television (720p)`, `tv_720p`, `My Custom Phone`, and the
+    // `tv_720p` resolve below).
+    const runner = new ScriptedProcessRunner(
+      Array.from({ length: 5 }, () => processResult(sdkOutput)),
+    );
+    const registry = new DeviceProfileRegistry([
+      new LibraryDeviceProfileSource(),
+      new BuiltinDeviceProfileSource(avdmanager, runner),
+      new UserDeviceProfileSource(
+        devicesXmlPath,
+        await filesystemWithDevicesXml(collidingDevicesXml),
+      ),
+    ]);
+
+    const catalog = await registry.catalog();
+    const expected: Record<string, DeviceClass | undefined> = {};
+    for (const model of catalog.models) {
+      const resolved = await registry.resolve(model);
+      expected[model] =
+        resolved.kind === "properties"
+          ? resolved.imageKind === "android-tv"
+            ? "tv"
+            : resolved.imageKind === "android-wear"
+              ? "watch"
+              : resolved.imageKind === undefined
+                ? "phone"
+                : undefined
+          : resolved.deviceClass;
+    }
+    expect(catalog.modelClasses).toEqual(expected);
+    await expect(registry.resolve("tv_1080p")).resolves.toMatchObject({
+      deviceClass: "tv",
+      kind: "library",
+      name: "Television (1080p)",
+    });
+    await expect(registry.resolve("tv_720p")).resolves.toMatchObject({
+      avdmanagerId: "tv_720p",
+      deviceClass: "tv",
+      kind: "builtin",
+    });
+    await expect(registry.resolve("wearos_large_round")).resolves.toMatchObject({
+      deviceClass: "watch",
+      kind: "library",
+      name: "Wear OS Large Round",
+    });
   });
 
   it("lists no class for a profile whose tag is outside the table, and keeps the model", async () => {

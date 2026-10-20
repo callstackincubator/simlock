@@ -11,6 +11,7 @@ const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
 /** One iOS device and no more, so a second request waits. */
 const ONE_DEVICE = { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 };
+const ONE_RUNNING = { ios: { maxDevices: 2, maxRunning: 1 }, maxRunning: 2 };
 
 /**
  * Waits until `simlock list --requests` prints exactly one line per pattern, each matching its
@@ -19,38 +20,44 @@ const ONE_DEVICE = { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 };
  */
 async function untilListed(env: TestEnv, patterns: readonly RegExp[]): Promise<void> {
   let lines: string[] = [];
-  await waitFor(
-    async () => {
-      const listed = await env.cli(["list", "--requests"]);
-      expect(listed.code, listed.stderr).toBe(0);
-      lines = listed.stdout.trimEnd().split("\n");
-      return (
-        lines.length === patterns.length &&
-        patterns.every((pattern, index) => pattern.test(lines[index] ?? ""))
-      );
-    },
-    { label: "the waiting request lines" },
-  );
+  try {
+    await waitFor(
+      async () => {
+        const listed = await env.cli(["list", "--requests"]);
+        expect(listed.code, listed.stderr).toBe(0);
+        lines = listed.stdout.trimEnd().split("\n");
+        return (
+          lines.length === patterns.length &&
+          patterns.every((pattern, index) => pattern.test(lines[index] ?? ""))
+        );
+      },
+      { label: "the waiting request lines" },
+    );
+  } catch (timedOut) {
+    expect(lines).toEqual(patterns.map((pattern) => expect.stringMatching(pattern)));
+    throw timedOut;
+  }
 }
 
 describe("simlock list --requests", () => {
-  it("simlock list --requests prints one line per waiting request", async () => {
+  it("simlock list --requests prints one line per waiting request, each queued one saying why it waits", async () => {
     const env = await withDaemon({
-      configOverrides: { limits: ONE_DEVICE },
+      configOverrides: { limits: ONE_RUNNING },
       driverScript: { ios: IOS },
     });
     expect((await env.cli([...LEASE, "--agent-id", "holder", "--detach"])).code).toBe(0);
     const empty = await env.cli(["list", "--requests"]);
     expect(empty.stdout).toBe("No requests are waiting.\n");
 
-    const b = /^Request \S+: agent-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/;
+    const b =
+      /^Request \S+: agent-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s — full: running limit for iOS$/;
     env.cliBackground([...LEASE, "--agent-id", "agent-b"]);
     await untilListed(env, [b]);
     env.cliBackground([...LEASE, "--agent-id", "agent-c", "--mode", "slim"]);
 
     await untilListed(env, [
       b,
-      /^Request \S+: agent-c, ios iPhone 16 18\.4 mode slim, queued at 2, waiting \d+s$/,
+      /^Request \S+: agent-c, ios iPhone 16 18\.4 mode slim, queued at 2, waiting \d+s — behind an earlier request$/,
     ]);
   });
 
@@ -88,14 +95,15 @@ describe("simlock list --requests", () => {
     expect((await worker.cli([...LEASE, "--agent-id", "local-a", "--detach"])).code).toBe(0);
     worker.cliBackground([...LEASE, "--agent-id", "local-b"]);
     await untilListed(worker, [
-      /^Request \S+: local-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/,
+      /^Request \S+: local-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s — full: device limit$/,
     ]);
     gateway.cliBackground([...LEASE, "--agent-id", "fleet-c"]);
 
     await untilListed(gateway, [
       /^Request \S+: fleet-c, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/,
+      /^ {2}worker-a: busy with its own queue$/,
       new RegExp(
-        `^Request \\S+: local-b on ${workerId}, ios iPhone 16 18\\.4, queued at 1, waiting \\d+s$`,
+        `^Request \\S+: local-b on ${workerId}, ios iPhone 16 18\\.4, queued at 1, waiting \\d+s — full: device limit$`,
       ),
     ]);
   });

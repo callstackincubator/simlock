@@ -19,7 +19,11 @@ export const srcDir = dirname(dirname(fileURLToPath(import.meta.url)));
  * naming a forbidden import) is never mistaken for a real one. Good enough for this repo's
  * source, which never puts `//` inside an import specifier string. */
 export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  // why: a block comment leaves its newlines behind, so a report that counts lines in the
+  // stripped text names the line the reported code is actually written on.
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ""))
+    .replace(/\/\/.*$/gm, "");
 }
 
 /**

@@ -14,6 +14,8 @@ function findComponents(dir) {
 const escape = (path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const testFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?)$";
 const linkTestFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?|/testing\\.ts)$";
+// why: the console layers below the screens are plain TypeScript, so a test drives them without a browser.
+const uiLibrary = "(^|node_modules/)(react|react-dom|recharts|@tanstack/[^/]+)(/|$)";
 const fsOrProcess = "^(node:)?(fs|fs/promises|child_process)$";
 
 // why: e2e imports the compiled package from dist/, which mirrors src/, so each component's rule covers its compiled copy too.
@@ -28,7 +30,7 @@ const pastIndex = components.map((component) => ({
   from: { pathNot: `^${escape(component)}/` },
   to: {
     path: `^${escape(component)}/`,
-    pathNot: `^${escape(component)}/(index|testing)\\.(ts|js)$`,
+    pathNot: `^${escape(component)}/(index|testing|definition)\\.(ts|js)$`,
   },
 }));
 
@@ -103,8 +105,8 @@ export default {
     ),
     direction(
       "no-fs-or-process",
-      "core, leasing, agent-device and host-load reach the filesystem and processes only through injected ports",
-      "^src/(core|leasing|agent-device|host-load)/",
+      "core, leasing, agent-device, host-load and stream reach the filesystem and processes only through injected ports",
+      "^src/(core|leasing|agent-device|host-load|stream)/",
       { dependencyTypes: ["core"], path: fsOrProcess },
     ),
     direction(
@@ -112,6 +114,18 @@ export default {
       "the core, leasing and the drivers import nothing from the agent-device edge",
       "^src/(core|leasing|drivers)/",
       { path: "^src/agent-device/" },
+    ),
+    direction(
+      "not-stream",
+      "core, leasing, the drivers, the gateway and the contract import nothing from the stream module",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/stream/" },
+    ),
+    direction(
+      "stream-not-edges",
+      "the stream module is a module the host loads: it imports no frontend, gateway, driver or leasing",
+      "^src/stream/",
+      { path: "^src/(http|gateway|drivers|daemon|cli|mcp|leasing)/" },
     ),
     direction(
       "host-load-imports-ports-only",
@@ -142,6 +156,101 @@ export default {
       "only the composition root, main.ts, knows a gateway exists",
       "^src/daemon/(?!main\\.ts$)",
       { path: "^src/gateway/" },
+    ),
+    {
+      name: "definition-is-light",
+      comment:
+        "a module's definition.ts imports its own module only for types or by dynamic import, so reading the registry loads no module code",
+      severity: "error",
+      from: { path: "^src/([^/]+)/definition\\.ts$" },
+      to: {
+        dependencyTypesNot: ["type-only", "dynamic-import"],
+        path: "^src/$1/",
+        pathNot: "^src/$1/definition\\.ts$",
+      },
+    },
+    {
+      name: "auth-imports-little",
+      comment: "src/auth imports only ports and contract",
+      severity: "error",
+      from: { path: "^src/auth/", pathNot: linkTestFile },
+      to: { path: "^src/", pathNot: "^src/(auth|ports|contract)/" },
+    },
+    {
+      name: "modules-imports-little",
+      comment: "src/modules imports only ports, contract and core, plus the bus for its types",
+      severity: "error",
+      from: { path: "^src/modules/", pathNot: linkTestFile },
+      to: { path: "^src/", pathNot: "^src/(modules|ports|contract|core|bus)/" },
+    },
+    {
+      name: "modules-imports-bus-types-only",
+      comment: "src/modules imports the bus for its types only",
+      severity: "error",
+      from: { path: "^src/modules/", pathNot: linkTestFile },
+      to: { path: "^src/bus/", dependencyTypesNot: ["type-only"] },
+    },
+    {
+      name: "main-loads-modules-lazily",
+      comment:
+        "main.ts imports nothing from src/agent-device, of any type: a module reaches a daemon only through the module host",
+      severity: "error",
+      from: { path: "^src/daemon/main\\.ts$" },
+      to: { path: "^src/agent-device/" },
+    },
+    direction(
+      "not-modules",
+      "core, leasing, the drivers, the gateway and the contract import nothing from the optional-module host or its registry",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/(modules|module-registry)/" },
+    ),
+    direction(
+      "ui-ds-stands-alone",
+      "the console's design system imports nothing else of the console",
+      "^ui/src/ds/",
+      { path: "^ui/src/(app|screens|state|data|model)/" },
+    ),
+    direction(
+      "ui-model-is-pure",
+      "the console's business rules import no other layer and no UI library",
+      "^ui/src/model/",
+      { path: `^ui/src/(app|screens|state|data|ds)/|${uiLibrary}` },
+    ),
+    direction(
+      "ui-data-is-below-the-ui",
+      "the console's network and storage layer imports no state, screen, design system or UI library",
+      "^ui/src/data/",
+      { path: `^ui/src/(app|screens|state|ds)/|${uiLibrary}` },
+    ),
+    direction(
+      "ui-state-feeds-screens",
+      "the console's state layer imports no screen, and from the design system only the types it fills",
+      "^ui/src/state/",
+      { path: "^ui/src/(app|screens)/" },
+    ),
+    direction(
+      "ui-state-ds-types-only",
+      "the console's state layer imports no screen, and from the design system only the types it fills",
+      "^ui/src/state/",
+      { path: "^ui/src/ds/", dependencyTypesNot: ["type-only"] },
+    ),
+    direction(
+      "ui-screens-present-only",
+      "a console screen reaches data only through the state layer: no network, storage or business rule of its own",
+      "^ui/src/screens/",
+      { path: "^ui/src/(app|data|model)/" },
+    ),
+    direction(
+      "cli-router-imports-no-component-values",
+      "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types, by dynamic import, or statically for agent-identity alone, so the fast paths load no component code",
+      "^src/cli/(main|index|tree|errors|types|usage-error|environment|stdio|log-file|args|connect)\\.ts$",
+      {
+        // why: every component but agent-identity, the one AGENTS.md carves out as the cheap
+        // static import, plus the command modules: a static edge to one of those from the
+        // router is the same eager load this rule exists to keep out
+        path: "^src/((?!agent-identity/|cli/)[a-z0-9-]+/)|^src/cli/commands/",
+        dependencyTypesNot: ["type-only", "dynamic-import"],
+      },
     ),
     direction(
       "contract-imports-nothing",

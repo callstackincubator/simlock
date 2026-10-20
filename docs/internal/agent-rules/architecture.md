@@ -41,8 +41,8 @@ grounds for rejecting a change even if it works.
    `ProcessRunner`, `Clock`, `SystemStats`, …) injected at startup — never
    import `fs`/`child_process` or call `Date.now()`/`setTimeout` directly in
    application code. Tests use the in-memory/fake implementations; if a new
-   external dependency appears, define its port first. See "External APIs
-   behind interfaces" in [../ARCHITECTURE.md](../ARCHITECTURE.md).
+   external dependency appears, define its port first. The ports are listed
+   in [the ports manual](../../../src/ports/AGENTS.md).
 10. **A rule is enforced in exactly one place.** Never implement the same
     decision twice — not in two modules, not on two code paths through one
     module, not "once for the fast path and once for the general path". If
@@ -75,8 +75,8 @@ grounds for rejecting a change even if it works.
     module, and the others ask it through its surface. Where a boundary
     forbids the import (the contract imports nothing, ADR 0003), the copy
     is checked by a test that fails when the two disagree. The
-    agent-device lease TTL floor, 5 s, is set in core config and again in
-    agent-device's own check: the day one changes, the other is wrong.
+    agent-device lease TTL floor, 5 s, is set in agent-device's config check
+    (`definition.ts`) and again in its TTL parser (`front/ttl.ts`): the day one changes, the other is wrong.
 11. **Every wait that crosses a process boundary is bounded, and the budget
     does not reset.** An RPC to a worker, a handshake, a subscription, a
     forwarded command: each needs an explicit deadline, and a caller that
@@ -115,9 +115,8 @@ grounds for rejecting a change even if it works.
     `.dependency-cruiser-known-cycles.json`; those lists only shrink. A single-file
     component's surface is what the file exports, and a component whose
     surface has grown past one file becomes a directory with an index, not
-    a second file others reach into. The inventory in
-    [../COMPONENTS.md](../COMPONENTS.md) names each component and its
-    surface.
+    a second file others reach into. Each module's manual,
+    `src/<module>/AGENTS.md`, names its files and its surface.
 15. **Dependencies point from the optional to the required, never back.**
     The lease transaction (request book, queue, acquisition, planner,
     provisioner, lifecycle, release, reclaim, registry, capacity) is the

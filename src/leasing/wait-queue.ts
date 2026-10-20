@@ -1,5 +1,6 @@
 import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
 import { type DeviceRequest, type LeaseGrant, type LeaseProgress } from "../core/index.js";
+import { type WaitingReason } from "./acquisition-planner.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
@@ -107,6 +108,7 @@ export type WaiterState = "new" | "queued" | "processing" | "granted" | "rejecte
 export interface QueuePlace {
   readonly id: string;
   readonly queuePosition?: number;
+  readonly reason?: WaitingReason;
 }
 
 export interface Waiter {
@@ -121,6 +123,7 @@ interface MutableWaiter extends Waiter {
   readonly onProgress: ((progress: LeaseProgress) => void) | undefined;
   rejectPromise: (error: Error) => void;
   resolvePromise: (grant: LeaseGrant) => void;
+  reason: WaitingReason | undefined;
   state: WaiterState;
   timer: TimerHandle | undefined;
   /**
@@ -169,7 +172,11 @@ export class WaitQueue {
   places(): readonly QueuePlace[] {
     return [...this.#pendingWaiters].map((waiter) =>
       waiter.state === "queued"
-        ? { id: waiter.id, queuePosition: this.#line(lineOf(waiter.request)).indexOf(waiter) + 1 }
+        ? {
+            id: waiter.id,
+            queuePosition: this.#line(lineOf(waiter.request)).indexOf(waiter) + 1,
+            ...(waiter.reason === undefined ? {} : { reason: waiter.reason }),
+          }
         : { id: waiter.id },
     );
   }
@@ -215,6 +222,7 @@ export class WaitQueue {
       options: requestOptions,
       promise,
       rejectPromise,
+      reason: undefined,
       request,
       resolvePromise,
       state: "new",
@@ -229,11 +237,12 @@ export class WaitQueue {
   /**
    * A re-queue keeps the first deadline (`deadlineAt`) instead of re-arming the full `timeoutMs`.
    */
-  enqueue(waiter: Waiter): boolean {
+  enqueue(waiter: Waiter, reason?: WaitingReason): boolean {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
 
     if (this.#expireIfPastDeadline(mutable)) return false;
+    mutable.reason = reason;
 
     if (!this.#waiters.includes(mutable)) {
       this.#waiters.push(mutable);
@@ -329,7 +338,7 @@ export class WaitQueue {
   }
 
   /**
-   * Arms (or re-arms, after a cycle back through `queued`) this waiter's timeout. `deadlineAt` is
+   * why: Arms (or re-arms, after a cycle back through `queued`) this waiter's timeout. `deadlineAt` is
    * computed once, the first time a waiter with a `timeoutMs` is ever armed, and never moved
    * afterward -- every later call here (a re-enqueue `enqueue` already let through because the
    * deadline had not yet passed) times the remaining budget against that same fixed deadline
@@ -362,11 +371,13 @@ export class WaitQueue {
    * would have fired at the identical moment anyway), but real, not merely theoretical --
    * `FakeClock` (every test here) never fires early, so no test under it can ever land in this
    * window, which is why the difference is a doc claim to get right rather than a behavior to
-   * cover with one. Separately: `markNew` (below) is a public path back to `queued` that arms no
-   * timer at all -- a waiter it returns to `queued` sits with no deadline until some *other*
-   * `enqueue` call re-arms it, which is a real gap in `timeoutMs` enforcement for whichever
-   * caller uses that path (`LeaseAcquisitionCoordinator`'s own eviction and provision-retry
-   * callers, not this module's problem to close on its own).
+   * cover with one.
+   *
+   * `markNew` arms nothing, and that is safe only because its callers hand the waiter straight
+   * back to a decision: every branch of that decision that keeps the waiter alive passes
+   * `#expireIfPastDeadline` (through `markProcessing`) or `enqueue`'s own upfront check first. A
+   * caller that returned without re-deciding would leave a waiter `queued` with a fixed deadline
+   * and no timer, and would have to arm here.
    */
   #armTimeout(waiter: MutableWaiter): void {
     if (waiter.timer !== undefined || waiter.options.timeoutMs === undefined) return;

@@ -92,6 +92,13 @@ const valid = [
 ].join("\n");
 
 describe("pr-body-check.mjs", () => {
+  it("refuses incomplete assessment even with zero findings and allows a completed assessment", () => {
+    const body = valid.replace("Rounds:", "Assessment: incomplete — budget exhausted\nRounds:");
+    expect(check(body).status).toBe(1);
+    expect(check(body, "--draft-ok").status).toBe(0);
+    expect(check(body.replace("incomplete — budget exhausted", "complete")).status).toBe(0);
+  });
+
   it("accepts a body with the counts line, a tagged Rejected line and the footer, without a word", () => {
     expect(check(valid, "--branch", "task/12")).toEqual({ status: 0, lines: [] });
   });

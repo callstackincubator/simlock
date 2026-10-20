@@ -8,6 +8,9 @@
 #
 #   diff.patch             the PR's diff against its base, as GitHub shows it
 #   commit                 the PR head the directory was built from
+#   base, merge-base       immutable actual PR base tip and fork
+#   previous               validated ancestor for targeted checks
+#   review-protocol.md     review policy from the pinned base, when present
 #   kind                   what .agents/scripts/diff-kind.mjs calls the diff: adr-only,
 #                          docs-only, comments-only, tests-only, full or large; it sets which
 #                          reviews run
@@ -26,8 +29,9 @@
 #                          and, when there is an issue, always-in-scope.md
 #   rules/                 every file in docs/internal/agent-rules/, and the ADR index as
 #                          adr-index.md
-#   tests-after-red.patch  what changed in the files of the branch's first `test:` commit (the
-#                          red tests, or a bug's reproduction) between that commit and the head
+#   tests-after-red.patch  each later change to a file a `test:` commit wrote (a build cycle's
+#                          failing test, or a bug's reproduction), but a `test:` commit that
+#                          only adds lines
 #   assumptions.md         the PR body's `Assumption:` lines (coding rule 2)
 #
 # Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules, ADRs
@@ -64,8 +68,18 @@ git fetch -q origin "+refs/heads/$base_ref:refs/remotes/origin/$base_ref"
 git fetch -q origin "+refs/pull/$pr/head:refs/review-inputs/$pr"
 head=$(git rev-parse "refs/review-inputs/$pr")
 git update-ref -d "refs/review-inputs/$pr"
-base="origin/$base_ref"
+base=$(git rev-parse "origin/$base_ref")
 fork=$(git merge-base "$base" "$head")
+if [ -n "$previous" ]; then
+  previous=$(git rev-parse --verify "$previous^{commit}" 2>/dev/null) || {
+    say "previous commit is unavailable; assessment incomplete"
+    exit 65
+  }
+  git merge-base --is-ancestor "$previous" "$head" || {
+    say "previous commit is not an ancestor of head; assessment incomplete"
+    exit 65
+  }
+fi
 
 tmp=${TMPDIR:-/tmp}
 out=$(mktemp -d "${tmp%/}/review-$pr.XXXXXX")
@@ -73,13 +87,15 @@ mkdir "$out/spec" "$out/rules"
 
 git diff "$fork" "$head" >"$out/diff.patch"
 echo "$head" >"$out/commit"
+echo "$base" >"$out/base"
+echo "$fork" >"$out/merge-base"
+[ -z "$previous" ] || echo "$previous" >"$out/previous"
+if git cat-file -e "$base:docs/internal/REVIEW.md" 2>/dev/null; then
+  git show "$base:docs/internal/REVIEW.md" >"$out/review-protocol.md"
+fi
 node "$(dirname "$0")/diff-kind.mjs" "$fork" "$head" >"$out/kind"
 if [ -n "$previous" ]; then
-  if git cat-file -e "$previous^{commit}" 2>/dev/null; then
-    git diff "$previous" "$head" >"$out/fix.patch"
-  else
-    say "previous commit $previous is not in this clone; no fix.patch"
-  fi
+  git diff "$previous" "$head" >"$out/fix.patch"
 fi
 "$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
 # Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
@@ -202,12 +218,30 @@ for n in $adrs; do
   fi
 done
 
-# The final diff hides a red test that was deleted or loosened on the way to green.
+# why: the final diff hides a test deleted or loosened after it was first committed failing, so
+# every later change to a file a `test:` commit wrote goes in, but a later `test:` commit that
+# only adds lines: that is the next build cycle's test.
 red=$(git log --reverse --format='%H %s' "$base..$head" | awk '$2 == "test:" { print $1; exit }')
 if [ -n "$red" ]; then
   set -f
-  git diff "$red" "$head" -- $(git diff-tree --no-commit-id --name-only -r "$red") \
-    >"$out/tests-after-red.patch"
+  written=" "
+  : >"$out/tests-after-red.patch"
+  for c in $(git rev-list --reverse --no-merges "$base..$head"); do
+    files=$(git diff-tree --no-commit-id --name-only -r "$c")
+    later=
+    for f in $files; do
+      case $written in *" $f "*) later="$later $f" ;; esac
+    done
+    subject=$(git log -1 --format=%s "$c")
+    if [ -n "$later" ]; then
+      removed=$(git diff --numstat "$c^" "$c" -- $later | awk '{ n += $2 } END { print n + 0 }')
+      case $subject in
+        test:*) [ "$removed" -eq 0 ] || git show --format='commit %H %s' "$c" -- $later ;;
+        *) git show --format='commit %H %s' "$c" -- $later ;;
+      esac >>"$out/tests-after-red.patch"
+    fi
+    case $subject in test:*) for f in $files; do written="$written$f "; done ;; esac
+  done
   set +f
 else
   say "no 'test:' commit on $head_ref: no tests-after-red.patch"

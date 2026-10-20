@@ -10,6 +10,7 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
+import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
 
 /** Thrown when no installed driver can serve the requested platform. */
@@ -41,6 +42,11 @@ export interface PlatformCatalog extends DriverCatalogEntry {
   readonly platform: Platform;
   /** ADR 0015 §4: the model Simlock would create for each class on this host. */
   readonly classDefaults: Readonly<Partial<Record<DeviceClass, string>>>;
+}
+
+export interface ScreenAvailability {
+  readonly platform: Platform;
+  readonly reason?: string;
 }
 
 /** Immutable platform-to-driver lookup used by the lease path. */
@@ -85,6 +91,37 @@ export class DriverCatalog {
       }
     }
     throw new UnknownPassthroughToolError(tool);
+  }
+
+  async openScreen(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    settings: ScreenSettings,
+    signal: AbortSignal,
+  ): Promise<ScreenFeed> {
+    const capture = this.#drivers.get(platform)?.screenCapture;
+    if (capture === undefined) {
+      throw new ScreenNotSupportedError(`A ${platform} device's screen cannot be streamed`);
+    }
+    return await capture.open(device, settings, signal);
+  }
+
+  async screenAvailability(): Promise<readonly ScreenAvailability[]> {
+    return await Promise.all(
+      [...this.#drivers.values()].flatMap((driver) =>
+        driver.screenCapture === undefined
+          ? []
+          : [
+              driver.screenCapture
+                .unavailable()
+                .then((reason) =>
+                  reason === undefined
+                    ? { platform: driver.platform }
+                    : { platform: driver.platform, reason },
+                ),
+            ],
+      ),
+    );
   }
 
   async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {

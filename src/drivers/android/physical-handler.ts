@@ -7,9 +7,11 @@ import {
   type PhysicalInspection,
   type PresentPhysical,
   type ReclaimResult,
+  ScreenUnavailableError,
   uninstallPlan,
 } from "../../core/index.js";
-import type { ProcessRunner } from "../../ports/index.js";
+import type { ProcessRunner, TcpStreamConnector } from "../../ports/index.js";
+import type { ScreenTarget } from "./screen/index.js";
 import {
   type AdbGateAnswer,
   DEFAULT_ADB_PORT,
@@ -85,6 +87,39 @@ export class AndroidPhysicalHandler {
     env.ANDROID_ADB_SERVER_PORT = PORT;
     this.#env = env;
     this.#gate = new DefaultAdbServerGate({ ...options, env });
+  }
+
+  /**
+   * why: where one phone's scrcpy session runs. Every step passes the same version check every other
+   * phone command passes, and only then runs `adb -P 5037` with this handler's environment or opens a
+   * raw connection to port 5037, so the capture never names a port or a check.
+   */
+  screenTargetFor(device: PhysicalDriverDevice, tcp: TcpStreamConnector): ScreenTarget {
+    const serial = device.deviceId;
+    const checked = async (): Promise<void> => {
+      const answer = await this.#gate.check();
+      if (!answer.open) throw new ScreenUnavailableError(answer.message);
+    };
+    return {
+      connect: async (timeoutMs) => {
+        await checked();
+        return await tcp.connect(DEFAULT_ADB_PORT, timeoutMs);
+      },
+      serial,
+      spawn: async (args) => {
+        await checked();
+        return this.#processRunner.spawn(this.#adb, ["-P", PORT, "-s", serial, ...args], {
+          env: this.#env,
+        });
+      },
+      run: async (args, timeoutMs) => {
+        await checked();
+        return await this.#processRunner.run(this.#adb, ["-P", PORT, "-s", serial, ...args], {
+          env: this.#env,
+          timeoutMs,
+        });
+      },
+    };
   }
 
   async advisories(): Promise<readonly DriverAdvisory[]> {

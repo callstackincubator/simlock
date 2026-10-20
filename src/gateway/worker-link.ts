@@ -506,21 +506,14 @@ export class WorkerLink {
   }
 
   /**
-   * ADR 0005 §22: a worker's business events are republished on the gateway's bus with
-   * `workerId` added, so they land in its ring buffer and `simlock events --follow` against a
-   * gateway shows the fleet. The name, the emitting module, the `id` and the `timestamp` travel
-   * unchanged (ADR 0014 §2: one fact, one id, and the time it happened) -- the fact came
-   * from that worker's reaper or its leasing module, and rewriting either would make the audit trail
-   * lie about where it happened; `workerId` is what says which machine.
-   *
-   * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends
-   * -- a client of this same admin protocol, on a machine this gateway does not otherwise
-   * control -- and `workerId` is merged in last, so it cannot be spoofed, but the *name* is
-   * taken on faith. Refusing the names in `GATEWAY_OWN_EVENTS` (the six `worker.*` facts and
-   * `request.granted`; `request.dispatched` is not in the set) keeps a worker from forging
-   * `worker.drain-ended`, `worker.removed`, `request.granted`, etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
-   * author of. Every other name still forwards unchanged, including ones this gateway's own
-   * `EventMap` has never heard of (a newer worker's own vocabulary).
+   * why: a push names its own event with a plain string nothing proves the worker owns, while
+   * `workerId` is merged in here and cannot be spoofed -- so the names only a gateway authors
+   * (`GATEWAY_OWN_EVENTS`) are refused by name, or a worker would write `worker.removed` or
+   * `request.granted` straight into the operator's audit trail. Any other name is forwarded
+   * unchanged: a newer worker's vocabulary is a fact its consumers need, and a gateway that
+   * dropped it would lose it from `events.replay`. The name, module, `id` and `timestamp` travel
+   * as they arrived -- the fact happened on that machine at that time, and rewriting either would
+   * make the audit trail lie about where it happened; `workerId` is what says which machine.
    */
   #onWorkerEvent(envelope: {
     readonly id: string;
@@ -561,11 +554,10 @@ export class WorkerLink {
 }
 
 /**
- * ADR 0005 §22 / `docs/internal/EVENTS.md`: the facts only a gateway itself ever emits -- six about
- * the workers connected to it, and (ADR 0021 §4) `request.granted`, the outcome of a fleet request.
- * Never forwarded from a worker's own event stream (see
- * `#onWorkerEvent`) -- a worker is a client of the same admin protocol, and nothing about
- * `events.subscribe` proves the name it pushes is genuinely its own.
+ * why: a worker's `events.subscribe` push carries an event name it simply claims, and the uplink
+ * proves only that it holds a worker credential -- so the names whose facts a gateway is the sole
+ * author of have to be dropped rather than forwarded, or a worker would put a dispatch or a grant
+ * it never served into the operator's audit trail, beside the gateway's genuine ones.
  */
 const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
   "worker.connected",
@@ -574,6 +566,7 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
   "worker.removed",
   "worker.drain-started",
   "worker.drain-ended",
+  "request.dispatched",
   "request.granted",
 ]);
 

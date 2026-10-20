@@ -1,0 +1,73 @@
+/* Buttons. Primary is filled orange with dark text, secondary is outlined, quiet is text only. */
+
+.button {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration),
+    border-color var(--duration),
+    color var(--duration);
+}
+
+.button:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.button:disabled,
+.button:disabled:hover {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.button-secondary {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text);
+}
+
+.button-secondary:hover {
+  border-color: var(--text);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.button-quiet:hover {
+  border-color: transparent;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* A button that does nothing here, such as Next on the last page. It keeps its place and its
+ * focus; its text and edge go quiet. */
+.button[aria-disabled="true"],
+.button[aria-disabled="true"]:hover {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}

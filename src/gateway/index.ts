@@ -16,8 +16,6 @@ export { FileDrainStore } from "./drain-store.js";
 // fallow-ignore-next-line unused-type -- public port shape for anyone supplying their own store.
 export type { DrainStore } from "./drain-store.js";
 export { GatewayDispatcher } from "./dispatcher.js";
-// fallow-ignore-next-line unused-type -- public option shape for anyone composing a gateway; `main.ts` builds one inline.
-export type { GatewayTokenStore } from "./dispatcher.js";
 export { GatewayService, type GatewayServiceOptions } from "./service.js";
 export type { FleetViews } from "./fleet-ports.js";
 export type { WorkerRegistry } from "./worker-registry.js";

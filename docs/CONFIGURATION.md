@@ -32,12 +32,17 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `lease.maxRequestRecords`         | The most lease-request records Simlock keeps. When a new request would go over it, the oldest settled record is removed. A request that is still open is never removed. | `10000`                                                         |
 | `lease.maxPerRequester`           | How many leases one agent id may hold at once. A positive integer; anything else (`0`, `-1`, `1.5`, a string) stops the daemon from starting. An agent id still has at most one waiting request at a time. At the limit, or with a request already waiting, a new request is refused with `REQUESTER_ALREADY_LEASED`. On a gateway the limit counts the agent's leases across the whole fleet, and workers do not apply their own limit to what the gateway sends them. An agent that holds more than the limit (you lowered it and restarted) keeps its leases and cannot request more until it is below. Read at start; changing it needs a restart. **Risk above `1`:** agents that lease one device after another can block each other, each holding one device while waiting for a second.| `1`                                                             |
 | `lease.endWaitMs` | How long Simlock waits, after a lease ends, for add-ons that act on the device before it is wiped (for example one that ends a session on it). A positive number of milliseconds, at most `2147483647`; anything else stops the daemon from starting. When it passes, the wipe starts anyway. Stopping the daemon and `simlock nuke` do not wait. With no such add-on, nothing waits. Read at start; changing it needs a restart. | `600000` |
+| `capabilities.<name>.enabled`     | **Both sides.** Turns the optional module `<name>` on. A module that is off is not loaded and is reported `off` in `status`. Each module's own keys sit beside `enabled` under `capabilities.<name>`. A name no installed module has is warned about and ignored. A gateway always reads `enabled`; a module's other keys are warned about there unless the module lists them for gateways. This build has no optional module of its own, so `simlock config get` shows `"capabilities": {}`. | `false` for each module |
 | `gateway.url`                     | **Worker side.** Base URL of the gateway this worker joins, e.g. `wss://gw.example:4700`; the worker dials `<url>/v1/uplink` and upgrades it to a WebSocket. Joining grants that gateway the `admin` role on this daemon, and `gateway.token` rides on the upgrade request as a bearer credential, so use `wss://` — or plain `ws://` only over loopback or inside your own tunnel. `http://` and `https://` are rejected at load. Unset means "do not join a fleet": the default, and the only thing that changes about a joined worker.                    | unset                                                            |
 | `gateway.token`                   | **Worker side.** The join token (`simlock token create --role worker`, minted on the gateway) this worker presents when it opens its uplink. Required whenever `gateway.url` is set. `simlock config` shows it; the daemon log and the `daemon.started` event show `[redacted]`. It is stored in plain text in `config.json`, which `simlock config set` writes owner-only.                                          | unset                                                            |
 | `gateway.label`                   | **Worker side.** Display name for this worker in `simlock worker list`, `status`, the console, and on the lease's `worker` block. Display-only: nothing routes on it and it need not be unique.                              | the worker's own id                                              |
-| `agentDevice.enabled`             | **Both sides.** On a worker: run one agent-device daemon on this worker, started and watched by Simlock. It sees Simlock's devices and no others, refuses `boot` and `shutdown`, and keeps its files in `~/.simlock/agent-device`. If agent-device is missing, older than 0.21.25, speaks another RPC protocol or needs a newer Node than Simlock runs on, it is not started and Simlock runs on without it. A daemon a killed Simlock left behind is stopped at the next start. With `http.enabled` also `true`, the agent-device CLI reaches it at `/v1/agent-device` (see [HTTP-API.md](HTTP-API.md#v1agent-device)). On a gateway: serve `/v1/agent-device` and send each agent to a worker whose agent-device is available; the gateway runs no daemon of its own. | `false` |
-| `agentDevice.leaseTtlCapMs`       | **Both sides.** Caps the TTL of the leases the agent-device CLI makes and renews through Simlock: a longer `ttlMs` is lowered to it, and a lease that sends none gets it. A whole number of milliseconds from `5000` to `lease.maxTtlMs`; a value outside that range stops the daemon at start, on a gateway too. Used only when `agentDevice.enabled` is `true`. | unset (no cap) |
-| `agentDevice.command`             | **Worker side.** The agent-device executable: a name looked up on `PATH`, or a path. A gateway ignores it and logs a warning. Used only when `agentDevice.enabled` is `true`. | `agent-device` |
+| `capabilities.agent-device.enabled`             | **Both sides.** On a worker: run one agent-device daemon on this worker, started and watched by Simlock. It sees Simlock's devices and no others, refuses `boot` and `shutdown`, and keeps its files in `~/.simlock/agent-device`. If agent-device is missing, older than 0.21.28, speaks another RPC protocol or needs a newer Node than Simlock runs on, it is not started and Simlock runs on without it. A daemon a killed Simlock left behind is stopped at the next start with `capabilities.agent-device.enabled` `true`; with it off, Simlock does not look for one. With `http.enabled` also `true`, the agent-device CLI reaches it at `/v1/agent-device` (see [HTTP-API.md](HTTP-API.md#v1agent-device)). On a gateway: serve `/v1/agent-device` and send each agent to a worker whose agent-device is available; the gateway runs no daemon of its own. | `false` |
+| `capabilities.agent-device.leaseTtlCapMs`       | **Both sides.** Caps the TTL of the leases the agent-device CLI makes and renews through Simlock: a longer `ttlMs` is lowered to it, and a lease that sends none gets it. A whole number of milliseconds from `5000` to `lease.maxTtlMs`; a value outside that range stops the daemon at start, on a gateway too. Used only when `capabilities.agent-device.enabled` is `true`. | unset (no cap) |
+| `capabilities.agent-device.command`             | **Worker side.** The agent-device executable: a name looked up on `PATH`, or a path. A gateway ignores it and logs a warning. Used only when `capabilities.agent-device.enabled` is `true`. | `agent-device` |
+| `capabilities.stream.enabled`                  | **Both sides.** Offer a live view of a leased device's screen: a simulator, an emulator or a physical iPhone. On a worker: answer `GET /v1/stream/leases/{leaseId}` (see [HTTP-API.md](HTTP-API.md#get-v1streamleasesleaseid)) by capturing the screen of the device that lease holds. On a gateway: serve the same URL and relay each request to the worker that holds the lease. Off by default because a stream is a capture pinned to a leased device — with it off, nothing is running until someone asks to look, and nothing is running when they stop. Read at start; changing it needs a restart. | `false` |
+| `capabilities.stream.fps`                      | **Worker side.** The frame rate the encoder is asked for. A capture sends full frames only when the device's screen changes, and on a still screen only small keep-alive frames, so this is a ceiling and not a promise: an untouched home screen stays far below it, which is what keeps an idle stream cheap. A whole number from `1` to `60`. | `30` |
+| `capabilities.stream.maxDimension`             | **Worker side.** Cap on the encoded picture's longest side, in pixels; the other side follows the device's aspect ratio. This is the lever that costs the most bandwidth — a device that encodes at about 6 Mbit/s native is nearer 1.4 Mbit/s at `720`. A whole number from `96` to `4096`. | `720` |
+| `capabilities.stream.bitrateKbps`              | **Worker side.** Target bitrate in kilobits per second, handed to the encoder as an average rather than a ceiling; a frame that needs more takes it. A whole number from `100` to `40000`; the iOS encoder takes nothing lower. | `1500` |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
 | `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1. Among the workers that can serve the request, in order: a worker whose health is not `running`, or that has requests of its own waiting, is left out; a worker holding a ready device that fits goes first (the device's mode must fit the request, a request with no mode fits a device that serves the worker's default mode, and its runtime must be the one requested or, with none requested, the one the worker would pick: the newest runtime the model pairs with); otherwise a worker with no free running slot for the platform or overall is left out (a running device that is not leased counts as free: the worker shuts it down to make room), a worker under its RAM budget for the platform is preferred over one at it (a worker at its budget is still asked when it is the only one left), and the one with the most free running capacity for the platform wins. A worker that is left out is busy, not unable: the request waits for it. Ties go to the lowest worker id. | `warm-then-free`                                                 |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
@@ -46,6 +51,12 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)) and the web console served beside it (see [CONSOLE.md](CONSOLE.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
+| `http.proxyAuth` | Sign-in through a proxy in front of Simlock (Cloudflare Access, for one). Not set: proxy sign-in is off. Set the four required keys together, as one JSON object, because each `config set` checks the whole file; one key alone is refused, naming the first missing key (`expected set with the other http.proxyAuth keys`). `signOutUrl` alone counts as an incomplete set. Read in both modes; takes effect on daemon restart. | not set |
+| `http.proxyAuth.header` | Required. The request header carrying the proxy's signed JWT, e.g. `cf-access-jwt-assertion`. 1-64 letters, digits or `-`; matched without regard to case. With `authorization`, only a `Bearer` value that does not start `slk_` is taken as the JWT. | — |
+| `http.proxyAuth.jwksUrl` | Required. Where the proxy publishes its public keys. An `https://` URL, or `http://` on `127.0.0.1`, `::1` or `localhost`. The daemon fetches it (5 s limit, no redirects, at most 64 KiB) and keeps the keys 10 minutes. | — |
+| `http.proxyAuth.issuer` | Required. The `iss` the JWT must carry. 1-128 characters. | — |
+| `http.proxyAuth.audience` | Required. The `aud` the JWT must carry (or list). 1-512 characters. | — |
+| `http.proxyAuth.signOutUrl` | Optional. An `http://` or `https://` URL the console sends a person to for signing out; `GET /v1/identity` returns it. | not set |
 | `exec.timeoutMs`                  | How long a single `device.exec` command (the remote half of `simlock simctl` / `simlock adb` — see [CLI.md](CLI.md#reaching-a-leased-device)) may run before Simlock kills it and fails the call with `EXEC_TIMEOUT`. Output is streamed, never buffered, so there is no size limit to go with it.                                | `10 minutes`                                                     |
 | `gateway.url`                     | **Worker side.** The gateway's base URL (`ws://host:port` or `wss://...`); the worker derives the uplink endpoint (`/v1/uplink`) from it. Set together with `gateway.token`, or not at all.                                  | unset (this worker has no gateway)                              |
 | `gateway.token`                   | **Worker side.** The join token this worker presents, minted on the gateway with `simlock token create --role worker`.                                                                                                        | unset                                                            |
@@ -58,9 +69,9 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `downloads.timeoutMs`             | How long one request for a missing runtime / system image may take, counted from the moment it arrives. Waiting behind another download on the same platform counts too, and the clock never restarts; a request that runs out fails with `DOWNLOAD_TIMEOUT`. A running download is stopped when the oldest request sharing it runs out, and every request sharing it fails then. On a busy machine, raise it. | `20 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of recent business events kept in memory, which `simlock events` without `--since` replays.                                                                                                                                          | `1000`                                                           |
-| `eventLog.rotateBytes` | Size of one generation of the event file, `~/.simlock/events.jsonl`, before it rotates. Every business event is written there and survives a daemon restart. A rotation renames the file to `events.jsonl.1` and shifts older generations up by one (`.2`, `.3`, …). | `5 MiB` |
-| `eventLog.retention` | How long the event history is kept, in milliseconds. Retention is judged per generation by its newest line: a generation is deleted once its newest line is older than this, so a generation that mixes old and new lines stays until its newest line ages out. The sweep runs after every rotation and once when the daemon starts. The current file is never deleted. | `604800000` (7 days) |
-| `eventLog.maxBytes` | Total size of the event file and all its generations, the backstop for when events arrive faster than `eventLog.retention` ages them out. When the generations exceed it, the oldest are deleted first, whatever their age. Must be at least twice `eventLog.rotateBytes`; a smaller value is refused when the config loads. | `256 MiB` |
+| `eventLog.retention` | How long the event history is kept, in milliseconds, counted back from the moment of the prune and compared with each event's own time. Every business event is written to `~/.simlock/history.db` and survives a daemon restart. Older events are deleted once the daemon holds its socket and every hour after; the freed space goes back to the disk. | `604800000` (7 days) |
+| `eventLog.maxBytes` | Cap on the stored size of the events in `history.db` (the size of each event as written, not the file), the backstop for when events arrive faster than `eventLog.retention` ages them out. When they exceed it, the oldest events are deleted first, whatever their age. At least `16 MiB`; a smaller value is refused when the config loads. | `256 MiB` |
+| `metrics.retention` | How long the usage figures in `history.db` are kept, in milliseconds, counted back from the moment of the prune: one row per lease request (by when it was requested), per-minute levels (by the minute) and one row per device boot, provision, recovery or quarantine event and per declined lease request (by when it happened). They outlive the events behind them. It may not be shorter than `eventLog.retention`, and must be a positive whole number of milliseconds; either is refused when the config loads. | the larger of `7776000000` (90 days) and `eventLog.retention` |
 | `log.level`                       | Lowest level written to `daemon.log`: `debug`, `info`, `warn`, or `error`. `debug` adds a line for every request that only reads (such as `simlock status`) and for every device command Simlock runs (`simctl`, `adb`, …) with its arguments and exit code. | `info`                                                           |
 | `log.rotateBytes`                 | Size at which `daemon.log` is rotated to `daemon.log.1`. One rotated file is kept.                                                                                                                                          | `5 MiB`                                                          |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery. Physical devices are watched whatever it says.                                                                                                                                                                | `true`                                                           |
@@ -72,6 +83,8 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `stalledTransition.thresholdMultiplier` | Factor applied to a driver's own `provision + boot` (for `provisioning`) or `reclaim` (for `reclaiming`) estimate to get the stall threshold: past it, `simlock doctor` reports a `stalled-transition` finding and `simlock status` marks the device `stalled`. | `3`                                                               |
 | `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
 | `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
+| `drivers.ios.screenCaptureCommand` | The program that captures a simulator's screen for `capabilities.stream.enabled`. Unset, the one `pnpm build` put beside the daemon. | unset |
+| `drivers.ios.deviceCaptureCommand` | The program that captures a physical iPhone's screen for `capabilities.stream.enabled`. Unset, the one `pnpm build` put beside the daemon. | unset |
 | `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
 | `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
 | `ios.defaultMode`                 | The device mode an iOS lease request gets when it names none: `slim` or `full`. Every worker makes both kinds whatever this says. See [Device mode: slim and full](#device-mode-slim-and-full).                             | `full`                                                           |
@@ -160,13 +173,14 @@ local agents whether or not its gateway is reachable, and `http.enabled` stays
 off by default.
 
 **A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
-`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `gateway.*` and
-`agentDevice.*` (`enabled` and `leaseTtlCapMs` only). Every other key —
+`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*`, `gateway.*` and
+`capabilities.*` (`enabled`, and `leaseTtlCapMs` for agent-device). Every other key —
 capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
 configures devices, which a gateway does not have; each one present in a
 gateway's config is reported with a warning and ignored, the same treatment an
-unknown key gets. The worker-side `gateway.url`/`token`/`label` and
-`agentDevice.command` are warned about there too. Nothing is stripped: the same file can be copied between a
+unknown key gets. The worker-side `gateway.url`/`token`/`label`,
+`capabilities.agent-device.command` and `capabilities.stream.fps`/`maxDimension`/`bitrateKbps`
+are warned about there too. Nothing is stripped: the same file can be copied between a
 worker and a gateway with only `mode` differing, and the warning is what makes
 the difference visible rather than silent.
 
@@ -227,7 +241,7 @@ does not apply to it. It reads:
 | `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
-| `log.*`, `eventBuffer.*`, `eventLog.*` | logging and the event history, as anywhere |
+| `log.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*` | logging, the event history and the usage figures kept beside it, as anywhere |
 
 **A worker's `downloads.policy` does not apply to requests through a
 gateway.** The gateway sends a request only to a worker whose catalog already
@@ -451,6 +465,13 @@ is why `ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
 especially on slower CI runners. The `ios.slim.*` keys apply to every slim
 device the worker makes, whatever its default mode.
 
+An iOS simulator is ready after boot completes and `simctl listapps` succeeds.
+Boot completion and installer polling share a 120-second deadline for a full
+device and for crash recovery, or `ios.slim.bootTimeoutMs` for each preparation
+boot of a supported slim device.
+If the deadline expires, readiness fails and Simlock attempts to shut the
+simulator down.
+
 **`full` is a guarantee; `slim` is best effort.** A `full` request never
 receives a slim device. A `slim` request on a runtime that cannot be slimmed
 -- an iOS runtime older than 18.5, or any Android device -- is granted a full
@@ -566,6 +587,54 @@ snapshot.
 Only these four keys exist. There is no way to pass other emulator
 arguments from config, so nothing here can move an emulator's port or AVD
 home.
+
+## Screen streaming
+
+`capabilities.stream.enabled` turns a leased device's screen into something you can look at:
+a worker captures the screen of the device a lease holds, encodes it as
+H.264, and the bytes reach a browser as the body of one ordinary
+`GET /v1/stream/leases/{leaseId}` (see
+[HTTP-API.md](HTTP-API.md#get-v1streamleasesleaseid)). On a gateway the same URL
+relays the request to the worker that holds the lease, and the gateway forwards
+the bytes without reading one of them.
+
+Nothing is captured until someone asks to look, and asking is the only
+on-command there is: the request itself keeps the capture running, and closing
+it — pressing Stop, navigating away, closing the tab — is the off-command. A
+lease that ends by any other route stops the capture too, so a device never
+goes on being filmed after it has been handed back, and no stream outlives a
+viewer or a lease.
+
+What it costs is mostly `capabilities.stream.maxDimension` and `capabilities.stream.bitrateKbps`. Against
+a device whose screen is being actively redrawn on an Apple silicon Mac, the
+encoder's native settings produce about 6 Mbit/s; at `maxDimension` `720` and
+`bitrateKbps` `1500` the same motion is about 1.4 Mbit/s, and a device nobody is
+touching sits between 25 and 90 kbit/s because a screen that has not changed
+sends almost nothing. `capabilities.stream.fps` is a ceiling rather than a rate for the same
+reason. On a Mac an iOS capture costs about 50-80 MB of memory per device being
+watched.
+
+An iOS simulator's screen, a physical iPhone's screen, an Android
+emulator's screen and a physical Android phone's screen can be streamed. A
+device whose platform has no screen source is refused with
+`STREAM_NOT_SUPPORTED`, naming that as the reason rather than failing for one
+the reader has to guess. A phone whose screen is off is woken first; one that
+does not wake is refused with `STREAM_UNAVAILABLE` saying to turn it on. While a
+phone streams, its stay-awake setting is raised so the screen stays on as long
+as it charges, and put back when the stream ends.
+
+- **iOS** needs the capture programs `pnpm build` builds on a Mac with Xcode
+  selected: one for a simulator and one for a physical iPhone. Without the one
+  a device needs, that stream is refused with `STREAM_UNAVAILABLE`, saying why;
+  `simlock status` says why too when no platform on the worker can stream. A
+  physical iPhone additionally needs a worker on Xcode 27 — the device program
+  refuses a Mac whose CoreDevice major is another.
+  `drivers.ios.screenCaptureCommand` names another simulator program and
+  `drivers.ios.deviceCaptureCommand` another iPhone one.
+- **Android** needs nothing more than the SDK the emulators already use. Each
+  stream copies a small screen server into the emulator, and removes it when
+  the stream ends. An emulator encodes in software unless its GPU mode gives it
+  a hardware encoder, so expect about 20 frames a second while the screen moves.
 
 ## Capacity strategies
 
@@ -699,3 +768,14 @@ did — a config file written against an older Simlock keeps its behaviour
 without changes, and needs none. Setting them alongside an explicitly
 selected non-`resource` strategy is the one case Simlock warns about, since
 those settings would have no effect.
+
+## Signing in through a proxy
+
+`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. Set it as one object:
+
+```
+simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://team.cloudflareaccess.com","audience":"4f1c…"}'
+simlock daemon stop && simlock daemon start
+```
+
+Setting one key alone fails the whole-file check: `Invalid config after setting http.proxyAuth.header: Invalid config value for "http.proxyAuth.jwksUrl": expected set with the other http.proxyAuth keys`. See [HTTP-API.md](HTTP-API.md#signing-in-through-a-proxy) for how a request is checked.

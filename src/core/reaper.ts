@@ -104,7 +104,20 @@ export class CleanupReaper {
     }
 
     for (const proposal of proposals) {
-      await this.options.executor.execute(proposal);
+      // why: one action that throws (a device whose platform has no driver) must not abort the
+      // proposals after it. Only the action is contained: a rule or registry-view failure above
+      // still rejects the run.
+      try {
+        await this.options.executor.execute(proposal);
+      } catch (error: unknown) {
+        this.#logger.error("cleanup action failed", {
+          step: "cleanup",
+          action: proposal.action,
+          rule: proposal.rule,
+          target: proposal.target,
+          error: stableError(error),
+        });
+      }
     }
 
     return proposals;

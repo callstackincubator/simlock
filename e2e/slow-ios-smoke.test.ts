@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { withDaemon } from "./helpers/index.js";
+import { IOS, withDaemon } from "./helpers/index.js";
 import {
   iosDeviceSet,
   setDevices,
@@ -221,7 +221,7 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     it(
-      "a platform-only lease grants the first listed phone model booted in Simlock's device set, and the same request after release gets that device back without a second boot",
+      "a platform-only lease grants the first listed phone model and accepts an immediate install, including after erase and reuse",
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -239,6 +239,8 @@ describe.skipIf(process.platform !== "darwin")(
         expect(first.code, `lease failed: ${first.stderr}`).toBe(0);
         const firstGrant = first.json as Grant;
         const udid = firstGrant.device.driverDeviceId;
+        const firstInstall = await env.cli(["simctl", "install", udid, IOS.app]);
+        expect(firstInstall.code, `first install failed: ${firstInstall.stderr}`).toBe(0);
         expect(firstGrant.device.spec.model).toBe(phone);
         const bootedDevice = (await setDevices(deviceSet)).find((device) => device.udid === udid);
         expect(bootedDevice?.state).toBe("Booted");
@@ -259,6 +261,13 @@ describe.skipIf(process.platform !== "darwin")(
         const second = await env.cli(request, { timeout: 120_000 });
         expect(second.code, `second lease failed: ${second.stderr}`).toBe(0);
         const secondGrant = second.json as Grant;
+        const secondInstall = await env.cli([
+          "simctl",
+          "install",
+          secondGrant.device.driverDeviceId,
+          IOS.app,
+        ]);
+        expect(secondInstall.code, `install after erase failed: ${secondInstall.stderr}`).toBe(0);
         expect(
           secondGrant.device.driverDeviceId,
           "the same request must reuse the idle device",

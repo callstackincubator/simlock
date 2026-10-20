@@ -123,6 +123,25 @@ describe("loadInstanceId on a real filesystem", () => {
     // Written once: the two that lost the race read the winner's file instead of writing.
     await expect(filesystem.readdir(home)).resolves.toEqual(["instance.json"]);
   });
+
+  it("creates instance.json owner-only", async () => {
+    // why: #685: `writeFileExclusive` links a temp file into place, and that temp file is written
+    // without a mode, so the identity the daemon stamps into every device root lands world-
+    // readable under the umask every real host starts from. A restrictive umask here would
+    // mask what the code asks for, so pin 022.
+    const previousUmask = process.umask(0o022);
+    try {
+      const filesystem = new NodeFilesystem();
+      home = await mkdtemp(join(tmpdir(), "simlock-instance-identity-"));
+      const instancePath = join(home, "instance.json");
+
+      await loadInstanceId({ filesystem, idGenerator: sequence(), path: instancePath });
+
+      expect((await filesystem.stat(instancePath)).mode).toBe(0o600);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
 });
 
 /** Stands in for another daemon whose exclusive create landed first. */

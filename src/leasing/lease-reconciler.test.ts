@@ -163,9 +163,12 @@ describe("LeaseReconciler", () => {
       },
     });
 
-    // The deadline has passed and the platform's root lists nothing of this device.
+    // why: the deadline has passed, so each of these reads would end a virtual device's lease;
+    // they cover a read that misses the device, one that skips its platform, and one that lists
+    // it stopped.
     await harness.reconciler.run(read({ ios: reality() }));
     await harness.reconciler.run(read({}));
+    await harness.reconciler.run(read({ ios: reality(["00008110-001A2B3C4D5E", "stopped"]) }));
 
     expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual(["lse_phys"]);
     expect(harness.registry.snapshot.devices[0]?.state).toBe("leased");
@@ -320,7 +323,7 @@ describe("LeaseReconciler", () => {
     ]);
   });
 
-  it("keeps a running lease whose deadline passed, for the expiry timers to expire through the ordinary path", async () => {
+  it("keeps a running lease whose deadline passed and ends nothing", async () => {
     const harness = await createHarness();
     const lease = await leaseOn(harness, "ios", "d1", 999);
 
@@ -330,7 +333,7 @@ describe("LeaseReconciler", () => {
     expect(eventNames(harness)).toEqual([]);
   });
 
-  it("ends the leases in deadline order, then id order, whatever order they were granted in", async () => {
+  it("ends the leases in deadline order, whatever order they were granted in", async () => {
     // Ids are handed out device, lease, device, lease, ...: "z" is granted first but sorts last.
     const harness = await createHarness({ ids: ["a", "z", "b", "a", "c", "m"] });
     const late = await leaseOn(harness, "ios", "d1", 5_000);
@@ -365,7 +368,7 @@ describe("LeaseReconciler", () => {
     ).toEqual(["lse_a", "lse_z"]);
   });
 
-  it("leaves a lease whose device record is gone for the expiry timers, and still ends the others", async () => {
+  it("leaves a lease whose device record is gone untouched, and still ends the others", async () => {
     const harness = await createHarness();
     const orphan = await leaseOn(harness, "ios", "d1", 5_000);
     const ended = await leaseOn(harness, "ios", "d2", 6_000);

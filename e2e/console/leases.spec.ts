@@ -114,34 +114,30 @@ async function untilTheDaemonSays(
   );
 }
 
-async function openLeases(page: Page, daemon: RunningDaemon): Promise<void> {
-  await page.goto(daemon.url);
+async function openLeases(page: Page, daemon: RunningDaemon, path = "/leases"): Promise<void> {
+  await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
-  await page.getByRole("link", { name: "Leases", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
 }
 
-/** A lease's row, by its id. */
 function leaseRow(page: Page, id: string): Locator {
-  return page.getByRole("row").filter({ has: page.getByRole("link", { name: id, exact: true }) });
-}
-
-/** A lease's cell in the column named `label`. */
-function leaseCell(page: Page, id: string, label: string): Locator {
-  return leaseRow(page, id).locator(`td[data-label="${label}"]`);
-}
-
-/** The value beside a label in a list of facts. */
-function fact(page: Page, label: string): Locator {
   return page
-    .locator("#main dt", { hasText: new RegExp(`^${label}$`) })
-    .locator("xpath=following-sibling::dd[1]");
+    .getByRole("list", { name: "Leases" })
+    .locator(`a[href="/leases/${encodeURIComponent(id)}/"]`);
 }
 
-/** What the panel titled `heading` on a worker's page holds, under its header. */
-function tableUnder(page: Page, heading: string): Locator {
-  return page.getByRole("region", { name: heading, exact: true }).locator(".panel-body");
+function inspectorTitle(page: Page, name: string | RegExp): Locator {
+  return page.getByRole("heading", { level: 2, name });
+}
+
+function card(page: Page, name: string): Locator {
+  return page.getByRole("region", { exact: true, name });
+}
+
+function fact(page: Page, cardName: string, label: string): Locator {
+  return card(page, cardName)
+    .locator("dt", { hasText: new RegExp(`^${label}$`) })
+    .locator("xpath=following-sibling::dd[1]");
 }
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
@@ -150,8 +146,8 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
-test.describe("the leases views", () => {
-  test("every lease in simlock list --leases appears in the fleet view", async ({ page }) => {
+test.describe("the leases page", () => {
+  test("every lease in simlock list --leases appears in the fleet list", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
@@ -175,15 +171,19 @@ test.describe("the leases views", () => {
 
       await openLeases(page, fleet.gateway);
 
-      await expect(page.locator("tbody tr")).toHaveCount(listed.length);
+      await expect(page.getByRole("list", { name: "Leases" }).getByRole("listitem")).toHaveCount(
+        listed.length,
+      );
+      await expect(page.getByText(`${listed.length} held`)).toBeVisible();
       for (const lease of listed) {
-        await expect(leaseRow(page, lease.id), lease.id).toBeVisible();
-        const holder = lease.requesterId === ci.id ? `ci-runner-3 ${ci.id}` : lease.requesterId;
-        await expect(leaseCell(page, lease.id, "Holder")).toHaveText(holder);
+        const row = leaseRow(page, lease.id);
+        await expect(row, lease.id).toBeVisible();
+        await expect(row).toContainText(
+          lease.requesterId === ci.id ? "ci-runner-3" : lease.requesterId,
+        );
         const worker = workers.find((candidate) => candidate.id === lease.workerId);
-        await expect(leaseCell(page, lease.id, "Worker")).toHaveText(worker?.label ?? "");
-        await expect(leaseCell(page, lease.id, "Device")).toContainText(lease.deviceId);
-        await expect(leaseCell(page, lease.id, "Expires in")).toHaveText(/^\d+ min( \d+ s)?$/);
+        await expect(row).toContainText(worker?.label ?? "");
+        await expect(row).toContainText(/\d+ min( \d+ s)?|\d+ s/);
       }
       expect(listed.map((lease) => lease.requesterId)).toContain(ci.id);
     } finally {
@@ -201,40 +201,29 @@ test.describe("the leases views", () => {
 
       await openLeases(page, host);
 
-      await expect(leaseCell(page, granted.id, "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
+      await expect(leaseRow(page, granted.id)).toContainText("ci-runner-3");
+      await expect(leaseRow(page, granted.id)).not.toContainText(ci.id);
     } finally {
       await host.dispose();
     }
   });
 
-  test("a worker's detail lists only that worker's leases", async ({ page }) => {
-    const fleet = await startFleet([
-      { driverScript: { ios: IOS }, label: "worker-a" },
-      { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
-    ]);
+  test("with no lease named in the address the first lease shows in the inspector, and the address stays", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await leaseOverSocket(fleet.gateway, "agent-a", "iPhone 16");
-      await leaseOverSocket(fleet.gateway, "agent-b", "iPhone 17");
-      await waitFor(async () => (await listLeases(fleet.gateway)).length === 2, {
-        label: "the gateway lists both leases",
-      });
-      const listed = await listLeases(fleet.gateway);
-      const holderOf = { "worker-a": "agent-a", "worker-b": "agent-b" } as const;
+      await leaseOverSocket(host, "agent-first");
+      await leaseOverSocket(host, "agent-second");
+      const first = (await listLeases(host)).find((lease) => lease.requesterId === "agent-first");
 
-      await openLeases(page, fleet.gateway);
-      for (const label of ["worker-a", "worker-b"] as const) {
-        await page.getByRole("link", { name: "Workers", exact: true }).click();
-        await page.getByRole("link", { name: label, exact: true }).click();
-        await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
+      await openLeases(page, host);
 
-        const own = listed.filter((lease) => lease.requesterId === holderOf[label]);
-        expect(own).toHaveLength(1);
-        const rows = tableUnder(page, "Leases").locator("tbody tr");
-        await expect(rows).toHaveCount(1);
-        await expect(rows.getByRole("link", { name: own[0]?.id ?? "", exact: true })).toBeVisible();
-      }
+      await expect(inspectorTitle(page, /agent-first/)).toBeVisible();
+      await expect(leaseRow(page, first?.id ?? "")).toHaveAttribute("aria-current", "page");
+      expect(new URL(page.url()).pathname).toBe("/leases");
     } finally {
-      await disposeFleet(fleet);
+      await host.dispose();
     }
   });
 
@@ -256,27 +245,30 @@ test.describe("the leases views", () => {
       expect(granted.id).toContain(".");
 
       await openLeases(page, fleet.gateway);
-      await page.getByRole("link", { name: granted.id, exact: true }).click();
+      await leaseRow(page, granted.id).click();
 
-      await expect(page.getByRole("heading", { level: 1, name: granted.id })).toBeVisible();
-      await expect(fact(page, "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
-      await expect(fact(page, "Worker")).toHaveText("worker-a");
-      await expect(fact(page, "Device")).toContainText(granted.device);
-      await expect(fact(page, "UDID")).toHaveText(granted.udid);
-      await expect(fact(page, "Mode")).toHaveText(granted.mode);
-      await expect(fact(page, "Request")).toHaveText(granted.requestId ?? "");
-      await expect(fact(page, "Expires in")).toHaveText(/^\d+ min( \d+ s)?$/);
+      await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
+      await expect(
+        page.getByRole("navigation", { name: "Breadcrumb" }).getByText(granted.id),
+      ).toBeVisible();
+      await expect(fact(page, "Lease", "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
+      await expect(fact(page, "Device", "Worker")).toHaveText("worker-a");
+      await expect(fact(page, "Device", "Model")).toHaveText(granted.device);
+      await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
+      await expect(fact(page, "Device", "Mode")).toHaveText(granted.mode);
+      await expect(fact(page, "Lease", "Request")).toHaveText(granted.requestId ?? "");
+      await expect(card(page, "Expires in").getByRole("timer")).toHaveText(
+        /^\d+ min( \d+ s)?$|^\d+ s$/,
+      );
       // The page's own address survives a reload, though the id holds a `.`.
       await page.reload();
-      await expect(fact(page, "UDID")).toHaveText(granted.udid);
+      await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
 
       // A worker's own lease, which the gateway did not issue, opens too.
-      await page.getByRole("link", { name: "All leases" }).click();
-      await page.getByRole("link", { name: local?.id ?? "", exact: true }).click();
-      await expect(page.getByRole("heading", { level: 1, name: local?.id ?? "" })).toBeVisible();
-      await expect(fact(page, "Holder")).toHaveText("local-agent");
-      await expect(fact(page, "Worker")).toHaveText("worker-b");
-      await expect(fact(page, "UDID")).not.toHaveText("—");
+      await leaseRow(page, local?.id ?? "").click();
+      await expect(inspectorTitle(page, /local-agent/)).toBeVisible();
+      await expect(fact(page, "Device", "Worker")).toHaveText("worker-b");
+      await expect(fact(page, "Device", "UDID")).not.toHaveText("—");
     } finally {
       await disposeFleet(fleet);
     }
@@ -293,28 +285,55 @@ test.describe("the leases views", () => {
       ).workers;
 
       await openLeases(page, host);
-      await page.getByRole("link", { name: granted.id, exact: true }).click();
+      await leaseRow(page, granted.id).click();
 
-      await expect(page.getByRole("heading", { level: 1, name: granted.id })).toBeVisible();
-      await expect(fact(page, "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
-      await expect(fact(page, "Worker")).toHaveText(view?.id ?? "");
-      await expect(fact(page, "UDID")).toHaveText(granted.udid);
-      await expect(fact(page, "Request")).toHaveText(granted.requestId ?? "");
+      await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
+      await expect(fact(page, "Lease", "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
+      await expect(fact(page, "Device", "Worker")).toHaveText(view?.id ?? "");
+      await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
+      await expect(fact(page, "Lease", "Request")).toHaveText(granted.requestId ?? "");
       await page.reload();
-      await expect(fact(page, "UDID")).toHaveText(granted.udid);
+      await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
     } finally {
       await host.dispose();
     }
   });
 
-  test("a released lease leaves the view within a second, without a reload", async ({ page }) => {
+  test("the filters narrow the list to the expiring leases or to one platform", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const ci = await labelledToken(host, "ci-runner-3");
+      const soon = await leaseOverHttp(host, ci.secret, { ttlMs: 120_000 });
+      const nightly = await labelledToken(host, "nightly");
+      const later = await leaseOverHttp(host, nightly.secret, { ttlMs: 3_000_000 });
+      await openLeases(page, host);
+      await expect(leaseRow(page, soon.id)).toBeVisible();
+      await expect(leaseRow(page, later.id)).toBeVisible();
+
+      await page.getByRole("radio", { name: "Expiring" }).check();
+      await expect(leaseRow(page, soon.id)).toBeVisible();
+      await expect(leaseRow(page, later.id)).toHaveCount(0);
+
+      await page.getByRole("radio", { name: "iOS" }).check();
+      await expect(leaseRow(page, later.id)).toBeVisible();
+
+      await page.getByRole("radio", { name: "Android" }).check();
+      await expect(page.getByText("No leases match this filter.")).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("a released lease leaves the list within a second, without a reload", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await leaseOverSocket(host, "agent-1");
       await leaseOverSocket(host, "agent-2");
       const [released, kept] = (await listLeases(host)) as [ListedLease, ListedLease];
       await openLeases(page, host);
-      await expect(page.locator("tbody tr")).toHaveCount(2);
+      await expect(page.getByRole("list", { name: "Leases" }).getByRole("listitem")).toHaveCount(2);
 
       expect((await host.cli(["release", released.id])).code).toBe(0);
       await untilTheDaemonSays(host, (leases) => leases.every((lease) => lease.id !== released.id));
@@ -326,33 +345,49 @@ test.describe("the leases views", () => {
     }
   });
 
-  test("a lease's page says it is not found once the lease is released", async ({ page }) => {
+  test("a lease's page says it is not found once the lease is released, with a way back", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await leaseOverSocket(host, "agent-1");
       const [released] = (await listLeases(host)) as [ListedLease];
       await openLeases(page, host);
-      await page.getByRole("link", { name: released.id, exact: true }).click();
-      await expect(page.getByRole("heading", { level: 1, name: released.id })).toBeVisible();
+      await leaseRow(page, released.id).click();
+      await expect(inspectorTitle(page, /agent-1/)).toBeVisible();
 
       expect((await host.cli(["release", released.id])).code).toBe(0);
 
-      await expect(page.getByRole("heading", { level: 1, name: "Lease not found" })).toBeVisible();
-      await expect(fact(page, "UDID")).toHaveCount(0);
+      await expect(page.getByText("Lease not found.")).toBeVisible();
+      await expect(fact(page, "Device", "UDID")).toHaveCount(0);
+      await page.getByRole("link", { name: "All leases" }).click();
+      expect(new URL(page.url()).pathname).toBe("/leases");
     } finally {
       await host.dispose();
     }
   });
 
-  test("a renewed lease shows its new expiry within a second", async ({ page }) => {
+  test("an address naming no lease says it is not found", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openLeases(page, host, "/leases/lse_nobody/");
+
+      await expect(page.getByText("Lease not found.")).toBeVisible();
+      await expect(page.getByRole("link", { name: "All leases" })).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("a renewed lease shows its new time left within a second", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       const ci = await labelledToken(host, "ci-runner-3");
       const granted = await leaseOverHttp(host, ci.secret, { ttlMs: 120_000 });
       const [before] = await listLeases(host);
       await openLeases(page, host);
-      const expiry = leaseCell(page, granted.id, "Expires in");
-      await expect(expiry).toHaveText(/^1 min \d+ s$/);
+      const expiry = leaseRow(page, granted.id);
+      await expect(expiry).toContainText(/\b1 min \d+ s/);
 
       const renewed = await fetch(new URL(`/v1/leases/${granted.id}/renew`, host.url), {
         body: JSON.stringify({ ttlMs: 3_000_000 }),
@@ -366,13 +401,15 @@ test.describe("the leases views", () => {
         ),
       );
 
-      await expect(expiry).toHaveText(/^(49|50) min( \d+ s)?$/, { timeout: 1_000 });
+      await expect(expiry).toContainText(/(49|50) min/, { timeout: 1_000 });
     } finally {
       await host.dispose();
     }
   });
 
-  test("the leases views have no horizontal scroll at 360px wide", async ({ page }) => {
+  test("the leases page has no horizontal scroll at 360px wide, and shows the list before a lease", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       const ci = await labelledToken(host, "ci-runner-3");
@@ -380,36 +417,29 @@ test.describe("the leases views", () => {
       await page.setViewportSize({ height: 740, width: 360 });
       await openLeases(page, host);
       await expect(leaseRow(page, granted.id)).toBeVisible();
+      await expect(inspectorTitle(page, /ci-runner-3/)).toBeHidden();
       expect(await hasHorizontalScroll(page)).toBe(false);
 
-      await page.getByRole("link", { name: granted.id, exact: true }).click();
-      await expect(fact(page, "UDID")).toHaveText(granted.udid);
-      expect(await hasHorizontalScroll(page)).toBe(false);
-
-      await page.getByRole("link", { name: "Workers", exact: true }).click();
-      await page.locator(".card").getByRole("link").click();
-      await expect(tableUnder(page, "Leases").locator("tbody tr")).toHaveCount(1);
+      await leaseRow(page, granted.id).click();
+      await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
+      await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
+      await expect(page.getByRole("button", { name: "Show screen" })).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();
     }
   });
 
-  test("the leases views are usable with the keyboard alone", async ({ browserName, page }) => {
+  test("the leases page is usable with the keyboard alone", async ({ browserName, page }) => {
     // Safari moves focus to links with Option-Tab; plain Tab reaches only form controls there.
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       const ci = await labelledToken(host, "ci-runner-3");
       const granted = await leaseOverHttp(host, ci.secret);
-      /**
-       * Tabs until the link named `label` has focus, forward or, for a link earlier on the page
-       * such as the navigation, backward, and follows it with Enter.
-       */
-      const follow = async (label: string, direction: "forward" | "backward" = "forward") => {
-        const link = page.getByRole("link", { name: label, exact: true });
+      const follow = async (link: Locator, direction: "forward" | "backward" = "forward") => {
         const key = direction === "forward" ? tab : `Shift+${tab}`;
-        for (let step = 0; step < 30; step += 1) {
+        for (let step = 0; step < 40; step += 1) {
           if (await link.evaluate((element) => element === document.activeElement)) break;
           await page.keyboard.press(key);
         }
@@ -420,25 +450,19 @@ test.describe("the leases views", () => {
       await page.keyboard.press(tab);
       await page.keyboard.type(host.tokens.operator);
       await page.keyboard.press("Enter");
-      await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
-      await follow("Leases");
+      await follow(
+        page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Leases" }),
+      );
       await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-      await follow(granted.id);
-      await expect(page.getByRole("heading", { level: 1, name: granted.id })).toBeVisible();
-      await follow("All leases");
-      await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-
-      // The same lease, from the table on its worker's page.
-      const [view] = (
-        (await host.cli(["worker", "list", "--json"])).json as { workers: { id: string }[] }
-      ).workers;
-      const name = view?.id ?? "";
-      await follow("Workers", "backward");
-      await follow(name);
-      await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-      await follow(granted.id);
-      await expect(page.getByRole("heading", { level: 1, name: granted.id })).toBeVisible();
+      await follow(leaseRow(page, granted.id));
+      await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(granted.id);
+      await follow(
+        page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Leases" }),
+      );
+      expect(new URL(page.url()).pathname).toBe("/leases");
     } finally {
       await host.dispose();
     }

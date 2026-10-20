@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { z } from "zod";
+
+import type { AuthStrategyDefinition } from "../auth/index.js";
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { configSchema } from "../contract/schemas.js";
@@ -110,7 +113,6 @@ describe("loadConfig", () => {
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
       eventLog: {
-        rotateBytes: 5 * 1024 * 1024,
         retention: 7 * 24 * 60 * 60 * 1000,
         maxBytes: 256 * 1024 * 1024,
       },
@@ -186,19 +188,22 @@ describe("loadConfig", () => {
     ).rejects.toThrow("log.rotateBytes");
   });
 
-  it("defaults eventLog.rotateBytes to 5 MiB and rejects zero and negative values", async () => {
+  it("loads a config with eventLog.rotateBytes with the unknown-key warning, and drops the key", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ eventLog: { rotateBytes: 1_048_576 } }),
+    );
+    const warn = vi.fn();
 
-    const defaults = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(defaults.eventLog.rotateBytes).toBe(5 * 1024 * 1024);
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
 
-    for (const rotateBytes of [0, -1]) {
-      await filesystem.writeFileAtomic(configPath, JSON.stringify({ eventLog: { rotateBytes } }));
-      await expect(
-        loadConfig({ configPath, filesystem, systemStats: createStats() }),
-      ).rejects.toThrow("eventLog.rotateBytes");
-    }
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
+    expect(config.eventLog).toEqual({
+      maxBytes: 256 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+    });
   });
 
   it("reports eventLog.retention and eventLog.maxBytes at their defaults", async () => {
@@ -208,7 +213,6 @@ describe("loadConfig", () => {
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
     expect(config.eventLog).toEqual({
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     });
@@ -232,25 +236,78 @@ describe("loadConfig", () => {
     }
   });
 
-  it("rejects a config with eventLog.maxBytes below twice eventLog.rotateBytes, naming the key", async () => {
+  it("accepts eventLog.maxBytes of 16 MiB and rejects one byte less, naming the key", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
+    const sixteenMiB = 16 * 1024 * 1024;
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 1_999 } }),
+      JSON.stringify({ eventLog: { maxBytes: sixteenMiB } }),
     );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('"eventLog.maxBytes": expected at least twice eventLog.rotateBytes');
+    const accepted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 2_000 } }),
+      JSON.stringify({ eventLog: { maxBytes: sixteenMiB - 1 } }),
     );
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/"eventLog\.maxBytes".*at least 16 MiB/);
+
+    expect(accepted.eventLog.maxBytes).toBe(sixteenMiB);
+  });
+
+  it("metrics.retention defaults to the larger of 90 days and eventLog.retention, and is accepted as written", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const DAY = 24 * 60 * 60 * 1000;
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const defaulted = await loadWith({});
+    const longer = await loadWith({ eventLog: { retention: 100 * DAY } });
+    const shorter = await loadWith({ eventLog: { retention: 30 * DAY } });
+    const written = await loadWith({ metrics: { retention: 120 * DAY } });
+    const empty = await loadWith({ eventLog: { retention: 100 * DAY }, metrics: {} });
+    const mistyped = await loadWith({ metrics: { retenton: 5 } });
+
+    expect(empty.metrics).toEqual({ retention: 100 * DAY });
+    expect(mistyped.metrics).toEqual({ retention: 90 * DAY });
+    expect(defaulted.metrics).toEqual({ retention: 90 * DAY });
+    expect(longer.metrics).toEqual({ retention: 100 * DAY });
+    expect(shorter.metrics).toEqual({ retention: 90 * DAY });
+    expect(written.metrics).toEqual({ retention: 120 * DAY });
+  });
+
+  it("rejects a metrics.retention shorter than eventLog.retention, or not a positive integer, naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const DAY = 24 * 60 * 60 * 1000;
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const equal = await loadWith({
+      eventLog: { retention: 7 * DAY },
+      metrics: { retention: 7 * DAY },
+    });
+    await expect(
+      loadWith({ eventLog: { retention: 7 * DAY }, metrics: { retention: 7 * DAY - 1 } }),
+    ).rejects.toThrow("metrics.retention");
+    for (const value of [0, -1, 1.5]) {
+      await expect(loadWith({ metrics: { retention: value } })).rejects.toThrow(
+        "metrics.retention",
+      );
+    }
+
+    await expect(
+      loadWith({ eventLog: { retention: 1 }, metrics: { retention: 1.5 } }),
+    ).rejects.toThrow("metrics.retention");
+
+    expect(equal.metrics).toEqual({ retention: 7 * DAY });
   });
 
   it("applies a file-level warm-pool quarantine override", async () => {
@@ -1726,12 +1783,23 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("raises no unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+  it("reads metrics.retention in a gateway config without a warning", async () => {
     const warn = vi.fn();
-    const config = await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
 
+    const config = await load(
+      { mode: "gateway", metrics: { retention: 120 * 24 * 3_600_000 } },
+      { warn },
+    );
+
+    expect(config.metrics).toEqual({ retention: 120 * 24 * 3_600_000 });
     expect(warn).not.toHaveBeenCalled();
-    expect(config.eventLog.rotateBytes).toBe(1024);
+  });
+
+  it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+    const warn = vi.fn();
+    await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
+
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
   });
 
   it("warns about android.emulator on a gateway without refusing the config", async () => {
@@ -1771,24 +1839,6 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining('Ignoring "gateway.disconnectedRetentionMs"'),
     );
-  });
-
-  it("reads agentDevice.enabled and leaseTtlCapMs on a gateway without a warning, and warns that it ignores agentDevice.command", async () => {
-    const warn = vi.fn();
-
-    const config = await load(
-      {
-        agentDevice: { enabled: true, leaseTtlCapMs: 10_000 },
-        mode: "gateway",
-      },
-      { warn },
-    );
-    expect(config.agentDevice).toMatchObject({ enabled: true, leaseTtlCapMs: 10_000 });
-    expect(warn).not.toHaveBeenCalled();
-
-    await load({ agentDevice: { command: "elsewhere" }, mode: "gateway" }, { warn });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice.command"'));
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice"'));
   });
 
   it("says nothing about worker keys on a worker, which is every daemon today", async () => {
@@ -1958,86 +2008,142 @@ describe("configSchema agrees with the config the daemon actually loads", () => 
   });
 });
 
-describe("agentDevice config", () => {
-  async function loadWith(contents: unknown, warn?: (message: string) => void) {
+describe("loadConfig over the auth strategies' config keys", () => {
+  const fake: AuthStrategyDefinition = {
+    name: "fake",
+    config: {
+      key: "fake",
+      schema: z.object({ limit: z.number().int().positive() }),
+      defaults: { limit: 5 },
+    },
+    enabled: () => true,
+    create: () => ({ authenticate: async () => ({ kind: "not-mine", sawCredential: false }) }),
+  };
+
+  async function load(http: unknown) {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http }));
     return loadConfig({
+      authStrategies: [fake],
       configPath,
       filesystem,
       systemStats: createStats(),
-      ...(warn === undefined ? {} : { warn }),
     });
   }
 
-  it("defaults agentDevice.enabled to false and agentDevice.command to agent-device", async () => {
-    const config = await loadWith({});
-
-    expect(dottedValue(config, "agentDevice.enabled")).toBe(false);
-    expect(dottedValue(config, "agentDevice.command")).toBe("agent-device");
+  it("fills a registered strategy's defaults and validates the key it owns", async () => {
+    expect(dottedValue(await load({}), "http.fake.limit")).toBe(5);
+    expect(dottedValue(await load({ fake: { limit: 9 } }), "http.fake.limit")).toBe(9);
+    await expect(load({ fake: { limit: "many" } })).rejects.toThrow("http.fake");
   });
+});
 
-  it("keeps an explicit agentDevice block", async () => {
-    const config = await loadWith({
-      agentDevice: { command: "/opt/ad/bin/agent-device", enabled: true },
+describe("loadConfig over http.proxyAuth", () => {
+  const complete = {
+    header: "cf-access-jwt-assertion",
+    jwksUrl: "https://team.cloudflareaccess.com/cdn-cgi/access/certs",
+    issuer: "https://team.cloudflareaccess.com",
+    audience: "4f1c0e",
+  };
+
+  async function load(proxyAuth: unknown) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify(proxyAuth === undefined ? {} : { http: { proxyAuth } }),
+    );
+    return loadConfig({ configPath, filesystem, systemStats: createStats() });
+  }
+
+  function proxyAuthOf(config: Config): unknown {
+    return dottedValue(config, "http.proxyAuth");
+  }
+
+  it("starts with proxy sign-in off when http.proxyAuth is not set, and on with the four keys", async () => {
+    expect(proxyAuthOf(await load(undefined))).toBeUndefined();
+    expect(proxyAuthOf(await load(complete))).toEqual(complete);
+    expect(proxyAuthOf(await load({ ...complete, signOutUrl: "http://localhost:1/out" }))).toEqual({
+      ...complete,
+      signOutUrl: "http://localhost:1/out",
     });
-
-    expect(dottedValue(config, "agentDevice.enabled")).toBe(true);
-    expect(dottedValue(config, "agentDevice.command")).toBe("/opt/ad/bin/agent-device");
   });
 
-  it("refuses a non-boolean agentDevice.enabled, naming the key", async () => {
-    await expect(loadWith({ agentDevice: { enabled: true } })).resolves.toBeDefined();
+  it.each(["http://127.0.0.1:9000/keys", "http://localhost:9000/keys", "http://[::1]:9000/keys"])(
+    "accepts the key URL %s over http on the local host",
+    async (jwksUrl) => {
+      expect(proxyAuthOf(await load({ ...complete, jwksUrl }))).toEqual({ ...complete, jwksUrl });
+    },
+  );
 
-    await expect(loadWith({ agentDevice: { enabled: "yes" } })).rejects.toThrow(
-      "agentDevice.enabled",
+  it("refuses a key URL that is neither https nor http on 127.0.0.1, ::1 or localhost, naming the key", async () => {
+    await expect(load(complete)).resolves.toBeDefined();
+
+    for (const jwksUrl of ["http://keys.team.dev/certs", "not a url"]) {
+      await expect(load({ ...complete, jwksUrl }), jwksUrl).rejects.toThrow(
+        'Invalid config value for "http.proxyAuth.jwksUrl": expected an https:// URL, or http:// on 127.0.0.1, ::1 or localhost',
+      );
+    }
+  });
+
+  it("refuses an incomplete set, naming the first missing key", async () => {
+    await expect(load(complete)).resolves.toBeDefined();
+
+    for (const missing of ["header", "jwksUrl", "issuer", "audience"] as const) {
+      const rest = Object.fromEntries(Object.entries(complete).filter(([key]) => key !== missing));
+      await expect(load(rest), missing).rejects.toThrow(
+        `Invalid config value for "http.proxyAuth.${missing}": expected set with the other http.proxyAuth keys`,
+      );
+    }
+    await expect(load({ header: complete.header })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.jwksUrl": expected set with the other http.proxyAuth keys',
+    );
+    await expect(load({ signOutUrl: "https://team.dev/out" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected set with the other http.proxyAuth keys',
     );
   });
 
-  it.each([
-    ["an empty string", ""],
-    ["a number", 7],
-  ])("refuses agentDevice.command as %s, naming the key", async (_case, command) => {
-    await expect(loadWith({ agentDevice: { command: "agent-device" } })).resolves.toBeDefined();
+  it("accepts a header written in any case, and refuses one that is not an HTTP header name", async () => {
+    expect(
+      proxyAuthOf(await load({ ...complete, header: "Cf-Access-Jwt-Assertion" })),
+    ).toMatchObject({ header: "Cf-Access-Jwt-Assertion" });
 
-    await expect(loadWith({ agentDevice: { command } })).rejects.toThrow("agentDevice.command");
-  });
-
-  it("leaves agentDevice.leaseTtlCapMs unset by default", async () => {
-    const config = await loadWith({});
-
-    expect(dottedValue(config, "agentDevice.leaseTtlCapMs")).toBeUndefined();
-  });
-
-  it("accepts agentDevice.leaseTtlCapMs of 5000 and of lease.maxTtlMs", async () => {
-    const lowest = await loadWith({ agentDevice: { leaseTtlCapMs: 5_000 } });
-    const highest = await loadWith({
-      agentDevice: { leaseTtlCapMs: 7_200_000 },
-      lease: { maxTtlMs: 7_200_000 },
-    });
-
-    expect(dottedValue(lowest, "agentDevice.leaseTtlCapMs")).toBe(5_000);
-    expect(dottedValue(highest, "agentDevice.leaseTtlCapMs")).toBe(7_200_000);
-  });
-
-  it.each([
-    ["4999", 4_999],
-    ["a fraction", 5_000.5],
-    ["a value above lease.maxTtlMs", 14_400_001],
-  ])("refuses agentDevice.leaseTtlCapMs of %s, naming the key", async (_case, leaseTtlCapMs) => {
-    await expect(loadWith({ agentDevice: { leaseTtlCapMs: 5_000 } })).resolves.toBeDefined();
-
-    await expect(loadWith({ agentDevice: { leaseTtlCapMs } })).rejects.toThrow(
-      "agentDevice.leaseTtlCapMs",
+    await expect(load({ ...complete, header: "x bad" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected an HTTP header name',
     );
   });
 
-  it("a loaded config parsed through configSchema keeps both keys", async () => {
-    const config = await loadWith({ agentDevice: { command: "ad", enabled: true } });
+  it("bounds the header name to 64 characters, the audience to 512, and refuses an empty issuer or audience", async () => {
+    await expect(load({ ...complete, header: "h".repeat(64) })).resolves.toBeDefined();
+    await expect(load({ ...complete, header: "h".repeat(65) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected an HTTP header name',
+    );
+    await expect(load({ ...complete, audience: "a".repeat(512) })).resolves.toBeDefined();
+    await expect(load({ ...complete, audience: "a".repeat(513) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.audience": expected at most 512 characters',
+    );
+    await expect(load({ ...complete, issuer: "" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.issuer": expected a non-empty string',
+    );
+    await expect(load({ ...complete, audience: "" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.audience": expected a non-empty string',
+    );
+  });
 
-    const parsed = configSchema.parse(config) as unknown as Config;
-    expect(dottedValue(parsed, "agentDevice.enabled")).toBe(true);
-    expect(dottedValue(parsed, "agentDevice.command")).toBe("ad");
+  it("refuses a sign-out URL that is not an http or https URL", async () => {
+    for (const signOutUrl of ["not a url", "ftp://team.dev/out"]) {
+      await expect(load({ ...complete, signOutUrl }), signOutUrl).rejects.toThrow(
+        'Invalid config value for "http.proxyAuth.signOutUrl": expected an http:// or https:// URL',
+      );
+    }
+  });
+
+  it("accepts an issuer of 128 characters and refuses one of 129", async () => {
+    await expect(load({ ...complete, issuer: "i".repeat(128) })).resolves.toBeDefined();
+
+    await expect(load({ ...complete, issuer: "i".repeat(129) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.issuer": expected at most 128 characters',
+    );
   });
 });

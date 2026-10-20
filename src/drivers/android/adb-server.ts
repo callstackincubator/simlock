@@ -48,8 +48,8 @@ const SCOPED_ENVIRONMENT = {
   ADB_USB: "0",
 } as const;
 
-/** What `${SIMLOCK_HOME}/adb-server.json` holds: the only handle on a server that outlives us. */
-// fallow-ignore-next-line unused-type -- on-disk contract; documented in docs/internal/KNOWN-PITFALLS.md and read back by a later daemon.
+/** why: `${SIMLOCK_HOME}/adb-server.json` is the only handle on a server that outlives the daemon. */
+// fallow-ignore-next-line unused-type -- on-disk contract, read back by a later daemon.
 export interface AdbServerRecord {
   readonly pid: number;
   readonly port: number;

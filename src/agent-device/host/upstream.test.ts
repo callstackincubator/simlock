@@ -10,6 +10,7 @@ import {
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
+import { tokenIdentity } from "../../auth/testing.js";
 import { FakeAgentDeviceHealth } from "../testing.js";
 import { agentDeviceLeaseMaxTtlMs } from "../shared/daemon-environment.js";
 import { AgentDeviceSupervisor } from "./agent-device-supervisor.js";
@@ -67,7 +68,7 @@ async function arrange(version: string) {
   const supervisor = new AgentDeviceSupervisor({
     baseEnvironment: { HOME: "/home/operator", PATH: "/usr/local/bin:/usr/bin" },
     clock,
-    config: { command: "agent-device", enabled: true },
+    config: { command: "agent-device" },
     driverEnvironment: {},
     filesystem,
     healthProbe: health,
@@ -103,7 +104,7 @@ async function started(harness: Awaited<ReturnType<typeof arrange>>): Promise<vo
 
 describe("the agent-device upstream adapter over the supervisor", () => {
   it("reports running with the supervisor's base URL, token, generation and the ceiling", async () => {
-    const harness = await arrange("0.21.25-dev");
+    const harness = await arrange("0.21.28");
     await started(harness);
     const availability = harness.supervisor.availability();
     if (availability.state !== "running") throw new Error(`got ${availability.state}`);
@@ -123,13 +124,13 @@ describe("the agent-device upstream adapter over the supervisor", () => {
     await started(harness);
 
     expect(harness.upstream.current()).toEqual({
-      reason: "found 0.20.3, need 0.21.25 or later",
+      reason: "found 0.20.3, need 0.21.28 or later",
       state: "unavailable",
     });
   });
 
   it("reports unavailable with starting while the supervisor starts", async () => {
-    const harness = await arrange("0.21.25-dev");
+    const harness = await arrange("0.21.28");
     const starting = harness.supervisor.start();
     starting.catch(() => undefined);
 
@@ -146,7 +147,7 @@ describe("the agent-device host's authenticate", () => {
   it("returns the tagged identity's principal as the tenant, and null for a request the front did not tag", () => {
     const host = new AgentDeviceHost(upstream, ["ios"]);
     const tagged = new Request("http://worker/v1/agent-device/rpc");
-    host.tag(tagged, { requesterId: "tok_agent", role: "agent" });
+    host.tag(tagged, tokenIdentity("tok_agent"));
 
     expect(host.authenticate(tagged)).toEqual({ tenantId: "tok_agent" });
     expect(host.authenticate(new Request("http://worker/v1/agent-device/rpc"))).toBeNull();

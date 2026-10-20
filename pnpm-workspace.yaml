@@ -1,5 +1,8 @@
 allowBuilds:
   lefthook: true
+# why: agent-device 0.21.28 is the first release with the edge's changes, published the day simlock moved to it.
+minimumReleaseAgeExclude:
+  - "@agent-device/proxy@0.21.28"
 overrides:
   "@hono/node-server": 2.0.10
   ip-address: ">=10.3.1"

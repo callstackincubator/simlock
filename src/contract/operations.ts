@@ -25,6 +25,7 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   hostFactsSchema,
+  historyStatusSchema,
   hostLoadSchema,
   imageTagSchema,
   leaseGrantSchema,
@@ -41,6 +42,8 @@ import {
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  usageOutputSchema,
+  usageWindowSchema,
   waitingRequestSchema,
   capabilityListSchema,
   workerViewSchema,
@@ -117,6 +120,7 @@ export const statusGet = defineOperation({
     }),
     host: hostFactsSchema,
     load: hostLoadSchema.optional(),
+    history: historyStatusSchema.optional(),
     queueDepth: z.number().optional(),
     physicalQueueDepth: z.number().optional(),
     installs: statusInstallsSchema.optional(),
@@ -645,6 +649,15 @@ export const eventsReplay = defineOperation({
   output: z.array(eventEnvelopeSchema),
 });
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const usageGet = defineOperation({
+  name: "usage.get",
+  role: "admin",
+  effect: "read",
+  input: usageWindowSchema,
+  output: usageOutputSchema,
+});
+
 // ---- events.subscribe ---------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -668,15 +681,13 @@ export const eventsUnsubscribe = defineOperation({
 });
 
 // ---- token.create / token.list / token.revoke --------------------------------------------
-//
-// ADR §11: "token create|list|revoke become daemon operations. The daemon is the only owner of
-// tokens.json." No daemon-side handler exists for these yet -- today `TokenStore` is read and
-// written directly by the CLI (`src/cli/index.ts`, `src/http/token-store.ts`). Declaring the
-// operation here, with no matching case in `DaemonServer#handleRequest`, is expected and fine
-// per this PR's brief ("declaring an operation whose handler does not exist yet"); moving the
-// CLI onto a daemon round-trip for these is later work (PR 4, per the ADR's sequencing).
 
-// fallow-ignore-next-line unused-export -- see the block comment above; declared now per this PR's brief.
+// why: ADR §11 makes the daemon the only owner of tokens.json, and that move has landed: both
+// dispatchers handle these three, the CLI reaches them as admin round-trips from
+// `src/cli/commands/token.ts`, and no CLI code reads `tokens.json` itself. The declarations live
+// here because the `OPERATIONS` map every dispatcher validates against is built from this file.
+
+// fallow-ignore-next-line unused-export -- reachable from outside this file only through OPERATIONS.
 export const tokenCreate = defineOperation({
   name: "token.create",
   role: "admin",
@@ -1017,7 +1028,22 @@ export const relayCancel = defineOperation({
   output: z.object({}),
 });
 
+const identityGet = defineOperation({
+  name: "identity.get",
+  role: "agent",
+  effect: "read",
+  input: z.object({}),
+  output: z.object({
+    principal: z.string(),
+    name: z.string(),
+    role: z.enum(["admin", "agent"]),
+    via: z.enum(["token", "proxy", "socket", "uplink"]),
+    signOutUrl: z.string().optional(),
+  }),
+});
+
 export const OPERATIONS = {
+  "identity.get": identityGet,
   "catalog.get": catalogGet,
   "status.get": statusGet,
   "lease.request": leaseRequest,
@@ -1037,6 +1063,7 @@ export const OPERATIONS = {
   "events.replay": eventsReplay,
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
+  "usage.get": usageGet,
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,

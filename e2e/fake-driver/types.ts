@@ -139,6 +139,10 @@ export interface FakeDriverPlatformScript {
    * Defaults to `<deviceId>-address`.
    */
   readonly address?: string;
+  // why: the browser lane has no simulator to film, so a script names a stand-in program that writes
+  // the capture envelope; unset, this platform's screen is unavailable, as on a host whose capture
+  // program was never built.
+  readonly screenCaptureCommand?: string;
   readonly missingPrerequisites?: readonly {
     readonly prerequisite: string;
     readonly message: string;

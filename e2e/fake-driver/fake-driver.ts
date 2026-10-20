@@ -35,7 +35,11 @@ import {
   type DeviceSpec,
   type VirtualSpec,
   type Platform,
+  type ScreenCapture,
+  ScreenNotSupportedError,
+  ScreenUnavailableError,
 } from "../../dist/core/index.js";
+import { NodeBytePipeLauncher } from "../../dist/ports/index.js";
 import type {
   FakeDriverErrorSpec,
   FakeDriverOperation,
@@ -221,6 +225,7 @@ export class OutOfProcessFakeDriver implements Driver {
   /** Synthetic: this driver owns no real devices, and nothing validates or creates it. */
   readonly deviceRoot: string;
   readonly passthroughTools: readonly string[];
+  readonly screenCapture: ScreenCapture;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly #clock: FakeDriverClock;
   /** Versions `installComponent` put in place, with each one's receipt. */
@@ -242,6 +247,30 @@ export class OutOfProcessFakeDriver implements Driver {
     this.#clock = options.clock;
     this.#logPath = options.logPath;
     this.#scriptPath = options.scriptPath;
+    this.screenCapture = {
+      open: async (device) => {
+        if (device.physical)
+          throw new ScreenNotSupportedError("A physical phone cannot be streamed");
+        const command = (await this.#readScript()).screenCaptureCommand;
+        if (command === undefined) throw new ScreenUnavailableError("No screen capture program");
+        const child = new NodeBytePipeLauncher().start(command, [device.deviceId], {
+          env: process.env,
+        });
+        let closing: Promise<void> | undefined;
+        return {
+          body: child.stdout,
+          close: () =>
+            (closing ??= (async () => {
+              child.closeStdin();
+              await child.exited;
+            })()),
+        };
+      },
+      unavailable: async () =>
+        (await this.#readScript()).screenCaptureCommand === undefined
+          ? "No screen capture program"
+          : undefined,
+    };
   }
 
   /**

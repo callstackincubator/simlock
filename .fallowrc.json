@@ -12,17 +12,31 @@
   // them (budget-guard, comment-lint) import from their neighbours (usage, comments).
   // .dependency-cruiser.cycles.mjs is named only by src/lint-rules.test.ts, which runs depcruise
   // with it (ADR 0027).
+  // vendor/screen-capture/scripts/unframe.mjs is a diagnostic a person runs by hand against a
+  // captured file, the way the .agents scripts are.
+  // src/core/usage/read-thread.ts is the entry of the usage read thread, loaded by path from
+  // src/core/usage/index.ts (a worker thread, not an import).
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
+    "src/core/usage/read-thread.ts",
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
     "e2e/console/*.spec.ts",
+    "e2e/real-proxy/*.spec.ts",
+    "e2e/real-proxy/global-setup.ts",
     "vitest.mutate.config.ts",
     ".agents/scripts/*.mjs",
-    ".dependency-cruiser.cycles.mjs"
+    ".dependency-cruiser.cycles.mjs",
+    "vendor/screen-capture/scripts/*.mjs"
   ],
-  "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
+  "dynamicallyLoaded": [
+    "e2e/fake-driver/index.ts",
+    // The command tree names its modules in an `import("./commands/<name>.js")` thunk, so
+    // reachability is the tree's job and never a static edge; the tree's own module list is
+    // what `lazy-loading.test.ts` and the router tests cover.
+    "src/cli/commands/*.ts"
+  ],
   // The web console's libraries are bundled into dist/ui at build time and ship as files, so
   // they are dev dependencies on purpose: the package gains no runtime dependency for them.
   "ignoreDependencies": [
@@ -78,6 +92,11 @@
         "files": ["src/agent-device/host/agent-device-supervisor.test.ts"],
         "maxCrap": 80,
         "reason": "The supervisor's test arranges a process table, a clock, a filesystem and a scripted runner in one helper so each of its cases reads as one claim; the helper is branching setup, not logic under test."
+      },
+      {
+        "files": ["src/drivers/android/screen/session.test.ts"],
+        "maxCrap": 45,
+        "reason": "The capture's `setup` builds both devices' worlds — two targets, a scripted runner, an adb server, a clock, a filesystem, an optional scripted screen answer — in one helper so each case reads as one claim; the branches are optional arrangement, not logic under test."
       },
       {
         "files": ["e2e/fake-driver/fake-driver.ts"],

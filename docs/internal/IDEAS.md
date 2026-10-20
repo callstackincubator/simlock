@@ -2,24 +2,10 @@
 
 Things discussed and deliberately deferred. Roughly ordered by expected value.
 
-## Warm pool (decided: ADR 0017, #359)
+## Warm pool targets, further
 
-The release-driven pool shipped first: a device became warm only because a
-lease released it and capacity allowed it to stay running. [ADR
-0017](adr/0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md)
-makes the pool its own module with operator targets, a reserve of running
-slots, and an off switch; #359 delivers it. Still deferred from there:
-targets named by class, changing targets without a restart, and fleet-level
-targets on a gateway.
-
-## Orphaned-holder fix (shipped)
-
-Parent-death watch in the holder process, behind a `ParentWatch` port, so a
-crashed agent's backgrounded lease holder self-terminates, plus the
-`--bind-pid` escape hatch for subshell-spawned holders. The plan called for
-`kqueue`/`EVFILT_PROC` on macOS and `prctl(PR_SET_PDEATHSIG)` on Linux;
-neither is reachable from plain Node without a native addon, so the shipped
-adapter polls instead. Details in [known-pitfalls.md](known-pitfalls.md).
+Deferred from the warm pool: targets named by class, changing targets
+without a restart, and fleet-level targets on a gateway.
 
 ## MCP server
 
@@ -51,7 +37,7 @@ Store internally) would let the driver resolve the exact newest compatible
 patch release instead of gambling on the major matching a real build. Not
 pursued in v1: parsing an undocumented, Apple-controlled catalog format is a
 maintenance burden disproportionate to the edge case it closes (see
-`docs/internal/KNOWN-PITFALLS.md`, "Component downloads").
+the known gaps in [the core manual](../../src/core/AGENTS.md)).
 
 ## Gateway-side file upload for `device.exec`
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // `pnpm mutate [base] [--max-lines <n>]`: mutation-test only the source lines this branch changed
 // against base (default origin/main), with the unit suite, and print each mutant the suite let live.
+// A near pass runs only the unit test files that import a mutated file directly and those the
+// branch changed; a wide pass gives each mutant the near pass left alive every unit test file
+// Vitest finds related to its file, through any depth of imports.
 // With --max-lines, it takes the changed files newest first (by the last commit on HEAD's
 // first-parent history that touched each; uncommitted changes are newest of all) until the next
 // file would pass n changed lines, cuts a first file larger than n at n, and prints what it skipped.
@@ -22,7 +25,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const REPORT = ".stryker-tmp/report/mutation.json";
 const KEEP_MS = 14 * 24 * 60 * 60 * 1000;
@@ -112,46 +115,136 @@ if (clean && last?.sources === sources && last.mutate === mutate) {
   print(last.total, ranges.length, last.alive);
 }
 
-// A killed run leaves its sandboxes behind; start clean.
-rmSync(".stryker-tmp", { force: true, recursive: true });
-const run = spawnSync(
-  "pnpm",
-  [
-    "exec",
-    "stryker",
-    "run",
-    "--mutate",
-    mutate,
-    "--incremental",
-    "--incrementalFile",
-    `${branch}.json`,
-  ],
-  { stdio: ["ignore", "inherit", "pipe"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-);
-process.stderr.write(run.stderr ?? "");
-if (!existsSync(REPORT)) {
-  // Last, so a caller that keeps only the tail of the output still sees why.
-  const tail = (run.stderr ?? "").trimEnd().split("\n").slice(-15).join("\n");
-  console.error(`\nStryker exited ${run.status} without a report: no mutant was tested.\n${tail}`);
-  process.exit(2);
-}
-
-const report = JSON.parse(readFileSync(REPORT, "utf8"));
-const alive = [];
+// why: Stryker's first run executes every test it may use, to learn which test covers which
+// line, and Vitest's related mode follows imports through any depth: one changed file can
+// pull in thousands of tests. So the near pass runs only the test files that import a mutated
+// file directly, plus the test files the branch changed; the wide pass gives the mutants that
+// near pass left alive the whole related set. A mutant is reported alive only when the related
+// set lets it live, as a single related run would.
+const near = nearTests([...new Set(ranges.map((r) => r.slice(0, r.indexOf(":"))))]);
 let total = 0;
-for (const [path, { mutants }] of Object.entries(report.files)) {
-  for (const m of mutants) {
-    total += 1;
-    if (m.status === "Survived" || m.status === "NoCoverage") {
-      const replacement = (m.replacement ?? "").replace(/\s+/g, " ").slice(0, 80);
-      alive.push(`${path}:${m.location.start.line} ${m.status} ${m.mutatorName}: ${replacement}`);
-    }
-  }
+let alive = [];
+let wideMutate = mutate;
+let nearAlive = null;
+if (near.length > 0) {
+  console.log(`Near pass: ${near.length} test files that import a mutated file directly.`);
+  const report = stryker(mutate, near, `${branch}.json`);
+  total = report.total;
+  wideMutate = report.alive.map((m) => m.range).join(",");
+  nearAlive = new Set(report.alive.map((m) => m.key));
+}
+if (wideMutate !== "") {
+  console.log(`Wide pass: ${wideMutate.split(",").length} ranges with every related test file.`);
+  const report = stryker(
+    wideMutate,
+    [],
+    near.length > 0 ? `${branch}.wide.json` : `${branch}.json`,
+  );
+  if (near.length === 0) total = report.total;
+  // why: a range can hold a mutant the near pass killed, and a branch's changed test file need
+  // not be related to the file, so only a mutant both passes left alive is alive.
+  alive = report.alive.filter((m) => nearAlive?.has(m.key) ?? true).map((m) => m.text);
 }
 if (clean) {
   writeFileSync(`${branch}.last.json`, JSON.stringify({ sources, mutate, total, alive }));
 }
 print(total, ranges.length, alive);
+
+function stryker(mutate, testFiles, incrementalFile) {
+  // why: a killed run leaves its sandboxes behind, and a stale report would be read as this one.
+  rmSync(".stryker-tmp", { force: true, recursive: true });
+  const only = testFiles.length > 0 ? ["--testFiles", testFiles.join(",")] : [];
+  const argv = ["exec", "stryker", "run", "--mutate", mutate, ...only];
+  argv.push("--incremental", "--incrementalFile", incrementalFile);
+  const run = spawnSync("pnpm", argv, {
+    stdio: ["ignore", "inherit", "pipe"],
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const stderr = run.stderr ?? "";
+  process.stderr.write(stderr);
+  if (!existsSync(REPORT)) failed(run.status, stderr);
+  const report = JSON.parse(readFileSync(REPORT, "utf8"));
+  const mutants = Object.entries(report.files).flatMap(([path, file]) =>
+    file.mutants.map((m) => ({ path, ...m })),
+  );
+  const alive = mutants
+    .filter((m) => m.status === "Survived" || m.status === "NoCoverage")
+    .map(described);
+  return { total: mutants.length, alive };
+}
+
+function failed(status, stderr) {
+  // why: last, so a caller that keeps only the tail of the output still sees the cause.
+  const tail = stderr.trimEnd().split("\n").slice(-15).join("\n");
+  console.error(`\nStryker exited ${status} without a report: no mutant was tested.\n${tail}`);
+  process.exit(2);
+}
+
+function described({ path, location: { start, end }, mutatorName, replacement, status }) {
+  const shown = (replacement ?? "").replace(/\s+/g, " ").slice(0, 80);
+  return {
+    // why: the report counts columns from 1 and a --mutate range from 0; keeping the end
+    // as reported widens the range by one column, which can only take this mutant in.
+    range: `${path}:${start.line}:${start.column - 1}-${end.line}:${end.column}`,
+    key: `${path}:${start.line}:${start.column}-${end.line}:${end.column} ${mutatorName} ${replacement}`,
+    text: `${path}:${start.line} ${status} ${mutatorName}: ${shown}`,
+  };
+}
+
+// why: a module's own tests reach it through its index.ts (architecture rule 14), so a test
+// that imports a barrel re-exporting a mutated file counts when it sits in that barrel's
+// directory; tests elsewhere import the barrel as callers and are left to the wide pass. A
+// mutated file that only re-exports has no mutant, so its importers are not taken for it. The
+// test files are vitest.mutate.config.ts's unit set.
+function nearTests(files) {
+  const reExport = /^\s*export\s+(?:type\s+)?(?:\*|\{[^}]*\})\s+from\s+["'](\.[^"']+)["'];?/gm;
+  const importLine = /^\s*import\s[^;]*?from\s+["'][^"']+["'];?/gm;
+  const comment = /\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm;
+  const specifier = /(?:from\s+|import\s*\(\s*|import\s+)["'](\.[^"']+)["']/g;
+  const resolve = (from, s) => {
+    const path = join(dirname(from), s);
+    return [path, path.replace(/\.jsx?$/, ".ts"), path.replace(/\.jsx?$/, ".tsx")].find(
+      (p) => statSync(p, { throwIfNoEntry: false })?.isFile() === true,
+    );
+  };
+  const source = (f) => readFileSync(f, "utf8").replace(comment, "");
+  const targets = new Set(
+    files.filter((f) => source(f).replace(reExport, "").replace(importLine, "").trim() !== ""),
+  );
+  // why: a barrel may re-export another barrel, so a chain is followed to its files.
+  const exposed = new Map();
+  const exposes = (file) => {
+    if (exposed.has(file)) return exposed.get(file);
+    const found = new Set();
+    exposed.set(file, found);
+    const targets = [...source(file).matchAll(reExport)].map(([, s]) => resolve(file, s));
+    for (const target of targets.filter((t) => t !== undefined)) {
+      found.add(target);
+      exposes(target).forEach((t) => found.add(t));
+    }
+    return found;
+  };
+  const reaches = (test, imported) =>
+    targets.has(imported) ||
+    (test.startsWith(`${dirname(imported)}/`) &&
+      [...exposes(imported)].some((f) => targets.has(f)));
+  const unit = (f) => f !== "" && !f.endsWith(".timing.test.ts");
+  const globs = ["src/*.test.ts", "ui/*.test.ts", "ui/*.test.tsx"];
+  const tests = git("ls-files", ...globs)
+    .split("\n")
+    .filter(unit);
+  const changedTests = git("diff", "--name-only", "--diff-filter=d", mergeBase, "--", ...globs)
+    .split("\n")
+    .filter(unit);
+  const picked = tests.filter((test) =>
+    [...readFileSync(test, "utf8").matchAll(specifier)].some(([, s]) => {
+      const imported = resolve(test, s);
+      return imported !== undefined && reaches(test, imported);
+    }),
+  );
+  return [...new Set([...picked, ...changedTests])];
+}
 
 function print(total, rangeCount, alive) {
   console.log(`\n${total} mutants on ${rangeCount} changed ranges; ${alive.length} alive.`);

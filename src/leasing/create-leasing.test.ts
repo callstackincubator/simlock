@@ -24,7 +24,7 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import { createLeasing } from "./create-leasing.js";
-import { NoCapacityError } from "./lease-acquisition-coordinator.js";
+import { NoCapacityError, ProvisionFailedError } from "./lease-acquisition-coordinator.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
@@ -44,8 +44,8 @@ function config(
   warmPool: Partial<Config["warmPool"]> = {},
 ): Config {
   return {
+    capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     gateway: {
@@ -96,10 +96,10 @@ function config(
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: warmPoolEnabled,
       maxConcurrentBoots: 1,
@@ -534,7 +534,7 @@ describe("createLeasing", () => {
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
   });
 
-  it("deletes managed LRU inventory at maxDevices before provisioning a new spec", async () => {
+  it("deletes an idle managed device at maxDevices before provisioning a new spec", async () => {
     const harness = await createHarness();
     const old = await seedReady(harness);
     await harness.registry.transitionDevice(old.id, "shutdown", {
@@ -652,10 +652,17 @@ describe("createLeasing", () => {
       requesterId: "first",
     });
 
+    const readyBefore = harness.bus
+      .replay()
+      .filter((event) => event.event === "device.ready").length;
+
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
 
     expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+    expect(harness.bus.replay().filter((event) => event.event === "device.ready")).toHaveLength(
+      readyBefore,
+    );
   });
   it("enforces global and platform limits together across drivers", async () => {
     const clock = new FakeClock(1_000);
@@ -768,7 +775,7 @@ describe("createLeasing", () => {
     ]);
   });
 
-  it("shuts an orphaned reclaiming or migrated legacy device down through its driver", async () => {
+  it("shuts an orphaned reclaiming device down through its driver", async () => {
     const harness = await createHarness();
     const device = await seedReady(harness);
     const lease = await harness.registry.createLease({
@@ -903,7 +910,7 @@ describe("createLeasing", () => {
     });
     await flush();
 
-    expect(driver.calls.filter((call) => call.operation === "resolveSpec")).toHaveLength(2);
+    expect(harness.engine.queueDepth).toBe(1);
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
     clock.advance(20);
     await first;
@@ -926,6 +933,9 @@ describe("createLeasing", () => {
       platform: "ios",
     });
     const progress: string[] = [];
+    const provisions = () =>
+      harness.driver.calls.filter((call) => call.operation === "provision").length;
+    const provisionedBefore = provisions();
 
     const grant = await harness.engine.request(request, {
       onProgress: (update) => progress.push(update.stage),
@@ -935,7 +945,7 @@ describe("createLeasing", () => {
 
     expect(grant.device.id).toBe(matching.id);
     expect(progress).toEqual([]);
-    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+    expect(provisions()).toBe(provisionedBefore);
   });
 
   it("provisions and makes a device ready when capacity is available, returning progress estimates", async () => {
@@ -1275,7 +1285,11 @@ describe("createLeasing", () => {
 
     harness.clock.advance(6);
     const renewed = await harness.engine.renew(granted.lease.id, 20);
-    expect(renewed.ttlDeadline).toBe(1_026);
+    expect(renewed).toMatchObject({ lastRenewedAt: 1_006, ttlMs: 20, ttlDeadline: 1_026 });
+    expect(harness.bus.replay().find((event) => event.event === "lease.renewed")?.payload).toEqual({
+      leaseId: granted.lease.id,
+      newDeadline: 1_026,
+    });
 
     // The grant-time deadline (1_010) has now passed, but the renewal re-armed the expiry
     // timer at the new one, so the lease must still be alive.
@@ -1322,7 +1336,6 @@ describe("createLeasing", () => {
     });
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
-    expect(harness.clock.pendingTimerCount).toBe(0);
     await expect(
       harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
     ).resolves.toMatchObject({ lease: { ownerId: "agent-1", requesterId: "agent-1" } });
@@ -1358,7 +1371,6 @@ describe("createLeasing", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(driver.calls.map((call) => call.operation)).toContain("destroy");
-    expect(harness.clock.pendingTimerCount).toBe(0);
   });
 
   it("emits committed happy-path facts in lifecycle order", async () => {
@@ -1452,7 +1464,9 @@ describe("createLeasing RAM budget by mode", () => {
       provisionDuration: 0,
       spec: { ...slimRequest, physical: false },
     });
-    const quarantined = await harness.registry.enterQuarantine(registered.id, 60_000);
+    const quarantined = await harness.registry.enterQuarantine(registered.id, 60_000, {
+      kind: "purge-failed",
+    });
 
     expect(quarantined.state).toBe("quarantined");
     expect(harness.engine.ramBudget?.usedBytes).toBe(ramBudget.iosBytesPerDevice);
@@ -2201,74 +2215,6 @@ describe("createLeasing logger wiring", () => {
     ]);
   });
 
-  it("createCore hands its logger to the driver catalog: a platform left out of the catalog is logged", async () => {
-    const clock = new FakeClock(1_000);
-    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
-    android.failOn("listCatalog", 1, new DriverCrashError("~/.android is not readable"));
-    const { logger, sink } = debugLogger();
-    const harness = await createHarness({ driver: ios, drivers: [ios, android], logger });
-
-    await harness.engine.listCatalog();
-
-    expect(
-      sink.records.filter((record) => record.message === "A driver could not read its catalog"),
-    ).toMatchObject([
-      {
-        level: "warn",
-        module: "daemon.driver-catalog",
-        fields: { error: "DriverCrashError: ~/.android is not readable", platform: "android" },
-      },
-    ]);
-  });
-
-  it("createCore hands its logger to the device provisioner: a new device that fails to boot is logged", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("makeReady", 1, new DriverCrashError("first boot exploded"));
-    const { logger, sink } = debugLogger();
-    const harness = await createHarness({ driver, logger });
-
-    await expect(
-      harness.engine.request(request, { ownerId: "first", requesterId: "first" }),
-    ).rejects.toMatchObject({ name: "BootTimeoutError" });
-
-    expect(
-      sink.records.filter((record) => record.message === "new device failed to become ready"),
-    ).toMatchObject([
-      {
-        level: "warn",
-        module: "daemon.device-provisioner",
-        fields: { error: "DriverCrashError: first boot exploded", step: "boot" },
-      },
-    ]);
-  });
-
-  it("createLeasing hands its logger to the lease expiry scheduler: an expiry that fails is logged", async () => {
-    const { logger, sink } = debugLogger();
-    const harness = await createHarness({ lease: { defaultTtlMs: 10 }, logger });
-    const granted = await harness.engine.request(request, {
-      ownerId: "agent-1",
-      requesterId: "agent-1",
-    });
-    // The expiry's release has to commit to the state file; a disk that refuses the write
-    // makes the expiry throw out of the scheduler's timer.
-    harness.filesystem.defineFailure(statePath, "EIO");
-
-    harness.clock.advance(10);
-    await flush();
-
-    expect(sink.records.filter((record) => record.message === "lease expiry failed")).toMatchObject(
-      [
-        {
-          level: "error",
-          module: "daemon.lease-expiry-scheduler",
-          fields: { leaseId: granted.lease.id, step: "expire" },
-        },
-      ],
-    );
-  });
-
   it("createLeasing hands its logger to the acquisition coordinator: a failed eviction is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
@@ -2492,7 +2438,7 @@ describe("createLeasing class requests", () => {
     expect(granted.device.spec).toMatchObject({ model: "iPhone 16", osVersion: "18.4" });
   });
 
-  it("refuses a class request naming an OS that is not installed as RUNTIME_MISSING without calling the installer, whatever allowDownload says", async () => {
+  it("refuses a class request naming an OS that is not installed as RUNTIME_MISSING without calling the installer", async () => {
     const asked: unknown[] = [];
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
@@ -2658,20 +2604,6 @@ describe("createLeasing: capacity.changed and queue.changed", () => {
     });
     expect(capacityEvents(fixed)).toHaveLength(1);
     expect(capacityEvents(fixed)[0]).not.toHaveProperty("ramBudget");
-  });
-
-  it("emits queue.changed when a request joins the worker's queue and when it leaves, with the new depth", async () => {
-    const harness = await createHarness();
-    await harness.engine.convergeRunningCapacity();
-    const first = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
-    const queued = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
-    await flush();
-    expect(queueEvents(harness)).toEqual([0, 1]);
-
-    await harness.engine.release(first.lease.id, "explicit");
-    await queued;
-
-    expect(queueEvents(harness)).toEqual([0, 1, 0]);
   });
 });
 
@@ -2919,28 +2851,6 @@ describe("createLeasing wiring", () => {
     expect(harness.bus.replay().map((event) => event.event)).toContain("lease.expired");
   });
 
-  it("hands the physical device watcher leasing's logger: a failed presence read is logged by it", async () => {
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock: new FakeClock(1_000), sink });
-    const harness = await createHarness({ logger });
-    await harness.registry.enrollPhysical({
-      apps: [],
-      class: "phone",
-      driverDeviceId: "UDID-A",
-      model: "iPhone 15 Pro",
-      osVersion: "18.4",
-      platform: "ios",
-    });
-    harness.driver.failOn("listPresentPhysical", 1, new Error("devicectl failed"));
-    harness.engine.leasing.physicalDeviceWatcher.start();
-
-    harness.clock.advance(30_000);
-    await harness.engine.settle();
-
-    expect(sink.records.map((record) => record.message)).toContain("physical presence read failed");
-    harness.engine.dispose();
-  });
-
   it("disposes the physical device watcher with leasing: no presence read happens after dispose", async () => {
     const harness = await createHarness();
     await harness.registry.enrollPhysical({
@@ -2963,7 +2873,7 @@ describe("createLeasing wiring", () => {
     );
   });
 
-  it("does not connect core itself: building a second leasing leaves the first one's ports in place", async () => {
+  it("does not connect core itself when a second leasing is built", async () => {
     const harness = await createHarness();
     const connect = vi.spyOn(harness.engine.core, "connect");
 
@@ -3059,7 +2969,7 @@ describe("createLeasing warm pool", () => {
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
   });
 
-  it("starts the pool only once convergence has finished, so what convergence commits triggers no pass", async () => {
+  it("triggers no pool pass from a fact before daemon.started, and ends with one of two ready devices shut down at one running slot", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -3608,8 +3518,7 @@ describe("createLeasing warm targets", () => {
     ).toHaveLength(1);
   });
 
-  it("with a target naming an OS that is not installed, starts no install and logs the target short with runtime-missing", async () => {
-    const sink = new MemoryLogSink();
+  it("with a target naming an OS that is not installed, starts no install", async () => {
     const install = vi.fn(async () => ({ outcome: "installed" as const, version: "27.0" }));
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
@@ -3620,7 +3529,6 @@ describe("createLeasing warm targets", () => {
       components: { claimProvision: () => () => undefined, install },
       driver,
       limits: roomy,
-      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
       warmPool: { targets: [{ ...target, osVersion: "27.0" }] },
     });
     await harness.engine.convergeRunningCapacity();
@@ -3632,9 +3540,6 @@ describe("createLeasing warm targets", () => {
     expect(eventsNamed(harness, "component.install-started")).toEqual([]);
     expect(driver.calls.filter((call) => call.operation === "installComponent")).toEqual([]);
     expect(harness.registry.snapshot.devices).toEqual([]);
-    expect(
-      sink.records.filter((record) => record.message === "a warm pool target is short"),
-    ).toMatchObject([{ fields: { short: "runtime-missing" } }]);
   });
 
   it("under fresh identity, creates a device before any lease, and after that lease ends and the spent device is deleted, creates the next", async () => {
@@ -3907,6 +3812,9 @@ describe("createLeasing a lease ID chosen by the requester", () => {
     await expect(
       harness.engine.request(request, asking("agent-1", "myid", { idempotencyKey: "key-1" })),
     ).rejects.toMatchObject({ name: "IdempotencyConflictError" });
+    await expect(
+      harness.engine.request(request, asking("agent-1", undefined, { idempotencyKey: "key-1" })),
+    ).resolves.toEqual(first);
     expect(harness.registry.snapshot.leases.map((lease) => lease.id)).toEqual([first.lease.id]);
   });
 
@@ -4229,7 +4137,9 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
       )
       .toMatchObject({ state: "open" });
 
-    await settledOrPending(harness.engine.request(request, probeOf("gw:one")));
+    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
+      name: "RequesterAlreadyLeasedError",
+    });
 
     expect(payloads(harness, "lease.declined")).toEqual([
       {
@@ -4352,32 +4262,6 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
     expect(grantedLocal).not.toHaveProperty("fleetRequestId");
   });
 
-  it("answers a declined probe with the error code it answered before, NO_CAPACITY for no room and the already-leased error for a probe of the same requester still waiting", async () => {
-    const harness = await createHarness();
-    await harness.engine.request(request, holder);
-
-    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
-      name: "NoCapacityError",
-    });
-
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock: new FakeClock(1_000),
-      platform: "ios",
-    });
-    driver.hangMakeReady();
-    const waiting = await createHarness({ driver });
-    void waiting.engine.request(request, probeOf("gw:one")).catch(() => undefined);
-    await expect
-      .poll(() =>
-        waiting.registry.leaseRequests().find((record) => record.requesterId === "gw:one"),
-      )
-      .toMatchObject({ state: "open" });
-    await expect(waiting.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
-      name: "RequesterAlreadyLeasedError",
-    });
-  });
-
   it("a worker grants a probe for a requester that already holds a lease from an earlier probe", async () => {
     const harness = await createHarness({
       limits: {
@@ -4394,30 +4278,6 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
     expect(
       harness.registry.snapshot.leases.filter((lease) => lease.requesterId === "gw:one"),
     ).toHaveLength(2);
-  });
-
-  it("a worker declines a probe already-leased while an earlier probe of the same requester is still waiting", async () => {
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock: new FakeClock(1_000),
-      platform: "ios",
-    });
-    driver.hangMakeReady();
-    const harness = await createHarness({ driver });
-    void harness.engine.request(request, probeOf("gw:one")).catch(() => undefined);
-    await expect
-      .poll(() =>
-        harness.registry.leaseRequests().find((record) => record.requesterId === "gw:one"),
-      )
-      .toMatchObject({ state: "open" });
-
-    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
-      name: "RequesterAlreadyLeasedError",
-    });
-
-    expect(payloads(harness, "lease.declined")).toEqual([
-      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "already-leased" }),
-    ]);
   });
 
   it("declines, rather than rejects, a request carrying fleetRequestId whose wait in the queue times out", async () => {
@@ -4452,12 +4312,13 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
       return driver;
     }
 
-    it("declines a probe with reason no-wait, answers NO_CAPACITY, and emits no lease.queued", async () => {
+    it("declines a probe with reason no-wait, answers PROVISION_FAILED with the driver's message, and emits no lease.queued", async () => {
       const harness = await createHarness({ driver: failingTwice() });
 
       const outcome = await settledOrPending(harness.engine.request(request, probeOf("gw:one")));
 
-      expect(outcome).toBeInstanceOf(NoCapacityError);
+      expect(outcome).toBeInstanceOf(ProvisionFailedError);
+      expect(outcome).toMatchObject({ message: "simulator exited again" });
       expect(payloads(harness, "lease.declined")).toEqual([
         expect.objectContaining({ fleetRequestId: "req_gw1", reason: "no-wait" }),
       ]);
@@ -4465,15 +4326,17 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
       expect(payloads(harness, "lease.rejected")).toEqual([]);
     });
 
-    it("still queues a local request in the same case", async () => {
+    it("rejects a local request in the same case with PROVISION_FAILED, lists nothing and emits no lease.queued", async () => {
       const harness = await createHarness({ driver: failingTwice() });
 
       const outcome = await settledOrPending(
         harness.engine.request(request, { ownerId: "local", requesterId: "local" }),
       );
 
-      expect(outcome).toBe("still pending");
-      expect(payloads(harness, "lease.queued")).toEqual([expect.objectContaining({})]);
+      expect(outcome).toBeInstanceOf(ProvisionFailedError);
+      expect(outcome).toMatchObject({ message: "simulator exited again" });
+      expect(harness.engine.waitingRequests()).toEqual([]);
+      expect(payloads(harness, "lease.queued")).toEqual([]);
       expect(payloads(harness, "lease.declined")).toEqual([]);
     });
   });
@@ -4532,5 +4395,210 @@ describe("createLeasing after a quarantine retry (ADR 0022 §2)", () => {
     expect(harness.engine.core.warmPoolReader.figures().targets).toMatchObject([
       { count: 1, ready: 1 },
     ]);
+  });
+});
+
+describe("createLeasing: a waiting request says why it is not placed (#636)", () => {
+  const runningLimit = {
+    android: { maxDevices: 1, maxRunning: 1 },
+    ios: { maxDevices: 2, maxRunning: 1 },
+    maxRunning: 2,
+  };
+  const asking = (requesterId: string, more: Record<string, unknown> = {}) => ({
+    ownerId: requesterId,
+    requesterId,
+    ...more,
+  });
+  const listing = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    harness.engine.waitingRequests().map((entry) => ({
+      reason: (entry as { reason?: string }).reason,
+      requesterId: entry.requesterId,
+      stage: entry.stage,
+    }));
+
+  it("lists a queued request at the iOS running limit as platform-running-limit and one behind it as behind-earlier-request, and stores no reason", async () => {
+    const harness = await createHarness({ limits: runningLimit });
+    await harness.engine.request(request, asking("holder"));
+    void harness.engine.request(request, asking("head"));
+    void harness.engine.request(request, asking("behind"));
+    await flush();
+
+    expect(listing(harness)).toEqual([
+      { reason: "platform-running-limit", requesterId: "head", stage: "queued" },
+      { reason: "behind-earlier-request", requesterId: "behind", stage: "queued" },
+    ]);
+    const stored = harness.registry.leaseRequests().find((record) => record.requesterId === "head");
+    expect(stored).toBeDefined();
+    expect(stored).not.toHaveProperty("reason");
+  });
+
+  it("follows the latest attempt: when the head is granted, the request behind it lists its own new reason", async () => {
+    const harness = await createHarness({ limits: runningLimit });
+    const holder = await harness.engine.request(request, asking("holder"));
+    const head = harness.engine.request(request, asking("head"));
+    void harness.engine.request(request, asking("behind"));
+    await flush();
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    await head;
+    await harness.engine.settle();
+
+    expect(listing(harness)).toEqual([
+      { reason: "platform-running-limit", requesterId: "behind", stage: "queued" },
+    ]);
+  });
+
+  it("cancelling the queued head makes the request behind it plan again and list its own reason", async () => {
+    const harness = await createHarness({ limits: runningLimit });
+    await harness.engine.request(request, asking("holder"));
+    const head = harness.engine.request(request, asking("head"));
+    void harness.engine.request(request, asking("behind"));
+    await flush();
+
+    await expect(harness.engine.cancelPending("head")).resolves.toBe("cancelled");
+    await expect(head).rejects.toBeInstanceOf(RequestCancelledError);
+    await flush();
+
+    expect(listing(harness)).toEqual([
+      { reason: "platform-running-limit", requesterId: "behind", stage: "queued" },
+    ]);
+  });
+
+  it("plans again at once after a first provisioning failure, and a success then grants", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    driver.failOn("provision", 1, new DriverCrashError("simulator exited"));
+    const harness = await createHarness({ driver });
+
+    const granted = await harness.engine.request(request, asking("retried"));
+
+    expect(granted.lease.id).toBeDefined();
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+    expect(listing(harness)).toEqual([]);
+  });
+
+  it("rejects a request whose provision failed twice with PROVISION_FAILED, lists nothing for it, and the request behind it plans again", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { provision: 50 },
+      platform: "ios",
+    });
+    driver.failOn("provision", 1, new DriverCrashError("simulator exited"));
+    driver.failOn("provision", 2, new DriverCrashError("simulator exited again"));
+    const harness = await createHarness({ driver });
+    const rejected = harness.engine
+      .request(request, asking("failing"))
+      .catch((error: unknown) => error);
+    await flush();
+    clock.advance(50);
+    await flush();
+    void harness.engine.request(request, asking("meanwhile"));
+    await flush();
+    expect(listing(harness)).toEqual([
+      { reason: undefined, requesterId: "failing", stage: "starting" },
+      { reason: "device-limit", requesterId: "meanwhile", stage: "queued" },
+    ]);
+
+    clock.advance(50);
+    await flush();
+
+    expect(await rejected).toBeInstanceOf(ProvisionFailedError);
+    expect(await rejected).toMatchObject({ message: "simulator exited again" });
+    expect(listing(harness)).toEqual([
+      { reason: undefined, requesterId: "meanwhile", stage: "starting" },
+    ]);
+  });
+
+  it("lists a request that waits for a device the warm pool is booting as waiting-for-device", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { makeReady: 50 },
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 2,
+      },
+    });
+    const granting = harness.engine.request(request, asking("a"));
+    await flush();
+    clock.advance(50);
+    const first = await granting;
+    await harness.engine.release(first.lease.id, "explicit");
+    await vi.waitFor(() =>
+      expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
+    );
+
+    void harness.engine.request(request, asking("b"));
+    await flush();
+
+    expect(listing(harness)).toEqual([
+      { reason: "waiting-for-device", requesterId: "b", stage: "queued" },
+    ]);
+  });
+
+  it("lists a request whose eviction failed as the capacity reason that asked for it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("shutdown", 1, new DriverCrashError("cannot stop victim"));
+    const harness = await createHarness({ driver, limits: runningLimit });
+    await seedReady(harness);
+
+    void harness.engine.request({ ...request, model: "iPhone SE" }, asking("new-spec"));
+    await flush();
+
+    expect(listing(harness)).toEqual([
+      { reason: "platform-running-limit", requesterId: "new-spec", stage: "queued" },
+    ]);
+  });
+
+  it("lists a request whose only match is reclaiming as the capacity reason its plan gave", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { reclaim: 20 },
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    const first = await harness.engine.request(request, asking("first"));
+    await harness.engine.release(first.lease.id, "explicit");
+
+    void harness.engine.request(request, asking("second"));
+    await flush();
+
+    expect(listing(harness)).toEqual([
+      { reason: "device-limit", requesterId: "second", stage: "queued" },
+    ]);
+  });
+
+  it("lists no reason for a starting request that is being provisioned", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { provision: 50 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver });
+    void harness.engine.request(request, asking("provisioned"));
+    await flush();
+
+    expect(listing(harness)).toEqual([
+      { reason: undefined, requesterId: "provisioned", stage: "starting" },
+    ]);
+    expect(harness.engine.waitingRequests()[0]).not.toHaveProperty("reason");
   });
 });

@@ -1,5 +1,8 @@
 import { createHash, type Hash } from "node:crypto";
 
+import type { OptionalModuleDefinition } from "../modules/index.js";
+import { agentDeviceModule } from "./definition.js";
+import { createWorkerWith } from "./worker.js";
 import type { AgentDeviceHealthProbe } from "./host/health.js";
 import type { AgentDeviceUpstream, AgentDeviceUpstreamState } from "./host/upstream.js";
 
@@ -45,7 +48,6 @@ interface FakeAgentDeviceLease {
     readonly deviceKey: unknown;
   };
   readonly ttlMs: unknown;
-  ended: boolean;
 }
 
 interface FakeFailure {
@@ -513,7 +515,6 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#replyDevice = undefined;
     this.leases.set(leaseId, {
       address,
-      ended: false,
       leaseId,
       scope,
       tenant,
@@ -603,7 +604,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       });
       await Promise.race([Promise.all(running.map((command) => command.ended)), aborted]);
     }
-    return envelope(id, { ok: true, released: !lease.ended });
+    return envelope(id, { ok: true, released: true });
   }
 
   // fallow-ignore-next-line complexity -- one fake mirroring agent-device's command handling.
@@ -650,9 +651,17 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         { headers: { "content-type": "application/x-ndjson" } },
       );
     }
+    const endedLeases = this.#endOnClose(command, params, leaseId);
     const failure = this.#failCommand;
     this.#failCommand = undefined;
-    if (failure !== undefined) return errorEnvelope(id, failure);
+    if (failure !== undefined) {
+      return errorEnvelope(
+        id,
+        endedLeases.length === 0
+          ? failure
+          : { ...failure, details: { ...failure.details, endedLeases } },
+      );
+    }
     const status = this.#failCommandStatus;
     this.#failCommandStatus = undefined;
     if (status !== undefined) return new Response(status.body, { status: status.status });
@@ -661,10 +670,36 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       if ("body" in inventory) return new Response(inventory.body, { status: 200 });
       return envelope(id, { data: { devices: inventory.list }, ok: true });
     }
-    if (command === "close" && typeof leaseId === "string") {
-      const lease = this.leases.get(leaseId);
-      if (lease !== undefined) lease.ended = true;
+    if (endedLeases.length > 0) {
+      const data = command === "batch" ? { endedLeases, results: [] } : { endedLeases };
+      return envelope(id, { command, data, ok: true });
     }
     return envelope(id, { command, ok: true });
   }
+
+  // why: agent-device ends the lease a `close`, or a `batch` with a close step, closes with, and names it in the reply's `endedLeases` instead of waiting for a release.
+  #endOnClose(
+    command: string,
+    params: Record<string, unknown>,
+    leaseId: unknown,
+  ): readonly { readonly leaseId: string; readonly outcome: "released" }[] {
+    const flags = (params["flags"] ?? {}) as Record<string, unknown>;
+    const steps = Array.isArray(flags["batchSteps"]) ? (flags["batchSteps"] as unknown[]) : [];
+    const closes =
+      command === "close" ||
+      (command === "batch" &&
+        steps.some((step) => (step as { readonly command?: unknown }).command === "close"));
+    if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
+    return [{ leaseId, outcome: "released" }];
+  }
+}
+
+export function agentDeviceModuleWith(fakes: {
+  readonly upstream?: AgentDeviceUpstream;
+  readonly health?: AgentDeviceHealthProbe;
+}): OptionalModuleDefinition<unknown> {
+  return {
+    ...agentDeviceModule,
+    loadWorker: () => Promise.resolve({ createWorker: createWorkerWith(fakes) }),
+  } as OptionalModuleDefinition<unknown>;
 }

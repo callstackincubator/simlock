@@ -5,8 +5,14 @@ export {
   NodeFilesystem,
 } from "./filesystem.js";
 export type { PathDetails } from "./filesystem.js";
+export { readPackageVersion } from "./package-version.js";
 export { resolveDaemonSocketPath, resolveSimlockHome, SocketPathTooLongError } from "./paths.js";
-export { type DaemonLauncher, FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
+export {
+  DAEMON_STARTUP_TIMEOUT_MS,
+  type DaemonLauncher,
+  FakeDaemonLauncher,
+  NodeDaemonLauncher,
+} from "./daemon-launcher.js";
 export {
   type IpcConnection,
   type IpcConnector,
@@ -51,9 +57,14 @@ export {
   NodeFileLogSink,
   NoopLogger,
 } from "./logger.js";
-export type { LogSink } from "./logger.js";
 // fallow-ignore-next-line unused-type -- public shape of a parsed log line, for consumers of MemoryLogSink.records.
 export type { LogRecord } from "./logger.js";
+export {
+  FakeKeySetFetcher,
+  KEY_SET_MAX_BYTES,
+  type KeySetFetcher,
+  NodeKeySetFetcher,
+} from "./key-set-fetcher.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
 export { CryptoTokenSecrets, type TokenSecrets } from "./token-secrets.js";
 export { FakeSystemStats, NodeSystemStats, type SystemStats } from "./system-stats.js";
@@ -65,6 +76,18 @@ export type { ProcessSupervisor } from "./process-supervisor.js";
 // fallow-ignore-next-line unused-type -- public shape of FakeProcessSupervisor.signals.
 export type { SignalRecord } from "./process-supervisor.js";
 export { FakeTcpProbe, NodeTcpProbe } from "./tcp-probe.js";
+export {
+  FakeTcpStreamConnector,
+  NodeTcpStreamConnector,
+  type TcpStream,
+  type TcpStreamConnector,
+} from "./tcp-stream.js";
+export {
+  type BytePipeLauncher,
+  type BytePipeProcess,
+  FakeBytePipeLauncher,
+  NodeBytePipeLauncher,
+} from "./byte-pipe.js";
 // fallow-ignore-next-line unused-type -- public shape of FakeTcpProbe.sends.
 export type { FakeSend } from "./tcp-probe.js";
 export type { TcpProbe } from "./tcp-probe.js";
@@ -96,3 +119,9 @@ export {
   type MemoryCounters,
   productionHostLoadProbe,
 } from "./host-load.js";
+export {
+  filterSqliteExperimentalWarning,
+  NodeSqliteOpener,
+  SqliteUnavailableError,
+} from "./sqlite.js";
+export type { SqliteDatabase, SqliteOpener, SqliteStatement } from "./sqlite.js";

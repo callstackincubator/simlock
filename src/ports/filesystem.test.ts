@@ -99,6 +99,28 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.readFile(file)).resolves.toBe("first writer");
   });
 
+  it("creates an exclusively written file with the mode it is given, and Node's default without one", async () => {
+    // why: #685: the exclusive create publishes by hard-linking a temp file, so a mode that
+    // did not ride on that file's create would leave the winner's file world-readable. A
+    // restrictive umask here would mask what the code asks for, so pin the one a host starts
+    // from and pin both halves: the mode a caller asks for, and the default it gets for free.
+    const previousUmask = process.umask(0o022);
+    try {
+      const filesystem = create();
+      const asked = `${temporaryDirectory}/asked.json`;
+      const unasked = `${temporaryDirectory}/unasked.json`;
+
+      await filesystem.mkdirp(temporaryDirectory);
+      await filesystem.writeFileExclusive(asked, "{}", { mode: 0o600 });
+      await filesystem.writeFileExclusive(unasked, "{}");
+
+      expect((await filesystem.stat(asked)).mode).toBe(0o600);
+      expect((await filesystem.stat(unasked)).mode).toBe(0o644);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
   it("moves a directory and everything under it in one step", async () => {
     const filesystem = create();
     const staging = `${temporaryDirectory}/.ios.staging`;

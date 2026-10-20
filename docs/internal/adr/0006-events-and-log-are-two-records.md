@@ -1,6 +1,6 @@
 # 0006. Events and the daemon log are two records
 
-- **Status:** Accepted
+- **Status:** Accepted; §2 narrowed by [ADR 0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md): the event record is a database, not `events.jsonl`
 - **Date:** 2026-10-01
 - **Issue:** [#168](https://github.com/callstackincubator/simlock/issues/168),
   [#169](https://github.com/callstackincubator/simlock/issues/169)

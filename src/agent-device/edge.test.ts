@@ -15,7 +15,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import { FakeAgentDevice } from "./testing.js";
+import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -44,12 +44,18 @@ const scope = { clientId: "client-1", leaseProvider: "proxy", runId: "run-1" } a
 
 const adminSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "admin",
   role: "admin",
 } as const;
 
 function sessionFor(principal: string) {
-  return { manageEventSubscription: () => undefined, principal, role: "agent" } as const;
+  return {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal,
+    role: "agent",
+  } as const;
 }
 
 interface Envelope {
@@ -162,13 +168,20 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const logs = new MemoryLogSink();
   const launch = () =>
     startDaemon({
-      agentDeviceUpstream: fake,
       clock,
       configOverrides: {
-        agentDevice: {
-          ...(options.enabled === "unset" ? {} : { enabled: options.enabled ?? true }),
-          ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
-        },
+        ...(options.enabled === "unset"
+          ? {}
+          : {
+              capabilities: {
+                "agent-device": {
+                  enabled: options.enabled ?? true,
+                  ...(options.leaseTtlCapMs === undefined
+                    ? {}
+                    : { leaseTtlCapMs: options.leaseTtlCapMs }),
+                },
+              },
+            }),
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
         http: { enabled: true, host: "127.0.0.1", port },
         lease: {
@@ -182,6 +195,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       drivers,
       filesystem,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
+      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
       statePath,
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
@@ -522,7 +536,7 @@ async function runningCommand(rig: Rig, n: number, options: Omit<SendOptions, "b
 }
 
 describe("the agent-device front, through the whole worker daemon", () => {
-  it("with agentDevice.enabled false, and unset on a gateway-mode daemon, /v1/agent-device/health answers 404, as today", async () => {
+  it("with capabilities.agent-device.enabled false, and unset on a gateway-mode daemon, /v1/agent-device/health answers 404, as today", async () => {
     const enabled = await setUp();
     expect((await send(enabled, "/health")).status).toBe(200);
 
@@ -559,9 +573,9 @@ describe("the agent-device front, through the whole worker daemon", () => {
     });
   });
 
-  it("with agentDevice.enabled true and agent-device unavailable, /health, /rpc and an upload each answer `agent-device is not available on this simlock: <reason>`, nothing is leased, and POST /v1/lease-requests still grants a device", async () => {
+  it("with capabilities.agent-device.enabled true and agent-device unavailable, /health, /rpc and an upload each answer `agent-device is not available on this simlock: <reason>`, nothing is leased, and POST /v1/lease-requests still grants a device", async () => {
     const rig = await setUp();
-    const reason = "found 0.20.3, need 0.21.25 or later";
+    const reason = "found 0.20.3, need 0.21.28 or later";
     rig.fake.setUnavailable(reason);
 
     const health = await send(rig, "/health");
@@ -1197,7 +1211,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
   });
 
-  it("release, and release after `close` (which the daemon answers `released: false`), go to the agent-device daemon first, then release the simlock lease, and the device is reclaimed and free", async () => {
+  it("release goes to the agent-device daemon first, then frees the simlock lease and the device; a release after `close`, which already freed the simlock lease, reaches the daemon with no lease held and is answered `released: false`", async () => {
     const rig = await setUp();
     let heldAtDaemonRelease: readonly string[] = [];
     rig.fake.onRelease = async () => {
@@ -1216,11 +1230,73 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     await granted(rig, 2);
     await command(rig, "close", 2);
+    await expect.poll(async () => leases(rig)).toEqual([]);
     const afterClose = await envelopeOf(await release(rig, 2));
 
     expect(afterClose.result).toMatchObject({ ok: true, released: false });
-    expect(heldAtDaemonRelease).toEqual([hex(2)]);
+    expect(heldAtDaemonRelease).toEqual([]);
     expect(await leases(rig)).toEqual([]);
+    await expect
+      .poll(async () => (await devices(rig)).map((device) => device.state))
+      .toEqual(["ready"]);
+  });
+
+  const ended = [{ leaseId: hex(1), outcome: "released" }];
+  it.each([
+    [
+      "a `close` that succeeds, in `data`",
+      { result: { data: { endedLeases: ended } } },
+      (rig: Rig) => command(rig, "close", 1),
+    ],
+    [
+      "a `close` that fails, in `error.details`",
+      { error: { data: { details: { endedLeases: ended } } } },
+      (rig: Rig) => {
+        rig.fake.failNextCommand({ code: "COMMAND_FAILED", message: "close failed" });
+        return command(rig, "close", 1);
+      },
+    ],
+    [
+      "a `batch` with a close step, in `data` beside `results`",
+      { result: { data: { endedLeases: ended, results: [] } } },
+      (rig: Rig) => batch(rig, 1, [{ command: "snapshot" }, { command: "close" }]),
+    ],
+  ] as const)(
+    "%s: a command that ends the agent-device lease and names it in `endedLeases` releases the simlock lease and frees the device though the CLI sends no release, and a later heartbeat answers `LEASE_NOT_FOUND`",
+    async (_case, reply, send) => {
+      const rig = await setUp();
+      await granted(rig, 1);
+
+      expect(await envelopeOf(await send(rig))).toMatchObject(reply);
+      await expect.poll(async () => listed(rig)).toEqual([]);
+      await expect
+        .poll(async () => (await devices(rig)).map((device) => device.state))
+        .toEqual(["ready"]);
+      expectLeaseGone(await envelopeOf(await heartbeat(rig, 1)), "LEASE_NOT_FOUND");
+    },
+  );
+
+  // why: agent-device 0.21.28 streams a reply when the CLI runs without --json; the JSON-RPC answer is the `response` of a `type: "response"` line, not the line itself.
+  it("a close streamed in agent-device's own line shape releases the simlock lease", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const chunks = [
+      `${JSON.stringify({ event: { kind: "command", message: "Closing" }, type: "progress" })}\n`,
+      `${JSON.stringify({
+        response: {
+          id: "x",
+          jsonrpc: "2.0",
+          result: { data: { endedLeases: ended, session: "t:adc-1" }, ok: true },
+        },
+        type: "response",
+      })}\n`,
+    ];
+    rig.fake.streamNextCommand(chunks);
+
+    const streamed = await command(rig, "close", 1);
+
+    expect(await streamed.text()).toBe(chunks.join(""));
+    await expect.poll(async () => listed(rig), { timeout: 3_000 }).toEqual([]);
     await expect
       .poll(async () => (await devices(rig)).map((device) => device.state))
       .toEqual(["ready"]);
@@ -1273,7 +1349,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("a command's reply, a streamed progress body included, reaches the CLI unchanged, and a CLI that hangs up during it aborts the request the agent-device daemon was answering", async () => {
     const rig = await setUp();
-    const chunks = ['{"progress":1}\n', '{"progress":2}\n', '{"done":true}\n'];
+    const chunks = [
+      '{"type":"progress","event":{"kind":"command","message":"one"}}\n',
+      '{"type":"progress","event":{"kind":"command","message":"two"}}\n',
+      '{"type":"response","response":{"jsonrpc":"2.0","id":"x","result":{"ok":true,"data":{}}}}\n',
+    ];
     rig.fake.streamNextCommand(chunks);
 
     const streamed = await command(
@@ -2095,14 +2175,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await deadlineOf(restarted, 1)).toBe(before);
   });
 
-  it("`config.get` returns `agentDevice.leaseTtlCapMs` when it is set", async () => {
+  it("`config.get` returns `capabilities.agent-device.leaseTtlCapMs` when it is set, and no `agentDevice` key", async () => {
     const rig = await setUp({ leaseTtlCapMs: 10_000 });
 
     const config = (await rig.daemon.dispatch("config.get", {}, adminSession)) as {
-      readonly agentDevice: { readonly leaseTtlCapMs?: number };
+      readonly capabilities: Record<string, { readonly leaseTtlCapMs?: number }>;
     };
 
-    expect(config.agentDevice.leaseTtlCapMs).toBe(10_000);
+    expect(config.capabilities["agent-device"]?.leaseTtlCapMs).toBe(10_000);
+    expect(config).not.toHaveProperty("agentDevice");
   });
 });
 
@@ -2497,7 +2578,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(rig)).toEqual([]);
   });
 
-  it("with agentDevice.enabled false, release-all reclaims at once, as today", async () => {
+  it("with capabilities.agent-device.enabled false, release-all reclaims at once, as today", async () => {
     const rig = await setUp({ enabled: false });
     await plainLease(rig, "plain-1");
     const before = wipes(rig);
@@ -2888,7 +2969,7 @@ describe("the agent-device front's request rules", () => {
       expect((await send(rig, "/admin/leases")).status).toBe(404);
       const missing = await send(rig, "/admin/leases", { token: null });
       expect(missing.status).toBe(401);
-      rig.fake.setUnavailable("found 0.20.3, need 0.21.25 or later");
+      rig.fake.setUnavailable("found 0.20.3, need 0.21.28 or later");
 
       const unavailable = await send(rig, "/admin/leases");
 
@@ -2906,6 +2987,25 @@ describe("the agent-device front's request rules", () => {
         rig,
         () => rpc(rig, "agent_device.admin", { command: "snapshot" }),
         "refused: unknown method agent_device.admin",
+      );
+    });
+
+    it("`install_from_source` and `release_materialized_paths`, which agent-device's proxy refuses for a tenant, are refused `refused: unknown method <method>` and never forwarded", async () => {
+      const rig = await setUp();
+
+      await refused(
+        rig,
+        () =>
+          rpc(rig, "agent_device.install_from_source", {
+            platform: "ios",
+            source: { kind: "url", url: "https://example.com/App.zip" },
+          }),
+        "refused: unknown method agent_device.install_from_source",
+      );
+      await refused(
+        rig,
+        () => rpc(rig, "agent_device.release_materialized_paths", { materializationId: "m-1" }),
+        "refused: unknown method agent_device.release_materialized_paths",
       );
     });
   });
@@ -2969,21 +3069,6 @@ describe("the agent-device front's request rules", () => {
         onlyIosAndAndroid,
       );
       expect(commandsReceived(rig)).toHaveLength(1);
-    });
-
-    it("`install_from_source` with a URL source and platform `ios` is forwarded, as today; with platform `web` it is refused", async () => {
-      const rig = await setUp();
-      const params = (platform: string) => ({
-        platform,
-        source: { kind: "url", url: "https://example.com/App.zip" },
-      });
-      await forwarded(rig, () => rpc(rig, "agent_device.install_from_source", params("ios")));
-
-      await refused(
-        rig,
-        () => rpc(rig, "agent_device.install_from_source", params("web")),
-        onlyIosAndAndroid,
-      );
     });
   });
 
@@ -3643,7 +3728,7 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
     return (await rig.daemon.dispatch("status.get", {}, adminSession)).capabilities;
   }
 
-  it("a worker with agentDevice.enabled unset answers status.get with capabilities [{name: agent-device, state: off}], and so does one with it false", async () => {
+  it("a worker with no capabilities.agent-device section answers status.get with capabilities [{name: agent-device, state: off}], and so does one with it false", async () => {
     const unset = await setUp({ enabled: "unset" });
     const off = await setUp({ enabled: false });
     const running = await setUp();
@@ -3664,7 +3749,7 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
 
   it("a worker whose agent-device is unavailable answers state unavailable with the same reason its front's notAvailable reply names", async () => {
     const rig = await setUp();
-    const reason = "found 0.20.1, need 0.21.25 or later";
+    const reason = "found 0.20.1, need 0.21.28 or later";
     rig.fake.setUnavailable(reason);
 
     const health = await (await send(rig, "/health")).text();

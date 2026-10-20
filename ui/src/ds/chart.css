@@ -1,0 +1,108 @@
+/* Charts: an orange line or columns with a faint orange fill, light grid lines, mono axis
+ * labels. Recharts draws the SVG; every colour here overrides its defaults. */
+
+.chart {
+  margin: 0 0 var(--space-3);
+}
+
+.chart svg {
+  overflow: visible;
+}
+
+.chart .recharts-cartesian-grid line {
+  stroke: var(--border);
+}
+
+.chart .recharts-cartesian-axis-line {
+  stroke: var(--border);
+}
+
+.chart .recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.chart-area .recharts-area-curve {
+  stroke: var(--accent);
+  stroke-width: 2px;
+}
+
+.chart-area .recharts-area-area {
+  fill: var(--accent);
+  fill-opacity: 0.08;
+}
+
+.chart-area .recharts-tooltip-cursor {
+  stroke: var(--border-strong);
+}
+
+.chart-columns .recharts-bar-rectangle path {
+  fill: var(--accent);
+}
+
+.chart-cursor {
+  fill: var(--accent);
+  fill-opacity: 0.08;
+}
+
+.chart-dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+}
+
+.chart-tip {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.chart-tip-label {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+/* A chart takes focus so the arrow keys can step through it. The ring goes round the whole
+ * chart, and only for keyboard focus: a click on a chart draws none. */
+.chart:has(:focus-visible) {
+  outline: var(--focus-width) solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.chart :focus {
+  outline: none;
+}
+
+.chart-summary {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.chart-summary strong {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.chart-data summary {
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.chart-data summary:hover {
+  color: var(--text);
+}
+
+.chart-data[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+.chart-data summary {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}

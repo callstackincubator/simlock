@@ -2,6 +2,11 @@ import { dirname } from "node:path";
 
 import type { Filesystem, IdGenerator } from "../ports/index.js";
 
+/** why: Owner-only, like the other files that hold secrets or state (`config.json`,
+ * `state.json`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and the id this
+ * file holds is what every device root's ownership marker is checked against. */
+const INSTANCE_FILE_MODE = 0o600;
+
 export interface InstanceIdentityOptions {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
@@ -45,7 +50,9 @@ export async function loadInstanceId(options: InstanceIdentityOptions): Promise<
     // land on top of an identity the winner had already stamped into its roots, and every
     // one of them would read `wrong-instance` from then on. Here the kernel picks the
     // winner and the loser is told so.
-    await options.filesystem.writeFileExclusive(options.path, serializeIdentity(generated));
+    await options.filesystem.writeFileExclusive(options.path, serializeIdentity(generated), {
+      mode: INSTANCE_FILE_MODE,
+    });
   } catch (error: unknown) {
     if (!isExistingPathError(error)) {
       throw new InstanceIdentityError(

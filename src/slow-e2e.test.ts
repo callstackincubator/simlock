@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "slow-e2e.sh");
-const PINNED = "54e4e4db971d75ba1ebeb75c0ab7bce45c7d9b28";
+const PINNED = "0.21.28";
 
 const started: number[] = [];
 afterEach(() => {
@@ -23,8 +23,11 @@ afterEach(() => {
 function machine() {
   const dir = mkdtempSync(join(tmpdir(), "slow-e2e-"));
   const repo = join(dir, "repo");
-  mkdirSync(join(repo, "vendor"), { recursive: true });
-  writeFileSync(join(repo, "vendor", "README.md"), `packed at commit \`${PINNED}\`\n`);
+  mkdirSync(repo, { recursive: true });
+  writeFileSync(
+    join(repo, "package.json"),
+    JSON.stringify({ dependencies: { "@agent-device/proxy": PINNED } }),
+  );
   execFileSync("git", ["init", "-q"], { cwd: repo });
   const env = {
     ...process.env,
@@ -145,28 +148,39 @@ describe("scripts/slow-e2e.sh", () => {
     expect(existsSync(lock)).toBe(false);
   });
 
-  it("check refuses an agent-device checkout at another commit than vendor/README.md pins", () => {
+  function agentDeviceInstall(dir: string, version: string): string {
+    const install = join(dir, "agent-device");
+    mkdirSync(join(install, "bin"), { recursive: true });
+    mkdirSync(join(install, "dist"));
+    writeFileSync(join(install, "package.json"), JSON.stringify({ name: "agent-device", version }));
+    return join(install, "bin", "agent-device.mjs");
+  }
+
+  it("check refuses an agent-device install of another version than package.json pins for @agent-device/proxy", () => {
     const { dir, env, repo } = machine();
-    const checkout = join(dir, "agent-device");
-    mkdirSync(join(checkout, "bin"), { recursive: true });
-    mkdirSync(join(checkout, "dist"));
-    execFileSync("git", ["init", "-q"], { cwd: checkout });
-    execFileSync(
-      "git",
-      ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
-      { cwd: checkout },
-    );
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" });
 
     const result = spawnSync("sh", [SCRIPT, "check"], {
       cwd: repo,
-      env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: join(checkout, "bin", "agent-device.mjs") },
+      env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, "0.21.27") },
       encoding: "utf8",
     });
 
     expect(result.status).toBe(69);
     expect(result.stderr).toBe(
-      `unfit: SIMLOCK_E2E_AGENT_DEVICE is a checkout at ${head.slice(0, 9)}; vendor/README.md pins ${PINNED.slice(0, 9)}\n`,
+      `unfit: SIMLOCK_E2E_AGENT_DEVICE is agent-device 0.21.27; package.json pins ${PINNED}\n`,
     );
+  });
+
+  it("check passes an agent-device install of the version package.json pins", () => {
+    const { dir, env, repo } = machine();
+
+    const result = spawnSync("sh", [SCRIPT, "check"], {
+      cwd: repo,
+      env: { ...env, SIMLOCK_E2E_AGENT_DEVICE: agentDeviceInstall(dir, PINNED) },
+      encoding: "utf8",
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
   });
 });

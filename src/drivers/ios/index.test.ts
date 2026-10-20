@@ -17,6 +17,7 @@ import {
   UnknownModelError,
 } from "../../core/index.js";
 import {
+  FakeBytePipeLauncher,
   FakeClock,
   MemoryFilesystem,
   NodeFilesystem,
@@ -46,16 +47,13 @@ const instanceId = "instance-1";
 const listInvocation = simctl("list", "-j", "devicetypes", "runtimes");
 const listDevicesInvocation = simctl("list", "-j", "devices");
 
-// iPhone 16 pairs with both installed runtimes; iPhone Xs pairs only with the older one (iOS 26
+// why: iPhone 16 pairs with both installed runtimes; iPhone Xs pairs only with the older one (iOS 26
 // dropped it, mirroring real Xcode 27) and its range caps out at iOS 18.6; iPhone 7 caps out at
 // iOS 15.0, below the 16.0 auto-download floor.
 const pairingFixture = readFileSync(
   new URL("./fixtures/simctl-list-pairing.json", import.meta.url),
   "utf8",
 );
-// Every way a model and an installed runtime can fail to pair: a runtime that is not available,
-// one whose `supportedDeviceTypes` leaves the model out, one outside the model's range, and a
-// model nothing pairs with. Two builds share 26.0, and only the second supports the iPad mini.
 const modelRuntimesFixture = JSON.stringify({
   devicetypes: [
     deviceType("iPhone-16", "iPhone 16"),
@@ -100,7 +98,7 @@ function runtime(version: string, build: string, isAvailable: boolean, supports:
   };
 }
 
-// Same catalog as `listFixture`, plus an iOS 18.6 runtime that has just finished downloading --
+// why: Same catalog as `listFixture`, plus an iOS 18.6 runtime that has just finished downloading --
 // stands in for the re-scanned catalog `resolveSpec` reads after a successful `xcodebuild` call.
 const listFixtureAfterDownload = JSON.stringify({
   devicetypes: (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes,
@@ -134,19 +132,18 @@ const dataPath = `${deviceRoot}/${driverData.udid}/data`;
 const durableMarkPath = `${deviceRoot}/${driverData.udid}/simlock-mark.json`;
 const erasableMarkPath = `${dataPath}/simlock-mark.json`;
 
-/** Every simctl call the driver makes is scoped to its device set; so is every expectation. */
+/** why: Every simctl call the driver makes is scoped to its device set; so is every expectation. */
 
 function simctlArgs(...args: readonly string[]): string[] {
   return ["simctl", "--set", deviceRoot, ...args];
 }
 
-/** Runners handed to a driver built by `createDriver`; drained by the invariant below. */
 const scopedRunners: ScriptedProcessRunner[] = [];
 
 const legacyUdid = "00000000-0000-0000-0000-0000000000ff";
 
 /**
- * The complete argv of every call the pre-root path is allowed to make without `--set`,
+ * why: The complete argv of every call the pre-root path is allowed to make without `--set`,
  * spelled out rather than pattern-matched: `findLegacy` / `destroyLegacy` deliberately
  * address the machine's default set (ADR 0001, Migration), and `listComponents` reads it with
  * the same `list` to count foreign devices (ADR 0010 §8). Every *other* call must still fail
@@ -161,7 +158,7 @@ const UNSCOPED_LEGACY_CALLS = new Set(
 );
 
 /**
- * The one global invariant, asserted over everything every test in this file recorded
+ * why: The one global invariant, asserted over everything every test in this file recorded
  * rather than per call site: scoping is what makes ownership provable, so a spawn that
  * reached `xcrun` without `simctl --set <root>` in front of it would address the machine's
  * default device set (safety rule 8). Per-test argv equality proves today's calls are
@@ -170,7 +167,7 @@ const UNSCOPED_LEGACY_CALLS = new Set(
  */
 afterEach(() => {
   for (const call of scopedRunners.splice(0).flatMap((runner) => runner.calls)) {
-    // Not every spawn addresses a device: `xcodebuild -downloadPlatform` installs a runtime
+    // why: Not every spawn addresses a device: `xcodebuild -downloadPlatform` installs a runtime
     // and has no device set to point at. The invariant is about the calls that *do* -- a
     // `simctl` that reached the machine's default set is the leak this guards.
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
@@ -297,7 +294,6 @@ describe("IosSimctlDriver", () => {
       downloadable: true,
       message: expect.stringMatching(/18\.6.*(allow-download|downloads\.policy)/),
     });
-    // Only the catalog read: resolving never downloads.
     expect(runner.calls.map((call) => call.command)).toEqual(["xcrun"]);
   });
 
@@ -316,7 +312,7 @@ describe("IosSimctlDriver", () => {
       downloadable: false,
       message: expect.stringContaining("iPhone Xs supports iOS 12.0-18.6"),
     });
-    // No xcodebuild (or any further simctl) call: out-of-range is checked before download logic.
+    // why: No xcodebuild (or any further simctl) call: out-of-range is checked before download logic.
     expect(runner.calls).toHaveLength(1);
   });
 
@@ -354,7 +350,6 @@ describe("IosSimctlDriver", () => {
       downloadable: false,
       message: "iOS 18.4 is installed but does not support iPhone 16",
     });
-    // Installed and in range, but not paired: no download attempted, no simctl create.
     expect(runner.calls).toHaveLength(1);
   });
 
@@ -364,7 +359,7 @@ describe("IosSimctlDriver", () => {
     ]);
     const driver = await createDriver(runner);
 
-    // iOS 26.5 is newer and installed, but only iOS 18.4 still lists iPhone Xs as supported.
+    // why: iOS 26.5 is newer and installed, but only iOS 18.4 still lists iPhone Xs as supported.
     await expect(driver.resolveSpec({ model: "iPhone Xs", platform: "ios" })).resolves.toEqual({
       physical: false,
       model: "iPhone Xs",
@@ -405,7 +400,7 @@ describe("IosSimctlDriver", () => {
   });
 
   describe("empty runtime catalog", () => {
-    // Devicetypes come from the Xcode install itself and are never empty on a working
+    // why: Devicetypes come from the Xcode install itself and are never empty on a working
     // toolchain (an empty list there still means malformed JSON), but a fresh Xcode with zero
     // simulator runtimes installed is a normal starting state -- `parseCatalog` must let it
     // through so `resolveSpec` can reach the download-latest path instead of failing before any
@@ -479,7 +474,6 @@ describe("IosSimctlDriver", () => {
       return { match: listInvocation, result: { code: 0, stderr: "", stdout } };
     }
 
-    /** `simctl runtime list -j`: an object keyed by image identifier. */
     function imagesListed(images: readonly { build: string; id: string; runtime: string }[]) {
       const stdout = JSON.stringify(
         Object.fromEntries(
@@ -673,7 +667,7 @@ describe("IosSimctlDriver", () => {
         await Promise.resolve();
       }
 
-      // Settled within a few microtasks of the signal: the kill ended it, not a timer.
+      // why: Settled within a few microtasks of the signal: the kill ended it, not a timer.
       expect(error).toBeInstanceOf(DriverCrashError);
       expect((error as Error).message).toContain("was ended before it finished");
     });
@@ -916,10 +910,11 @@ describe("IosSimctlDriver", () => {
     );
   });
 
-  it("boots then waits for bootstatus with the documented timeout", async () => {
+  it("boots then checks bootstatus and installer readiness with bounded commands", async () => {
     const runner = new ScriptedProcessRunner([
       { match: simctl("boot", driverData.udid) },
       { match: simctl("bootstatus", driverData.udid, "-b") },
+      { match: simctl("listapps", driverData.udid) },
     ]);
     const driver = await createDriver(runner);
 
@@ -932,14 +927,123 @@ describe("IosSimctlDriver", () => {
       address: driverData.udid,
       deviceId: driverData.udid,
       driverData,
-      // Slim mode is off, so this boot slimmed nothing: the device is full.
+      // why: Slim mode is off, so this boot slimmed nothing: the device is full.
       mode: "full",
     });
     expect(runner.calls).toEqual([
       { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
       { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
     ]);
   });
+
+  it.each([false, true])(
+    "keeps makeReady pending until an installer probe succeeds after a failure (hung: %s)",
+    async (hangs) => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", driverData.udid) },
+        { match: simctl("bootstatus", driverData.udid, "-b") },
+        {
+          match: simctl("listapps", driverData.udid),
+          result: { code: 2, stderr: "installer starting", stdout: "" },
+          hangs,
+        },
+        { match: simctl("listapps", driverData.udid) },
+      ]);
+      const driver = await createDriver(runner, clock);
+      const ready = driver.makeReady(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        prepareFull,
+      );
+      const state = promiseState(ready);
+      await flushMicrotasks221();
+      expect(state.state).toBe("pending");
+      expect(runner.calls.at(-1)?.args).toEqual(simctlArgs("listapps", driverData.udid));
+      if (hangs) {
+        clock.advance(30_000);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+      }
+      clock.advance(1_000);
+      await flushMicrotasks221();
+      expect(state.state).toBe("fulfilled");
+      expect((await ready).deviceId).toBe(driverData.udid);
+    },
+  );
+
+  it.each([false, true])(
+    "shares the bootstatus deadline with a %s-hanging installer probe and shuts down on expiry",
+    async (hangs) => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", driverData.udid) },
+        {
+          match: simctl("bootstatus", driverData.udid, "-b"),
+          onSpawn: () => clock.advance(119_500),
+        },
+        {
+          match: simctl("listapps", driverData.udid),
+          hangs,
+          result: { code: 2, stderr: "installer starting", stdout: "" },
+        },
+        { match: simctl("shutdown", driverData.udid) },
+      ]);
+      const driver = await createDriver(runner, clock);
+      const ready = driver.makeReady(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        prepareFull,
+      );
+      const state = promiseState(ready);
+      await flushMicrotasks221();
+      expect(state.state).toBe("pending");
+      expect(runner.calls.at(-1)).toEqual({
+        ...simctl("listapps", driverData.udid),
+        options: { timeoutMs: 500 },
+      });
+      clock.advance(499);
+      await flushMicrotasks221();
+      expect(state.state).toBe("pending");
+      clock.advance(1);
+      await flushMicrotasks221();
+      expect(state.state).toBe("rejected");
+      await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
+      expect(runner.calls.at(-1)?.args).toEqual(simctlArgs("shutdown", driverData.udid));
+    },
+  );
+
+  it.each(["bootstatus", "listapps"])(
+    "rejects readiness when a successful %s consumes the remaining budget",
+    async (slowCommand) => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", driverData.udid) },
+        {
+          match: simctl("bootstatus", driverData.udid, "-b"),
+          onSpawn: () => {
+            if (slowCommand === "bootstatus") clock.advance(120_000);
+          },
+        },
+        ...(slowCommand === "listapps"
+          ? [{ match: simctl("listapps", driverData.udid), onSpawn: () => clock.advance(120_000) }]
+          : []),
+        { match: simctl("shutdown", driverData.udid) },
+      ]);
+      const driver = await createDriver(runner, clock);
+      await expect(
+        driver.makeReady(
+          { address: driverData.udid, deviceId: driverData.udid, driverData },
+          prepareFull,
+        ),
+      ).rejects.toBeInstanceOf(BootTimeoutError);
+      expect(runner.calls.map((call) => call.args)).toEqual([
+        simctlArgs("boot", driverData.udid),
+        simctlArgs("bootstatus", driverData.udid, "-b"),
+        ...(slowCommand === "listapps" ? [simctlArgs("listapps", driverData.udid)] : []),
+        simctlArgs("shutdown", driverData.udid),
+      ]);
+    },
+  );
 
   it("times out bootstatus and issues a best-effort shutdown", async () => {
     const clock = new FakeClock();
@@ -953,7 +1057,7 @@ describe("IosSimctlDriver", () => {
       { address: driverData.udid, deviceId: driverData.udid, driverData },
       prepareFull,
     );
-    // Handled up front so a failure below reports itself rather than surfacing as an
+    // why: Handled up front so a failure below reports itself rather than surfacing as an
     // unhandled rejection in whichever test happens to run next.
     void ready.catch(() => undefined);
 
@@ -1067,7 +1171,7 @@ describe("IosSimctlDriver", () => {
   it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {
     const driver = await createDriver(scriptedListRunner());
 
-    // Strict: a catalog key an iOS driver does not fill (`images`, `customModels`) must be
+    // why: Strict: a catalog key an iOS driver does not fill (`images`, `customModels`) must be
     // absent, not present as undefined.
     await expect(driver.listCatalog()).resolves.toStrictEqual({
       defaultRuntime: "26.5",
@@ -1153,13 +1257,9 @@ describe("IosSimctlDriver", () => {
 
       expect(catalog.runtimes).toEqual(["18.4", "26.0", "26.0"]);
       expect(catalog.modelRuntimes).toEqual({
-        // 17.5 supports every model but is not available.
         "iPhone 16": ["18.4", "26.0"],
-        // 26.0 lists the XS as supported, but 26.0 is above the XS's 18.6 range cap.
         "iPhone XS": ["18.4"],
-        // Only 26.0 lists the iPad Pro as supported.
         "iPad Pro": ["26.0"],
-        // Only the second 26.0 build supports the iPad mini.
         "iPad mini": ["26.0"],
         "iPhone 8": [],
       });
@@ -1199,7 +1299,7 @@ describe("IosSimctlDriver", () => {
             });
             accepted += 1;
           } else {
-            // Every runtime here is installed, so the refusal is the range or the pairing
+            // why: Every runtime here is installed, so the refusal is the range or the pairing
             // check -- never a missing runtime, and never a download.
             await expect(resolution).rejects.toThrow(
               /is out of range|is installed but does not support/,
@@ -1214,7 +1314,6 @@ describe("IosSimctlDriver", () => {
     it("resolves an exact version when any installed build of that version pairs with the model", async () => {
       const driver = await createDriver(pairingRunner());
 
-      // The first 26.0 build does not support the iPad mini; the second does.
       await expect(
         driver.resolveSpec({
           model: "iPad mini",
@@ -1230,8 +1329,6 @@ describe("IosSimctlDriver", () => {
     });
 
     it("pairs two device types that differ only in letter case through the first, as resolveSpec matches them", async () => {
-      // Only the first type's identifier is supported, so the lower-cased duplicate pairs with
-      // nothing in its own right.
       const fixture = JSON.stringify({
         devicetypes: [
           deviceType("iPhone-16", "iPhone 16"),
@@ -1283,7 +1380,7 @@ describe("IosSimctlDriver", () => {
 
     const reality = await driver.listManaged();
 
-    // The fixture's last device carries no `simlock-` prefix. Membership in the set is the
+    // why: The fixture's last device carries no `simlock-` prefix. Membership in the set is the
     // ownership proof (safety rule 8), so it is Simlock's like every other entry here.
     expect(
       reality.devices.map((device) => ({ deviceId: device.deviceId, runState: device.runState })),
@@ -1324,7 +1421,7 @@ describe("IosSimctlDriver", () => {
       { clean: "full" },
     );
 
-    // Owning the set means the data container's path is known, so `reclaim` -- which runs
+    // why: Owning the set means the data container's path is known, so `reclaim` -- which runs
     // on every release -- never pays for the `simctl list` it used to need to find it.
     expect(runner.calls.map((call) => call.args)).toEqual([
       simctlArgs("shutdown", driverData.udid),
@@ -1341,7 +1438,7 @@ describe("IosSimctlDriver", () => {
       { match: simctl("erase", driverData.udid) },
     ]);
     const driver = await createDriver(runner, new FakeClock(), filesystem);
-    // The device directory exists, its data container does not, and `writeFileAtomic`
+    // why: The device directory exists, its data container does not, and `writeFileAtomic`
     // creates no parents -- the erasable write cannot land.
     await filesystem.mkdirp(`${deviceRoot}/${driverData.udid}`);
 
@@ -1352,7 +1449,7 @@ describe("IosSimctlDriver", () => {
       ),
     ).rejects.toThrow();
 
-    // A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
+    // why: A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
     // a half-written pair would have `doctor` accusing the user of erasing the device
     // Simlock itself just erased. Neither half is what "never marked" looks like.
     expect(await filesystem.exists(durableMarkPath)).toBe(false);
@@ -1472,7 +1569,7 @@ describe("IosSimctlDriver", () => {
       .then(() => undefined)
       .catch((error: unknown) => error);
 
-    // Fails closed: no fallback to the machine's default device set (safety rule 9).
+    // why: Fails closed: no fallback to the machine's default device set (safety rule 9).
     expect(failure).toBeInstanceOf(OwnedRootError);
     expect(failure).toMatchObject({ platform: "ios", reason: "wrong-instance" });
   });
@@ -1490,7 +1587,7 @@ describe("IosSimctlDriver", () => {
       .then(() => undefined)
       .catch((error: unknown) => error);
 
-    // An `OwnedRootError` costs iOS alone; anything else takes the daemon down with it,
+    // why: An `OwnedRootError` costs iOS alone; anything else takes the daemon down with it,
     // and with it every way of finding out why -- `"deviceRoot": true` and
     // `"deviceRoot": "devices/ios"` must not differ by that much.
     expect(failure).toBeInstanceOf(OwnedRootError);
@@ -1507,7 +1604,7 @@ describe("IosSimctlDriver", () => {
   it("refuses to re-prove a root that has become a symlink since startup", async () => {
     const filesystem = new MemoryFilesystem();
     const driver = await createDriver(new ScriptedProcessRunner([]), new FakeClock(), filesystem);
-    // The case the re-proof exists for: ownership was proven at startup and the path has
+    // why: The case the re-proof exists for: ownership was proven at startup and the path has
     // been swapped since, so `listManaged` now answers from somewhere else entirely.
     filesystem.defineSymlink(deviceRoot, "/Users/someone/Library/Developer/CoreSimulator/Devices");
 
@@ -1659,7 +1756,7 @@ describe("IosSimctlDriver", () => {
     async (args) => {
       const driver = await createDriver(new ScriptedProcessRunner([]));
 
-      // The bug this pins was not the flag itself: the flag's separated value was found as
+      // why: The bug this pins was not the flag itself: the flag's separated value was found as
       // the subcommand, so the refused verb behind it was never seen, and the wrapper
       // answered with `--set <simlockRoot>` prepended -- Simlock handing over the very path
       // that contains every other agent's devices.
@@ -1671,7 +1768,7 @@ describe("IosSimctlDriver", () => {
   );
 
   it("refuses any unrecognized flag ahead of the subcommand, rather than skipping over it as presumed harmless", async () => {
-    // Round 4, F6: structurally the same escape round 3 closed on the Android side
+    // why: Round 4, F6: structurally the same escape round 3 closed on the Android side
     // (`--reply-fd 9 -H attacker.example`). Before this fix, an unrecognized `-...` token was
     // treated as a no-value flag and the scan continued to the next argument -- so a
     // caller-supplied global's *value* was read as the subcommand, and the real
@@ -1810,7 +1907,7 @@ describe("IosSimctlDriver", () => {
     });
 
     it("gates persistent slim on iOS 18.5+ without falling into string comparison", () => {
-      // A naive string/lexicographic compare would put "9.0" ahead of "18.5" -- the gate must
+      // why: A naive string/lexicographic compare would put "9.0" ahead of "18.5" -- the gate must
       // compare the parsed integers instead.
       expect(supportsPersistentSlim([18, 5])).toBe(true);
       expect(supportsPersistentSlim([26, 0])).toBe(true);
@@ -1828,13 +1925,14 @@ describe("IosSimctlDriver", () => {
       });
     });
 
-    it("leaves the command sequence unchanged when the slim option is omitted (regression guard)", async () => {
+    it("checks installer readiness without slimming when the slim option is omitted", async () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", driverData.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", driverData.udid, "-b") } },
+        { match: simctl("listapps", driverData.udid) },
       ]);
 
-      // `driverData` has no `slimSignature`/`slimMarkToken`, exactly what a registry written
+      // why: `driverData` has no `slimSignature`/`slimMarkToken`, exactly what a registry written
       // before slim mode shipped holds, so this also proves such data still loads.
       await expect(
         (await createDriver(runner)).makeReady(
@@ -1845,12 +1943,13 @@ describe("IosSimctlDriver", () => {
         address: driverData.udid,
         deviceId: driverData.udid,
         driverData,
-        // Slim mode is off, so this boot slimmed nothing: the device is full.
+        // why: Slim mode is off, so this boot slimmed nothing: the device is full.
         mode: "full",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", driverData.udid),
         simctlArgs("bootstatus", driverData.udid, "-b"),
+        simctlArgs("listapps", driverData.udid),
       ]);
     });
 
@@ -1864,6 +1963,7 @@ describe("IosSimctlDriver", () => {
           {
             match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
           },
+          { match: simctl("listapps", slim18_5.udid) },
           {
             match: {
               args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -1875,6 +1975,7 @@ describe("IosSimctlDriver", () => {
           {
             match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
           },
+          { match: simctl("listapps", slim18_5.udid) },
         ]);
         const onSlimmed = vi.fn();
         const onSlimSkipped = vi.fn();
@@ -1905,14 +2006,15 @@ describe("IosSimctlDriver", () => {
         expect(runner.calls.map((call) => call.args)).toEqual([
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
+          simctlArgs("listapps", slim18_5.udid),
           simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
           simctlArgs("shutdown", slim18_5.udid),
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
+          simctlArgs("listapps", slim18_5.udid),
         ]);
-        // Both boots use the widened slim deadline, not the default 120s.
         expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
-        expect(runner.calls[5]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
         expect(onSlimmed).toHaveBeenCalledWith({
           address: slim18_5.udid,
@@ -1928,22 +2030,12 @@ describe("IosSimctlDriver", () => {
     );
 
     it("downgrades a failed post-apply shutdown to a skip instead of failing the lease, but always reboots first (finding #3 / second-review finding #2, issue #87)", async () => {
-      // CHANGED EXPECTATIONS (second adversarial review, finding #2): the previous version of
-      // this test asserted that a failed `#shutdown` call meant "nothing was actually rebooted,
-      // so the device is still healthy" and stopped right there, returning the device as-is with
-      // `mode: "full"`. That inference doesn't hold -- `#shutdown` fails on a
-      // *non-zero exit* the same way it fails on a *timeout*, and a timeout is exactly the case
-      // where the shutdown may actually be in progress or have already completed. The fix stops
-      // guessing: it always runs a boot+bootstatus afterward regardless of how `#shutdown` came
-      // back, so the device handed back is verified running, not assumed running. Because
-      // whether the disable list survived is now genuinely unknown, the outcome is also
-      // downgraded from "full" to "slim" -- the safe direction under uncertainty (see the
-      // comment on `#applySlimAndReboot`).
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -1954,10 +2046,11 @@ describe("IosSimctlDriver", () => {
           match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) },
           result: { code: 1, stderr: "unexpected shutdown failure", stdout: "" },
         },
-        // Always run after the shutdown call, whether or not it succeeded -- `boot` tolerates an
+        // why: Always run after the shutdown call, whether or not it succeeded -- `boot` tolerates an
         // already-booted device either way.
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -1977,17 +2070,18 @@ describe("IosSimctlDriver", () => {
       expect(result).toEqual({
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
-        // Unchanged: no marker written, so the next `makeReady` retries the whole label set.
         driverData: slim18_5,
         mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -1996,7 +2090,7 @@ describe("IosSimctlDriver", () => {
     });
 
     it("recovers from a shutdown that timed out and reports it as an uncertain, skipped apply (second-review finding #2, issue #87)", async () => {
-      // A `simctl shutdown` *timeout* (as opposed to a clean non-zero exit) is exactly the case
+      // why: A `simctl shutdown` *timeout* (as opposed to a clean non-zero exit) is exactly the case
       // the fix targets: the shutdown may have completed, may still be in flight, or may never
       // have taken effect. Rather than guess from the exception, the driver always re-establishes
       // a known-good running device afterward and reports the apply as uncertain.
@@ -2006,6 +2100,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2018,6 +2113,7 @@ describe("IosSimctlDriver", () => {
         },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2039,7 +2135,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 4);
+      await waitForCalls(runner, 5);
       clock.advance(30_000); // COMMAND_TIMEOUT_MS, the `#shutdown` call's own timeout
 
       const result = await ready;
@@ -2053,10 +2149,12 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -2065,7 +2163,7 @@ describe("IosSimctlDriver", () => {
     });
 
     it("propagates BootTimeoutError when the shutdown succeeds but the post-slim reboot times out (second-review finding #2, issue #87)", async () => {
-      // Unlike the shutdown-failure cases above, the device here genuinely is shut down and the
+      // why: Unlike the shutdown-failure cases above, the device here genuinely is shut down and the
       // reboot that should bring it back never completes -- this must still surface as a boot
       // failure, exactly like any other boot timeout, not as a skip.
       const filesystem = new MemoryFilesystem();
@@ -2074,6 +2172,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2086,7 +2185,6 @@ describe("IosSimctlDriver", () => {
           hangs: true,
           match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
         },
-        // `#bootAndWait`'s best-effort shutdown after the bootstatus timeout.
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
       ]);
       const onSlimmed = vi.fn();
@@ -2109,7 +2207,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       clock.advance(300_000); // slim.bootTimeoutMs -- the widened deadline applies to this reboot too
 
       await expect(ready).rejects.toThrow(BootTimeoutError);
@@ -2118,7 +2216,7 @@ describe("IosSimctlDriver", () => {
     });
 
     it("still fails the lease when the shutdown succeeds but the second boot doesn't -- the device really is left shut down (finding #3, issue #87 review)", async () => {
-      // Unlike the shutdown-failure case above, the device here genuinely is no longer running
+      // why: Unlike the shutdown-failure case above, the device here genuinely is no longer running
       // once `#shutdown` succeeds -- returning it as "ready" from a skip path would be a lie.
       // This must still raise like any other boot failure.
       const filesystem = new MemoryFilesystem();
@@ -2126,6 +2224,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2176,6 +2275,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2198,6 +2298,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
     });
@@ -2214,6 +2315,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2223,6 +2325,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2252,6 +2355,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2261,6 +2365,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2284,6 +2389,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_4.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_4.udid, "-b") } },
+        { match: simctl("listapps", slim18_4.udid) },
       ]);
       const onSlimSkipped = vi.fn();
       const driver = await createSlimDriver(
@@ -2305,11 +2411,10 @@ describe("IosSimctlDriver", () => {
         driverData: slim18_4,
         mode: "full",
       });
-      expect(runner.calls).toHaveLength(2);
+      expect(runner.calls).toHaveLength(3);
       expect(onSlimSkipped).toHaveBeenCalledWith(
         expect.objectContaining({ deviceId: slim18_4.udid, reason: "runtime-too-old" }),
       );
-      // Off (or gate-failed) uses the ordinary 120s bootstatus deadline, not the slim one.
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
     });
 
@@ -2317,6 +2422,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim17_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim17_5.udid, "-b") } },
+        { match: simctl("listapps", slim17_5.udid) },
       ]);
       const onSlimSkipped = vi.fn();
       const driver = await createSlimDriver(
@@ -2346,6 +2452,7 @@ describe("IosSimctlDriver", () => {
             args: simctlArgs("bootstatus", slimGarbageRuntime.udid, "-b"),
           },
         },
+        { match: simctl("listapps", slimGarbageRuntime.udid) },
       ]);
       const onSlimSkipped = vi.fn();
       const driver = await createSlimDriver(
@@ -2376,6 +2483,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
+        { match: simctl("listapps", slim26_0.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim26_0.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2385,6 +2493,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim26_0.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
+        { match: simctl("listapps", slim26_0.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2398,7 +2507,7 @@ describe("IosSimctlDriver", () => {
     });
 
     it("commits a boot with individually-rejected launchd labels instead of retrying it forever (finding #2, issue #87 review; corrected by second-review finding #3)", async () => {
-      // CHANGED EXPECTATIONS (second adversarial review, finding #3): the previous version of
+      // why: CHANGED EXPECTATIONS (second adversarial review, finding #3): the previous version of
       // this test treated an individual `simlock-slim-failed` line the same as a whole chunk
       // failing to run, and asserted the marker was withheld. That conflated two very different
       // failures: a label the in-simulator script itself rejects (renamed/removed daemon on this
@@ -2415,6 +2524,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2431,6 +2541,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2450,18 +2561,18 @@ describe("IosSimctlDriver", () => {
       expect(result).toEqual({
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
-        // The marker IS written this time -- no `slimMarkToken` because no mark file exists yet
-        // in this test (mirrors "boots, applies the disable list..." above).
         driverData: { ...slim18_5, slimSignature: widgetsSignature },
         mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).toHaveBeenCalledTimes(1);
       expect(onSlimmed).toHaveBeenCalledWith({
@@ -2477,9 +2588,6 @@ describe("IosSimctlDriver", () => {
     });
 
     it("a device already marked slim with a rejected-label history skips the whole pass on the next boot (second-review finding #3, issue #87)", async () => {
-      // The marker written by the test above lets `#checkAlreadySlimmed` short-circuit the next
-      // `makeReady` entirely -- proving the permanently-rejected label does not cost this device
-      // an apply+reboot on every future boot, unlike before the fix.
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
@@ -2491,6 +2599,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2513,12 +2622,13 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
     });
 
     it("4 chunks, one times out: reboots, writes no marker, and a later boot re-applies (finding #2, issue #87 review; second-review finding #3)", async () => {
-      // The full, unfiltered label set (~170 labels, per the SLIM_CHUNK_SIZE=50 comment in
+      // why: The full, unfiltered label set (~170 labels, per the SLIM_CHUNK_SIZE=50 comment in
       // index.ts) chunks into 4 `simctl spawn` calls. If the last one times out under load, the
       // other 3 chunks still ran -- `#applySlimLabels` reports the whole apply as "applied"
       // (`anyChunkSucceeded`), but with the timed-out chunk's labels folded into
@@ -2550,6 +2660,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         ...chunks.slice(0, 3).map((labelChunk) => ({
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk)),
@@ -2566,6 +2677,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2579,8 +2691,6 @@ describe("IosSimctlDriver", () => {
         onSlimSkipped,
         onSlimmed,
         processRunner: runner,
-        // No `categories` filter -- every category's labels, chunked the same way a real,
-        // unfiltered slim run would be.
         slim: { bootTimeoutMs: 300_000 },
       });
 
@@ -2589,7 +2699,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
 
       const result = await ready;
@@ -2597,14 +2707,13 @@ describe("IosSimctlDriver", () => {
       expect(result).toEqual({
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
-        // Unchanged: no `slimSignature`/`slimMarkToken` written, so the next `makeReady` will
-        // find `#checkAlreadySlimmed` false and re-apply the whole set.
         driverData: slim18_5,
         mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[0] ?? [])),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[1] ?? [])),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[2] ?? [])),
@@ -2612,6 +2721,7 @@ describe("IosSimctlDriver", () => {
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -2625,12 +2735,13 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
             command: "xcrun",
           },
-          // Real simctl stderr ends in a newline; the detail must not carry it.
+          // why: Real simctl stderr ends in a newline; the detail must not carry it.
           result: { code: 1, stderr: "boom\n", stdout: "" },
         },
       ]);
@@ -2658,6 +2769,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
@@ -2683,7 +2795,8 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        // Three different exits before the timeout, so a detail that kept any but the last
+        { match: simctl("listapps", slim18_5.udid) },
+        // why: Three different exits before the timeout, so a detail that kept any but the last
         // failure would name one of them instead.
         ...["first", "second", "third"].map((stderr, index) => ({
           match: { args: spawnArgs(chunks[index] ?? []), command: "xcrun" },
@@ -2708,7 +2821,7 @@ describe("IosSimctlDriver", () => {
         { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
         prepareSlim,
       );
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
 
       expect((await ready).mode).toBe("full");
@@ -2726,6 +2839,7 @@ describe("IosSimctlDriver", () => {
         const runner = new ScriptedProcessRunner([
           { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
           { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+          { match: simctl("listapps", slim18_5.udid) },
         ]);
         const onSlimmed = vi.fn();
         const onSlimSkipped = vi.fn();
@@ -2753,7 +2867,7 @@ describe("IosSimctlDriver", () => {
           driverData: slim18_5,
           mode: "full",
         });
-        expect(runner.calls).toHaveLength(2);
+        expect(runner.calls).toHaveLength(3);
         expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).not.toHaveBeenCalled();
         expect(onSlimSkipped).not.toHaveBeenCalled();
@@ -2767,6 +2881,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
+        { match: simctl("listapps", stamped.udid) },
         {
           match: {
             args: simctlArgs("spawn", stamped.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2776,6 +2891,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", stamped.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
+        { match: simctl("listapps", stamped.udid) },
       ]);
       const driver = await createSlimDriver(runner, filesystem, slimOptions());
 
@@ -2788,7 +2904,7 @@ describe("IosSimctlDriver", () => {
     });
 
     it("a purpose: 'recover' boot never applies slim, even on a device that would otherwise qualify (finding #1, issue #87 review)", async () => {
-      // `slim18_5` (a slim spec, an 18.5+ runtime) is exactly the shape of device
+      // why: `slim18_5` (a slim spec, an 18.5+ runtime) is exactly the shape of device
       // "boots, applies the disable list, and reboots on a qualifying, not-yet-slimmed device"
       // (above) slims -- the only difference here is `{ purpose: "recover" }`, standing in for
       // `ManagedDeviceLifecycle.recoverLeased`'s call on a crashed, still-*leased* device. Safety
@@ -2801,6 +2917,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2826,8 +2943,9 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
-      // The ordinary, un-widened boot deadline -- not `slim.bootTimeoutMs` -- since this boot
+      // why: The ordinary, un-widened boot deadline -- not `slim.bootTimeoutMs` -- since this boot
       // never considers applying anything.
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
       expect(onSlimmed).not.toHaveBeenCalled();
@@ -2841,6 +2959,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2871,17 +2990,17 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       const readyState = promiseState(ready);
 
-      // Just past the default 120s: a reboot timed against it would have given up by now.
+      // why: Just past the default 120s: a reboot timed against it would have given up by now.
       clock.advance(120_001);
       await flushMicrotasks221();
       expect(readyState.state).toBe("pending");
 
       clock.advance(300_000 - 120_001);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-      expect(runner.calls[5]?.options).toEqual({ timeoutMs: 300_000 });
+      expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
     it("estimates the boot cost with the slim reboot+apply budget for a slim spec", async () => {
@@ -2967,7 +3086,6 @@ describe("IosSimctlDriver", () => {
           true,
         );
 
-        // listFixture installs iOS 18.4 (below the floor) alongside iOS 26.5 (above it).
         await expect(driver.advisories()).resolves.toEqual([
           {
             code: "slim-runtime-unsupported",
@@ -3005,7 +3123,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("reports an installed runtime with an unparseable identifier as unsupported, even though its marketing version looks modern (finding #5, issue #87 review)", async () => {
-        // The marketing `version` string here ("26.5") would pass the persistent-slim floor if
+        // why: The marketing `version` string here ("26.5") would pass the persistent-slim floor if
         // `advisories()` still parsed it directly -- but this fixture's `identifier` doesn't
         // match `iosRuntimeVersionFromId`'s pattern, and `planSlimBoot` (the boot-time decision)
         // only ever reads the identifier. `advisories()` must reuse that same call so the two
@@ -3060,7 +3178,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("reports downloaded runtime assets whose runtime is not in the catalog, and only those (#79)", async () => {
-        // `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~8.5 GiB
+        // why: `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~8.5 GiB
         // asset bundle stays in mobileassetd's store, tagged `NeverCollected`, on the same
         // volume the download preflight measures. So the bytes stay spent and CoreSimulator can
         // re-register the runtime from them later. The catalog here installs 18.4 and 26.5 while
@@ -3080,7 +3198,7 @@ describe("IosSimctlDriver", () => {
         }
         const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
 
-        // The advisory code and message shape are a proposal (see the triage report), so this
+        // why: The advisory code and message shape are a proposal (see the triage report), so this
         // pins only what any fix must do: name both orphan builds, name neither installed one.
         const advisories = await driver.advisories();
         const text = advisories.map((advisory) => advisory.message).join("\n");
@@ -3094,7 +3212,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("tells two downloads of one marketing version apart by build, and reports only the uninstalled one (#79)", async () => {
-        // simctl reports `buildversion`, and a version match alone would call this bundle
+        // why: simctl reports `buildversion`, and a version match alone would call this bundle
         // installed: 18.4 is in the catalog, but not from this download. Deleting the runtime
         // and re-downloading the same version leaves exactly this -- a stale build nobody can
         // reclaim, sitting behind an installed runtime of the same name.
@@ -3137,7 +3255,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("names orphaned runtimes oldest first, not in string order (#79)", async () => {
-        // A store that has been collecting for months is read by a human deciding what to
+        // why: A store that has been collecting for months is read by a human deciding what to
         // reclaim; "iOS 9.3, iOS 18.6" is that list, and a plain string sort inverts it.
         const filesystem = new MemoryFilesystem();
         for (const [bundle, simulatorVersion, build] of [
@@ -3203,7 +3321,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("states the measured sizes of several leftover downloads as one total", async () => {
-        // The sizes of the iOS 18.6 and 18.4 downloads measured on a real machine; this catalog
+        // why: The sizes of the iOS 18.6 and 18.4 downloads measured on a real machine; this catalog
         // installs 18.4, so the second bundle is labelled 18.3 to be reported.
         const filesystem = new SizedFilesystem(
           new Map([
@@ -3249,7 +3367,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("stays quiet, and asks simctl nothing, when the asset store cannot be read (#79)", async () => {
-        // The store is macOS's, not Simlock's: absent on a machine that never downloaded a
+        // why: The store is macOS's, not Simlock's: absent on a machine that never downloaded a
         // runtime, and readable only to whoever the OS says. Neither is a `doctor` failure --
         // and with nothing to report, the `simctl list` that would classify the bundles is
         // never worth running, which is why the runner below scripts no invocation at all.
@@ -3263,7 +3381,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("skips an asset bundle it cannot identify by build rather than naming it (#79)", async () => {
-        // The build is what decides whether a bundle's runtime is installed, so a bundle
+        // why: The build is what decides whether a bundle's runtime is installed, so a bundle
         // without one cannot be classified -- and guessing would send the operator to delete
         // a runtime they are still using. `missing-build.asset` below names iOS 19.9 and
         // nothing else; the store around it is still reported.
@@ -3296,7 +3414,6 @@ describe("IosSimctlDriver", () => {
 
 describe("IosSimctlDriver listComponents()", () => {
   const runtimeListInvocation = simctl("runtime", "list", "-j");
-  /** The unscoped read of the machine's default device set: no `--set`. */
   const defaultSetInvocation = { args: ["simctl", "list", "-j", "devices"], command: "xcrun" };
 
   interface Image {
@@ -3339,7 +3456,7 @@ describe("IosSimctlDriver listComponents()", () => {
   }
 
   /**
-   * The default set's devices per runtime: a number is that many used devices, or name both
+   * why: The default set's devices per runtime: a number is that many used devices, or name both
    * kinds. A used device carries `lastUsedAt`, as `simctl list -j devices` reports one that has
    * been booted; an unused one -- like the batch CoreSimulator creates when a runtime install
    * ends -- carries every other key a real entry has and no `lastUsedAt`.
@@ -3413,7 +3530,7 @@ describe("IosSimctlDriver listComponents()", () => {
   it("counts a device in the default device set that has lastUsedAt and uses an image's runtime as foreign, and reads no device in Simlock's own set for it", async () => {
     const used = image("18.4", "22E238");
     const unused = image("26.0", "23A343");
-    // The scripted runner refuses any call it was not given, so a `simctl --set <root> list`
+    // why: The scripted runner refuses any call it was not given, so a `simctl --set <root> list`
     // would fail this test: only the default set is read.
     const runner = new ScriptedProcessRunner([
       imagesListed([used, unused]),
@@ -3437,7 +3554,7 @@ describe("IosSimctlDriver listComponents()", () => {
     const fresh = image("18.6", "22G86");
     const runner = new ScriptedProcessRunner([
       imagesListed([fresh]),
-      // What a runtime install leaves on Xcode 26.4.1: about eleven never-booted simulators of
+      // why: What a runtime install leaves on Xcode 26.4.1: about eleven never-booted simulators of
       // it. One more the user has booted is the only one that counts.
       defaultSetListed({ [fresh.runtime]: { unused: 11, used: 1 } }),
     ]);
@@ -3617,8 +3734,6 @@ describe("IosSimctlDriver listComponents()", () => {
     const other = image("18.4", "22E238");
     const receipt = { build: "23E244", image: "IMG-26.4-23E244" };
     const deleteInvocation = simctl("runtime", "delete", "IMG-26.4-23E244");
-    // After a delete the driver lists the images once more to see whether the image is still
-    // being deleted (#259), then the shared check lists images and the default set again.
     const deleted = { match: deleteInvocation, result: { code: 0, stderr: "", stdout: "" } };
     const signal = () => new AbortController().signal;
 
@@ -3628,7 +3743,6 @@ describe("IosSimctlDriver listComponents()", () => {
       return addAssets(new MemoryFilesystem(), builds);
     }
 
-    /** Adds one `bundle-<index>.asset` per build to the asset store in `filesystem`. */
     async function addAssets(
       filesystem: MemoryFilesystem,
       builds: readonly (readonly [string, string])[],
@@ -3642,7 +3756,6 @@ describe("IosSimctlDriver listComponents()", () => {
     }
 
     it("deletes the image the receipt names with simctl runtime delete and no --keep-asset, and reports no residue when it had no unused default-set device and its download is gone", async () => {
-      // Another runtime's never-used devices are not this removal's to report.
       const runner = new ScriptedProcessRunner([
         imagesListed([target, other]),
         defaultSetListed({ [other.runtime]: { unused: 4 } }),
@@ -3651,8 +3764,6 @@ describe("IosSimctlDriver listComponents()", () => {
         imagesListed([other]),
         defaultSetListed({ [other.runtime]: { unused: 4 } }),
       ]);
-      // Other builds' downloads are in the store, one of them of the same version; this one's
-      // is not.
       const filesystem = await assetStore([
         ["18.4", "22E238"],
         ["26.4", "23E200"],
@@ -3682,7 +3793,6 @@ describe("IosSimctlDriver listComponents()", () => {
       expect(removal.residue).toContain("26.4 (23E244)");
       expect(removal.residue).toContain(IOS_RUNTIME_ASSET_ROOT);
       expect(removal.residue).toContain("Xcode's Settings -> Platforms");
-      // Read only: the bundle is still there.
       await expect(filesystem.exists(`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`)).resolves.toBe(
         true,
       );
@@ -3697,7 +3807,7 @@ describe("IosSimctlDriver listComponents()", () => {
         imagesListed([]),
         defaultSetListed({}),
       ]);
-      // The iOS 18.6 download measured on a real machine.
+      // why: The iOS 18.6 download measured on a real machine.
       const filesystem = new SizedFilesystem(
         new Map([[`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`, 8_917_036 * 1024]]),
       );
@@ -3710,8 +3820,6 @@ describe("IosSimctlDriver listComponents()", () => {
     });
 
     it("states the same measured size in the doctor advisory as in the residue of the removal", async () => {
-      // One asset store, read by a driver removing iOS 26.4 and by one asked for its advisories
-      // afterwards, whose catalog does not install 26.4.
       const filesystem = new SizedFilesystem(
         new Map([[`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`, 8_917_036 * 1024]]),
       );
@@ -3860,14 +3968,13 @@ describe("IosSimctlDriver listComponents()", () => {
 
       const removal = await driver.removeComponent(receipt, { signal: signal() });
 
-      // Two sentences, the devices first, joined as prose.
       expect(removal.residue).toMatch(
         /^2 never-used simulators .*`xcrun simctl delete unavailable` clears them\. iOS 26\.4 \(23E244\) is no longer installed, but its download .*Xcode's Settings -> Platforms to get the space back$/,
       );
     });
 
     it("reports no unavailable simulators when another installed build of the same runtime stays behind (#241)", async () => {
-      // Two builds of iOS 26.4 share one runtime identifier, so its simulators keep working
+      // why: Two builds of iOS 26.4 share one runtime identifier, so its simulators keep working
       // on the build that stays.
       const sibling = image("26.4", "23E200", { id: "IMG-26.4-23E200" });
       const runner = new ScriptedProcessRunner([
@@ -3898,7 +4005,7 @@ describe("IosSimctlDriver listComponents()", () => {
 
       await driver.removeComponent(receipt, { signal: signal() });
 
-      // Every call that names no `--set` addresses the default set; each must be the read.
+      // why: Every call that names no `--set` addresses the default set; each must be the read.
       const unscoped = runner.calls.filter(
         (call) => call.command === "xcrun" && !call.args.includes("--set"),
       );
@@ -3930,7 +4037,7 @@ describe("IosSimctlDriver listComponents()", () => {
     });
 
     it("fails with simctl's own error when runtime delete exits non-zero", async () => {
-      // No listing after the failure: the scripted runner fails any call it was not given.
+      // why: No listing after the failure: the scripted runner fails any call it was not given.
       const runner = new ScriptedProcessRunner([
         imagesListed([target]),
         defaultSetListed({}),
@@ -3948,7 +4055,7 @@ describe("IosSimctlDriver listComponents()", () => {
     });
 
     it("refuses with ComponentInUseError when one default-set device of the runtime has lastUsedAt, and deletes nothing", async () => {
-      // The scripted runner fails any call it was not given, so a delete would fail this test.
+      // why: The scripted runner fails any call it was not given, so a delete would fail this test.
       // Ten never-used devices beside the used one: only the used one counts.
       const runner = new ScriptedProcessRunner([
         imagesListed([target]),
@@ -3986,7 +4093,7 @@ describe("IosSimctlDriver listComponents()", () => {
       ]);
       const driver = await createDriver(runner);
 
-      // The clock never moves, so a removal that waited would never settle.
+      // why: The clock never moves, so a removal that waited would never settle.
       const error = await settledValue(
         driver.removeComponent(receipt, { signal: signal() }).catch((caught: unknown) => caught),
       );
@@ -3997,7 +4104,7 @@ describe("IosSimctlDriver listComponents()", () => {
     });
 
     it("answers the removal with its size and residue when simctl runtime list shows the image as Deleting after simctl runtime delete returns and drops it seconds later (#259)", async () => {
-      // As seen on Xcode 26.4.1: `simctl runtime delete` exits while `simctl runtime list`
+      // why: As seen on Xcode 26.4.1: `simctl runtime delete` exits while `simctl runtime list`
       // still lists the image, in state `Deleting`, for about eight seconds. The runner answers
       // by the fake clock rather than by call order, so it does not dictate how a fix waits.
       const clock = new FakeClock();
@@ -4018,7 +4125,7 @@ describe("IosSimctlDriver listComponents()", () => {
         .finally(() => {
           settled = true;
         });
-      // Lets time pass in one-second steps, well inside the five-minute removal budget.
+      // why: Lets time pass in one-second steps, well inside the five-minute removal budget.
       for (let second = 0; second < 30 && !settled; second += 1) {
         await flushMicrotasks221();
         clock.advance(1_000);
@@ -4034,7 +4141,7 @@ describe("IosSimctlDriver listComponents()", () => {
     });
 
     it("fails with DriverCrashError five minutes after simctl runtime delete started, not after it answered, when simctl runtime list keeps showing the image as Deleting (#259)", async () => {
-      // The delete itself takes two minutes, so a budget restarted when it answers would end
+      // why: The delete itself takes two minutes, so a budget restarted when it answers would end
       // two minutes later than one measured from its start.
       const clock = new FakeClock();
       const runner = new ClockedSimctl259(
@@ -4047,7 +4154,7 @@ describe("IosSimctlDriver listComponents()", () => {
           ready: imagesListed([target]),
           deleting: imagesListed([target], "Deleting"),
         },
-        // Half a second off the one-second polls, so the last pause must be cut short.
+        // why: Half a second off the one-second polls, so the last pause must be cut short.
         120_500,
       );
       const driver = await createDriver(runner, clock, await assetStore([]));
@@ -4059,7 +4166,7 @@ describe("IosSimctlDriver listComponents()", () => {
         .finally(() => {
           settledAt = clock.now();
         });
-      // Half-second steps land on the deadline itself, so the time it fails at is exact.
+      // why: Half-second steps land on the deadline itself, so the time it fails at is exact.
       for (let step = 0; step < 1_200 && settledAt === undefined; step += 1) {
         await flushMicrotasks221();
         clock.advance(500);
@@ -4091,7 +4198,7 @@ describe("IosSimctlDriver listComponents()", () => {
         .catch((caught: unknown) => caught);
       await vi.waitFor(() => expect(runner.listsAfterDelete).toBe(1));
       await flushMicrotasks221();
-      // The clock never moves: only the signal can end the wait.
+      // why: The clock never moves: only the signal can end the wait.
       controller.abort();
 
       const error = await settledValue(removal);
@@ -4127,7 +4234,7 @@ describe("IosSimctlDriver listComponents()", () => {
         clock.advance(1);
         await vi.waitFor(() => expect(runner.listsAfterDelete).toBe(expected));
       }
-      // Gone at 3.5 s: the listing at 4 s ends the wait.
+      // why: Gone at 3.5 s: the listing at 4 s ends the wait.
       await flushMicrotasks221();
       clock.advance(1_000);
       await expect(removal).resolves.toEqual({ sizeBytes: 7_000_000_000 });
@@ -4186,7 +4293,7 @@ describe("IosSimctlDriver listComponents()", () => {
       );
       const driver = await createDriver(runner, clock, await assetStore([]));
 
-      // The clock never moves: only the signal, already fired when the pause starts, ends it.
+      // why: The clock never moves: only the signal, already fired when the pause starts, ends it.
       const error = await settledValue(
         driver
           .removeComponent(receipt, { signal: controller.signal })
@@ -4202,7 +4309,7 @@ describe("IosSimctlDriver listComponents()", () => {
     });
 
     it("ends simctl runtime delete after five minutes, SIGTERM then SIGKILL, and answers only once it has exited", async () => {
-      // Ignores SIGTERM: only the SIGKILL ten seconds later ends it.
+      // why: Ignores SIGTERM: only the SIGKILL ten seconds later ends it.
       const stubborn = { hangs: true, ignoresSigterm: true, match: deleteInvocation };
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
@@ -4247,7 +4354,7 @@ describe("IosSimctlDriver listComponents()", () => {
         message: expect.stringMatching(/was ended before it finished/),
       });
 
-      // The scripted runner fails any call it was not given, so a delete would fail this.
+      // why: The scripted runner fails any call it was not given, so a delete would fail this.
       const lateRunner = new ScriptedProcessRunner([imagesListed([target]), defaultSetListed({})]);
       const lateDriver = await createDriver(lateRunner);
       await expect(
@@ -4260,15 +4367,6 @@ describe("IosSimctlDriver listComponents()", () => {
 
 type ScriptedStep259 = ConstructorParameters<typeof ScriptedProcessRunner>[0][number];
 
-/**
- * A scripted `simctl` that answers by state rather than by call order (#259): `simctl runtime
- * list -j` answers `ready` until `simctl runtime delete` has run, then `deleting` until
- * `deletingForMs` of fake-clock time has passed since, then `gone`. The default set's listing
- * always answers `defaultSet`. `deleteTakesMs` moves the fake clock on while the delete runs,
- * as a slow `simctl runtime delete` would. Every call is recorded in `calls`, as the scripted
- * runner does, and `deleteStartedAt` and `listsAfterDelete` say when the delete started and how
- * often the images were listed after it; `onListAfterDelete` runs at each of those listings.
- */
 class ClockedSimctl259 extends ScriptedProcessRunner {
   deletes = 0;
   deleteStartedAt: number | undefined;
@@ -4323,13 +4421,13 @@ class ClockedSimctl259 extends ScriptedProcessRunner {
   }
 }
 
-/** Lets queued continuations run, so a test can see that something has not happened yet. */
+/** why: Lets queued continuations run, so a test can see that something has not happened yet. */
 async function flushMicrotasks221(): Promise<void> {
   for (let count = 0; count < 100; count += 1) await Promise.resolve();
 }
 
 /**
- * What a promise settled with, once it has: a promise still open fails a named assertion rather
+ * why: What a promise settled with, once it has: a promise still open fails a named assertion rather
  * than the test's own timeout, so a deadline that never ends anything reads as that.
  */
 async function settledValue(promise: Promise<unknown>): Promise<unknown> {
@@ -4342,6 +4440,53 @@ async function settledValue(promise: Promise<unknown>): Promise<unknown> {
   await vi.waitFor(() => expect(state.done).toBe(true));
   return state.value;
 }
+
+describe("IosSimctlDriver screen capture commands", () => {
+  const physicalDevice = {
+    address: "UDID-P",
+    deviceId: "UDID-P",
+    driverData: {},
+    enrolledApps: [],
+    physical: true,
+  } as const;
+  const settings = { bitrateKbps: 1_500, fps: 30, maxDimension: 720 };
+
+  // why: the daemon hands the driver its packaged programs; `drivers.ios.deviceCaptureCommand`
+  // replaces only the physical iPhone's program, and an empty string counts as unset exactly as
+  // `screenCaptureCommand` does, so one mistaken `""` does not turn iPhone streams off.
+  it.each([
+    ["the configured program", "/worker/custom-device-capture", "/worker/custom-device-capture"],
+    ["the daemon's program when unset", undefined, "/dist/bin/simlock-device-capture"],
+    ["the daemon's program when set empty", "", "/dist/bin/simlock-device-capture"],
+  ] as const)("a physical iPhone's stream starts %s", async (_claim, configured, expected) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/worker");
+    await filesystem.mkdirp("/dist/bin");
+    await filesystem.writeFileAtomic("/worker/custom-device-capture", "");
+    await filesystem.writeFileAtomic("/dist/bin/simlock-device-capture", "");
+    const launcher = new FakeBytePipeLauncher();
+    const driver = await IosSimctlDriver.create({
+      clock: new FakeClock(),
+      driverConfig: configured === undefined ? {} : { deviceCaptureCommand: configured },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: new ScriptedProcessRunner([]),
+      screenCapture: {
+        baseEnvironment: { PATH: "/usr/bin" },
+        command: "/dist/bin/simlock-screen-capture",
+        deviceCommand: "/dist/bin/simlock-device-capture",
+        launcher,
+      },
+      simlockHome: "/home/.simlock",
+    });
+
+    const capture = driver.screenCapture;
+    if (capture === undefined) throw new Error("the driver offers no screen capture");
+    await capture.open(physicalDevice, settings, new AbortController().signal);
+    expect(launcher.starts.map((start) => start.command)).toEqual([expected]);
+  });
+});
 
 describe("IosSimctlDriver defaultModels", () => {
   it("lists the built-in iOS preference list per class, newest first, with phone starting at iPhone 17", async () => {
@@ -4425,7 +4570,7 @@ describe("IosSimctlDriver toolVersions()", () => {
   });
 
   it.each([
-    // Output that would parse, so only the exit code can be what turns it away.
+    // why: Output that would parse, so only the exit code can be what turns it away.
     ["exits non-zero", { code: 1, stderr: "error", stdout: "Xcode 16.4\nBuild version 16F6\n" }],
     ["is killed by its timeout", { code: null, stderr: "", stdout: "" }],
     ["prints no Xcode version", { code: 0, stderr: "", stdout: "something else\n" }],
@@ -4439,7 +4584,7 @@ describe("IosSimctlDriver toolVersions()", () => {
   });
 
   it("rejects when xcodebuild cannot be started", async () => {
-    // No scripted invocation: the runner refuses to start it, as a spawn failure would.
+    // why: No scripted invocation: the runner refuses to start it, as a spawn failure would.
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
     await expect(driver.toolVersions()).rejects.toThrow();
@@ -4468,7 +4613,7 @@ function createDriver(
 }
 
 /**
- * `#idGenerator.generate()` is called once while the root is being created, then names
+ * why: `#idGenerator.generate()` is called once while the root is being created, then names
  * the device, then mints a mark token per write -- so the second call must stay
  * "device-1" to match `driverData.name` while later ones vary, proving the reclaim token
  * differs from the provision token.
@@ -4497,7 +4642,7 @@ function createTokenDriver(
 }
 
 /**
- * Bounded on purpose. An unexpected invocation makes `ScriptedProcessRunner.spawn` throw
+ * why: Bounded on purpose. An unexpected invocation makes `ScriptedProcessRunner.spawn` throw
  * synchronously, `#invokeSimctl` turns that into a `DriverCrashError`, and the call this
  * is waiting for never arrives -- an unbounded spin then hangs the whole suite instead of
  * reporting which argv the driver actually produced.
@@ -4514,7 +4659,7 @@ async function waitForCalls(runner: ScriptedProcessRunner, count: number): Promi
 }
 
 /**
- * Plants a managed device in the root the way a real one arrives: inside a root Simlock
+ * why: Plants a managed device in the root the way a real one arrives: inside a root Simlock
  * already owns and marked as such.
  *
  * A bare `mkdirp(dataPath)` describes a state that cannot occur -- `ensureOwnedRoot` creates
@@ -4568,7 +4713,7 @@ async function createSlimDriver(
   });
 }
 
-/** Mirrors `#applySlimLabels`'s generated script -- keeps test expectations in sync by construction. */
+/** why: Mirrors `#applySlimLabels`'s generated script -- keeps test expectations in sync by construction. */
 function slimScript(labels: readonly string[]): string {
   return (
     `[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT"; ` +
@@ -4587,14 +4732,15 @@ function scriptedListRunner(): ScriptedProcessRunner {
 }
 
 /**
- * Where macOS keeps the simulator runtimes `xcodebuild -downloadPlatform` fetches. Spelled out
- * here rather than imported: no driver code knows about this path yet, and a test that failed to
- * compile would prove nothing (#79).
+ * why: Where macOS keeps the simulator runtimes `xcodebuild -downloadPlatform` fetches. Spelled
+ * out here rather than imported from the driver, which keeps its own copy of the same path: this
+ * suite reads the store as the OS lays it out, so a fixture stays a fact about macOS rather than
+ * about what the driver happens to look at (#79).
  */
 const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
 
 /**
- * A `MemoryFilesystem` whose `directorySize` answers a set size for the directories in `sizes`,
+ * why: A `MemoryFilesystem` whose `directorySize` answers a set size for the directories in `sizes`,
  * as a downloaded runtime bundle of several GiB would; it measures every other path as usual.
  */
 class SizedFilesystem extends MemoryFilesystem {
@@ -4608,7 +4754,7 @@ class SizedFilesystem extends MemoryFilesystem {
 }
 
 /**
- * mobileassetd's own metadata for one downloaded simulator runtime, cut down to the keys that
+ * why: mobileassetd's own metadata for one downloaded simulator runtime, cut down to the keys that
  * identify it. `NeverCollected` is verbatim from a real bundle on macOS 26.6.1 / Xcode 27: the
  * store is told not to reclaim these, which is why deleting the runtime does not shrink it.
  */

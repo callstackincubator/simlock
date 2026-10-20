@@ -1,6 +1,6 @@
 # 0026. agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-13
 - **Issue:** [#511](https://github.com/callstackincubator/simlock/issues/511)
 - **Narrows:** [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)

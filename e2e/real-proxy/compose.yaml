@@ -1,0 +1,20 @@
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
+    network_mode: host
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
+    network_mode: host
+    command:
+      - --alpha-config=/etc/oauth2-proxy.yaml
+      - --email-domain=*
+      - --cookie-secret=0123456789abcdef0123456789abcdef
+      - --cookie-secure=false
+      - --skip-provider-button
+      - --skip-auth-route=^/v1/uplink$
+      - --skip-auth-route=^/v1/healthz$
+    volumes:
+      - ./oauth2-proxy.yaml:/etc/oauth2-proxy.yaml:ro

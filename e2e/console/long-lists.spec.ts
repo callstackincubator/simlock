@@ -4,19 +4,13 @@ import type { Locator, Page, Route } from "@playwright/test";
 import { connectSimlock } from "../../dist/client/index.js";
 import {
   expect,
-  NAV_LABELS,
+  NAV,
   type RunningDaemon,
+  settled,
   signIn,
   startDaemon,
   test as base,
 } from "./fixtures.js";
-
-/**
- * Long lists: every table pages, the worker cards page, and the events feed draws only the rows
- * in view. The paging tests answer one route with a list of the length they need, built here,
- * and pass every other request to a real daemon. The browser lane's own tests run against a
- * single host seeded for real with 300 leases and 5,000 events.
- */
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -98,6 +92,7 @@ async function read(host: RunningDaemon, path: string): Promise<unknown> {
 }
 
 interface Envelope {
+  readonly id: string;
   readonly seq: number;
   readonly timestamp: number;
   readonly event: string;
@@ -111,7 +106,7 @@ async function recentEvents(host: RunningDaemon): Promise<readonly Envelope[]> {
 async function open(page: Page, host: RunningDaemon, path: string): Promise<void> {
   await page.goto(host.url);
   await signIn(page, host.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
   await page.goto(new URL(path, host.url).href);
   await expect(page.locator("#main h1")).toBeVisible();
   await expect(page.locator("#main")).not.toContainText("Loading…");
@@ -151,9 +146,23 @@ function pad(n: number): string {
   return String(n).padStart(4, "0");
 }
 
-/** The ids in the first column of a table, top to bottom. */
-function firstColumn(table: Locator): Promise<string[]> {
-  return table.locator("tbody tr td:first-child").allTextContents();
+function pane(page: Page, title: string): Locator {
+  return page.getByRole("region", { name: title, exact: true });
+}
+
+function rowIds(list: Locator, section: string): Promise<string[]> {
+  return list.getByRole("link").evaluateAll(
+    (links, prefix) =>
+      links.map((link) => {
+        const path = (link.getAttribute("href") ?? "").split("?")[0] ?? "";
+        return decodeURIComponent(path.slice(prefix.length + 1).replace(/\/$/, ""));
+      }),
+    section,
+  );
+}
+
+function leaseRows(page: Page): Locator {
+  return pane(page, "Leases").getByRole("list", { name: "Leases" });
 }
 
 function ids(from: number, to: number, prefix = "lse"): string[] {
@@ -166,24 +175,23 @@ function pager(page: Page, label: string): Locator {
 }
 
 test.describe("long lists page", () => {
-  test("a table of 1,240 rows shows 25 and the pager says 1–25 of 1,240", async ({
+  test("a list of 1,240 leases shows 25 rows and the pager says 1–25 of 1,240", async ({
     daemon,
     page,
   }) => {
     await answer(page, "/v1/leases", () => ({ leases: leases(1_240) }));
     await open(page, daemon, "/leases");
 
-    const table = page.getByRole("region", { name: "All leases" }).locator("table");
-    expect(await firstColumn(table)).toEqual(ids(1, 25));
-    await expect(pager(page, "All leases").locator(".pager-range")).toHaveText("1–25 of 1,240");
-    await expect(pager(page, "All leases")).toContainText("Page 1 of 50");
+    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(1, 25));
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 1,240");
+    await expect(pager(page, "Leases")).toContainText("Page 1 of 50");
   });
 
   test("next and previous move by one page and stop at the ends", async ({ daemon, page }) => {
     await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
     await open(page, daemon, "/leases");
-    const table = page.getByRole("region", { name: "All leases" }).locator("table");
-    const nav = pager(page, "All leases");
+    const rows = leaseRows(page);
+    const nav = pager(page, "Leases");
     const range = nav.locator(".pager-range");
     const next = nav.getByRole("button", { name: "Next" });
     const previous = nav.getByRole("button", { name: "Previous" });
@@ -197,10 +205,10 @@ test.describe("long lists page", () => {
 
     await next.click();
     await expect(range).toHaveText("26–50 of 60");
-    expect(await firstColumn(table)).toEqual(ids(26, 50));
+    expect(await rowIds(rows, "/leases")).toEqual(ids(26, 50));
     await next.click();
     await expect(range).toHaveText("51–60 of 60");
-    expect(await firstColumn(table)).toEqual(ids(51, 60));
+    expect(await rowIds(rows, "/leases")).toEqual(ids(51, 60));
     await expect(next).toHaveAttribute("aria-disabled", "true");
     const entries = await page.evaluate(() => window.history.length);
     await next.click({ force: true });
@@ -213,7 +221,7 @@ test.describe("long lists page", () => {
     await expect(range).toHaveText("26–50 of 60");
     await previous.click();
     await expect(range).toHaveText("1–25 of 60");
-    expect(await firstColumn(table)).toEqual(ids(1, 25));
+    expect(await rowIds(rows, "/leases")).toEqual(ids(1, 25));
     // The first page is the plain address.
     await expect(page).toHaveURL(/\/leases$/);
   });
@@ -224,19 +232,18 @@ test.describe("long lists page", () => {
   }) => {
     await answer(page, "/v1/leases", () => ({ leases: leases(1_240) }));
     await open(page, daemon, "/leases");
-    const table = page.getByRole("region", { name: "All leases" }).locator("table");
-    const range = pager(page, "All leases").locator(".pager-range");
+    const range = pager(page, "Leases").locator(".pager-range");
 
-    await pager(page, "All leases").getByLabel("Per page").selectOption("50");
+    await pager(page, "Leases").getByLabel("Per page").selectOption("50");
 
     await expect(range).toHaveText("1–50 of 1,240");
-    expect(await firstColumn(table)).toEqual(ids(1, 50));
+    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(1, 50));
     await expect(page).toHaveURL(/\/leases\?size=50$/);
 
     // From rows 101 to 125, 50 a page goes to the page that still starts with row 101.
     await page.goto(new URL("/leases?page=5", daemon.url).href);
     await expect(range).toHaveText("101–125 of 1,240");
-    await pager(page, "All leases").getByLabel("Per page").selectOption("50");
+    await pager(page, "Leases").getByLabel("Per page").selectOption("50");
     await expect(range).toHaveText("101–150 of 1,240");
     expect(new URL(page.url()).searchParams.toString()).toBe("page=3&size=50");
   });
@@ -244,10 +251,9 @@ test.describe("long lists page", () => {
   test("opening a URL with page=3 shows the third page", async ({ daemon, page }) => {
     await answer(page, "/v1/leases", () => ({ leases: leases(1_240) }));
     await open(page, daemon, "/leases?page=3");
-    const table = page.getByRole("region", { name: "All leases" }).locator("table");
 
-    await expect(pager(page, "All leases").locator(".pager-range")).toHaveText("51–75 of 1,240");
-    expect(await firstColumn(table)).toEqual(ids(51, 75));
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("51–75 of 1,240");
+    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(51, 75));
     await expect(page).toHaveURL(/\/leases\?page=3$/);
   });
 
@@ -258,19 +264,18 @@ test.describe("long lists page", () => {
     let count = 60;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
     await open(page, daemon, "/leases?page=3");
-    const table = page.getByRole("region", { name: "All leases" }).locator("table");
-    const range = pager(page, "All leases").locator(".pager-range");
+    const range = pager(page, "Leases").locator(".pager-range");
     await expect(range).toHaveText("51–60 of 60");
 
     count = 30;
 
     // The next refresh, within a second, leaves no third page: the second, now the last, shows.
     await expect(range).toHaveText("26–30 of 30", { timeout: 2_000 });
-    expect(await firstColumn(table)).toEqual(ids(26, 30));
+    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 30));
     await expect(page).toHaveURL(/\/leases\?page=2$/);
   });
 
-  test("a focused link in a table keeps its focus, and its row its place, across two refreshes", async ({
+  test("a focused link in the list keeps its focus, and its row its place, across two refreshes", async ({
     daemon,
     page,
   }) => {
@@ -282,11 +287,10 @@ test.describe("long lists page", () => {
       return { leases: listed };
     });
     await open(page, daemon, "/leases?page=2");
-    const table = page.getByRole("region", { name: "All leases" }).locator("table");
-    const row = table.locator("tbody tr").nth(2);
+    const row = leaseRows(page).getByRole("listitem").nth(2);
     const link = row.getByRole("link");
-    const expires = row.locator('td[data-label="Expires in"]');
-    await expect(link).toHaveText("lse_0028");
+    const expires = row.locator(".list-aside");
+    await expect(link).toHaveAttribute("href", "/leases/lse_0028/?page=2");
     await link.focus();
     await expect(link).toBeFocused();
     // The element itself is marked: a link drawn again in its place would not carry the mark.
@@ -306,25 +310,31 @@ test.describe("long lists page", () => {
     expect(await link.evaluate((element) => (element as unknown as { kept?: boolean }).kept)).toBe(
       true,
     );
-    expect(await firstColumn(table)).toEqual(ids(26, 50));
+    expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 50));
     await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/leases\/lse_0028\/$/);
+    await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2$/);
+    await expect(leaseRows(page).locator('a[href^="/leases/lse_0028/"]')).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
     let count = 25;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
     await open(page, daemon, "/leases");
-    const rows = page.getByRole("region", { name: "All leases" }).locator("tbody tr");
-    await expect(rows).toHaveCount(25);
-    await expect(pager(page, "All leases")).toHaveCount(0);
+    await expect(leaseRows(page).getByRole("listitem")).toHaveCount(25);
+    await expect(pager(page, "Leases")).toHaveCount(0);
 
     // One row more and the list needs a second page: the pager shows.
     count = 26;
-    await expect(pager(page, "All leases").locator(".pager-range")).toHaveText("1–25 of 26");
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
   });
 
-  test("two tables on one page keep their own page in the URL", async ({ daemon, page }) => {
+  test("the worker list and the devices table in its inspector keep their own page in the URL", async ({
+    daemon,
+    page,
+  }) => {
     const listed = (await read(daemon, "/v1/workers")) as { workers: Record<string, unknown>[] };
     const host = listed.workers[0] ?? {};
     const devices = Array.from({ length: 60 }, (_, index) => ({
@@ -333,69 +343,69 @@ test.describe("long lists page", () => {
       spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       state: "ready",
     }));
-    await answer(page, "/v1/workers", () => ({ workers: [{ ...host, devices }] }));
-    await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
-    await open(page, daemon, `/workers/${encodeURIComponent(String(host.id))}`);
+    const workers = Array.from({ length: 30 }, (_, index) => ({
+      ...host,
+      devices,
+      id: `wrk_${pad(index + 1)}`,
+      label: `worker-${pad(index + 1)}`,
+    }));
+    await answer(page, "/v1/workers", () => ({ workers }));
+    await open(page, daemon, "/workers/wrk_0001");
     const devicesTable = page.getByRole("region", { name: "Devices" }).locator("table");
-    const leasesTable = page.getByRole("region", { name: "Leases" }).locator("table");
+    const deviceIds = async () =>
+      (await devicesTable.locator("tbody tr td:first-child").allTextContents()).map(
+        (text) => /dev_\d+/.exec(text)?.[0],
+      );
 
+    await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
+    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
     await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
-    await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("26–50 of 60");
-    await pager(page, "Leases").getByRole("button", { name: "Next" }).click();
-    await pager(page, "Leases").getByRole("button", { name: "Next" }).click();
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("51–60 of 60");
+    await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
+    await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
 
-    // Each table moved on its own, and the URL holds both pages.
-    expect(await firstColumn(devicesTable)).toEqual(ids(26, 50, "dev"));
-    expect(await firstColumn(leasesTable)).toEqual(ids(51, 60));
-    expect(new URL(page.url()).searchParams.toString()).toBe("devices-page=2&leases-page=3");
+    expect(await deviceIds()).toEqual(ids(51, 60, "dev"));
+    expect(await rowIds(pane(page, "Workers"), "/workers")).toEqual(ids(26, 30, "wrk"));
+    expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
+      "devices-page": "3",
+      page: "2",
+    });
 
     // A reload opens both where they were.
     await page.reload();
-    await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("26–50 of 60");
-    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("51–60 of 60");
+    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
+    await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
   });
 
-  test("the worker cards page at 24", async ({ daemon, page }) => {
+  test("the worker list pages at 25 like the others and keeps a new size in the URL", async ({
+    daemon,
+    page,
+  }) => {
     const listed = (await read(daemon, "/v1/workers")) as { workers: Record<string, unknown>[] };
     const host = listed.workers[0] ?? {};
-    let count = 30;
     const workers = Array.from({ length: 30 }, (_, index) => ({
       ...host,
       id: `wrk_${pad(index + 1)}`,
       label: `worker-${pad(index + 1)}`,
     }));
-    await answer(page, "/v1/workers", () => ({ workers: workers.slice(0, count) }));
+    await answer(page, "/v1/workers", () => ({ workers }));
     await open(page, daemon, "/workers");
-    const cards = page.getByRole("region", { name: "All workers" }).locator("li.card");
-    const titles = () => cards.locator(".card-title").allTextContents();
-    const labels = (from: number, to: number) =>
-      ids(from, to, "worker").map((id) => id.replace("_", "-"));
+    const rows = pane(page, "Workers").getByRole("list", { name: "Workers" });
+    const range = pager(page, "Workers").locator(".pager-range");
 
-    expect(await titles()).toEqual(labels(1, 24));
-    await expect(pager(page, "All workers").locator(".pager-range")).toHaveText("1–24 of 30");
-    await pager(page, "All workers").getByRole("button", { name: "Next" }).click();
-    await expect(pager(page, "All workers").locator(".pager-range")).toHaveText("25–30 of 30");
-    expect(await titles()).toEqual(labels(25, 30));
-    // The cards' sizes are 24, 48 and 96; a new size keeps the first card shown in view.
-    await expect(pager(page, "All workers").getByLabel("Per page").locator("option")).toHaveText([
-      "24",
-      "48",
-      "96",
+    expect(await rowIds(rows, "/workers")).toEqual(ids(1, 25, "wrk"));
+    await expect(range).toHaveText("1–25 of 30");
+    await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
+    await expect(range).toHaveText("26–30 of 30");
+    expect(await rowIds(rows, "/workers")).toEqual(ids(26, 30, "wrk"));
+    await expect(pager(page, "Workers").getByLabel("Per page").locator("option")).toHaveText([
+      "25",
+      "50",
+      "100",
     ]);
-    await pager(page, "All workers").getByLabel("Per page").selectOption("48");
-    await expect(page).toHaveURL(/\/workers\?size=48$/);
-    expect(await titles()).toEqual(labels(1, 30));
-
-    // Busiest workers ranks five, and links to the cards for the rest.
-    const busiest = page.getByRole("region", { name: "Busiest workers" });
-    await expect(busiest.locator("tbody tr")).toHaveCount(5);
-    await busiest.getByRole("link", { name: "All 30 workers" }).click();
-    await expect(page).toHaveURL(/#all-workers$/);
-    // With five workers there is no rest to link to.
-    count = 5;
-    await expect(busiest.locator("tbody tr")).toHaveCount(5);
-    await expect(busiest.getByRole("link")).toHaveCount(0);
+    await pager(page, "Workers").getByLabel("Per page").selectOption("50");
+    await expect(page).toHaveURL(/\/workers\?size=50$/);
+    expect(await rowIds(rows, "/workers")).toEqual(ids(1, 30, "wrk"));
+    await expect(pager(page, "Workers")).toHaveCount(0);
   });
 });
 
@@ -416,10 +426,15 @@ function feed(page: Page): Locator {
   return page.getByRole("region", { name: "Event feed" });
 }
 
-/** The number on the Events shown card. */
-async function eventsShown(page: Page): Promise<number> {
-  return Number(await page.locator(".stat-value").first().textContent());
+// why: the feed draws only the rows in view and prints no count, so its scroll height, one row
+// tall per event, is the only measure of how many events it holds.
+const ROW_PX = 60;
+
+async function eventsHeld(page: Page): Promise<number> {
+  return Math.round((await feed(page).evaluate((box) => box.scrollHeight)) / ROW_PX);
 }
+
+const NUMBER = /evt_load_(\d+)/;
 
 /** Scrolls the feed down past its first 2,000 pixels with the mouse wheel, as a reader would. */
 async function scrollDown(page: Page): Promise<void> {
@@ -444,20 +459,20 @@ async function scrollDown(page: Page): Promise<void> {
     .toBe(true);
 }
 
-/** The feed's first row in view, by its payload's `n`, and its top against the box's top. */
 async function firstInView(page: Page): Promise<{ n: string; top: number }> {
-  return feed(page).evaluate((box) => {
+  return feed(page).evaluate((box, pattern) => {
     const edge = box.getBoundingClientRect().top;
-    const rows = [...box.querySelectorAll<HTMLElement>("li.event")]
+    const rows = [...box.querySelectorAll<HTMLElement>("li")]
       .map((row) => ({ row, top: row.getBoundingClientRect().top - edge }))
       .filter(({ row, top }) => top + row.getBoundingClientRect().height > 0)
       .sort((a, b) => a.top - b.top);
     const first = rows[0];
+    const href = first?.row.querySelector("a")?.getAttribute("href") ?? "";
     return {
-      n: first?.row.querySelector("dd")?.textContent ?? "",
+      n: new RegExp(pattern).exec(decodeURIComponent(href))?.[1] ?? "",
       top: Math.round(first?.top ?? Number.NaN),
     };
-  });
+  }, NUMBER.source);
 }
 
 test.describe("the events feed", () => {
@@ -468,18 +483,19 @@ test.describe("the events feed", () => {
     const replay = events(10_000);
     await answer(page, "/v1/events", () => ({ events: replay }));
     await open(page, daemon, "/events");
-    await expect.poll(() => eventsShown(page)).toBe(10_000);
+    await expect.poll(() => eventsHeld(page)).toBe(10_000);
 
-    const rows = feed(page).locator("li.event");
+    const rows = feed(page).getByRole("listitem");
     expect(await rows.count()).toBeGreaterThan(0);
     expect(await rows.count()).toBeLessThan(100);
+    expect((await firstInView(page)).n).toBe("10000");
     // Halfway down, the rows there are drawn in place of the first ones, and no more of them.
     await feed(page).evaluate((box) => {
       box.scrollTop = box.scrollHeight / 2;
     });
-    await expect(rows.first()).not.toHaveAttribute("aria-posinset", "1");
+    await expect.poll(async () => Number((await firstInView(page)).n)).toBeGreaterThan(4_000);
+    expect(Number((await firstInView(page)).n)).toBeLessThan(6_000);
     expect(await rows.count()).toBeLessThan(100);
-    await expect(rows.first()).toHaveAttribute("aria-setsize", "10000");
   });
 
   test("a new event while scrolled down keeps the visible rows in place and counts in the new-events button", async ({
@@ -496,7 +512,7 @@ test.describe("the events feed", () => {
       const replay = events(1_000);
       await answer(page, "/v1/events", () => ({ events: replay }));
       await open(page, host, "/events");
-      await expect.poll(() => eventsShown(page)).toBe(1_000);
+      await expect.poll(() => eventsHeld(page)).toBe(1_000);
 
       await scrollDown(page);
       const before = await firstInView(page);
@@ -504,7 +520,7 @@ test.describe("the events feed", () => {
 
       // Each renew is one lease.renewed, newer than every event in the list.
       await client.renewLease({ leaseId: grant.lease.id });
-      await expect.poll(() => eventsShown(page)).toBe(1_001);
+      await expect.poll(() => eventsHeld(page)).toBe(1_001);
       await expect(page.getByRole("button", { name: "1 new event" })).toBeVisible();
       expect(await firstInView(page)).toEqual(before);
 
@@ -529,7 +545,7 @@ test.describe("the events feed", () => {
       const replay = events(1_000);
       await answer(page, "/v1/events", () => ({ events: replay }));
       await open(page, host, "/events");
-      await expect.poll(() => eventsShown(page)).toBe(1_000);
+      await expect.poll(() => eventsHeld(page)).toBe(1_000);
       await scrollDown(page);
       await client.renewLease({ leaseId: grant.lease.id });
       const button = page.getByRole("button", { name: "1 new event" });
@@ -540,11 +556,11 @@ test.describe("the events feed", () => {
       await expect(button).toHaveCount(0);
       // The button is gone, so focus moves to the feed rather than dropping to the page.
       await expect(feed(page)).toBeFocused();
-      const top = feed(page).locator("li.event[aria-posinset='1']");
-      await expect(top.locator(".event-name")).toHaveText("lease.renewed");
+      const top = feed(page).getByRole("listitem").first();
+      await expect(top.locator("time + span")).toHaveText("lease.renewed");
       // At the top, the next event shows at the top with no count.
       await client.renewLease({ leaseId: grant.lease.id });
-      await expect.poll(() => eventsShown(page)).toBe(1_002);
+      await expect.poll(() => eventsHeld(page)).toBe(1_002);
       await expect(page.getByRole("button", { name: /new event/ })).toHaveCount(0);
       expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(0);
       const newest = (await recentEvents(host)).at(-1);
@@ -568,14 +584,14 @@ test.describe("the events feed", () => {
     const replay = events(1_000);
     await answer(page, "/v1/events", () => ({ events: replay }));
     await open(page, daemon, "/events");
-    await expect.poll(() => eventsShown(page)).toBe(1_000);
+    await expect.poll(() => eventsHeld(page)).toBe(1_000);
     await scrollDown(page);
 
     // Every generated event is under Other: the same list, shown again from its top.
     await page.getByRole("radio", { name: "Other" }).check();
 
     await expect.poll(() => feed(page).evaluate((box) => box.scrollTop)).toBe(0);
-    await expect(feed(page).locator("li.event").first()).toHaveAttribute("aria-posinset", "1");
+    expect((await firstInView(page)).n).toBe("1000");
   });
 });
 
@@ -640,12 +656,12 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     await page.keyboard.press(tab);
     await page.keyboard.type(host.tokens.operator);
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
     await tabTo(page, page.getByRole("link", { name: "Leases", exact: true }), tab);
     await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
 
-    const nav = pager(page, "All leases");
+    const nav = pager(page, "Leases");
     const range = nav.locator(".pager-range");
     await expect(range).toHaveText("1–25 of 300");
     await tabTo(page, nav.getByRole("button", { name: "Next" }), tab);
@@ -675,14 +691,13 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     await page.keyboard.press("5");
     await expect(range).toHaveText("251–300 of 300");
 
-    // Back up into the table, to the last lease shown, and open it.
     await page.keyboard.press(back);
-    const last = page.getByRole("region", { name: "All leases" }).locator("tbody tr").last();
-    const link = last.getByRole("link");
+    const link = leaseRows(page).getByRole("link").last();
     await expect(link).toBeFocused();
-    const id = await link.textContent();
+    const href = await link.getAttribute("href");
+    expect(href).toMatch(/^\/leases\/lse_[^/]+\/\?page=6&size=50$/);
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { level: 1, name: id ?? "" })).toBeVisible();
+    await expect(page).toHaveURL((url) => `${url.pathname}${url.search}` === href);
   });
 
   test("the events feed scrolls through 5,000 events smoothly and the newest stays first", async ({
@@ -692,8 +707,8 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
   }) => {
     const { host } = seeded;
     await open(page, host, "/events");
-    await expect.poll(() => eventsShown(page)).toBeGreaterThanOrEqual(EVENTS);
-    const held = await eventsShown(page);
+    await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
+    const held = await eventsHeld(page);
 
     // Down to the oldest, two boxes at a time, one step a frame, as a fast fling would.
     const run = await feed(page).evaluate(async (box) => {
@@ -708,7 +723,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
         const now = await frame();
         gaps.push(now - last);
         last = now;
-        const rows = box.querySelectorAll("li.event");
+        const rows = box.querySelectorAll("li");
         most = Math.max(most, rows.length);
         const edge = box.getBoundingClientRect();
         const covered = [...rows].some((row) => {
@@ -718,10 +733,10 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
         if (!covered) blank += 1;
       }
       const sorted = [...gaps].sort((a, b) => a - b);
-      const lastRow = [...box.querySelectorAll("li.event")].at(-1);
+      const lastRow = [...box.querySelectorAll("li")].at(-1);
       return {
         blank,
-        end: lastRow?.getAttribute("aria-posinset") === lastRow?.getAttribute("aria-setsize"),
+        lastHref: lastRow?.querySelector("a")?.getAttribute("href") ?? "",
         median: sorted[Math.floor(sorted.length / 2)] ?? 0,
         most,
         p95: sorted[Math.floor(sorted.length * 0.95)] ?? 0,
@@ -730,7 +745,10 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
       };
     });
     console.log(`${browserName}: ${held} events, ${JSON.stringify(run)}`);
-    expect(run.end).toBe(true);
+    const oldest = (await recentEvents(host)).reduce((a, b) =>
+      b.timestamp < a.timestamp || (b.timestamp === a.timestamp && b.seq < a.seq) ? b : a,
+    );
+    expect(run.lastHref).toBe(`/events/${encodeURIComponent(oldest.id)}`);
     expect(run.blank).toBe(0);
     expect(run.most).toBeLessThan(100);
     expect(run.p95).toBeLessThan(50);
@@ -746,12 +764,12 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const newest = events.reduce((a, b) =>
       b.timestamp > a.timestamp || (b.timestamp === a.timestamp && b.seq > a.seq) ? b : a,
     );
-    const first = feed(page).locator("li.event[aria-posinset='1']");
+    const first = feed(page).getByRole("listitem").first();
     await expect(first.locator("time")).toHaveAttribute(
       "datetime",
       new Date(newest.timestamp).toISOString(),
     );
-    await expect(first.locator(".event-name")).toHaveText(newest.event);
+    await expect(first.locator("time + span")).toHaveText(newest.event);
   });
 
   /** Every page, with a pager in view where the page has one, and the feed scrolled. */
@@ -759,16 +777,16 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const leaseList = (await read(seeded.host, "/v1/leases")) as { leases: { id: string }[] };
     const lease = leaseList.leases[0]?.id ?? "";
     for (const path of [
-      ...NAV_LABELS.map((label) => `/${label.toLowerCase()}`),
+      ...NAV.map((entry) => entry.path),
       "/leases?page=12",
-      `/workers/${encodeURIComponent(seeded.worker)}?devices-page=2&leases-page=3`,
+      `/workers/${encodeURIComponent(seeded.worker)}?devices-page=2`,
       `/leases/${encodeURIComponent(lease)}/`,
     ]) {
       await page.goto(new URL(path, seeded.host.url).href);
-      await expect(page.locator("#main h1")).toBeVisible();
+      await expect(page.locator("#main").getByRole("heading").first()).toBeVisible();
       await expect(page.locator("#main")).not.toContainText("Loading…");
       if (path === "/events") {
-        await expect.poll(() => eventsShown(page)).toBeGreaterThanOrEqual(EVENTS);
+        await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
         await feed(page).evaluate((box) => {
           box.scrollTop = box.scrollHeight / 3;
         });
@@ -776,6 +794,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
       if (path.startsWith("/leases?") || path.startsWith("/workers/")) {
         await expect(page.locator(".pager").first()).toBeVisible();
       }
+      await settled(page);
       await visit(path);
     }
   }
@@ -790,7 +809,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     });
     await page.goto(seeded.host.url);
     await signIn(page, seeded.host.tokens.operator);
-    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
     await everyPage(page, seeded, async (path) => {
       const found = await page.evaluate(() => ({
@@ -805,7 +824,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     await page.setViewportSize({ height: 740, width: 360 });
     await page.goto(seeded.host.url);
     await signIn(page, seeded.host.tokens.operator);
-    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
     await everyPage(page, seeded, async (path) => {
       expect(await hasHorizontalScroll(page), path).toBe(false);
@@ -820,7 +839,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
       await page.emulateMedia({ colorScheme });
       await page.goto(seeded.host.url);
       await signIn(page, seeded.host.tokens.operator);
-      await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
       await everyPage(page, seeded, async (path) => {
         const results = await new AxeBuilder({ page })

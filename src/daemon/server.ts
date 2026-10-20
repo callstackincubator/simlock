@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { type EventBus, type EventEnvelope, type EventHistory } from "../bus/index.js";
+import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
 import {
   type ComponentInstaller,
   type Config,
@@ -48,7 +49,12 @@ import {
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { ConnectionHost } from "./connection-host.js";
-import type { TokenStore } from "../http/token-store.js";
+import {
+  resolveAgentRole,
+  type Auth,
+  type SessionRoleResolver,
+  type TokenOperations,
+} from "../auth/index.js";
 import {
   Dispatcher,
   DispatchError,
@@ -56,8 +62,6 @@ import {
   type DispatcherOptions,
   type DispatchSession,
 } from "./dispatcher.js";
-import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
-import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
 import { RelayConnection, type RelayTargets } from "./relay.js";
@@ -67,7 +71,7 @@ type RequestId = string | number;
 interface Connection {
   readonly socket: IpcConnection;
   /**
-   * Detaches this connection's request-scoped pushes (`progress` for an in-flight
+   * why: Detaches this connection's request-scoped pushes (`progress` for an in-flight
    * `lease.request`, `output` for an in-flight `device.exec`) when the socket goes away, so a
    * push callback that outlives the connection writes nothing instead of throwing into whatever
    * operation is still running. One set for both families: they are disposed for the same
@@ -78,14 +82,10 @@ interface Connection {
   buffer: string;
   helloReceived: boolean;
   closed: boolean;
-  /** ADR 0003 §4: fixed at `hello` for the connection's lifetime. `principal` defaults to
-   * `options.defaultRequesterId` when `hello` omits one (today's CLI/MCP -- PR 4 moves them
-   * onto the typed client, which always sends one). `role` comes from `options.resolveRole`,
-   * the seam PR 2's credential handshake replaces -- see `session.ts`. */
   principal: string;
   role: Role;
   /**
-   * Set only for a connection accepted through `acceptUplink` (ADR 0005 §5): the role that
+   * why: Set only for a connection accepted through `acceptUplink` (ADR 0005 §5): the role that
    * connection gets, decided by *how it was accepted* rather than by anything in its `hello`.
    * `#handleHello` uses it in place of `#resolveRole`, so no credential is consulted and none
    * is required. See `acceptUplink`'s own comment for why that is the correct trust model
@@ -93,7 +93,7 @@ interface Connection {
    */
   readonly forcedRole: Role | undefined;
   /**
-   * H3 (round 3 review, narrowed further): set only by `acceptUplink`, and only there -- a
+   * why: H3 (round 3 review, narrowed further): set only by `acceptUplink`, and only there -- a
    * dedicated fact about *how this connection was accepted*, not derived from `forcedRole`.
    * Before this, `#session` read `forcedRole !== undefined` as the proxy for "this is the
    * worker's own uplink to its configured gateway", which happened to be true only because
@@ -107,7 +107,7 @@ interface Connection {
   // why: set with `isGatewayUplink`; the link accepts the byte channels a relay names (ADR 0028).
   readonly link: LinkConnection | undefined;
   /**
-   * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
+   * why: Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by
    * `#notifyLeaseLost`. ADR 0003 §8 says a client "never fires `onLeaseLost` for a release the
    * same client asked for", and pushes are owner-routed to every connection sharing a
@@ -118,7 +118,7 @@ interface Connection {
    * that used to sit beside it.
    */
   readonly selfInitiatedReleases: Set<string>;
-  /** Set by `#handleHello` only when this connection's `hello` failed protocol-version
+  /** why: Set by `#handleHello` only when this connection's `hello` failed protocol-version
    * negotiation (ADR 0003 §6). `principal`/`role` are still resolved and fixed as normal --
    * the frozen exception is scoped to the protocol-version gate, not to authentication or role
    * (see the comment on `#dispatchLine`'s `daemon.stop` handling). While set, every operation on
@@ -127,7 +127,7 @@ interface Connection {
    * first. */
   protocolMismatch: { readonly message: string; readonly details: unknown } | undefined;
   unsubscribeEvents: (() => void) | undefined;
-  /** Set while this connection has an active `events.subscribe`; correlates `event` pushes
+  /** why: Set while this connection has an active `events.subscribe`; correlates `event` pushes
    * (ADR 0003 §8). Minted per-subscription from `#eventSubscriptionSeq` rather than injected --
    * `DaemonServer` has no `IdGenerator` dependency today, and this only needs to be unique per
    * connection lifetime, not globally unpredictable. */
@@ -146,7 +146,8 @@ export interface DaemonServerEngineOptions {
   readonly catalog: CatalogReader;
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly historyPath?: string;
   readonly leases: LeaseCommands;
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;
@@ -164,7 +165,7 @@ export interface DaemonServerEngineOptions {
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
-  readonly tokens?: TokenStore;
+  readonly tokens?: TokenOperations;
 }
 
 export interface DaemonServerCommonOptions {
@@ -180,29 +181,24 @@ export interface DaemonServerCommonOptions {
   readonly host: ConnectionHost;
   readonly hostLoad?: { start(): void; dispose(): void };
   readonly logger?: Logger;
-  /** Overrides the daemon's advertised protocol range (ADR 0003 §6); defaults to
-   * `PROTOCOL_VERSION_RANGE`. A bare number is normalized to `{n, n}`, same as a client's. */
   readonly protocolVersion?: number | ProtocolRange;
   readonly version: string;
-  /** ADR §5's seam (see `session.ts`): resolves a session's role from `hello`'s payload.
-   * Defaults to `resolveAgentRole` (every session is "agent") -- PR 2's credential handshake
-   * supplies a real resolver here without changing anything else in this class. */
   readonly resolveRole?: SessionRoleResolver;
   /**
-   * ADR §5's per-start admin secret. Undefined is a legitimate default for tests that don't
+   * why: ADR §5's per-start admin secret. Undefined is a legitimate default for tests that don't
    * exercise the admin handshake at all -- `start()`/`#stop()` simply skip the persist/remove
    * calls below when it is absent, same style as `doctor`/`nuke`.
    */
-  readonly adminSecret?: AdminSecretManager;
+  readonly adminSecret?: Auth["adminSecret"];
   /**
-   * Startup recovery work (doctor reconciliation, running-capacity convergence) run
+   * why: Startup recovery work (doctor reconciliation, running-capacity convergence) run
    * *after* the socket is claimed, so reachability never depends on it. `hello` and
    * `status.get` answer immediately; every other request type parks on this promise.
    * A rejection here stops the daemon rather than leaving it half-open — see `start()`.
    */
   readonly converge?: () => Promise<void>;
   /**
-   * Awaits lease work the subsystem is finishing off its callers' paths — today the
+   * why: Awaits lease work the subsystem is finishing off its callers' paths — today the
    * backgrounded device reclaims a release hands off (see `LeaseReleaseCoordinator`).
    * A graceful stop drains it so the pool is left settled; an ungraceful death leaves
    * it for startup recovery. The stop itself releases nothing (ADR 0004 §3), so what this
@@ -211,39 +207,39 @@ export interface DaemonServerCommonOptions {
    */
   readonly settle?: () => Promise<void>;
   /**
-   * Called synchronously the moment a stop is asked for, before anything is awaited: it closes
+   * why: Called synchronously the moment a stop is asked for, before anything is awaited: it closes
    * to new work whatever `settle` will later wait for (the warm pool), so nothing started in the
    * window while auxiliary frontends stop is something the drain then waits out (architecture
    * rule 12).
    */
   readonly beginStop?: () => void;
   /**
-   * Releases what the daemon holds beyond its own state on shutdown: timers the lease
+   * why: Releases what the daemon holds beyond its own state on shutdown: timers the lease
    * subsystem armed (quarantine retries), and every driver's own external resources.
    * Awaited, because a driver's release is asynchronous and a stop that returned before it
    * finished would report a shutdown that had not happened.
    */
   readonly dispose?: () => void | Promise<void>;
   /**
-   * Stops an auxiliary frontend (today: the HTTP gateway's listener, started only after
-   * `start()` resolves -- see `main.ts`) before anything else in `stop()` runs, so no
-   * request arriving through it can ever observe a stopping engine. A no-op default when
+   * why: Stops an auxiliary frontend (today: the HTTP gateway's listener, which `main.ts` starts
+   * from `onSocketClaimed`, partway through `start()`) before anything else in `stop()` runs, so
+   * no request arriving through it can ever observe a stopping engine. A no-op default when
    * no auxiliary frontend is running.
    */
   readonly stopAuxiliary?: () => Promise<void>;
   /**
-   * ADR 0003 §2's "an HTTP request during startup now waits like a socket request instead of
+   * why: ADR 0003 §2's "an HTTP request during startup now waits like a socket request instead of
    * being refused" needs the HTTP gateway actually listening *before* convergence finishes --
    * otherwise there is nothing for a request to park against, it just gets connection-refused
    * the way it always did. Called synchronously right after `#readyPromise` is assigned (so any
    * request `dispatch()` serves as a result of this callback already parks correctly) and after
-   * the socket claim and the admin-secret write, but *before* awaiting convergence -- an
+   * the socket claim and the admin secret write, but *before* awaiting convergence -- an
    * auxiliary frontend started from here must not itself assume convergence is done. A no-op
    * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
    */
   readonly onSocketClaimed?: () => void;
   /**
-   * #118: a gateway's own `OwnerRoutedFacts` (`src/gateway/owner-routed-facts.ts`'s
+   * why: #118: a gateway's own `OwnerRoutedFacts` (`src/gateway/owner-routed-facts.ts`'s
    * `GatewayOwnerRoutedFacts`), replacing the inert one gateway mode has used since #117. Worker
    * mode ignores this entirely -- it builds its own `OwnerRoutedFactBus` from the engine's
    * registry, exactly as before. Structurally typed (not imported) so this module need not
@@ -252,7 +248,7 @@ export interface DaemonServerCommonOptions {
    */
   readonly ownerRoutedFacts?: OwnerRoutedFacts & { dispose(): void };
   /**
-   * #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
+   * why: #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
    * suppression (`#handleRequest`'s `lease.release-all` case below). Worker mode reads its own
    * registry directly and never needs this (`this.#engine?.registry` already answers it); a
    * gateway has no registry, so it supplies its fleet lease index's own entries here instead --
@@ -264,7 +260,7 @@ export interface DaemonServerCommonOptions {
 }
 
 /**
- * ADR 0005 §32: one transport, two dispatchers. A worker passes its engine and gets the
+ * why: ADR 0005 §32: one transport, two dispatchers. A worker passes its engine and gets the
  * `Dispatcher` built for it; a gateway passes a ready-made `dispatcher` (its own handlers, over
  * worker views and uplinks) and no engine at all. The union -- rather than one interface with
  * everything optional -- is what keeps each mode's requirements checked at compile time.
@@ -272,7 +268,6 @@ export interface DaemonServerCommonOptions {
 export type DaemonServerOptions =
   | (DaemonServerCommonOptions & DaemonServerEngineOptions & { readonly dispatcher?: undefined })
   | (DaemonServerCommonOptions & {
-      /** The contract implementation this daemon serves. See `src/gateway/dispatcher.ts`. */
       readonly dispatcher: ContractDispatcher;
     });
 
@@ -302,6 +297,7 @@ function buildDispatcher(
     errorCode: classifyError,
     eventBus: options.eventBus,
     eventHistory: options.eventHistory,
+    ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: hooks.health,
     hostFacts: options.hostFacts,
     ...(options.load === undefined ? {} : { load: options.load }),
@@ -336,7 +332,7 @@ export class DaemonServer {
   // why: a request that arrives on an uplink before `start()` has claimed its socket parks here, so it never runs ahead of convergence.
   readonly #beforeReady = quietDeferred();
   /**
-   * Every `#dispatchLine` call that starts while `#health` is still `"starting"`,
+   * why: Every `#dispatchLine` call that starts while `#health` is still `"starting"`,
    * tracked so a convergence failure can genuinely drain them -- await each one's
    * own response actually being written -- before closing sockets, rather than
    * hoping a `stop()` scheduling gap gives them time to run. See the catch in
@@ -344,11 +340,10 @@ export class DaemonServer {
    */
   readonly #parkedDispatches = new Set<Promise<void>>();
   readonly #dispatcher: ContractDispatcher;
-  /** The worker's own dispatcher, held to dispose on stop; absent on a gateway. */
   readonly #workerDispatcher: Dispatcher | undefined;
   readonly #resolveRole: SessionRoleResolver;
   /**
-   * The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
+   * why: The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
    * registry, capacity or lifecycle to hold). Every engine touchpoint below is written
    * against this rather than `this.options`, so "what a gateway does not have" is one
    * `?.` at each site instead of a mode flag threaded through the class.
@@ -363,12 +358,12 @@ export class DaemonServer {
         : normalizeProtocolVersion(options.protocolVersion);
     this.#logger = options.logger ?? new NoopLogger();
     this.#resolveRole = options.resolveRole ?? resolveAgentRole;
-    // ADR §8: the same translation `#notifyLeaseLost`/`#notifyDeviceUnhealthy`/
+    // why: ADR §8: the same translation `#notifyLeaseLost`/`#notifyDeviceUnhealthy`/
     // `#notifyDeviceRecovered` below route from is what the HTTP gateway's `LeaseNoticeBuffer`
     // consumes too (see `ownerRoutedFacts` getter and `main.ts`) -- one bus subscription
     // per raw event, not one per consumer.
     if (options.dispatcher === undefined) {
-      // Worker mode: build the engine-backed `Dispatcher` exactly as before. `options` narrows
+      // why: Worker mode: build the engine-backed `Dispatcher` exactly as before. `options` narrows
       // to the engine arm of the union here, so every field it needs is still required at
       // compile time.
       const engine: DaemonServerEngineOptions = options;
@@ -380,16 +375,9 @@ export class DaemonServer {
       });
       this.#dispatcher = this.#workerDispatcher;
     } else {
-      // Gateway mode (ADR 0005 §32): the handlers come ready-made, and there is no engine to
-      // hold. Owner-routed facts are inert here, deliberately: the gateway issues no leases of
-      // its own in this PR, and a worker's republished `lease.expired` names *that worker's*
-      // owner, not a gateway client's principal -- routing one to a gateway connection would
-      // push another machine's fact at the wrong holder. #118/#119 relay lease-scoped pushes,
-      // with the gateway's own lease index to route them by; until then this is inert rather
-      // than wrong.
       this.#engine = undefined;
       this.#dispatcher = options.dispatcher;
-      // #118: a gateway now issues leases of its own, and `GatewayOwnerRoutedFacts` (built by
+      // why: #118: a gateway now issues leases of its own, and `GatewayOwnerRoutedFacts` (built by
       // `main.ts`, with the fleet's own lease index) is what routes their `lease-lost`/
       // `device-unhealthy`/`device-recovered` facts to the right owner -- see that class's doc
       // comment for why a worker's own republished `lease.expired` cannot be routed off its raw
@@ -402,23 +390,14 @@ export class DaemonServer {
     return this.options.host.endpoint;
   }
 
-  /** Public read of `#health`. A gateway's dispatcher reads it through here (`main.ts` passes
+  /** why: Public read of `#health`. A gateway's dispatcher reads it through here (`main.ts` passes
    * `() => daemon.health` as its `health` hook), which is what keeps `status.get` on a gateway
    * reporting the same daemon health a worker does without the gateway holding a second copy. */
   get health(): DaemonHealth {
     return this.#health;
   }
 
-  /**
-   * ADR 0003 §2: "the HTTP app ... calls the same dispatcher in-process. Nothing routes HTTP
-   * through the loopback socket; the parity comes from the shared dispatcher, not from a
-   * shared wire." This is that seam -- the one privileged thing an in-process auxiliary
-   * frontend (today: `createHttpApp`, see `main.ts`) is allowed to reach into `DaemonServer`
-   * for, so that it gets the exact same input parsing, role check, `authorize` hook, and
-   * startup-readiness parking as every socket request, from the exact same `Dispatcher`
-   * instance -- not a second one constructed with equivalent-looking options.
-   */
-  /** Shared with the HTTP gateway (`main.ts`) so its `LeaseNoticeBuffer` consumes the same
+  /** why: Shared with the HTTP gateway (`main.ts`) so its `LeaseNoticeBuffer` consumes the same
    * owner-routed facts this class's own socket pushes do, instead of subscribing to the raw
    * event bus a second time -- see `owner-routed-facts.ts`'s module doc. */
   get ownerRoutedFacts(): OwnerRoutedFacts {
@@ -430,7 +409,7 @@ export class DaemonServer {
     input: unknown,
     session: DispatchSession,
   ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
-    // Mirrors the socket path's `#stopping` -> `DAEMON_STOPPING` gate in `#dispatchLine` (just
+    // why: Mirrors the socket path's `#stopping` -> `DAEMON_STOPPING` gate in `#dispatchLine` (just
     // above the `#stopping` check there), so every transport that calls this method -- not only
     // the socket -- shares it. Without this, a caller that reaches the dispatcher directly (the
     // HTTP gateway; review finding S5) could have a request accepted *during* `#stop()`'s
@@ -446,7 +425,7 @@ export class DaemonServer {
   }
 
   /**
-   * Claims the socket first so reachability never depends on startup recovery work:
+   * why: Claims the socket first so reachability never depends on startup recovery work:
    * a lost startup race throws `DaemonAlreadyRunningError` here, before `converge()`
    * runs any device work. Only after the claim does convergence run; `hello` and
    * `status.get` answer throughout, every other request parks on `#readyPromise`
@@ -465,7 +444,7 @@ export class DaemonServer {
 
   async #start(): Promise<void> {
     await this.options.host.start((connection) => this.#accept(connection));
-    // ADR §5: written only after the socket claim above has succeeded -- a daemon that loses
+    // why: ADR §5: written only after the socket claim above has succeeded -- a daemon that loses
     // the start race throws out of `host.start()` and never reaches this line, so it never
     // touches `admin.token`. Awaited before convergence starts (not raced with it): the file
     // landing is not itself gated on convergence -- `hello` already verifies the in-memory
@@ -482,14 +461,14 @@ export class DaemonServer {
     const readyPromise = this.#converge();
     this.#readyPromise = readyPromise;
     readyPromise.then(this.#beforeReady.resolve, this.#beforeReady.reject);
-    // See `onSocketClaimed`'s doc: fired only after `#readyPromise` is assigned, so a request
+    // why: See `onSocketClaimed`'s doc: fired only after `#readyPromise` is assigned, so a request
     // the auxiliary frontend starts serving as an immediate result of this call already parks
     // on it correctly via `#awaitReady()`.
     this.options.onSocketClaimed?.();
     try {
       await readyPromise;
     } catch (error: unknown) {
-      // Convergence failed after the socket was claimed: stop rather than sit there
+      // why: Convergence failed after the socket was claimed: stop rather than sit there
       // accepting connections we can never serve. Drain `#parkedDispatches` first --
       // genuinely wait for each dispatch that started during the window to finish,
       // not just for `#awaitReady()` to reject -- so a request already parked on
@@ -506,7 +485,7 @@ export class DaemonServer {
       throw error;
     }
 
-    // Convergence succeeded, but a `stop()` may have run to completion while it was in
+    // why: Convergence succeeded, but a `stop()` may have run to completion while it was in
     // flight -- `daemon.stop` is accepted during startup (see `#dispatchLine`), and an
     // auxiliary frontend that fails to start asks for a stop of its own. Everything below
     // this point arms live machinery: it subscribes to the fact bus, emits `daemon.started`,
@@ -522,10 +501,10 @@ export class DaemonServer {
       return;
     }
 
-    // Subscribed only now, after convergence, not before `start()` claimed the socket. Under
-    // ADR 0004 convergence releases nothing at all (the orphan sweep is gone), so the only
-    // lease fact it can still emit is a `lease.expired` for a lease whose deadline passed
-    // while no daemon was running.
+    // why: Subscribed only now, after convergence, not before `start()` claimed the socket.
+    // Convergence ends every lease whose device the startup read does not find running, so the
+    // lease facts this window can emit are a `lease.expired` for a lease whose deadline passed
+    // while no daemon ran and a `lease.released` (`device-lost`) for one whose device is gone.
     //
     // Such a `lease-lost` push can genuinely be missed, and that is accepted rather than
     // assumed away: the socket has been accepting connections since the claim, `hello` is
@@ -547,8 +526,7 @@ export class DaemonServer {
     //
     // `device.crash-detected` / `device.recovered` re-checked: the health monitor
     // that emits them is only started after convergence too (see `createLeasing` /
-    // `DaemonServer` startup wiring), so neither can fire during this window either
-    // -- the same "nothing emitted during convergence needs a push" argument holds.
+    // `DaemonServer` startup wiring), so neither can fire during this window either.
     this.#unsubscribeLeaseLost.push(
       this.#ownerRoutedFacts.subscribe((fact) => {
         switch (fact.type) {
@@ -565,19 +543,17 @@ export class DaemonServer {
       }),
     );
 
-    // Redacted: the payload lands in the ring and `events.jsonl`, and the log line in
-    // `daemon.log`, none of which is as guarded as `config.json`. `this.options.config` itself
-    // stays whole -- `config.get` answers from it.
+    // why: redacted because the payload lands in the ring and `history.db`, and the log line in `daemon.log`, none of which is as guarded as `config.json`; `this.options.config` stays whole for `config.get`.
     const configSnapshot = redactConfig(this.options.config);
     this.options.eventBus.emit(
       "daemon.started",
       { configSnapshot, version: this.options.version },
       "daemon",
     );
-    // After `daemon.started`, because these are facts about the daemon that just started
+    // why: After `daemon.started`, because these are facts about the daemon that just started
     // and a subscriber reading the buffer in order should see it come up first.
     for (const rejection of this.options.driverRejections ?? []) {
-      // No assertion: `DriverRejection` pairs each event name with that event's own
+      // why: No assertion: `DriverRejection` pairs each event name with that event's own
       // payload, so the contract is checked where the driver module builds the refusal
       // rather than being taken on trust here, one step from the ring buffer.
       this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
@@ -589,7 +565,7 @@ export class DaemonServer {
       socketPath: this.options.host.endpoint,
       version: this.options.version,
     });
-    // Armed only here, after convergence: a probe tick shells out per platform, and
+    // why: Armed only here, after convergence: a probe tick shells out per platform, and
     // convergence is already doing that per driver and device. Starting it late is
     // also what keeps the subscriptions above safe -- nothing can emit
     // device.crash-detected during the startup window, because the only emitter is
@@ -631,7 +607,7 @@ export class DaemonServer {
   }
 
   async #stop(reason: string): Promise<void> {
-    // Awaited first, before anything below: an auxiliary frontend calls the role interfaces
+    // why: Awaited first, before anything below: an auxiliary frontend calls the role interfaces
     // directly rather than parking on `#awaitReady`/this method's own teardown order, so it
     // must be shut off before lease/queue teardown begins -- otherwise a request arriving
     // through it mid-stop could run against an engine already being torn down.
@@ -653,15 +629,18 @@ export class DaemonServer {
     for (const connection of this.#connections) {
       await connection.socket.close();
     }
-    await this.options.host.stop();
-    // why: a daemon that lost the start race never persisted it, and `#stop()` is never reached on that
-    // instance.
-    await this.options.adminSecret?.remove();
+    // why: releasing the endpoint lets a replacement write its credential, so removal must happen while this daemon still owns it.
+    // why: a failed removal must still release the endpoint, or the stopping daemon keeps listening and blocks its replacement.
+    try {
+      await this.options.adminSecret?.remove();
+    } finally {
+      await this.options.host.stop();
+    }
     this.#logger.info("Daemon stopped", { reason });
   }
 
   /**
-   * ADR 0005 §5: accepts a worker's *outbound* uplink as one more connection on this daemon's
+   * why: ADR 0005 §5: accepts a worker's *outbound* uplink as one more connection on this daemon's
    * own protocol, and grants that session the `admin` role.
    *
    * The grant is not a hole in ADR 0003 §5 ("admin authority comes from a credential in the
@@ -691,7 +670,7 @@ export class DaemonServer {
       helloReceived: false,
       isGatewayUplink: link !== undefined,
       link,
-      // Overwritten by `#handleHello` before any dispatched request can read them -- every
+      // why: Overwritten by `#handleHello` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `#handleHello` until then).
       principal: "",
@@ -727,7 +706,7 @@ export class DaemonServer {
   }
 
   /**
-   * Fires `#dispatchLine` without awaiting it, same as before, but while `#health` is
+   * why: Fires `#dispatchLine` without awaiting it, same as before, but while `#health` is
    * still `"starting"` also tracks the call in `#parkedDispatches` so a convergence
    * failure can drain it deterministically. Tracking every dispatch during the
    * window (not just the ones that turn out to park) is simplest and harmless --
@@ -774,7 +753,7 @@ export class DaemonServer {
     // why: accepted here, in the same turn the line was read, so a request that parks for startup already holds its channel (ADR 0028).
     const relayChannel = this.#acceptRelayChannel(connection, frame);
 
-    // `daemon.stop` is a frozen exception (ADR 0003 §6), but only with respect to the
+    // why: `daemon.stop` is a frozen exception (ADR 0003 §6), but only with respect to the
     // *protocol-version* gate: "the daemon accepts it at any protocol version it has ever
     // spoken". It is not frozen with respect to authentication or role -- §3's operation matrix
     // assigns `daemon.stop` role `admin` like any other admin operation, and the ADR's Context
@@ -832,7 +811,7 @@ export class DaemonServer {
     } catch (error: unknown) {
       relayChannel?.abort();
       const code = errorCode(error);
-      // A handled error is already on the dispatcher's `operation` line; this one adds the stack.
+      // why: A handled error is already on the dispatcher's `operation` line; this one adds the stack.
       if (code === "INTERNAL") {
         this.#logger.error("Unhandled request error", {
           message: errorMessage(error),
@@ -840,7 +819,7 @@ export class DaemonServer {
           type: frame.type,
         });
       }
-      // ADR 0003 §7's typed `details` travel with the code when the thrown error carries any
+      // why: ADR 0003 §7's typed `details` travel with the code when the thrown error carries any
       // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`,
       // and a worker's `UNSUPPORTED_IN_WORKER_MODE`),
       // so a socket client can narrow on them exactly as an HTTP one does.
@@ -855,7 +834,7 @@ export class DaemonServer {
   }
 
   /**
-   * A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
+   * why: A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
    * it reads identically to "this host has no Xcode". Safety rule 9 promises Simlock
    * reports *why* a platform is missing, so the refusal's own one-liner travels with the
    * error on both paths a user meets it: leasing, and the `simlock simctl` / `simlock adb`
@@ -905,15 +884,14 @@ export class DaemonServer {
       return;
     }
     const payload = parsedHello.data;
-    // ADR 0003 §6: the daemon prefers the client's `protocolRange` when present, and treats a
+    // why: ADR 0003 §6: the daemon prefers the client's `protocolRange` when present, and treats a
     // bare `protocolVersion` as `{n, n}` only when it is not -- `helloRequestSchema` already
     // guarantees at least one of the two is present.
     const clientRange: ProtocolRange =
       payload.protocolRange ?? normalizeProtocolVersion(payload.protocolVersion as number);
     const negotiated = negotiateProtocolVersion(clientRange, this.#protocolRange);
-    // ADR §5's seam: `#resolveRole` is `resolveAgentRole` (always "agent") until PR 2 supplies
-    // a real credential-checking resolver -- see `session.ts`. A resolver that rejects a bad
-    // credential throws here, before `connection.helloReceived` is ever set, which is why this
+    // why: A resolver that rejects a bad credential throws here, before
+    // `connection.helloReceived` is ever set, which is why this
     // whole block is wrapped: nothing after it should be able to run for a rejected `hello` --
     // including the version-mismatch path just below. Credential verification and role
     // resolution run *before* the version check, and independently of its outcome: ADR §6's
@@ -922,7 +900,7 @@ export class DaemonServer {
     // whether the versions would otherwise have matched.
     let role: Role;
     try {
-      // ADR 0005 §5: an uplink connection's role comes from how it was accepted (this daemon
+      // why: ADR 0005 §5: an uplink connection's role comes from how it was accepted (this daemon
       // dialled the gateway named in its own config), so no credential is consulted -- see
       // `acceptUplink`. Every other connection resolves its role from `hello` exactly as
       // before.
@@ -937,9 +915,6 @@ export class DaemonServer {
       await connection.socket.close();
       return;
     }
-    // ADR §4: the principal is fixed for the connection's lifetime from here on. Falls back to
-    // `defaultRequesterId` when `hello` omits one -- today's CLI/MCP frontends don't send a
-    // principal yet (PR 4 moves them onto the typed client, which always will).
     connection.principal = payload.principal ?? this.options.defaultRequesterId;
     connection.role = role;
     if (negotiated === undefined) {
@@ -949,7 +924,7 @@ export class DaemonServer {
         daemonVersion: this.options.version,
       };
       const message = `No overlapping protocol version: client supports ${clientRange.min}-${clientRange.max}, daemon supports ${this.#protocolRange.min}-${this.#protocolRange.max}`;
-      // `helloReceived` is still set: the handshake completed (credential verified, role
+      // why: `helloReceived` is still set: the handshake completed (credential verified, role
       // resolved) even though negotiation failed. `protocolMismatch` is what `#dispatchLine`
       // checks to refuse every subsequent operation except `daemon.stop` with this same error
       // (ADR §6). The socket is deliberately left open -- closing it here is what today's bug
@@ -986,7 +961,7 @@ export class DaemonServer {
         daemonProtocolRange: this.#protocolRange,
         version: this.options.version,
         role: connection.role,
-        // ADR §4: report the resolved principal back -- see `helloReplySchema`'s comment. Read
+        // why: ADR §4: report the resolved principal back -- see `helloReplySchema`'s comment. Read
         // from `connection.principal`, set a few lines above from `payload.principal` or the
         // daemon's own default, so this is always the same value every subsequent dispatched
         // request is authorized against.
@@ -997,16 +972,6 @@ export class DaemonServer {
     await writeFrame(connection.socket, { id: frame.id, ok: true, payload: reply });
   }
 
-  /**
-   * The request switch that used to live here moved to `Dispatcher` (ADR 0003 §2): this method
-   * now only does what stays with `DaemonServer` around the shared `dispatch()` call --
-   * building the per-call `DispatchSession` (ADR §2/§4) from this connection's fixed
-   * principal/role plus whatever is call-specific (progress delivery, event-subscription
-   * management), and marking a release this connection asked for so its own `lease-lost` push
-   * is suppressed. ADR 0004 §3 deleted the held-lease tracking that used to live here too: the
-   * daemon keeps no per-connection lease state, so a release is no longer bookkeeping to undo
-   * on failure, only a push to suppress while it is in flight.
-   */
   // fallow-ignore-next-line complexity -- one case per request type; the switch is the transport's whole surface.
   async #handleRequest(
     connection: Connection,
@@ -1018,7 +983,6 @@ export class DaemonServer {
         return this.#requestLease(connection, frame.id, frame.payload);
       case "lease.release": {
         const input = parseInput(leaseRelease.input, frame.payload);
-        // Marked for `#notifyLeaseLost` to suppress the self-push -- see that set's comment.
         connection.selfInitiatedReleases.add(input.leaseId);
         try {
           return await this.#dispatcher.dispatch(
@@ -1031,7 +995,7 @@ export class DaemonServer {
         }
       }
       case "lease.release-all": {
-        // Every lease this principal owns is about to end, and this connection asked for it,
+        // why: Every lease this principal owns is about to end, and this connection asked for it,
         // so suppress the self-push for each. Read from the registry rather than from
         // per-connection state, which no longer exists (ADR 0004 §3).
         //
@@ -1118,6 +1082,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "usage.get":
+        return this.#dispatcher.dispatch(
+          "usage.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "events.subscribe":
         return this.#dispatcher.dispatch(
           "events.subscribe",
@@ -1131,7 +1101,7 @@ export class DaemonServer {
           this.#session(connection),
         );
       case "driver.passthrough":
-        // Resolution only: the daemon never runs the command. Spawning it here would attach
+        // why: Resolution only: the daemon never runs the command. Spawning it here would attach
         // a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
         // that actually has a terminal.
         return this.#dispatcher.dispatch(
@@ -1140,7 +1110,7 @@ export class DaemonServer {
           this.#session(connection),
         );
       case "device.exec":
-        // Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
+        // why: Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
         // per-call push wiring `lease.request` needs, and gets it the same way.
         return this.#execDevice(connection, frame.id, frame.payload);
       case "relay.request":
@@ -1150,6 +1120,12 @@ export class DaemonServer {
       case "config.get":
         return this.#dispatcher.dispatch(
           "config.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "identity.get":
+        return this.#dispatcher.dispatch(
+          "identity.get",
           frame.payload ?? {},
           this.#session(connection),
         );
@@ -1163,7 +1139,7 @@ export class DaemonServer {
         );
       case "token.revoke":
         return this.#dispatcher.dispatch("token.revoke", frame.payload, this.#session(connection));
-      // ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
+      // why: ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
       // surface, and what a *given* daemon answers is the dispatcher's business, not the
       // transport's -- a worker's dispatcher answers `worker.list` about itself and refuses the
       // rest with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012).
@@ -1208,7 +1184,7 @@ export class DaemonServer {
         return this.#dispatcher.dispatch("device.add", frame.payload, this.#session(connection));
       case "device.remove":
         return this.#dispatcher.dispatch("device.remove", frame.payload, this.#session(connection));
-      // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
+      // why: "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`
       // role there), so it never reaches `#handleRequest`.
@@ -1238,10 +1214,11 @@ export class DaemonServer {
       principal: connection.principal,
       relays: connection.relays,
       role: connection.role,
+      via: connection.isGatewayUplink === true ? "uplink" : "socket",
     };
   }
 
-  /** Connection-scoped: tears down any existing `events.subscribe` unconditionally (matches
+  /** why: Connection-scoped: tears down any existing `events.subscribe` unconditionally (matches
    * the pre-dispatcher behaviour -- a second `subscribe` replaces the first), then, if asked,
    * wires a fresh one that pushes every bus event to this connection. Kept in `DaemonServer`
    * because event delivery is a push (ADR §2: pushes stay with the transport); the dispatcher's
@@ -1261,7 +1238,7 @@ export class DaemonServer {
   }
 
   /**
-   * The progress-delivery wiring ADR 0003 §2 keeps in `DaemonServer` ("DaemonServer keeps
+   * why: The progress-delivery wiring ADR 0003 §2 keeps in `DaemonServer` ("DaemonServer keeps
    * framing, connection lifecycle, and pushes; it loses the request switch"). The actual lease
    * acquisition is `Dispatcher`'s `lease.request` handler; this method's job is what is left
    * around that call that depends on *this connection* rather than on the operation itself,
@@ -1278,7 +1255,7 @@ export class DaemonServer {
       progressSocket = undefined;
     };
     connection.progressDisposers.add(disposeProgress);
-    // A connection close only silences this call's pushes (`disposeProgress`): the request
+    // why: A connection close only silences this call's pushes (`disposeProgress`): the request
     // itself keeps waiting, and a client that reconnects repeats it to get its answer.
     let grant;
     try {
@@ -1286,7 +1263,7 @@ export class DaemonServer {
         ...this.#session(connection),
         onProgress: (progress) => {
           if (progressSocket !== undefined) {
-            // Progress is advisory: one that does not fit the push contract (a `downloading`
+            // why: Progress is advisory: one that does not fit the push contract (a `downloading`
             // component the driver named past the contract's bound) or a socket that went away
             // is dropped, and the request carries on to its answer.
             void this.#pushProgress(progressSocket, requestId, progress).catch(() => {
@@ -1299,7 +1276,7 @@ export class DaemonServer {
       connection.progressDisposers.delete(disposeProgress);
       disposeProgress();
     }
-    // A grant that lands after its requester's connection died (or during a stop) is left
+    // why: A grant that lands after its requester's connection died (or during a stop) is left
     // standing on purpose: ADR 0004 §3 -- connection close means nothing to a lease, so the
     // client that reconnects can renew it, and if none does it expires at its deadline like
     // any other.
@@ -1307,7 +1284,7 @@ export class DaemonServer {
   }
 
   /**
-   * ADR 0005 §19a's output relay, and the exact counterpart of `#requestLease` above: the
+   * why: ADR 0005 §19a's output relay, and the exact counterpart of `#requestLease` above: the
    * operation itself is the dispatcher's `device.exec` handler; what lives here is the part
    * that depends on *this connection* -- turning each chunk into an `output` push carrying this
    * call's frame id, and stopping the moment the socket goes away.
@@ -1332,7 +1309,7 @@ export class DaemonServer {
     try {
       return await this.#dispatcher.dispatch("device.exec", value ?? {}, {
         ...this.#session(connection),
-        // Returned rather than fired and forgotten, which is what applies backpressure: the
+        // why: Returned rather than fired and forgotten, which is what applies backpressure: the
         // dispatcher hands this promise to the process runner, which stops reading the child
         // until the frame has actually been written (ADR 0005 §19e -- "streamed, never
         // buffered" is only true end to end if a client that does not read slows the command
@@ -1344,7 +1321,7 @@ export class DaemonServer {
           if (outputSocket === undefined) return;
           await this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
         },
-        // ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
+        // why: ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
         // unlike `onOutput` this carries no backpressure meaning, and the dispatcher calls it
         // synchronously between the spawn and the first chunk. Every peer that negotiates
         // protocol 5 understands the frame (§31), so this is not a signal anyone opts out of.
@@ -1381,7 +1358,7 @@ export class DaemonServer {
   }
 
   /**
-   * ADR 0010 §6: the counterpart of `#requestLease` for an install. Each progress update becomes
+   * why: ADR 0010 §6: the counterpart of `#requestLease` for an install. Each progress update becomes
    * a `component-progress` push carrying this call's frame id. A closed connection only
    * silences the pushes (`writeFrame` writes nothing to a closed socket, and a write that fails
    * is dropped): the install carries on for every call joined to it, and a client that
@@ -1407,7 +1384,6 @@ export class DaemonServer {
     });
   }
 
-  /** ADR 0010 §6: `component-progress` carries the originating request's frame id. */
   async #pushComponentProgress(
     socket: IpcConnection,
     requestId: RequestId,
@@ -1425,7 +1401,7 @@ export class DaemonServer {
   }
 
   /**
-   * ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
+   * why: ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
    * does, so a connection running more than one command routes each chunk to its own call.
    *
    * The returned promise is the backpressure signal, so it has to mean "this frame is out":
@@ -1447,7 +1423,7 @@ export class DaemonServer {
   }
 
   /**
-   * ADR 0005 §19a: `started` carries the originating request's frame id, exactly as `output`
+   * why: ADR 0005 §19a: `started` carries the originating request's frame id, exactly as `output`
    * does. It is the one fact a gateway forwarding this command cannot infer for itself -- see
    * `startedPushSchema`'s own doc -- so the worker that knows it sends it.
    */
@@ -1459,7 +1435,7 @@ export class DaemonServer {
   }
 
   /**
-   * Validates a handler's return value against its contract output schema before it goes on
+   * why: Validates a handler's return value against its contract output schema before it goes on
    * the wire. A mismatch here is always a daemon-side bug (the schema or the mapping is wrong,
    * per the PR brief -- never loosen the schema to whatever happens to be emitted), so it is
    * logged at error level with the full issue list, then rethrown as a plain `Error` (maps to
@@ -1483,7 +1459,7 @@ export class DaemonServer {
     );
   }
 
-  /** ADR §8: `progress` carries the originating request's frame id, so a client with more than
+  /** why: ADR §8: `progress` carries the originating request's frame id, so a client with more than
    * one lease request in flight on the same connection can route each push to its own call. */
   async #pushProgress(
     socket: IpcConnection,
@@ -1496,7 +1472,6 @@ export class DaemonServer {
     });
   }
 
-  /** ADR §8: `event` carries the subscribing connection's subscription id. */
   async #pushEvent(
     socket: IpcConnection,
     subscriptionId: string,
@@ -1509,7 +1484,7 @@ export class DaemonServer {
   }
 
   /**
-   * Pushes a lease-ended fact to every live connection whose principal owns `leaseId` (ADR
+   * why: Pushes a lease-ended fact to every live connection whose principal owns `leaseId` (ADR
    * 0003 §8, kept by ADR 0004 §5: these are facts about the device, not a liveness channel).
    * Reacts to the existing post-commit lease.expired / lease.released facts (observer-only; no
    * transaction waits on this). `ownerId` comes from the event payload, not a registry lookup:
@@ -1517,7 +1492,7 @@ export class DaemonServer {
    */
   #notifyLeaseLost(leaseId: string, deviceId: string, reason: string, ownerId: string): void {
     for (const connection of this.#connections) {
-      // Suppresses the push for exactly the connection that asked for this release itself
+      // why: Suppresses the push for exactly the connection that asked for this release itself
       // (see `selfInitiatedReleases`'s comment) -- every other connection sharing the owner
       // still gets pushed, which is the owner-routed fan-out this PR adds.
       if (connection.selfInitiatedReleases.delete(leaseId)) continue;
@@ -1536,9 +1511,6 @@ export class DaemonServer {
     });
   }
 
-  /** Reacts to the post-commit `device.crash-detected` fact (already translated, with
-   * `ownerId`, by `#ownerRoutedFacts`); observer-only, nothing awaits this. Routed to every
-   * live connection owning the lease (ADR §8), same as lease-lost. */
   #notifyDeviceUnhealthy(leaseId: string, deviceId: string, ownerId: string): void {
     for (const connection of this.#connections) {
       if (connection.principal !== ownerId) continue;
@@ -1560,9 +1532,6 @@ export class DaemonServer {
     });
   }
 
-  /** Reacts to the post-commit `device.recovered` fact (already translated, with `ownerId`,
-   * by `#ownerRoutedFacts`); observer-only, nothing awaits this. Routed to every live
-   * connection owning the lease (ADR §8), same as lease-lost. */
   #notifyDeviceRecovered(
     leaseId: string,
     deviceId: string,
@@ -1609,7 +1578,7 @@ export class DaemonServer {
     }
     connection.closed = true;
     if (connection.helloReceived) {
-      // ADR 0004 §3: closing a connection is not a lease event. Whatever this principal held
+      // why: ADR 0004 §3: closing a connection is not a lease event. Whatever this principal held
       // is still granted, still counting down its TTL, and still renewable by whatever
       // connects next -- there is nothing to release here and nothing to count.
       this.#logger.info("Connection closed", { principal: connection.principal });
@@ -1642,9 +1611,8 @@ function quietDeferred(): {
 }
 
 /**
- * An `OwnerRoutedFacts` that never emits -- what a gateway gets, since it has no local leases
- * to report facts about (see the constructor's comment). A named function rather than an inline
- * object literal so the intent reads at the one place that would otherwise be a bare `{}`.
+ * why: An `OwnerRoutedFacts` that never emits. A named function rather than an inline object
+ * literal so the intent reads at the one place that would otherwise be a bare `{}`.
  */
 function inertOwnerRoutedFacts(): OwnerRoutedFacts & { dispose(): void } {
   return {
@@ -1663,7 +1631,7 @@ class ProtocolError extends Error {
   }
 }
 
-/** Parses a request payload through its contract input schema, translating a validation
+/** why: Parses a request payload through its contract input schema, translating a validation
  * failure into the daemon's own `ProtocolError("BAD_REQUEST", ...)` rather than letting a raw
  * `ZodError` escape (its shape is not part of the wire contract). */
 function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
@@ -1673,9 +1641,10 @@ function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
 }
 
 /**
- * Resolves the wire `code` for a socket response. `ProtocolError` is socket-framing-specific
- * (thrown only while parsing a request frame, before a `Session` exists -- see its own doc) and
- * stays local to this file; every other error this daemon can throw is classified by the one
+ * why: Resolves the wire `code` for a socket response. `ProtocolError` is this file's own
+ * socket-framing error and carries the `code` the framing already decided (`BAD_FRAME`,
+ * `BAD_REQUEST`, `UNKNOWN_REQUEST`), so it answers for itself and never reaches the shared
+ * dispatcher; every other error this daemon can throw is classified by the one
  * shared table both transports read -- see `./error-code.js`'s module doc (ADR 0003 §7, review
  * finding B5: this used to be its own hand-written `instanceof` chain that silently drifted
  * from HTTP's).
@@ -1696,7 +1665,7 @@ function errorStack(error: unknown): string | undefined {
 }
 
 /**
- * A frame for a peer that has gone is dropped, never rejected. Once the peer's FIN arrives the
+ * why: A frame for a peer that has gone is dropped, never rejected. Once the peer's FIN arrives the
  * socket fails every write with EPIPE, but `closed` stays false until the socket is destroyed.
  * Most pushes are fired without a catch, so a write in that window would reject unhandled and
  * take the daemon down, failing every lease request still waiting.

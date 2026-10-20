@@ -40,6 +40,7 @@ import {
   LeaseIdTakenError,
   LeaseRequestForbiddenError,
   NoCapacityError,
+  ProvisionFailedError,
   QueueTimeoutError,
   RequesterAlreadyLeasedError,
   ReplayedLeaseRequestError,
@@ -47,7 +48,7 @@ import {
 import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";
-import { AdminAuthenticationFailedError } from "./session.js";
+import { AdminAuthenticationFailedError } from "../auth/index.js";
 
 /**
  * Thrown to a request parked on startup readiness (ADR §2 step 4's `awaitReady`) when
@@ -109,6 +110,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   // startup just to recognize it.
   if (error instanceof NoCapacityError) {
     return "NO_CAPACITY";
+  }
+  if (error instanceof ProvisionFailedError) {
+    return "PROVISION_FAILED";
   }
   if (error instanceof QueueTimeoutError) {
     return "QUEUE_TIMEOUT";

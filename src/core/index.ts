@@ -7,6 +7,7 @@ export {
   type DownloadPolicy,
   effectiveAllowDownload,
   loadConfig,
+  type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,
 } from "./config.js";
@@ -30,6 +31,7 @@ export {
 export {
   buildCapacityFigures,
   CapacityCoordinator,
+  type CapacityRefusalReason,
   capacityDevice,
   capacityDevices,
   type CapacityReservation,
@@ -37,6 +39,7 @@ export {
 } from "./capacity/index.js";
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
+export { integerInRange, invalidValue, nonEmptyString, objectValidator } from "./validation.js";
 export {
   BootTimeoutError,
   ComponentBusyError,
@@ -88,8 +91,21 @@ export {
   DriverCatalog,
   NoDriverError,
   type ModelPreferences,
+  type ScreenAvailability,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
+export {
+  encodeScreenFrame,
+  encodeScreenMeta,
+  type ScreenCapture,
+  type ScreenFeed,
+  SCREEN_FRAME_HEADER_BYTES,
+  SCREEN_FRAME_TAG,
+  type ScreenMeta,
+  ScreenNotSupportedError,
+  type ScreenSettings,
+  ScreenUnavailableError,
+} from "./screen.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export {
@@ -193,3 +209,4 @@ export {
   type IdleVictimScope,
 } from "./idle-order.js";
 export { ReclaimCoordinator } from "./reclaim-coordinator.js";
+export { createUsageReader, type UsageReader } from "./usage/index.js";

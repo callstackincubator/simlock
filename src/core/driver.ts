@@ -1,6 +1,7 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
+import type { ScreenCapture } from "./screen.js";
 import type {
   AbsentReason,
   DeviceClass,
@@ -354,6 +355,9 @@ export interface Driver {
   dispose?(): Promise<void>;
   /** Spelled `| undefined` so a driver that decides at construction can still say it has none. */
   readonly passthroughTools?: readonly string[] | undefined;
+  // why: optional because a platform whose screen cannot be taken leaves it out, and the stream
+  // module learns that from its absence rather than from a platform name.
+  readonly screenCapture?: ScreenCapture | undefined;
   /** why: `device.exec` has no pseudo-terminal (ADR 0005 §19c), so a driver may refuse there what it allows locally. */
   passthrough?(
     tool: string,

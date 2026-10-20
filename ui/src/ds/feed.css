@@ -1,0 +1,41 @@
+/* The feed: a box of fixed height that scrolls inside itself. Only the rows in view are in the page;
+ * the space of the rest is the list's padding. The browser's own scroll anchoring is off: the feed
+ * keeps the reader's row in place itself. */
+
+.feed {
+  position: relative;
+}
+
+.feed-box {
+  height: min(40rem, 70vh);
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--border);
+}
+
+.feed-box:focus-visible {
+  outline-offset: -2px;
+}
+
+/* One row is as tall as the feed says, whatever it holds, so the rows can be placed by arithmetic. */
+.feed-list .list-item {
+  height: var(--feed-row);
+}
+
+.feed-list .list-row {
+  box-sizing: border-box;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* "N new events": over the top of the box, while the reader is further down. */
+.feed-new {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 1;
+  min-height: 32px;
+  background: var(--bg);
+  transform: translateX(-50%);
+}

@@ -1,6 +1,6 @@
 # 0004. TTL-first leases on every transport
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease)
 - **Date:** 2026-09-05
 - **Issue:** [#114](https://github.com/callstackincubator/simlock/issues/114)
 - **Supersedes:** nothing. Narrows [ADR

@@ -37,12 +37,7 @@
   {
     "name": "feature:spec",
     "color": "0e8a16",
-    "description": "Business or technical spec in progress."
-  },
-  {
-    "name": "feature:ready",
-    "color": "0e8a16",
-    "description": "No sub-issues; one PR delivers the whole feature."
+    "description": "Spec in progress, business and technical together."
   },
   {
     "name": "feature:planned",

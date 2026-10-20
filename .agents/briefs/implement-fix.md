@@ -1,16 +1,20 @@
 # Mode `fix`: apply verified findings
 
-Each finding line is a verified defect, names its class in brackets (the
-rule it breaks), and ends in `src` (the fix changes production source) or
-`text` (a test, a comment, a doc or an assumption line is enough).
+Each finding has a stable ID, defect class and impacts from
+`docs/internal/REVIEW.md`: behavior, test-logic, acceptance, claims or
+mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
+`head`, plus the resolution ledger. Group instances of the same defect.
 
 1. **Find every instance.** The line is one instance of its class. Search
-   the whole diff for others, and for a stale claim have an `Explore`
-   agent (`model: haiku`) search the whole repo. For an order, interleaving or conflict between two
-   components, list every path through the same code (each caller, flag,
+   the whole diff for others, and for a stale claim search the repo directly
+   or use bounded Haiku discovery under `docs/internal/EXPLORATION.md`. For an order, interleaving or conflict
+   between two components, list every path through the same code (each caller, flag,
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
-   - behaviour: write the failing test first, then the fix;
+   - behaviour: make a test fail first, then fix. Extend the test that
+     proves the behaviour next to it; write a new one only when none does,
+     and list it under `fixes` with the test you could not extend and why
+     (testing rule 9);
    - a broken rule (`[architecture N]`, `[safety N]`, ...): change the code
      so it keeps the rule, never the doc that states the rule;
    - stale doc: fix it. Stale comment: delete it, or fix it if the comment
@@ -33,7 +37,7 @@ sync` (`gh stack rebase` where it stops on a conflict), resolve the
    run a check listed under "Checks agents never run", nor a tool behind it,
    from any path: the commit and push hooks run them, and their errors show
    in the hook's output.
-4. One commit per finding or closely related group. Then the audit
-   (`implement-audit.md`, with the sweep) and the test check on every test
-   the fix touched or added. Recheck every `Assumption:` line in the PR
-   body, not only those this fix touched.
+4. One commit per finding or closely related group. Then the incremental audit
+   (`implement-audit.md`, `previous..new-head`, with the affected sweep) and the test check on every test
+   the fix touched or added. Recheck affected assumptions and record actual impacts, fix commit and
+   evidence against each stable ID. Never label assertion edits mechanical.

@@ -30,6 +30,7 @@ export type {
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
+  IdentityOutput,
   LeaseCancelInput,
   LeaseCancelOutput,
   LeaseGrant,

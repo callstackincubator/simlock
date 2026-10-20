@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import { parseOsConstraint } from "../contract/os-range.js";
+import { parseOsConstraint } from "../contract/index.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
@@ -117,15 +117,13 @@ export type DoctorFinding =
       readonly remedy: string;
     }
   | {
-      readonly kind: "agent-device-unavailable";
+      readonly kind: "module-unavailable";
+      readonly module: string;
       readonly message: string;
       readonly remedy: string;
     };
 
-export type OptionalModuleFinding = Extract<
-  DoctorFinding,
-  { readonly kind: "agent-device-unavailable" }
->;
+export type OptionalModuleFinding = Extract<DoctorFinding, { readonly kind: "module-unavailable" }>;
 
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
 
@@ -136,7 +134,7 @@ export interface DoctorReport {
 }
 
 export interface DoctorQuarantine {
-  enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<void>;
+  enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean>;
 }
 
 export interface DoctorOptions {
@@ -1199,7 +1197,7 @@ function isDrift(finding: DoctorFinding): boolean {
     finding.kind !== "driver-advisory" &&
     finding.kind !== "prerequisite-missing" &&
     finding.kind !== "warm-pool-target-unreachable" &&
-    finding.kind !== "agent-device-unavailable"
+    finding.kind !== "module-unavailable"
   );
 }
 

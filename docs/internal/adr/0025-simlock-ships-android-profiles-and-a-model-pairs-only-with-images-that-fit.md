@@ -1,6 +1,6 @@
 # 0025. Simlock ships Android device profiles, and a model pairs only with images that fit it
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-12
 - **Issue:** [#485](https://github.com/callstackincubator/simlock/issues/485)
 - **Supersedes:** nothing. Amends [ADR

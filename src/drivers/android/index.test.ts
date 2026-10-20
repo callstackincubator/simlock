@@ -15,6 +15,7 @@ import {
   FakeClock,
   FakeProcessSupervisor,
   FakeTcpProbe,
+  FakeTcpStreamConnector,
   type Filesystem,
   MemoryFilesystem,
   NodeFilesystem,
@@ -47,7 +48,6 @@ const instanceId = "instance-1";
 const adbServerPort = 5038;
 const adbServerPid = 4242;
 const adbRecordPath = `${simlockHome}/adb-server.json`;
-/** The AVD home this driver owns and proves ownership from, not the user's own. */
 const avdDirectory = `${simlockHome}/devices/android`;
 const scopedEnv = {
   ANDROID_ADB_SERVER_PORT: String(adbServerPort),
@@ -55,7 +55,7 @@ const scopedEnv = {
   ANDROID_HOME: sdk,
 } as const;
 const scopedOptions = { env: scopedEnv } as const;
-// The emulator outlives the daemon and is never read from, so it is spawned detached.
+// why: The emulator outlives the daemon and is never read from, so it is spawned detached.
 const emulatorOptions = { env: scopedEnv, stdio: "ignore" } as const;
 const binaries = {
   adb: `${sdk}/platform-tools/adb`,
@@ -218,7 +218,6 @@ describe("AndroidDriver", () => {
   });
 
   describe("image tag", () => {
-    /** A driver over `images` whose next `provision` creates `simlock_one`. */
     async function taggedHarness(
       images: readonly (readonly [string, string, string])[],
       hostAbi = "arm64-v8a",
@@ -243,7 +242,6 @@ describe("AndroidDriver", () => {
       return { driver, filesystem, runner };
     }
 
-    /** The system image package `avdmanager create avd -k` was given. */
     function createdFromPackage(runner: ScriptedProcessRunner): string | undefined {
       const create = runner.calls.find(
         (call) => call.command === binaries.avdmanager && call.args[0] === "create",
@@ -337,7 +335,7 @@ describe("AndroidDriver", () => {
     });
 
     it("creates a tagged device from the host ABI's image when the tag is installed for two ABIs", async () => {
-      // On an x86_64 host the foreign arm64-v8a image is listed first, so taking the first image
+      // why: On an x86_64 host the foreign arm64-v8a image is listed first, so taking the first image
       // of the tag would pick it.
       const { driver, runner } = await taggedHarness(
         [
@@ -428,7 +426,7 @@ describe("AndroidDriver", () => {
     } as const;
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
-    // Another process's emulator holds the first port in the range. This daemon reserved
+    // why: Another process's emulator holds the first port in the range. This daemon reserved
     // nothing for it, so only `adb devices` can show that it is taken.
     const elsewhere = await createDriver(filesystem, host.runner(), { ids: ["zero"] });
     await elsewhere.resolveSpec(spec);
@@ -455,7 +453,7 @@ describe("AndroidDriver", () => {
     expect(
       [taken, firstReady, secondReady].map((device) => consolePortOf(device.address) % 2),
     ).toEqual([0, 0, 0]);
-    // Occupancy is read from Simlock's own server, not the machine's shared one: an
+    // why: Occupancy is read from Simlock's own server, not the machine's shared one: an
     // unscoped `adb devices` polls 5037, which reports the user's emulators and none of
     // Simlock's, so every console port would read free and collide on the next boot.
     const occupancyReads = runner.calls.filter((call) => call.args[0] === "devices");
@@ -465,7 +463,7 @@ describe("AndroidDriver", () => {
     }
   });
 
-  // Another Simlock instance's emulator is announced only to that instance's adb server, so
+  // why: Another Simlock instance's emulator is announced only to that instance's adb server, so
   // its own `adb devices` lists nothing here; only the machine's TCP ports show it (#257).
   it.each([
     ["its console port", 5586],
@@ -508,7 +506,7 @@ describe("AndroidDriver", () => {
   });
 
   /**
-   * The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
+   * why: The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
    * release the event loop -- the ChildProcess handle does -- so without the `unref` a
    * `daemon stop` logged "Daemon stopped" and then sat there for as long as any emulator ran.
    * An emulator is meant to outlive the daemon (`#reattachRunningEmulators` adopts it after a
@@ -519,7 +517,7 @@ describe("AndroidDriver", () => {
 
     await harness.driver.makeReady(harness.device);
 
-    // The launches specifically -- `emulator` is also invoked as a short-lived query
+    // why: The launches specifically -- `emulator` is also invoked as a short-lived query
     // (`-list-avds` and friends) through `run`, which waits on the child and must stay
     // referenced. Only a boot is detached.
     const launches = harness.runner.calls
@@ -530,14 +528,13 @@ describe("AndroidDriver", () => {
     for (const { index } of launches) {
       expect(harness.runner.handles[index]?.unreffed, `launch at call ${String(index)}`).toBe(true);
     }
-    // ... and nothing else is: every other child is one the driver waits on.
     expect(harness.runner.handles.filter((handle) => handle.unreffed)).toHaveLength(
       launches.length,
     );
   });
 
   /**
-   * #237: a timer the driver leaves armed holds the event loop open, so a daemon that logged
+   * why: #237: a timer the driver leaves armed holds the event loop open, so a daemon that logged
    * "Daemon stopped" stays alive until it fires. Both shutdowns here -- the one `makeReady`
    * does to restart from the new baseline, and the one the test asks for -- see the emulator
    * exit at once, so neither has anything left to wait for.
@@ -554,7 +551,6 @@ describe("AndroidDriver", () => {
     expect(running, "no running emulator").toBeDefined();
 
     const shutdown = harness.driver.shutdown(ready);
-    // The emulator answers `emu kill` by exiting.
     running?.kill("SIGTERM");
     await shutdown;
 
@@ -574,7 +570,7 @@ describe("AndroidDriver", () => {
     if (running === undefined) throw new Error("no running emulator");
     const kill = vi.spyOn(running, "kill");
 
-    // The emulator ignores `emu kill`: only the timeout can end the wait.
+    // why: The emulator ignores `emu kill`: only the timeout can end the wait.
     const armedBefore = harness.clock.pendingTimerCount;
     const shutdown = harness.driver.shutdown(ready);
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
@@ -596,7 +592,6 @@ describe("AndroidDriver", () => {
     );
     const running = harness.runner.handles[launch];
     if (running === undefined) throw new Error("no running emulator");
-    // A child that emits `error` rejects its wait instead of resolving it.
     vi.spyOn(running, "wait").mockRejectedValue(new Error("spawn error"));
 
     await expect(harness.driver.shutdown(ready)).rejects.toThrow("spawn error");
@@ -929,7 +924,7 @@ describe("AndroidDriver", () => {
     });
 
     /**
-     * A settings change reaches the driver through a daemon restart, so each case captures a
+     * why: A settings change reaches the driver through a daemon restart, so each case captures a
      * baseline under the default launch and then boots the device from a driver constructed with
      * the changed setting, reading the persisted baseline metadata the way a restarted daemon does.
      */
@@ -948,7 +943,7 @@ describe("AndroidDriver", () => {
       await harness.filesystem.mkdirp(
         `${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`,
       );
-      // A recovery boot never reads the baseline hash, so it never asks the emulator's version.
+      // why: A recovery boot never reads the baseline hash, so it never asks the emulator's version.
       const runner = new ScriptedProcessRunner([
         ...(purpose === "recover"
           ? []
@@ -1098,7 +1093,7 @@ describe("AndroidDriver", () => {
     });
 
     it("keeps a clean baseline captured before android.emulator existed, so an upgrade does not wipe the device", async () => {
-      // The hash the driver wrote for this exact fixture (image, emulator version, config.ini)
+      // why: The hash the driver wrote for this exact fixture (image, emulator version, config.ini)
       // before `android.emulator` existed. Under the default launch the hash must still be
       // this value; otherwise every device's first boot after the upgrade is a data wipe.
       const hashBeforeLaunchOptionsExisted = "4e9b7a98";
@@ -1178,7 +1173,7 @@ describe("AndroidDriver", () => {
         filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
       ).resolves.toBe(true);
       expect(runner.calls.filter((call) => call.args.includes("save"))).toHaveLength(0);
-      // A recovered device is re-marked like any other ready device: the mark is what proves
+      // why: A recovered device is re-marked like any other ready device: the mark is what proves
       // the device is still Simlock's on the next reconcile.
       expect(
         runner.calls.filter((call) => call.args.some((arg) => arg.includes("simlock-mark.json"))),
@@ -1246,7 +1241,7 @@ describe("AndroidDriver", () => {
       platform: "android",
     } as const;
 
-    // Both measured on an M3 Pro / Pixel 8 / API 35. The gap is real: a `wipe` reclaim defers
+    // why: Both measured on an M3 Pro / Pixel 8 / API 35. The gap is real: a `wipe` reclaim defers
     // the wipe to the next `makeReady`; a reclaim that also boots the device back to warm
     // spends a cold wipe boot in `reclaiming` rather than a shutdown.
     expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(6_000);
@@ -1266,7 +1261,7 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    // Strict: with no custom device profile there is no `customModels` key at all, not one
+    // why: Strict: with no custom device profile there is no `customModels` key at all, not one
     // present as undefined.
     await expect(driver.listCatalog()).resolves.toStrictEqual({
       defaultRuntime: "35",
@@ -1289,7 +1284,6 @@ describe("AndroidDriver", () => {
   });
 
   it("pairs a model with an installed API level whose only image has a foreign ABI, when the image fits", async () => {
-    // The host is arm64-v8a; API 33 is installed only as x86_64.
     const filesystem = await androidFilesystem({
       images: [
         ["33", "google_apis", "x86_64"],
@@ -1437,7 +1431,7 @@ describe("AndroidDriver", () => {
   });
 
   it("lists the same models as before other names were listed, for the same profiles", async () => {
-    // A devices.xml profile named after a built-in id stays listed, and one whose name repeats a
+    // why: A devices.xml profile named after a built-in id stays listed, and one whose name repeats a
     // built-in name in other letter case does not: both exactly as before this catalog listed
     // other names.
     const filesystem = await androidFilesystem();
@@ -1488,7 +1482,7 @@ describe("AndroidDriver", () => {
   });
 
   it("lists models with one avdmanager run", async () => {
-    // A second answer is scripted, so a second run would be served and counted, not refused.
+    // why: A second answer is scripted, so a second run would be served and counted, not refused.
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
@@ -1503,7 +1497,6 @@ describe("AndroidDriver", () => {
   });
 
   it("lists every installed system image with its API level, tag, and ABI, a foreign-ABI image included", async () => {
-    // The host is arm64-v8a; the API 33 image is x86_64 only.
     const filesystem = await androidFilesystem({
       images: [
         ["35", "google_apis_playstore", "arm64-v8a"],
@@ -1527,7 +1520,7 @@ describe("AndroidDriver", () => {
   });
 
   it("lists images by API level, then tag, then ABI, whatever order the disk returns them in", async () => {
-    // Directory listings come back in reverse, so a list read straight off the disk would be in
+    // why: Directory listings come back in reverse, so a list read straight off the disk would be in
     // exactly the wrong order at every level.
     const filesystem = await androidFilesystem(
       {
@@ -1570,7 +1563,7 @@ describe("AndroidDriver", () => {
   });
 
   it("does not list an image that is not installed, even one sdkmanager offers", async () => {
-    // Only API 34 is installed. An API 35 image is one `sdkmanager` run away, and the driver
+    // why: Only API 34 is installed. An API 35 image is one `sdkmanager` run away, and the driver
     // would install it for a lease that allows downloads; the catalog never asks `sdkmanager`
     // and lists the image on disk only. That no download policy reaches `listCatalog` is
     // proved in the dispatcher's tests.
@@ -1683,7 +1676,7 @@ describe("AndroidDriver", () => {
     expect(reality.devices).toEqual([
       expect.objectContaining({ deviceId: "simlock_idle", runState: "transitioning" }),
     ]);
-    // Only settled `device`-state serials are counted as running processes; the
+    // why: Only settled `device`-state serials are counted as running processes; the
     // unattributable offline serial never appears here regardless of the AVD fallback above.
     expect(reality.processes).toEqual([]);
   });
@@ -1721,7 +1714,7 @@ describe("AndroidDriver", () => {
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
       markWriteExpectation("emulator-5586", "device-2"),
-      // Second makeReady call: `state.handle` is still set from the first call, so this takes
+      // why: Second makeReady call: `state.handle` is still set from the first call, so this takes
       // the early-return branch -- it must still wait for readiness and rewrite the mark.
       processResult(
         binaries.adb,
@@ -1933,13 +1926,13 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    // An emulator can vanish between `adb devices` and the read. Losing the whole
+    // why: An emulator can vanish between `adb devices` and the read. Losing the whole
     // reality view over one dead serial would strand every other managed device.
     const reality = await driver.listManaged();
 
     const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
     expect(device?.runState).toBe("transitioning");
-    // The durable half is a host file and stays readable; the erasable half genuinely
+    // why: The durable half is a host file and stays readable; the erasable half genuinely
     // was not read, so it must report unreadable rather than absent -- absent would
     // classify as a foreign erase.
     expect(device?.mark).toEqual({
@@ -2113,7 +2106,7 @@ describe("AndroidDriver", () => {
     it("resolves a devices.xml-only model and applies its properties to config.ini before the config hash is captured", async () => {
       const filesystem = await androidFilesystem();
       await writeDevicesXml(filesystem, customDeviceXml("Custom A", 4096));
-      // `avdmanager create avd` is scripted (not a real process), so it never creates the AVD
+      // why: `avdmanager create avd` is scripted (not a real process), so it never creates the AVD
       // directory the way it would for real -- seed it here the same way, since applying
       // hardware properties to config.ini right after create relies on that directory existing.
       await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
@@ -2152,7 +2145,7 @@ describe("AndroidDriver", () => {
       const config = await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`);
       expect(config).toContain("hw.device.name=Custom A");
       expect(config).toContain("hw.ramSize=4096");
-      // The avdmanager `-d` seed uses a built-in device only to skip the interactive prompt --
+      // why: The avdmanager `-d` seed uses a built-in device only to skip the interactive prompt --
       // it must never leak into the resolved spec or the applied hardware properties.
       expect(config).not.toContain("pixel_5");
       expect(device.driverData).toMatchObject({ avdName: "simlock_one" });
@@ -2225,7 +2218,7 @@ describe("AndroidDriver", () => {
       });
       await driver.provision(spec);
 
-      // Only one `avdmanager list device` call happened (asserted implicitly by the runner
+      // why: Only one `avdmanager list device` call happened (asserted implicitly by the runner
       // never receiving the unscripted second call a `properties`-profile seed lookup would
       // require), and no properties were merged into config.ini -- it was never even written.
       await expect(filesystem.exists(`${avdDirectory}/simlock_one.avd/config.ini`)).resolves.toBe(
@@ -2234,7 +2227,7 @@ describe("AndroidDriver", () => {
     });
 
     it("rejects a hardware-property value with an embedded line break, defense in depth beyond the devices.xml parser", async () => {
-      // `UserDeviceProfileSource`/`parseDevicesXml` already reject this at the devices.xml parse
+      // why: `UserDeviceProfileSource`/`parseDevicesXml` already reject this at the devices.xml parse
       // boundary (see device-profile-source.test.ts), but `DeviceProfileSource` is a documented
       // extension point (see the interface's own doc comment) -- a future or third-party source
       // could hand the driver a multiline value directly, bypassing that parser entirely. This
@@ -2282,7 +2275,7 @@ describe("AndroidDriver", () => {
         idGenerator: { generate: () => "one" },
         instanceId,
         processRunner: runner,
-        // Adopt the recorded server `recordRunningAdbServer` just wrote, exactly as the
+        // why: Adopt the recorded server `recordRunningAdbServer` just wrote, exactly as the
         // shared `createDriver` helper does: this test is about hardware properties, and
         // starting a real supervised server is not part of what it exercises. `simlockHome`
         // has to be the real one too -- under `home` the AVD root would not be
@@ -2299,7 +2292,6 @@ describe("AndroidDriver", () => {
       });
 
       await expect(driver.provision(spec)).rejects.toThrow(/line break/);
-      // The rejected merge must never have reached the filesystem at all.
       await expect(filesystem.exists(`${avdDirectory}/simlock_one.avd/config.ini`)).resolves.toBe(
         false,
       );
@@ -2703,7 +2695,7 @@ describe("AndroidDriver", () => {
     });
 
     it("recognizes the alternate 'licenses have not been accepted' sdkmanager phrasing, not just 'not accepted'", async () => {
-      // The two documented sdkmanager phrasings this driver's license detection claims to
+      // why: The two documented sdkmanager phrasings this driver's license detection claims to
       // handle (see the comment on `hasUnacceptedLicense`): a per-package warning ("... not
       // accepted.") and this one, an aggregate summary with "been" between "not" and "accepted".
       const licensesHaveNotBeenAcceptedOutput =
@@ -2757,7 +2749,6 @@ describe("AndroidDriver", () => {
         (call) => call.command === binaries.sdkmanager && call.args[0] === "--licenses",
       );
       expect(licensesCall?.options.input).toBe("y\n".repeat(100));
-      // Exactly one retry: install, licenses, install again -- never a second acceptance pass.
       expect(runner.calls.filter((call) => call.args[0] === "--install")).toHaveLength(2);
     });
 
@@ -2846,7 +2837,6 @@ describe("AndroidDriver", () => {
 
     it("fails when sdkmanager exits 0 but the image is still not installed", async () => {
       const filesystem = await androidFilesystem();
-      // A plain ScriptedProcessRunner: sdkmanager claims success, and nothing lands on disk.
       const runner = new ScriptedProcessRunner([
         processResult(binaries.sdkmanager, ["--install", package35]),
       ]);
@@ -2936,7 +2926,7 @@ describe("AndroidDriver", () => {
         await Promise.resolve();
       }
 
-      // Settled within a few microtasks of the signal: the kill ended it, not a timer.
+      // why: Settled within a few microtasks of the signal: the kill ended it, not a timer.
       expect(error).toMatchObject({
         message: expect.stringContaining("was ended before it finished"),
         name: "DriverCrashError",
@@ -2972,6 +2962,267 @@ describe("AndroidDriver", () => {
     });
   });
 });
+
+describe("AndroidDriver screen capture", () => {
+  const serverPath = "/simlock/vendor/scrcpy-server-v5.0.1";
+  const running = {
+    address: "emulator-5586",
+    deviceId: "simlock_one",
+    driverData: { avdName: "simlock_one", configHash: "h", port: 5586, serial: "emulator-5586" },
+    physical: false,
+  } as const;
+  const settings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
+
+  it("is offered only when both the server path and a TCP stream connector are given", async () => {
+    const both = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]), {
+      scrcpyServerPath: serverPath,
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    expect(both.screenCapture).toBeDefined();
+    const noPath = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]), {
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    expect(noPath.screenCapture).toBeUndefined();
+    const noConnector = await createDriver(
+      await androidFilesystem(),
+      new ScriptedProcessRunner([]),
+      {
+        scrcpyServerPath: serverPath,
+      },
+    );
+    expect(noConnector.screenCapture).toBeUndefined();
+  });
+
+  it("pushes the server with this driver's adb, its scoped environment and the device's serial", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp("/simlock/vendor");
+    await filesystem.writeFileAtomic(serverPath, "jar");
+    const runner = new ScriptedProcessRunner([
+      {
+        match: {
+          args: ["-s", "emulator-5586", "push", serverPath, /simlock-scrcpy-/],
+          command: binaries.adb,
+        },
+        result: { code: 1, stderr: "error: closed", stdout: "" },
+      },
+      {
+        match: {
+          args: ["-s", "emulator-5586", "shell", "rm", "-f", /simlock-scrcpy-/],
+          command: binaries.adb,
+        },
+      },
+    ]);
+    const driver = await createDriver(filesystem, runner, {
+      scrcpyServerPath: serverPath,
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    await expect(
+      driver.screenCapture?.open(running, settings, new AbortController().signal),
+    ).rejects.toThrow(/error: closed/);
+    expect(runner.calls[0]?.options.env).toEqual(scopedEnv);
+    expect(runner.calls[1]?.options.env).toEqual(scopedEnv);
+  });
+
+  it("refuses an emulator that is not running, before running anything", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp("/simlock/vendor");
+    await filesystem.writeFileAtomic(serverPath, "jar");
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(filesystem, runner, {
+      scrcpyServerPath: serverPath,
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    const stopped = { ...running, driverData: { ...running.driverData, port: 0, serial: "" } };
+    await expect(
+      driver.screenCapture?.open(stopped, settings, new AbortController().signal),
+    ).rejects.toThrow(/not running/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("routes each device's capture to its own adb server: a phone's commands run adb -P 5037 and its socket connects to 5037, an emulator's use Simlock's port", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp("/simlock/vendor");
+    await filesystem.writeFileAtomic(serverPath, "jar");
+    const phone = {
+      address: "R58M123ABC",
+      deviceId: "R58M123ABC",
+      driverData: {},
+      enrolledApps: [],
+      physical: true,
+    } as const;
+    const clock = new FakeClock(1_000);
+    // why: the shared server answers the version check with Simlock's own protocol, so the phone's
+    // target is open and its commands are expected to go out.
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const runner = new CaptureRoutingRunner();
+    const tcp = new FakeTcpStreamConnector();
+    const driver = await createDriver(filesystem, runner, {
+      clock,
+      scrcpyServerPath: serverPath,
+      tcpProbe: probe,
+      tcpStreamConnector: tcp,
+    });
+
+    // why: each open is stopped while it waits on its socket's first reply — which is exactly the
+    // moment this test owns: every command has gone out through the device's own server, the socket
+    // has been aimed at the device, and a stop runs nothing further.
+    const phoneStop = new AbortController();
+    const phoneOpening = driver.screenCapture?.open(phone, settings, phoneStop.signal);
+    if (phoneOpening === undefined) throw new Error("the driver offers no screen capture");
+    // why: the rejection is asserted below; marking it handled here keeps a rejection that arrives
+    // while this test is still reading the socket from being reported as unhandled.
+    phoneOpening.catch(() => undefined);
+    await waitForSocket(clock, tcp, 1);
+    expect(tcp.connections[0]?.port).toBe(5037);
+    expect(tcp.connections[0]?.peer.writtenText()).toContain("host:transport:R58M123ABC");
+    phoneStop.abort();
+    await expect(driveOpen(clock, phoneOpening)).rejects.toThrow(/closed the connection/);
+
+    const emulatorStop = new AbortController();
+    const emulatorOpening = driver.screenCapture?.open(running, settings, emulatorStop.signal);
+    if (emulatorOpening === undefined) throw new Error("the driver offers no screen capture");
+    emulatorOpening.catch(() => undefined);
+    await waitForSocket(clock, tcp, 2);
+    expect(tcp.connections[1]?.port).toBe(adbServerPort);
+    expect(tcp.connections[1]?.peer.writtenText()).toContain("host:transport:emulator-5586");
+    emulatorStop.abort();
+    await expect(driveOpen(clock, emulatorOpening)).rejects.toThrow(/closed the connection/);
+
+    // why: every command the phone's session ran aims at the shared server — `adb -P 5037` with
+    // that server's env, Simlock's port in it and the three keys that could aim adb elsewhere
+    // removed — and every command the emulator's session ran carries this driver's scoped env,
+    // which points at Simlock's own port. Which commands a phone's session runs (its screen read
+    // included) is the capture's and the handler's own claim, proved in their own files.
+    const commands = runner.calls.filter((call) => call.args[0] !== "version");
+    const phoneCommands = commands.filter((call) => call.args[0] === "-P");
+    const emulatorCommands = commands.filter((call) => call.args[0] === "-s");
+    expect(phoneCommands.length).toBeGreaterThanOrEqual(3);
+    for (const call of phoneCommands) {
+      expect(call.args.slice(0, 3)).toEqual(["-P", "5037", "-s"]);
+      expect(call.args[3]).toBe("R58M123ABC");
+      expect(call.options.env).toEqual({
+        ANDROID_ADB_SERVER_PORT: "5037",
+        ANDROID_HOME: sdk,
+      });
+    }
+    expect(
+      phoneCommands.map((call) =>
+        call.args[4] === "push"
+          ? "push"
+          : call.args[5] === "rm"
+            ? "rm"
+            : call.args[5]?.startsWith("CLASSPATH=")
+              ? "server"
+              : String(call.args[4]),
+      ),
+    ).toEqual(expect.arrayContaining(["push", "server", "rm"]));
+    expect(emulatorCommands.map((call) => call.args.slice(0, 3))).toEqual([
+      ["-s", "emulator-5586", "push"],
+      ["-s", "emulator-5586", "shell"],
+      ["-s", "emulator-5586", "shell"],
+    ]);
+    for (const call of emulatorCommands) {
+      expect(call.options.env).toEqual(scopedEnv);
+    }
+  });
+});
+
+// why: flushes work until the n-th raw connection has been made, advancing the fake clock so the
+// capture's own bounds cannot strand it; an open that died first fails on a named assertion.
+async function waitForSocket(
+  clock: FakeClock,
+  tcp: FakeTcpStreamConnector,
+  count: number,
+): Promise<void> {
+  for (let spent = 0; spent < 60_000 && tcp.connections.length < count; spent += 50) {
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    clock.advance(50);
+  }
+  expect(tcp.connections.length, "the capture reached its socket").toBe(count);
+}
+
+// why: awaits an open with the fake clock turning, so its own 15 s bound can fire while the test waits.
+async function driveOpen(clock: FakeClock, opening: Promise<unknown>): Promise<unknown> {
+  let done = false;
+  void opening.then(
+    () => (done = true),
+    () => (done = true),
+  );
+  for (let spent = 0; spent < 60_000 && !done; spent += 50) {
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    clock.advance(50);
+  }
+  return await opening;
+}
+
+/**
+ * why: answers every adb call a capture makes by what it is rather than by its place in a queue, so
+ * the routing this test reads is proven the same way whether or not the capture reads the phone's
+ * screen state first -- the server's shell hangs until the capture's own close kills it, as a live
+ * scrcpy server does.
+ */
+class CaptureRoutingRunner implements ProcessRunner {
+  readonly calls: { readonly args: readonly string[]; readonly options: ProcessRunOptions }[] = [];
+  #nextPid = 1;
+
+  run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    return this.spawn(command, args, options).wait();
+  }
+
+  spawn(_command: string, args: readonly string[], options: ProcessRunOptions = {}): ProcessHandle {
+    this.calls.push({ args, options });
+    const rest = args[0] === "-P" ? args.slice(2) : [...args];
+    const line = rest.join(" ");
+    if (line === "version") {
+      return endedHandle(this.#nextPid++, "Android Debug Bridge version 1.0.41\nVersion 35.0.2\n");
+    }
+    if (line.includes("dumpsys power")) {
+      return endedHandle(this.#nextPid++, "  mWakefulness=Awake\n");
+    }
+    if (/shell CLASSPATH=\S*app_process/.test(line)) {
+      return hangingHandle(this.#nextPid++);
+    }
+    return endedHandle(this.#nextPid++, "");
+  }
+
+  spawnStreaming(..._args: Parameters<ProcessRunner["spawnStreaming"]>): never {
+    throw new Error("a screen capture spawns no streaming process");
+  }
+}
+
+function endedHandle(pid: number, stdout: string): ProcessHandle {
+  return {
+    kill: () => undefined,
+    pid,
+    stderr: emptyLines(),
+    stdout: emptyLines(),
+    unref: () => undefined,
+    wait: async () => ({ code: 0, stderr: "", stdout }),
+  };
+}
+
+function hangingHandle(pid: number): ProcessHandle {
+  let settle: (() => void) | undefined;
+  const ended = new Promise<void>((resolve) => (settle = resolve));
+  return {
+    kill: () => settle?.(),
+    pid,
+    stderr: emptyLines(),
+    stdout: emptyLines(),
+    unref: () => undefined,
+    wait: async () => {
+      await ended;
+      return { code: null, stderr: "", stdout: "" };
+    },
+  };
+}
 
 describe("AndroidDriver.create", () => {
   it("creates and marks its own AVD home under SIMLOCK_HOME when none exists yet", async () => {
@@ -3041,7 +3292,7 @@ describe("AndroidDriver.create", () => {
       processRunner: new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(),
       simlockHome,
-      // Listening, but nothing says it is Simlock's -- it could be Android Studio's.
+      // why: Listening, but nothing says it is Simlock's -- it could be Android Studio's.
       tcpProbe: new FakeTcpProbe([adbServerPort]),
     }).catch((error: unknown) => error);
 
@@ -3124,7 +3375,7 @@ describe("AndroidDriver.create", () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
-    // Every other case passes it first, so an `args[0] === "kill-server"` rule would pass
+    // why: Every other case passes it first, so an `args[0] === "kill-server"` rule would pass
     // them all; this is the one that holds the documented "anywhere in the arguments".
     await expect(passthroughOf(driver, ["-P", "1", "kill-server"])).rejects.toThrow(
       PassthroughRefusedError,
@@ -3176,7 +3427,7 @@ describe("AndroidDriver.create", () => {
   });
 
   it("refuses a caller-supplied server flag in the globals, in every spelling adb accepts, and any global it does not recognize", async () => {
-    // `adb` takes the *last* `-P` on the line, so a caller-supplied one silently wins over the
+    // why: `adb` takes the *last* `-P` on the line, so a caller-supplied one silently wins over the
     // one this driver inserts and the command lands on whatever server that names -- the
     // machine's default one included, which is outside Simlock's containment entirely (safety
     // rule 9). Same hole `--set`/`--profiles` closes on the iOS side, same answer.
@@ -3196,19 +3447,19 @@ describe("AndroidDriver.create", () => {
       ["-Hother-host", "devices"],
       ["-L", "tcp:127.0.0.1:5037", "devices"],
       ["-s", "emulator-5554", "-P5037", "shell", "getprop"],
-      // `--reply-fd` is a real, value-taking adb global absent from `adb --help` (confirmed
+      // why: `--reply-fd` is a real, value-taking adb global absent from `adb --help` (confirmed
       // against the adb binary: it errors `--reply-fd requires an argument`, not `unknown
       // command`). A scanner that assumes an unrecognized flag takes no value reads its value
       // (`9`) as the subcommand and never notices the `-H`/`-P` that follow -- the exact
       // bypass this allow-list scan closes by refusing anything it does not recognize.
       ["--reply-fd", "9", "-H", "attacker.example", "-P", "5037", "shell", "id"],
-      // Other real adb globals this driver has no reason to allow through, none of which may
+      // why: Other real adb globals this driver has no reason to allow through, none of which may
       // silently terminate the scan either: an unrecognized flag is refused on sight, not
       // treated as ending the globals region.
       ["-a", "devices"],
       ["--exit-on-write-error", "devices"],
       ["--one-device", "usb:1", "devices"],
-      // A wholly invented flag stands in for "the next adb release adds one": this list must
+      // why: A wholly invented flag stands in for "the next adb release adds one": this list must
       // refuse what it has never seen, not just what it already knows to refuse.
       ["--not-a-real-adb-flag", "devices"],
     ]) {
@@ -3221,19 +3472,18 @@ describe("AndroidDriver.create", () => {
       ).rejects.toThrow(/supplies the adb server itself/);
     }
 
-    // Past the subcommand every argument is that subcommand's operand, so one that merely
+    // why: Past the subcommand every argument is that subcommand's operand, so one that merely
     // looks like a global travels through: refusing `echo -Please` would break a working
     // command to prevent nothing.
     for (const args of [
       ["shell", "echo", "-Please"],
       ["shell", "getprop", "-P5037"],
       ["-s", "emulator-5554", "devices"],
-      // `-t` is allowed in both spellings adb accepts: separate, and fused like `-P`/`-H`.
       ["-t", "1", "devices"],
       ["-t1", "devices"],
       ["-d", "devices"],
       ["-e", "devices"],
-      // `--version` and `--help` answer on their own before adb ever looks for a subcommand,
+      // why: `--version` and `--help` answer on their own before adb ever looks for a subcommand,
       // so this scan treats them as the subcommand rather than as a global with an arity.
       ["--version"],
       ["--help"],
@@ -3247,7 +3497,7 @@ describe("AndroidDriver.create", () => {
   });
 
   it("refuses `--version`/`--help` with a tail, rather than treating them as ending the globals scan unconditionally", async () => {
-    // adb answers `--version`/`--help` and exits without ever looking at the rest of the line
+    // why: adb answers `--version`/`--help` and exits without ever looking at the rest of the line
     // (confirmed against real adb: it prints the version and exits 0), so this scan has no way
     // to vouch for anything after one -- and must not wave it through on the strength of an
     // action that is safe only alone. Hardening item from round 4: verified ALLOWED before this
@@ -3267,7 +3517,6 @@ describe("AndroidDriver.create", () => {
       );
     }
 
-    // Alone, either is still the self-answering command it always was.
     expect((await passthroughOf(driver, ["--version"])).args).toEqual([
       "-P",
       String(adbServerPort),
@@ -3281,7 +3530,7 @@ describe("AndroidDriver.create", () => {
   });
 
   it("refuses a bare `adb shell` only where the caller has no terminal, never merely because `shell` is the last word", async () => {
-    // ADR 0005 §19c: `device.exec` runs the command on this machine with pipes and no pty, so
+    // why: ADR 0005 §19c: `device.exec` runs the command on this machine with pipes and no pty, so
     // an interactive shell there is a process reading a pipe nothing will ever write to --
     // it would hang until `exec.timeoutMs` killed it. Locally, where the CLI hands the tool
     // its own tty, it is exactly the command a lease holder wants, so it stays allowed.
@@ -3298,7 +3547,7 @@ describe("AndroidDriver.create", () => {
       passthroughOf(driver, ["-s", "emulator-5586", "shell"], { hasTerminal: false }),
     ).rejects.toThrow(PassthroughRefusedError);
 
-    // A shell with something to run is not the interactive shell, and neither is anything
+    // why: A shell with something to run is not the interactive shell, and neither is anything
     // else -- the refusal is about the missing command, not about `shell`. Round 4, F2: this
     // is the case the naive "does the line end in the word `shell`" check got wrong -- every
     // one of these genuinely ends in `shell`, but as an operand of an earlier subcommand
@@ -3322,8 +3571,6 @@ describe("AndroidDriver.create", () => {
       ).toEqual(["-P", String(adbServerPort), ...args]);
     }
 
-    // And with a terminal (the local `simlock adb shell`, and the default when nothing says
-    // otherwise) it is proxied like any other command.
     expect((await passthroughOf(driver, ["shell"], { hasTerminal: true })).args).toEqual([
       "-P",
       String(adbServerPort),
@@ -3375,7 +3622,7 @@ describe("AndroidDriver.create", () => {
 
     await driver.dispose();
 
-    // By pid, because `ADB_REJECT_KILL_SERVER=1` means `adb kill-server` refuses Simlock too.
+    // why: By pid, because `ADB_REJECT_KILL_SERVER=1` means `adb kill-server` refuses Simlock too.
     expect(processSupervisor.signals).toEqual([{ pid: adbServerPid, signal: "SIGTERM" }]);
     await expect(filesystem.exists(adbRecordPath)).resolves.toBe(false);
   });
@@ -3403,7 +3650,7 @@ describe("AndroidDriver ownership", () => {
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
-        // Named exactly like one of Simlock's, and still not Simlock's: the AVD is not in
+        // why: Named exactly like one of Simlock's, and still not Simlock's: the AVD is not in
         // the root, and ownership is proven from the root rather than from the name or from
         // the fact that Simlock's own server can see it.
         "simlock_impostor\n",
@@ -3433,12 +3680,10 @@ describe("AndroidDriver readiness on a taken console port", () => {
     const machine = new PortTakingMachine(host);
     const driver = await createDriver(filesystem, machine.runner(), { ids: ["one"] });
     await driver.resolveSpec(spec);
-    // Booted and stopped once, the device has its clean baseline and boots from it next
-    // time, as it does for every lease after its first.
     const stopped = await driver.makeReady(await driver.provision(spec));
     await driver.shutdown(stopped);
 
-    // Another emulator takes the device's console port before its own emulator binds it --
+    // why: Another emulator takes the device's console port before its own emulator binds it --
     // whatever freed the port for it (#52, a second Simlock instance, the user's own
     // emulator). Its AVD is named like Simlock's but lives in the user's AVD home: a name
     // proves nothing, root membership does (safety rule 8).
@@ -3449,11 +3694,10 @@ describe("AndroidDriver readiness on a taken console port", () => {
       (ready) => machine.avdPathAnswering(ready.address),
       (error: unknown) => driverCrashMessage(error),
     );
-    // What the core does with a device whose boot failed: it destroys it, and destroying a
+    // why: What the core does with a device whose boot failed: it destroys it, and destroying a
     // device starts by shutting it down.
     await driver.shutdown(stopped);
 
-    // A DriverCrashError naming both directories: the one that answered, and the device's own.
     const ownPath = `${avdDirectory}/simlock_one.avd`;
     expect({ readied, other: other.observed() }).toEqual({
       readied: {
@@ -3472,12 +3716,11 @@ describe("AndroidDriver readiness on a taken console port", () => {
   }>([
     { answer: `${avdDirectory}/simlock_one.avd\r\nOK\r\n`, reported: "exactly" },
     { answer: `${avdDirectory}/simlock_one.avd/\r\nOK\r\n`, reported: "with a trailing slash" },
-    // `/private/home` is a link to `/home`: the link is on the answer's side.
     {
       answer: `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
       reported: "through a link to the device root's directory",
     },
-    // `/home` is a link to `/private/home`, as macOS's `/var` is to `/private/var`: the link
+    // why: `/home` is a link to `/private/home`, as macOS's `/var` is to `/private/var`: the link
     // is on the device root's side, and the emulator answers with the resolved path.
     {
       answer: `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
@@ -3499,7 +3742,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
       });
       const device = await driver.provision(spec);
       if (reported === "exactly") {
-        // An exact answer needs nothing from the filesystem: a directory that cannot be
+        // why: An exact answer needs nothing from the filesystem: a directory that cannot be
         // resolved this moment does not fail the boot.
         filesystem.defineFailure(`${avdDirectory}/simlock_one.avd`, "EACCES");
       }
@@ -3540,7 +3783,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
       answered: "its own directory below a blank first line",
     },
     {
-      // Resolved against the daemon's working directory, which here is the device root, a
+      // why: Resolved against the daemon's working directory, which here is the device root, a
       // relative answer would name the device's own directory -- by accident.
       answer: ok("simlock_one.avd\r\nOK\r\n"),
       answered: "a relative path",
@@ -3575,7 +3818,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
 
 describe("AndroidDriver emulator registration", () => {
   it("sweeps its own console range when it takes over a server, and nobody else's", async () => {
-    // A running emulator announced itself exactly once, to a server a previous daemon has
+    // why: A running emulator announced itself exactly once, to a server a previous daemon has
     // since reaped. With `ADB_EMU=0` nothing rediscovers it, so `simlock daemon stop` would
     // otherwise orphan gigabytes of RSS the driver can no longer see, and hand the console
     // port it is sitting on to the next emulator, which then cannot bind.
@@ -3587,7 +3830,7 @@ describe("AndroidDriver emulator registration", () => {
     expect(announced).toHaveLength(49);
     expect(announced[0]).toBe("0012host:emulator:5587");
     expect(announced.at(-1)).toBe("0012host:emulator:5683");
-    // Every send goes to Simlock's own server, and every port is inside Simlock's range:
+    // why: Every send goes to Simlock's own server, and every port is inside Simlock's range:
     // one below 5587 would be adb connecting to an emulator of the user's.
     expect(tcpProbe.sends.every((send) => send.port === adbServerPort)).toBe(true);
   });
@@ -3597,7 +3840,6 @@ describe("AndroidDriver emulator registration", () => {
     const tcpProbe = new FakeTcpProbe([adbServerPort]);
     tcpProbe.failSendsWith(new Error("connect ECONNREFUSED"));
 
-    // The whole range is unreachable here; nothing about starting Android depends on it.
     await expect(
       createDriver(filesystem, new ScriptedProcessRunner([]), { tcpProbe }),
     ).resolves.toBeDefined();
@@ -3606,20 +3848,19 @@ describe("AndroidDriver emulator registration", () => {
 
   it("re-announces an emulator that stays unreachable, since nothing else will", async () => {
     const harness = await provisionedHarness({ initialAdbFailures: 2 });
-    // Nothing is announced when an emulator is spawned: adb answers `host:emulator:<port>`
+    // why: Nothing is announced when an emulator is spawned: adb answers `host:emulator:<port>`
     // by connecting out to that port, and the emulator has not opened it yet.
     const afterSweep = harness.tcpProbe.sends.length;
     const ready = harness.driver.makeReady(harness.device);
     await vi.waitFor(() => expect(bootProbes(harness.runner)).toBe(1));
     expect(harness.tcpProbe.sends).toHaveLength(afterSweep);
 
-    // Past the grace period on the second failure: adb's own reconnect queue is drained by
+    // why: Past the grace period on the second failure: adb's own reconnect queue is drained by
     // the scanner thread, which `ADB_EMU=0` does not run.
     harness.clock.advance(6_000);
     await vi.waitFor(() => expect(bootProbes(harness.runner)).toBe(2));
     await vi.waitFor(() =>
       expect(harness.tcpProbe.sends.slice(afterSweep)).toEqual([
-        // The adb port is the console port + 1.
         { payload: "0012host:emulator:5587", port: adbServerPort },
       ]),
     );
@@ -3649,7 +3890,7 @@ describe("AndroidDriver console ports across a restart", () => {
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
 
-    // The first daemon: provision, boot and stop a device. Stopped, it holds its console
+    // why: The first daemon: provision, boot and stop a device. Stopped, it holds its console
     // port only in its driver data -- nothing is listening there any more. Each call gets
     // the device as the last one returned it, which is what the registry commits.
     const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
@@ -3657,7 +3898,6 @@ describe("AndroidDriver console ports across a restart", () => {
     const stopped = await before.makeReady(await before.provision(spec));
     await before.shutdown(stopped);
 
-    // A restart is a new process: a new driver on a new runner, the same machine and root.
     const after = await createDriver(filesystem, host.runner(), { ids: ["two"] });
     await after.resolveSpec(spec);
     const provisioned = await after.provision(spec);
@@ -3677,7 +3917,7 @@ describe("AndroidDriver console port reservations", () => {
   it("keeps a device's console port across its stops, so a call on its stopped record reaches no other device", async () => {
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
-    // Each boot's mark write takes the id after its device's.
+    // why: Each boot's mark write takes the id after its device's.
     const driver = await createDriver(filesystem, host.runner(), {
       ids: ["one", "mark-1", "two", "mark-2", "mark-3"],
     });
@@ -3686,7 +3926,6 @@ describe("AndroidDriver console port reservations", () => {
     await driver.reclaim(stopped, { clean: "full" });
     const running = await driver.makeReady(await driver.provision(spec));
 
-    // What a retried reclaim sends: the stopped device's record, as the registry holds it.
     await driver.reclaim(stopped, { clean: "full" });
 
     expect({
@@ -3721,7 +3960,7 @@ describe("AndroidDriver console port reservations", () => {
     const after = await createDriver(filesystem, host.runner(), { ids: ["two"] });
     await after.resolveSpec(spec);
     const running = await after.makeReady(await after.provision(spec));
-    // Nothing reserves a stopped device's port after a restart, so the next boot took it.
+    // why: Nothing reserves a stopped device's port after a restart, so the next boot took it.
     expect(running.address).toBe(stopped.address);
 
     await after.destroy(stopped);
@@ -3771,7 +4010,6 @@ describe("AndroidDriver console port reservations", () => {
         "save",
         "simlock_clean_baseline",
       ]),
-      // The baseline is not there: `makeReady` fails with the emulator it started still up.
       processResult(binaries.adb, ["-s", "emulator-5586", "emu", "avd", "snapshot", "list"], ""),
       processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_one"]),
@@ -3788,7 +4026,6 @@ describe("AndroidDriver console port reservations", () => {
       osVersion: "34",
       platform: "android",
     });
-    // What the registry still holds for it: `provision`'s data, since no `makeReady` committed.
     const provisioned = await driver.provision(spec);
     await expect(driver.makeReady(provisioned)).rejects.toThrow("was not validated");
     const launch = runner.calls.findIndex(
@@ -3797,7 +4034,7 @@ describe("AndroidDriver console port reservations", () => {
     const before = runner.calls.length;
 
     const destroyed = driver.destroy(provisioned);
-    // Exits as it would on `emu kill`, which a scripted emulator cannot hear.
+    // why: Exits as it would on `emu kill`, which a scripted emulator cannot hear.
     runner.handles[launch]?.kill("SIGTERM");
     await destroyed.catch(() => undefined);
 
@@ -3818,7 +4055,7 @@ describe("AndroidDriver pre-root devices", () => {
   it("refuses to re-prove a root that has become a symlink since startup", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
-    // The case the re-proof exists for: the path was proven at startup and swapped since,
+    // why: The case the re-proof exists for: the path was proven at startup and swapped since,
     // so `listManaged` would now answer with the user's own AVDs.
     filesystem.defineSymlink(avdDirectory, `${home}/.android/avd`);
 
@@ -3851,7 +4088,7 @@ describe("AndroidDriver pre-root devices", () => {
 
     await driver.destroyLegacy(legacy!.device);
 
-    // Pointed at the home the AVD is actually in, and deliberately carrying no
+    // why: Pointed at the home the AVD is actually in, and deliberately carrying no
     // `ANDROID_ADB_SERVER_PORT`: a device this old is not on Simlock's server, and the
     // user's is not one Simlock may drive.
     expect(runner.calls.at(-1)?.options?.env).toEqual({
@@ -3866,7 +4103,6 @@ describe("AndroidDriver listComponents()", () => {
   const googleApis = `${sdk}/system-images/android-35/google_apis/arm64-v8a`;
   const plain = `${sdk}/system-images/android-35/default/arm64-v8a`;
 
-  /** An AVD the user made with avdmanager: `<name>.ini` pointing at `<name>.avd`. */
   async function userAvd(
     filesystem: MemoryFilesystem,
     name: string,
@@ -3935,10 +4171,8 @@ describe("AndroidDriver listComponents()", () => {
       ],
     });
     await userAvd(filesystem, "Pixel_8", "system-images/android-35/google_apis/arm64-v8a/");
-    // avdmanager's `-p`: the AVD directory lives elsewhere, and the `.ini` points at it.
     await userAvd(filesystem, "Elsewhere", `${googleApis}/`, { avdPath: "/work/Elsewhere.avd" });
     await userAvd(filesystem, "Other", "system-images/android-34/google_apis/arm64-v8a/");
-    // Simlock's own AVD of the same image: one of its devices, counted from the registry.
     await userAvd(filesystem, "simlock_one", "system-images/android-35/google_apis/arm64-v8a/", {
       avdHome: avdDirectory,
     });
@@ -3955,9 +4189,7 @@ describe("AndroidDriver listComponents()", () => {
   it("counts every AVD in the user's AVD home that names the image, booted before or never (#241)", async () => {
     const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
     const sysdir = "system-images/android-35/google_apis/arm64-v8a/";
-    // Never booted: only what avdmanager writes.
     await userAvd(filesystem, "Fresh", sysdir);
-    // Booted: the emulator has written its disk image and hardware config beside config.ini.
     await userAvd(filesystem, "Booted", sysdir);
     await filesystem.writeFileAtomic(`${userAvdHome}/Booted.avd/userdata-qemu.img`, "data");
     await filesystem.writeFileAtomic(`${userAvdHome}/Booted.avd/hardware-qemu.ini`, "hw\n");
@@ -4088,7 +4320,7 @@ describe("AndroidDriver listComponents()", () => {
     it("refuses with ComponentInUseError when an AVD in the user's AVD home names the image, and uninstalls nothing", async () => {
       const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
       await userAvd(filesystem, "Pixel_8", "system-images/android-35/google_apis/arm64-v8a/");
-      // The scripted runner fails any call it was not given, so an uninstall would fail this test.
+      // why: The scripted runner fails any call it was not given, so an uninstall would fail this test.
       const runner = new ScriptedProcessRunner([]);
       const driver = await createDriver(filesystem, runner);
       const [target] = await driver.listComponents();
@@ -4160,7 +4392,6 @@ describe("AndroidDriver listComponents()", () => {
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
         {
-          // Ignores SIGTERM: only the SIGKILL ten seconds later ends it.
           hangs: true,
           ignoresSigterm: true,
           match: { args: ["--uninstall", packageName], command: binaries.sdkmanager },
@@ -4190,7 +4421,7 @@ describe("AndroidDriver listComponents()", () => {
 });
 
 /**
- * What a promise settled with, once it has: a promise still open fails a named assertion rather
+ * why: What a promise settled with, once it has: a promise still open fails a named assertion rather
  * than the test's own timeout, so a deadline that never ends anything reads as that.
  */
 async function settledValue(promise: Promise<unknown>): Promise<unknown> {
@@ -4257,7 +4488,6 @@ async function provisionedHarness(
   options: {
     readonly bootCompleted?: string;
     readonly emulator?: AndroidEmulatorLaunchOptions;
-    /** The flags `emulator` is expected to add to every launch. */
     readonly emulatorFlags?: readonly string[];
     readonly forBaselineReclaim?: boolean;
     readonly forFullCleanBoot?: boolean;
@@ -4266,7 +4496,6 @@ async function provisionedHarness(
     readonly initialAdbFailures?: number;
     readonly readinessTimeoutMs?: number;
     readonly firstMarkToken?: string;
-    /** Invocations the test makes after the harness's own, in order. */
     readonly afterwards?: readonly ScriptedProcessExpectation[];
   } = {},
 ) {
@@ -4288,7 +4517,7 @@ async function provisionedHarness(
     processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
   ];
 
-  // The mock idGenerator's first call is spent on the AVD name above, so `makeReady`'s tail
+  // why: The mock idGenerator's first call is spent on the AVD name above, so `makeReady`'s tail
   // mark write is always the second call, and (when a snapshot-reclaim follows) the third.
   const firstMarkToken = options.firstMarkToken ?? "device-2";
   const secondMarkToken = "device-3";
@@ -4363,7 +4592,7 @@ async function provisionedHarness(
 }
 
 /**
- * A driver whose adb server is already running and recorded, so `create` adopts it: that is
+ * why: A driver whose adb server is already running and recorded, so `create` adopts it: that is
  * the one start-up path that spawns nothing, which keeps the scripted process expectations
  * in every test about the behaviour the test is actually for. The start, reap, and refusal
  * paths are covered against the supervisor itself in `adb-server.test.ts`, and end to end
@@ -4504,7 +4733,6 @@ describe("AndroidDriver toolVersions()", () => {
   it("omits a tool whose source.properties cannot be read", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.writeFileAtomic(`${sdk}/emulator/source.properties`, "Pkg.Revision=35.4.9\n");
-    // platform-tools has no source.properties; cmdline-tools has one with an empty revision.
     await filesystem.writeFileAtomic(
       `${sdk}/cmdline-tools/latest/source.properties`,
       "Pkg.Desc=Android SDK Command-line Tools\nPkg.Revision=\n",
@@ -4623,6 +4851,16 @@ const HOST_IMAGES: readonly FitImage[] = [
   ["36", "google_apis_playstore", "arm64-v8a"],
   ["34", "android-tv", "arm64-v8a"],
 ];
+
+// why: the verbatim source.properties of the real android-Baklava image installed beside
+// android-36 and android-37.0 on a reporting host, so the fixture holds what the SDK really stores.
+const BAKLAVA_SOURCE_PROPERTIES =
+  "Pkg.Desc=System Image arm64-v8a with Google APIs.\n" +
+  "Pkg.Revision=4\n" +
+  "AndroidVersion.ApiLevel=35\n" +
+  "AndroidVersion.CodeName=Baklava\n" +
+  "SystemImage.Abi=arm64-v8a\n" +
+  "SystemImage.TagId=google_apis\n";
 
 describe("AndroidDriver image fit", () => {
   describe("each row of the In short table", () => {
@@ -4841,6 +5079,60 @@ describe("AndroidDriver image fit", () => {
       expect(catalog.modelRuntimes["Pixel 9"]).toEqual(["Baklava"]);
       expect(await resolve("Pixel 9")).toMatchObject({ osVersion: "Baklava" });
     });
+
+    it("ranks a preview image by the API level it records, so a newer numeric level stays the newest", async () => {
+      const { driver, resolve } = await fitHarness([
+        ["35", "google_apis", "arm64-v8a"],
+        ["36", "google_apis", "arm64-v8a"],
+        ["37.0", "google_apis", "arm64-v8a"],
+        ["Baklava", "google_apis", "arm64-v8a", BAKLAVA_SOURCE_PROPERTIES],
+      ]);
+
+      const catalog = await driver.listCatalog();
+
+      // why: stated first so the assertions below can only fail on the *ranking* — the preview is
+      // genuinely a listed candidate, not something the catalog left out.
+      expect(catalog.runtimes).toContain("Baklava");
+      expect(catalog.modelRuntimes["Pixel 9"]).toContain("Baklava");
+      expect(catalog.defaultRuntime).toBe("37.0");
+      expect(await resolve("Pixel 9")).toMatchObject({ osVersion: "37.0" });
+    });
+
+    it("ranks a preview image above the numeric levels when the level it records is higher", async () => {
+      const { driver } = await fitHarness([
+        ["37.0", "google_apis", "arm64-v8a"],
+        ["Baklava", "google_apis", "arm64-v8a", "AndroidVersion.ApiLevel=38\n"],
+      ]);
+
+      expect((await driver.listCatalog()).defaultRuntime).toBe("Baklava");
+    });
+
+    it("ranks a preview folder by the highest level any of its images records, so an image recording none does not raise it", async () => {
+      const { driver } = await fitHarness([
+        ["36", "google_apis", "arm64-v8a"],
+        ["37.0", "google_apis", "arm64-v8a"],
+        ["Baklava", "google_apis", "arm64-v8a", BAKLAVA_SOURCE_PROPERTIES],
+        ["Baklava", "google_apis_playstore", "arm64-v8a"],
+      ]);
+
+      expect((await driver.listCatalog()).defaultRuntime).toBe("37.0");
+    });
+
+    it.each([
+      ["lower first", "35", "38"],
+      ["higher first", "38", "35"],
+    ])(
+      "ranks a preview folder by the highest level among its images, whichever is read first (%s)",
+      async (_order, first, second) => {
+        const { driver } = await fitHarness([
+          ["37.0", "google_apis", "arm64-v8a"],
+          ["Baklava", "google_apis", "arm64-v8a", `AndroidVersion.ApiLevel=${first}\n`],
+          ["Baklava", "google_apis_playstore", "arm64-v8a", `AndroidVersion.ApiLevel=${second}\n`],
+        ]);
+
+        expect((await driver.listCatalog()).defaultRuntime).toBe("Baklava");
+      },
+    );
 
     it("uses the folder name for --image-tag and the catalog's images[].tag when SystemImage.TagId differs", async () => {
       const { driver, refusal, resolve } = await fitHarness([
@@ -5176,7 +5468,9 @@ async function createDriver(
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
+    readonly scrcpyServerPath?: string;
     readonly tcpProbe?: FakeTcpProbe;
+    readonly tcpStreamConnector?: FakeTcpStreamConnector;
   } = {},
 ) {
   let nextId = 0;
@@ -5219,8 +5513,16 @@ function onlyProvided(options: {
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly readinessTimeoutMs?: number;
+  readonly scrcpyServerPath?: string;
+  readonly tcpStreamConnector?: FakeTcpStreamConnector;
 }) {
   return {
+    ...(options.scrcpyServerPath === undefined
+      ? {}
+      : { scrcpyServerPath: options.scrcpyServerPath }),
+    ...(options.tcpStreamConnector === undefined
+      ? {}
+      : { tcpStreamConnector: options.tcpStreamConnector }),
     ...(options.acceptAndroidLicenses === undefined
       ? {}
       : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
@@ -5235,7 +5537,6 @@ function onlyProvided(options: {
   };
 }
 
-/** The `adb-server.json` a previous daemon would have left behind for the adoption above. */
 async function recordRunningAdbServer(filesystem: Filesystem, port = adbServerPort): Promise<void> {
   await filesystem.mkdirp(simlockHome);
   await filesystem.writeFileAtomic(
@@ -5420,7 +5721,7 @@ function customDeviceXml(name: string, ramMiB: number): string {
 }
 
 /**
- * Fails every `readFile` of `failingPath` with a non-ENOENT error while `armed`, so a test can
+ * why: Fails every `readFile` of `failingPath` with a non-ENOENT error while `armed`, so a test can
  * assert a caller rethrows it instead of treating it as an absent file -- then disarm to read
  * the path back and confirm nothing overwrote it in the meantime.
  */
@@ -5443,7 +5744,6 @@ class ReadFailureFilesystem extends MemoryFilesystem {
   }
 }
 
-/** Returns every directory listing in reverse, standing in for a disk with no listing order. */
 class ReversedReaddirFilesystem extends MemoryFilesystem {
   override async readdir(path: string): Promise<string[]> {
     return (await super.readdir(path)).reverse();
@@ -5463,7 +5763,7 @@ async function androidFilesystem(
     await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
     await filesystem.writeFileAtomic(binary, "binary");
   }
-  // Marked, so `ensureOwnedRoot` adopts it rather than creating one -- a root Simlock
+  // why: Marked, so `ensureOwnedRoot` adopts it rather than creating one -- a root Simlock
   // created in an earlier run is the ordinary case, and it keeps the id generator's first
   // value available for the AVD name the tests assert on.
   if (options.withDeviceRoot !== false) {
@@ -5485,7 +5785,6 @@ async function androidFilesystem(
 
 function baselineBuildExpectations(options: {
   readonly bootCompleted?: string | undefined;
-  /** What `android.emulator` adds to every launch, right after `-no-snapshot-save`. */
   readonly emulatorFlags?: readonly string[] | undefined;
   readonly initialAdbFailures?: number | undefined;
   readonly launchArgs: readonly string[];
@@ -5585,7 +5884,7 @@ function baselineBuildExpectations(options: {
 }
 
 /**
- * A `ScriptedProcessRunner` that also mirrors what real `sdkmanager` does on disk: a
+ * why: A `ScriptedProcessRunner` that also mirrors what real `sdkmanager` does on disk: a
  * successful (`code: 0`, no unaccepted-license text) `--install <package>` call creates the
  * corresponding `system-images/android-<api>/<tag>/<abi>` directory in `filesystem`. The
  * driver's post-install `#installSystemImageOnce` re-scan needs the filesystem to actually
@@ -5642,7 +5941,7 @@ class InstallReflectingProcessRunner extends ScriptedProcessRunner {
 }
 
 /**
- * The emulators on one machine, which outlive any one daemon: as much of `avdmanager`,
+ * why: The emulators on one machine, which outlive any one daemon: as much of `avdmanager`,
  * `emulator` and `adb` as provisioning, booting, capturing a baseline and stopping use. Each
  * `runner()` is one daemon process's view of it -- the driver keeps its port reservations per
  * runner, as a real daemon keeps them per process.
@@ -5653,14 +5952,12 @@ class InstallReflectingProcessRunner extends ScriptedProcessRunner {
  * emulator is listening on its port.
  */
 class EmulatorHost {
-  /** Console port -> the AVD whose emulator is listening on it. */
   readonly #listening = new Map<number, string>();
   readonly #exits = new Map<number, () => void>();
   #nextPid = 1;
 
   constructor(private readonly filesystem: MemoryFilesystem) {}
 
-  /** The AVD whose emulator answers `serial`, or `undefined` when nothing does. */
   avdAnswering(serial: string | undefined): string | undefined {
     return this.#listening.get(consolePortOf(serial));
   }
@@ -5722,7 +6019,6 @@ class EmulatorHost {
       return ok("OK: killing emulator, bye bye\n");
     }
     if (rest.startsWith("shell echo ")) return ok();
-    // The AVD directory of whichever emulator holds the port, as the console reports it.
     if (rest === "emu avd path") {
       return ok(`${avdDirectory}/${this.#listening.get(port) ?? ""}.avd\r\nOK\r\n`);
     }
@@ -5748,7 +6044,7 @@ class EmulatorHost {
       exit({ code: 1, stderr: `console port ${port} is already used`, stdout: "" });
     }
     return {
-      // Killing an emulator that never bound must not stop the one that did.
+      // why: Killing an emulator that never bound must not stop the one that did.
       kill: () => {
         if (bound && this.#listening.get(port) === avdName) this.#exit(port);
       },
@@ -5767,7 +6063,6 @@ class EmulatorHost {
   }
 }
 
-/** A runner that records what it is asked to run, then passes it on. */
 class RecordingRunner implements ProcessRunner {
   readonly calls: { args: readonly string[]; command: string; options: ProcessRunOptions }[] = [];
 
@@ -5788,7 +6083,6 @@ class RecordingRunner implements ProcessRunner {
   }
 }
 
-/** What a booted emulator answers to the `adb -s <serial>` commands a boot and a baseline capture send. */
 const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
@@ -5804,11 +6098,8 @@ function ok(stdout = ""): ProcessResult {
   return { code: 0, stderr: "", stdout };
 }
 
-async function* emptyLines(): AsyncIterable<string> {
-  // An emulator Simlock spawns is never read from.
-}
+async function* emptyLines(): AsyncIterable<string> {}
 
-/** `installComponent` with a no-op progress callback and a signal that never fires. */
 function installFor(
   driver: AndroidDriver,
   component: string,
@@ -5820,7 +6111,6 @@ function installFor(
   });
 }
 
-/** Where sdkmanager puts a `system-images;android-<api>;<tag>;<abi>` package. */
 function imageDirectory(packageName: string | undefined): string | undefined {
   const match = /^system-images;android-(.+);(.+);(.+)$/.exec(packageName ?? "");
   if (match === null) return undefined;
@@ -5835,11 +6125,6 @@ function processResult(command: string, args: readonly (string | RegExp)[], stdo
   };
 }
 
-/**
- * The `emu avd path` query every readiness wait ends with, answered by the emulator of
- * `avdName` in Simlock's device root -- with the console's own CRLF line endings and its
- * closing `OK` line.
- */
 function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedProcessExpectation {
   return processResult(
     binaries.adb,
@@ -5848,7 +6133,6 @@ function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedPr
   );
 }
 
-/** The adb shell call `#writeErasableMark` makes as the second half of every mark write. */
 function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
   return processResult(binaries.adb, [
     "-s",
@@ -5859,7 +6143,7 @@ function markWriteExpectation(serial: string, token: string): ScriptedProcessExp
 }
 
 /**
- * An `EmulatorHost` on which another emulator takes a device's console port just before the
+ * why: An `EmulatorHost` on which another emulator takes a device's console port just before the
  * device's own emulator is spawned on it, and which answers the queries that tell emulators
  * apart: `emu avd path`, `emu avd name` and `getprop ro.boot.qemu.avd_name`.
  *
@@ -5871,7 +6155,6 @@ function markWriteExpectation(serial: string, token: string): ScriptedProcessExp
  */
 class PortTakingMachine {
   readonly #inner: ProcessRunner;
-  /** Console port -> the path of the AVD the other emulator runs. */
   readonly #otherPaths = new Map<number, string>();
   #takeOnNextBoot: ((port: number) => void) | undefined;
 
@@ -5879,17 +6162,12 @@ class PortTakingMachine {
     this.#inner = host.runner();
   }
 
-  /** The AVD path whose emulator answers `serial`, or `undefined` when nothing does. */
   avdPathAnswering(serial: string | undefined): string | undefined {
     const name = this.host.avdAnswering(serial);
     if (name === undefined) return undefined;
     return this.#otherPaths.get(consolePortOf(serial)) ?? `${avdDirectory}/${name}.avd`;
   }
 
-  /**
-   * On the next emulator spawn, first starts another emulator, of the AVD at `avdPath`, on
-   * the port that spawn names. Returns what became of that other emulator.
-   */
   takePortOnNextBoot(avdPath: string): {
     observed(): { running: boolean; sentByDriver: string[] };
   } {
@@ -5970,7 +6248,6 @@ class PortTakingMachine {
   }
 }
 
-/** `inner`, with every `adb -s <serial> emu avd path` answered by `answer`. */
 function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessRunner {
   return {
     run: async (command, args, options) =>
@@ -5982,10 +6259,6 @@ function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessR
   };
 }
 
-/**
- * A filesystem whose `realpath` resolves a relative path against `workingDirectory`, as
- * Node's does against the process's working directory.
- */
 class WorkingDirectoryFilesystem extends MemoryFilesystem {
   constructor(private readonly workingDirectory: string) {
     super();
@@ -5996,10 +6269,6 @@ class WorkingDirectoryFilesystem extends MemoryFilesystem {
   }
 }
 
-/**
- * A filesystem on which `/home` is a link to `/private/home`, as `/var` is to `/private/var`
- * on macOS: every path under either spelling resolves to the `/private/home` one.
- */
 class LinkedHomeFilesystem extends MemoryFilesystem {
   override async realpath(path: string): Promise<string> {
     const resolved = await super.realpath(path.replace(/^\/private\/home\//, "/home/"));
@@ -6007,11 +6276,10 @@ class LinkedHomeFilesystem extends MemoryFilesystem {
   }
 }
 
-/** Commands that only read an emulator's state. */
 const QUERIES = /^(shell getprop \S+|emu avd (name|path|id|status|discoverypath))$/;
 
 /**
- * The message of the driver's `DriverCrashError`; anything else -- a boot timeout, the fake's
+ * why: The message of the driver's `DriverCrashError`; anything else -- a boot timeout, the fake's
  * own complaint about an unscripted call -- is rethrown, so it fails the test as itself.
  */
 function driverCrashMessage(error: unknown): { readonly refused: string } {

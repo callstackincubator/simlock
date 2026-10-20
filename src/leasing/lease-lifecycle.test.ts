@@ -15,7 +15,9 @@ const noTiming = {
 
 const statePath = "/home/agent/.simlock/state.json";
 
-async function createHarness(options: { readonly filesystem?: Filesystem } = {}) {
+async function createHarness(
+  options: { readonly filesystem?: Filesystem; readonly platform?: "ios" | "android" } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   let nextId = 0;
@@ -30,7 +32,10 @@ async function createHarness(options: { readonly filesystem?: Filesystem } = {})
     driverData: {},
     driverDeviceId: "driver_1",
     provisionDuration: 0,
-    spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    spec:
+      options.platform === "android"
+        ? { physical: false, model: "Pixel 8", osVersion: "35", platform: "android" }
+        : { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
   });
   await registry.transitionDevice(device.id, "ready", {
     event: "device.ready",
@@ -75,29 +80,26 @@ describe("LeaseLifecycle", () => {
     );
   });
 
-  it("emits lease.granted carrying the request id and source it was given", async () => {
-    const harness = await createHarness();
+  it.each(["ios", "android"] as const)(
+    "lease.granted carries the device's own platform, for an %s device",
+    async (platform) => {
+      const harness = await createHarness({ platform });
 
-    const grant = await harness.lifecycle.grant({
-      environment: {},
-      timing: noTiming,
-      deviceId: harness.device.id,
-      ownerId: "agent",
-      requestId: "req_served",
-      requesterId: "agent",
-      source: "booted",
-    });
+      const grant = await harness.lifecycle.grant({
+        environment: {},
+        timing: noTiming,
+        requestId: "req_1",
+        source: "warm",
+        deviceId: harness.device.id,
+        requesterId: "agent",
+        ownerId: "agent",
+      });
 
-    expect(
-      harness.eventBus.replay().find((event) => event.event === "lease.granted")?.payload,
-    ).toEqual({
-      deviceId: harness.device.id,
-      leaseId: grant.lease.id,
-      requester: "agent",
-      requestId: "req_served",
-      source: "booted",
-    });
-  });
+      expect(
+        harness.eventBus.replay().find((event) => event.event === "lease.granted")?.payload,
+      ).toMatchObject({ leaseId: grant.lease.id, platform });
+    },
+  );
 
   it("grants a lease at the width the request asked for, and stores that instead", async () => {
     const harness = await createHarness();
@@ -112,60 +114,6 @@ describe("LeaseLifecycle", () => {
       ttlMs: 50,
     });
     expect(grant.lease).toMatchObject({ ttlMs: 50, ttlDeadline: 1_050 });
-  });
-
-  it("renews with an explicit ttlMs, re-arming the timer and storing the new width", async () => {
-    const harness = await createHarness();
-    const grant = await harness.lifecycle.grant({
-      environment: {},
-      timing: noTiming,
-      requestId: "req_1",
-      source: "warm",
-      deviceId: harness.device.id,
-      requesterId: "agent",
-      ownerId: "agent",
-    });
-    expect(grant.lease.ttlDeadline).toBe(1_020);
-
-    // Renew just before the grant-time deadline would have fired.
-    harness.clock.advance(8);
-    const renewed = await harness.lifecycle.renew(grant.lease.id, 30);
-    expect(renewed).toMatchObject({ lastRenewedAt: 1_008, ttlMs: 30, ttlDeadline: 1_038 });
-    expect(harness.eventBus.replay()).toContainEqual(
-      expect.objectContaining({
-        event: "lease.renewed",
-        payload: { leaseId: grant.lease.id, newDeadline: 1_038 },
-      }),
-    );
-
-    // The grant-time deadline has now passed, but the timer was re-armed at the new one.
-    harness.clock.advance(12);
-    await Promise.resolve();
-    expect(harness.registry.snapshot.leases).toHaveLength(1);
-
-    // The new deadline still fires.
-    harness.clock.advance(18);
-    await vi.waitFor(() => expect(harness.registry.snapshot.leases).toEqual([]));
-  });
-
-  it("renews with no ttlMs by re-applying the lease's own width, never lease.defaultTtlMs", async () => {
-    const harness = await createHarness();
-    // Granted wider than the 20ms default, exactly the case ADR 0004 §4 exists for: a lease
-    // asked for a long TTL and must not shrink to the default the first time it is renewed.
-    const grant = await harness.lifecycle.grant({
-      environment: {},
-      timing: noTiming,
-      requestId: "req_1",
-      source: "warm",
-      deviceId: harness.device.id,
-      requesterId: "agent",
-      ownerId: "agent",
-      ttlMs: 60,
-    });
-
-    harness.clock.advance(5);
-    const renewed = await harness.lifecycle.renew(grant.lease.id);
-    expect(renewed).toMatchObject({ ttlMs: 60, ttlDeadline: 1_065 });
   });
 
   it("keeps re-applying a width a previous renew set, not the grant-time one", async () => {
@@ -280,7 +228,7 @@ describe("LeaseLifecycle", () => {
     // Advance to (and past) the original grant-time deadline: a restart that restored the
     // stale grant-time deadline instead of the renewed one would have expired the lease here.
     afterClock.advance(20);
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
     expect(afterRegistry.snapshot.leases).toHaveLength(1);
 
     // The renewed deadline still fires.

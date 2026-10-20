@@ -43,8 +43,10 @@ import {
   type DeviceMode,
   type DeviceSpec,
   type VirtualSpec,
+  type ScreenCapture,
 } from "../../core/index.js";
 import type {
+  BytePipeLauncher,
   Clock,
   Filesystem,
   IdGenerator,
@@ -54,6 +56,7 @@ import type {
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { IosPhysicalHandler } from "./physical.js";
+import { createIosScreenCapture } from "./screen-capture.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -61,6 +64,7 @@ const COMMAND_TIMEOUT_MS = 30_000;
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
+const INSTALLER_POLL_MS = 1_000;
 const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
 // being deleted, which it does for a few seconds after `simctl runtime delete` answers (#259).
@@ -206,6 +210,15 @@ export interface IosSimctlDriverOptions {
     readonly bootTimeoutMs: number;
   };
   readonly slimByDefault?: boolean;
+  // why: absent when this host has no way to run the capture program; the driver then offers no
+  // screen at all rather than one that fails on every open.
+  readonly screenCapture?: {
+    readonly command: string;
+    readonly deviceCommand?: string;
+    readonly launcher: BytePipeLauncher;
+    readonly baseEnvironment: NodeJS.ProcessEnv;
+    readonly onLog?: (line: string) => void;
+  };
 }
 
 type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
@@ -306,7 +319,31 @@ export class IosSimctlDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
+    this.screenCapture =
+      options.screenCapture === undefined
+        ? undefined
+        : createIosScreenCapture({
+            baseEnvironment: options.screenCapture.baseEnvironment,
+            clock: options.clock,
+            command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
+            ...(options.screenCapture.deviceCommand === undefined &&
+            configuredDeviceCaptureCommand(options) === undefined
+              ? {}
+              : {
+                  deviceCommand:
+                    configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
+                }),
+            deviceOsVersion: (udid) => this.#physical.osVersion(udid),
+            deviceSet: deviceRoot,
+            filesystem: options.filesystem,
+            launcher: options.screenCapture.launcher,
+            ...(options.screenCapture.onLog === undefined
+              ? {}
+              : { onLog: options.screenCapture.onLog }),
+          });
   }
+
+  readonly screenCapture: ScreenCapture | undefined;
 
   /**
    * why: Establishes the device set this driver owns before it can be asked to do anything,
@@ -753,14 +790,35 @@ export class IosSimctlDriver implements Driver {
     if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
+    const deadline = this.#clock.now() + bootstatusTimeoutMs;
     const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs);
 
-    if (outcome.kind === "timed-out") {
-      await this.#bestEffortShutdown(udid);
-      throw new BootTimeoutError(deviceId);
+    if (outcome.kind === "finished") {
+      this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
+      if (await this.#waitForInstaller(udid, deadline)) return;
     }
 
-    this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
+    await this.#bestEffortShutdown(udid);
+    throw new BootTimeoutError(deviceId);
+  }
+
+  async #waitForInstaller(udid: string, deadline: number): Promise<boolean> {
+    // why: bootstatus can finish before the installer accepts requests after an erase (#547).
+    while (this.#clock.now() < deadline) {
+      const outcome = await this.#invokeSimctl(
+        ["listapps", udid],
+        Math.min(COMMAND_TIMEOUT_MS, deadline - this.#clock.now()),
+      );
+      if (outcome.kind === "finished" && outcome.result.code === 0) {
+        return this.#clock.now() < deadline;
+      }
+      const remainingMs = deadline - this.#clock.now();
+      if (remainingMs <= 0) break;
+      await new Promise<void>((resolve) => {
+        this.#clock.setTimer(Math.min(INSTALLER_POLL_MS, remainingMs), resolve);
+      });
+    }
+    return false;
   }
 
   async #applySlimAndReboot(
@@ -1051,7 +1109,6 @@ export class IosSimctlDriver implements Driver {
     await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through the Driver interface by the leasing watcher.
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
     return this.#physical.listPresent(enrolledIds);
   }
@@ -1631,6 +1688,16 @@ class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
       `iOS ${requested} is not currently offered for download by Apple (likely superseded by a ` +
       `newer point release); request a different --os, or omit --os for the newest available runtime`;
   }
+}
+
+function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
+  const configured = options.driverConfig["screenCaptureCommand"];
+  return typeof configured === "string" && configured !== "" ? configured : undefined;
+}
+
+function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
+  const configured = options.driverConfig["deviceCaptureCommand"];
+  return typeof configured === "string" && configured !== "" ? configured : undefined;
 }
 
 function configuredDeviceRoot(options: IosSimctlDriverOptions): string {

@@ -681,11 +681,10 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // Hardening: a worker's event name is taken on faith from its own `events.subscribe` push --
-  // `workerId` is merged in last so it cannot be spoofed, but nothing about the protocol proves
-  // the *name* is genuinely the worker's own. Without a guard, a worker (or anything speaking
-  // its admin protocol) could forge one of the six subjects `docs/internal/EVENTS.md` calls "the
-  // gateway's own" -- e.g. `worker.drain-ended` -- straight into the operator's audit trail.
+  // why: nothing about the admin protocol proves that a pushed event's *name* is genuinely the
+  // worker's own -- `workerId` is merged in last so it cannot be spoofed, but a worker (or
+  // anything speaking its protocol) could otherwise forge a fact only a gateway authors, such as
+  // `worker.drain-ended`, straight into the operator's audit trail.
   it("refuses to republish a worker's event under a name reserved for the gateway itself", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -698,8 +697,6 @@ describe("GatewayService", () => {
       module: "gateway",
       payload: { workerId: "wrk_forged", label: "not-this-worker" },
     });
-    // A genuine event from the same worker still goes through -- the guard is on the six names,
-    // not on this link entirely.
     worker.pushEvent({
       event: "lease.granted",
       module: "lease-engine",
@@ -739,6 +736,40 @@ describe("GatewayService", () => {
     );
 
     expect(harness.events.filter((event) => event.event === "request.granted")).toEqual([]);
+
+    await harness.service.stop();
+  });
+
+  it("refuses to republish a request.dispatched a worker pushes, which only the gateway itself emits", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "request.dispatched",
+      module: "fleet-lease-coordinator",
+      payload: {
+        platform: "ios",
+        queuedMs: 0,
+        reason: "warm-hit",
+        requestId: "req_forged",
+        requesterId: "agent-1",
+        stage: "warm-hit",
+        workerId: "wrk_forged",
+      },
+    });
+    worker.pushEvent({
+      event: "lease.granted",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+    });
+    await vi.waitFor(() =>
+      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+    );
+
+    expect(harness.events.filter((event) => event.event === "request.dispatched")).toEqual([]);
 
     await harness.service.stop();
   });
@@ -1234,7 +1265,7 @@ describe("GatewayService", () => {
       min: PROTOCOL_VERSION_RANGE.max - 1,
       max: PROTOCOL_VERSION_RANGE.max - 1,
     };
-    expect(PROTOCOL_VERSION_RANGE.max).toBe(36);
+    expect(PROTOCOL_VERSION_RANGE.max).toBe(48);
     expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
     const harness = fleet();
     await harness.service.start();
@@ -1757,7 +1788,7 @@ describe("GatewayService", () => {
   // twice before this round. This asserts the coalescing itself: two dials with the same claimed
   // id and reason inside one window produce exactly one event, and the first dial after the
   // window closes reports the closed window's total as `count`.
-  it("coalesces a flood of identical refusals into one event per window, with a count (P-2)", async () => {
+  it("coalesces a flood of identical refusals into one event per window, with a count only above one (P-2)", async () => {
     const harness = fleet({ authenticate: () => "unauthenticated" });
     await harness.service.start();
     const rejectedEvents = () =>
@@ -1793,6 +1824,18 @@ describe("GatewayService", () => {
     ).rejects.toMatchObject({ code: "rejected" });
     expect(rejectedEvents()).toHaveLength(3);
     expect(rejectedEvents()[2]?.payload).not.toHaveProperty("count");
+
+    // why: both EVENTS.md cuts document `count` as "present only above one", so a lone refusal
+    // whose predecessor window absorbed exactly one -- the normal path for a worker redialling
+    // on its backoff, which lands outside every window by design -- must not carry `count: 1`.
+    // Presence is the flood signal (#677).
+    harness.clock.advance(REJECTION_COALESCE_WINDOW_MS);
+    await expect(
+      harness.join("wrk_other", new ScriptedWorkerClient(), "mac-mini-2"),
+    ).rejects.toMatchObject({ code: "rejected" });
+    expect(rejectedEvents()).toHaveLength(4);
+    expect(rejectedEvents()[3]?.payload).toMatchObject({ workerId: "wrk_other" });
+    expect(rejectedEvents()[3]?.payload).not.toHaveProperty("count");
 
     await harness.service.stop();
   });
@@ -1868,7 +1911,7 @@ describe("GatewayService", () => {
 describe("GatewayService: a worker's capabilities in its view", () => {
   const unavailable = {
     name: "agent-device",
-    reason: "found 0.20.1, need 0.21.25 or later",
+    reason: "found 0.20.1, need 0.21.28 or later",
     state: "unavailable" as const,
   };
   const available = { name: "agent-device", state: "available" as const };

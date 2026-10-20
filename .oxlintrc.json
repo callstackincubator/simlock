@@ -25,6 +25,8 @@
                   "LeaseRequestFailure",
                   "LeaseRequestLimits",
                   "SerializedDecision",
+                  "UsageReader",
+                  "createUsageReader",
                   "findCatalogModel",
                   "fits",
                   "fitsPhysical",

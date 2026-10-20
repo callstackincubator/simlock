@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
@@ -15,10 +15,13 @@ import {
   REDACTED_VALUE,
   Registry,
 } from "../core/index.js";
-import { FakeAgentDeviceHealth } from "../agent-device/testing.js";
+import { agentDeviceModule } from "../agent-device/definition.js";
+import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/testing.js";
 import { FakeDriver } from "../core/testing.js";
+import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventEnvelope } from "../bus/index.js";
+import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
@@ -46,6 +49,7 @@ import {
   type DriverDiscoveryContext,
   type StartDaemonOptions,
 } from "./main.js";
+import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -85,25 +89,84 @@ async function start(
   return { daemon, directory, sink };
 }
 
-describe("the event file sink", () => {
-  it("judges retention by the injected clock, so a generation younger than the retention on that clock survives the start-up sweep", async () => {
+async function historyEventsWhen(
+  directory: string,
+  done: (events: readonly EventEnvelope[]) => boolean,
+): Promise<EventEnvelope[]> {
+  let events: EventEnvelope[] = [];
+  await vi.waitFor(
+    async () => {
+      events = await readHistoryEvents(directory);
+      expect(done(events)).toBe(true);
+    },
+    { timeout: 4_000 },
+  );
+  return events;
+}
+
+const hasEvent =
+  (name: string) =>
+  (events: readonly EventEnvelope[]): boolean =>
+    events.some((event) => event.event === name);
+
+describe("the version a daemon reports", () => {
+  it("is the version in package.json when the caller names none", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    // The fake clock reads 1_000; a real clock would put the 7-day cutoff far past 500.
-    await writeFile(join(directory, "events.jsonl.1"), `{"timestamp":500}\n`);
     const clock = new FakeClock(1_000);
+    const socketPath = join(directory, "daemon.sock");
     const daemon = await startDaemon({
       clock,
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       filesystem: new MemoryFilesystem(),
+      hostLoadProbe: null,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      socketPath,
       statePath: join(directory, "state.json"),
-      version: "1.2.3",
     });
     runningDaemons.push(daemon);
+    const packageJson = JSON.parse(
+      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
 
-    expect(await readFile(join(directory, "events.jsonl.1"), "utf8")).toBe(`{"timestamp":500}\n`);
+    const client = await connectRetrying(socketPath);
+    try {
+      const hello = await client.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      expect(hello.payload).toMatchObject({ version: packageJson.version });
+    } finally {
+      client.socket.end();
+    }
+  });
+});
+
+describe("the event history", () => {
+  it("judges retention by the injected clock, so an event younger than the retention on that clock survives the start-up prune", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    // why: the fake clock reads 1_000; a real clock would put the 7-day cutoff far past 500.
+    await seedHistory(directory, [500]);
+
+    await start({ dataDirectory: directory });
+
+    const events = await historyEventsWhen(directory, hasEvent("daemon.started"));
+    expect(events.map((event) => event.id)).toContain("evt_1");
+  });
+
+  it("prunes at start by the configured eventLog.retention, so an event older than it on the injected clock is gone", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    // why: the fake clock reads 1_000; with a retention of 100 the cutoff is 900, past 500 and before 950.
+    await seedHistory(directory, [500, 950]);
+
+    await start({ configOverrides: { eventLog: { retention: 100 } }, dataDirectory: directory });
+
+    const events = await historyEventsWhen(directory, hasEvent("daemon.started"));
+    expect(events.map((event) => event.id)).not.toContain("evt_1");
+    expect(events.map((event) => event.id)).toContain("evt_2");
   });
 });
 
@@ -147,7 +210,7 @@ async function agentStatus(daemon: DaemonServer) {
   return (await daemon.dispatch(
     "status.get",
     {},
-    { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+    { manageEventSubscription: () => undefined, via: "socket", principal: "agent", role: "agent" },
   )) as { readonly host: { readonly tools: readonly unknown[] } };
 }
 
@@ -197,19 +260,22 @@ describe("startDaemon", () => {
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
   });
 
-  it("keeps gateway.token out of the daemon log, the events.replay answer, and events.jsonl, while config.get still returns it", async () => {
+  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
       configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
     });
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
 
     const replayed = await daemon.dispatch("events.replay", {}, admin);
-    const eventFile = await readFile(join(directory, "events.jsonl"), "utf8");
+    const eventFile = JSON.stringify(
+      await historyEventsWhen(directory, hasEvent("daemon.started")),
+    );
     const config = (await daemon.dispatch("config.get", {}, admin)) as {
       readonly gateway: { readonly token?: string };
     };
@@ -222,8 +288,8 @@ describe("startDaemon", () => {
     expect({
       daemonLog: JSON.stringify(sink.records).includes(secret),
       eventsReplay: JSON.stringify(replayed).includes(secret),
-      eventsJsonl: eventFile.includes(secret),
-    }).toEqual({ daemonLog: false, eventsReplay: false, eventsJsonl: false });
+      historyDb: eventFile.includes(secret),
+    }).toEqual({ daemonLog: false, eventsReplay: false, historyDb: false });
     expect(config.gateway.token).toBe(secret);
   });
 
@@ -236,7 +302,12 @@ describe("startDaemon", () => {
     const replayed = (await daemon.dispatch(
       "events.replay",
       {},
-      { manageEventSubscription: () => undefined, principal: "operator", role: "admin" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
     )) as readonly { readonly event: string; readonly payload: unknown }[];
 
     const started = replayed.find((envelope) => envelope.event === "daemon.started");
@@ -273,6 +344,7 @@ describe("startDaemon", () => {
     });
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -306,6 +378,7 @@ describe("startDaemon", () => {
     } as const;
     const session = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "agent",
       role: "agent",
     } as const;
@@ -411,7 +484,12 @@ describe("startDaemon", () => {
           osVersion: "26.5",
           platform: "ios",
         },
-        { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "agent",
+          role: "agent",
+        },
       )
       .catch((error: unknown) => error);
     await expect.poll(() => events).toEqual(["install-started"]);
@@ -491,7 +569,12 @@ describe("startDaemon", () => {
     const listed = await daemon.dispatch(
       "component.list",
       {},
-      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
     );
 
     expect(listed).toEqual({ components: [] });
@@ -517,11 +600,13 @@ describe("startDaemon", () => {
 describe("startDaemon wires core and leasing together", () => {
   const agent = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent",
     role: "agent",
   } as const;
   const admin = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "operator",
     role: "admin",
   } as const;
@@ -625,10 +710,7 @@ describe("startDaemon wires core and leasing together", () => {
   it("announces the capacity figures and then the queue depth once startup is done", async () => {
     const { directory } = await start();
 
-    const events = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { readonly event: string; readonly module: string });
+    const events = await historyEventsWhen(directory, hasEvent("queue.changed"));
     const names = events.map((event) => event.event);
 
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(-1);
@@ -639,10 +721,9 @@ describe("startDaemon wires core and leasing together", () => {
   it("runs doctor's startup pass on the startup read before core's device steps announce the capacity figures", async () => {
     const { directory } = await start();
 
-    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+    const names = (await historyEventsWhen(directory, hasEvent("capacity.changed"))).map(
+      (event) => event.event,
+    );
 
     expect(names.indexOf("doctor.reconciled")).toBeGreaterThan(-1);
     expect(names.indexOf("doctor.reconciled")).toBeLessThan(names.indexOf("capacity.changed"));
@@ -679,10 +760,9 @@ describe("startDaemon wires core and leasing together", () => {
     });
     runningDaemons.push(daemon);
 
-    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+    const names = (await historyEventsWhen(directory, hasEvent("capacity.changed"))).map(
+      (event) => event.event,
+    );
     expect(names.indexOf("lease.rejected")).toBeGreaterThan(-1);
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
   });
@@ -893,6 +973,69 @@ describe("startDaemon wires core and leasing together", () => {
     await settleRealTime();
 
     expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+  });
+
+  describe("a device quarantined by a failed purge", () => {
+    type CauseView = {
+      readonly id: string;
+      readonly quarantineCause?: { readonly kind: string; readonly message?: string };
+      readonly state: string;
+    };
+
+    async function quarantinedAfterFailedPurge() {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+      driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+      const { daemon } = await start({ clock, drivers: [driver] });
+      const grant = (await daemon.dispatch("lease.request", ios, agent)) as Grant;
+      await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+      await settleRealTime();
+      return daemon;
+    }
+
+    const devicesOf = async (
+      daemon: Awaited<ReturnType<typeof quarantinedAfterFailedPurge>>,
+      session: typeof agent | typeof admin,
+    ) =>
+      (
+        (await daemon.dispatch("status.get", {}, session)) as {
+          readonly devices: readonly CauseView[];
+        }
+      ).devices;
+
+    it("shows quarantineCause purge-failed with the driver's error in status.get and list.get", async () => {
+      const daemon = await quarantinedAfterFailedPurge();
+
+      const status = await devicesOf(daemon, admin);
+      const listed = (await daemon.dispatch(
+        "list.get",
+        { kind: "devices" },
+        admin,
+      )) as readonly CauseView[];
+
+      for (const devices of [status, listed]) {
+        expect(devices).toHaveLength(1);
+        expect(devices[0]).toMatchObject({ state: "quarantined" });
+        expect(devices[0]?.quarantineCause).toEqual({
+          kind: "purge-failed",
+          message: "DriverCrashError: purge exploded",
+        });
+      }
+    });
+
+    it("shows its message to an admin session and only its kind to an agent session", async () => {
+      const daemon = await quarantinedAfterFailedPurge();
+
+      const forAdmin = await devicesOf(daemon, admin);
+      const forAgent = await devicesOf(daemon, agent);
+
+      expect(forAdmin[0]?.quarantineCause).toEqual({
+        kind: "purge-failed",
+        message: "DriverCrashError: purge exploded",
+      });
+      expect(forAgent[0]).toMatchObject({ state: "quarantined" });
+      expect(forAgent[0]?.quarantineCause).toEqual({ kind: "purge-failed" });
+    });
   });
 
   it("probes a leased device again as time passes once startup is done", async () => {
@@ -1417,6 +1560,68 @@ async function pollUntilListening(port: number, secret: string): Promise<unknown
   }
   throw new Error("HTTP gateway never started listening");
 }
+
+describe("startDaemon HTTP status for a quarantined device", () => {
+  it("gives an operator token the cause's message and an agent token its kind alone", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-cause-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const secrets = new CryptoTokenSecrets();
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "tokens.json"),
+      JSON.stringify([
+        { id: "tok_agent", hash: secrets.hash("slk_cause_agent"), role: "agent", createdAt: 0 },
+        { id: "tok_op", hash: secrets.hash("slk_cause_operator"), role: "operator", createdAt: 0 },
+      ]),
+    );
+    const port = await freeLoopbackPort();
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      dataDirectory: directory,
+      drivers: [driver],
+      filesystem,
+      hostLoadProbe: null,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    const session = {
+      manageEventSubscription: () => undefined,
+      principal: "agent-1",
+      role: "agent",
+      via: "socket",
+    } as const;
+    const grant = (await daemon.dispatch(
+      "lease.request",
+      { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId: "agent-1" },
+      session,
+    )) as { readonly lease: { readonly id: string } };
+    await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, session);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const causeFor = async (secret: string) => {
+      const status = (await pollUntilListening(port, secret)) as {
+        readonly devices?: readonly {
+          readonly quarantineCause?: unknown;
+          readonly state: string;
+        }[];
+      };
+      expect(status.devices?.[0]?.state).toBe("quarantined");
+      return status.devices?.[0]?.quarantineCause;
+    };
+
+    expect(await causeFor("slk_cause_operator")).toEqual({
+      kind: "purge-failed",
+      message: "DriverCrashError: purge exploded",
+    });
+    expect(await causeFor("slk_cause_agent")).toEqual({ kind: "purge-failed" });
+  });
+});
 
 describe("discoverDrivers", () => {
   it("logs a skip when the Android SDK cannot be found, without throwing", async () => {
@@ -1978,7 +2183,7 @@ describe("processRunnerFor", () => {
   });
 });
 
-describe("startDaemon event file", () => {
+describe("startDaemon event history", () => {
   const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
 
   afterEach(() => {
@@ -1989,19 +2194,52 @@ describe("startDaemon event file", () => {
     }
   });
 
-  it("starts a daemon whose event file cannot be opened, and logs one error line", async () => {
+  it("starts a daemon whose history path is a directory, sets it aside and writes a fresh file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
     temporaryDirectories.push(directory);
-    await mkdir(join(directory, "events.jsonl"));
+    await mkdir(join(directory, "history.db"));
 
-    const { daemon, sink } = await start({ dataDirectory: directory });
+    const { daemon } = await start({ dataDirectory: directory });
 
+    const events = await historyEventsWhen(directory, hasEvent("daemon.started"));
+    const names = await readdir(directory);
+    const status = (await daemon.dispatch(
+      "status.get",
+      {},
+      {
+        manageEventSubscription: () => undefined,
+        principal: "operator",
+        role: "admin",
+        via: "socket",
+      },
+    )) as { readonly history?: unknown };
     expect(daemon.health).toBe("running");
+    expect(names).toContain("history.db.damaged-1000");
+    expect((await stat(join(directory, "history.db.damaged-1000"))).isDirectory()).toBe(true);
+    expect((await stat(join(directory, "history.db"))).isFile()).toBe(true);
+    expect(events.length).toBeGreaterThan(0);
+    expect(status.history).toEqual({ opened: true, setAsideAt: 1_000, writing: true });
+  });
+
+  it("a daemon that loses the socket claim leaves a damaged history.db byte-identical and in place", async () => {
+    const winner = await mkdtemp(join(tmpdir(), "simlock-main-claim-"));
+    const loser = await mkdtemp(join(tmpdir(), "simlock-main-claim-"));
+    temporaryDirectories.push(winner, loser);
+    const junk = "this is not a sqlite database ".repeat(20);
+    await writeFile(join(loser, "history.db"), junk);
+    const socketPath = join(winner, "daemon.sock");
+    await start({ dataDirectory: winner, socketPath });
+
+    const outcome = await start({ dataDirectory: loser, socketPath }).then(
+      () => "resolved" as const,
+      () => "rejected" as const,
+    );
+
+    expect(outcome).toBe("rejected");
     expect(
-      sink.records.filter(
-        (record) => record.level === "error" && record.module === "daemon.events",
-      ),
-    ).toHaveLength(1);
+      await readdir(loser).then((names) => names.filter((name) => name.startsWith("history"))),
+    ).toEqual(["history.db"]);
+    expect(await readFile(join(loser, "history.db"), "utf8")).toBe(junk);
   });
 
   it("mints event ids from the idGenerator the daemon was given", async () => {
@@ -2020,10 +2258,11 @@ describe("startDaemon event file", () => {
       idGenerator: { generate: () => "from-the-given-generator" },
     });
 
-    const ids = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trimEnd()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { id: string }).id);
+    const ids = (
+      await historyEventsWhen(directory, (events) =>
+        events.some((event) => event.id === "evt_from-the-given-generator"),
+      )
+    ).map((event) => event.id);
     expect(ids).toContain("evt_from-the-given-generator");
   });
 
@@ -2044,10 +2283,9 @@ describe("startDaemon event file", () => {
 
     const { sink } = await start({ dataDirectory: directory, drivers: undefined });
 
-    const written = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trimEnd()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { event: string }).event);
+    const written = (await historyEventsWhen(directory, hasEvent("device.slimmed"))).map(
+      (event) => event.event,
+    );
     expect(written).toEqual(expect.arrayContaining(["component.installed", "device.slimmed"]));
     expect(
       sink.records.filter((record) =>
@@ -2352,7 +2590,12 @@ describe("startDaemon logger wiring", () => {
       daemon.dispatch(
         "worker.drain",
         { workerId: "wrk_ghost" },
-        { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "test-operator",
+          role: "admin",
+        },
       ),
     ).rejects.toMatchObject({ code: "UNKNOWN_WORKER" });
 
@@ -2392,6 +2635,7 @@ describe("startDaemon with the agent-device edge", () => {
   } as const;
   const agent = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent",
     role: "agent",
   } as const;
@@ -2436,7 +2680,7 @@ describe("startDaemon with the agent-device edge", () => {
     return new ScriptedProcessRunner([
       {
         match: { args: [realCli, "--version"], command: process.execPath },
-        result: { code: 0, stderr: "", stdout: "0.21.25-dev\n" },
+        result: { code: 0, stderr: "", stdout: "0.21.28\n" },
       },
       {
         hangs: true,
@@ -2448,7 +2692,9 @@ describe("startDaemon with the agent-device edge", () => {
   async function startEdge(
     setup: Awaited<ReturnType<typeof setUp>>,
     ports: {
+      readonly agentDevice?: OptionalModuleDefinition<unknown>;
       readonly drivers?: StartDaemonOptions["drivers"];
+      readonly modules?: readonly FakeModule[];
       readonly processRunner: ScriptedProcessRunner;
       readonly processSupervisor: FakeProcessSupervisor;
     },
@@ -2456,7 +2702,6 @@ describe("startDaemon with the agent-device edge", () => {
     const clock = new FakeClock(1_000);
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
-      agentDeviceHealth: new FakeAgentDeviceHealth(),
       clock,
       dataDirectory: setup.directory,
       drivers: ports.drivers ?? [
@@ -2465,6 +2710,12 @@ describe("startDaemon with the agent-device edge", () => {
       filesystem: setup.filesystem,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
       logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+      optionalModules: [
+        ports.agentDevice ?? agentDeviceModuleWith({ health: new FakeAgentDeviceHealth() }),
+        ...(ports.modules ?? []).map(
+          (module) => module.definition as OptionalModuleDefinition<unknown>,
+        ),
+      ],
       processRunner: ports.processRunner,
       processSupervisor: ports.processSupervisor,
       statePath: join(setup.directory, "state.json"),
@@ -2475,8 +2726,58 @@ describe("startDaemon with the agent-device edge", () => {
     return { daemon, sink };
   }
 
+  it("runs a module's beforeDriversDispose and stops agent-device's child, both before the drivers are disposed", async () => {
+    const setup = await setUp({
+      capabilities: { "agent-device": { command, enabled: true }, alpha: { enabled: true } },
+    });
+    const events: string[] = [];
+    const processSupervisor = new KillingSupervisor();
+    const runner = versionAndDaemon(setup.directory);
+    const spawn = runner.spawn.bind(runner);
+    vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
+      const handle = spawn(spawned, args, options);
+      if (args[0] === entry) {
+        processSupervisor.markAlive(handle.pid);
+        processSupervisor.kills.set(handle.pid, () => handle.kill());
+        void handle.wait().then(() => events.push("agent-device exited"));
+      }
+      return handle;
+    });
+    const clock = new FakeClock(1_000);
+    class DisposingDriver extends FakeDriver {
+      async dispose(): Promise<void> {
+        events.push("driver disposed");
+      }
+    }
+    const { daemon } = await startEdge(setup, {
+      drivers: [new DisposingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      modules: [
+        fakeModule({
+          hooks: {
+            beforeDriversDispose: () => {
+              events.push("module beforeDriversDispose");
+              return Promise.resolve();
+            },
+          },
+          name: "alpha",
+        }),
+      ],
+      processRunner: runner,
+      processSupervisor,
+    });
+    await pollUntil(() => runner.calls.length === 2);
+
+    await daemon.stop("test");
+
+    expect(events.at(-1)).toBe("driver disposed");
+    expect(events.slice(0, -1).sort()).toEqual([
+      "agent-device exited",
+      "module beforeDriversDispose",
+    ]);
+  });
+
   it("resolves and grants a lease to an ordinary client while agent-device's /health never answers, and stops the child before the drivers are disposed", async () => {
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
+    const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const events: string[] = [];
     const processSupervisor = new KillingSupervisor();
     const runner = versionAndDaemon(setup.directory);
@@ -2515,7 +2816,7 @@ describe("startDaemon with the agent-device edge", () => {
   });
 
   async function spawnedEnvironment(drivers: (clock: FakeClock) => StartDaemonOptions["drivers"]) {
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
+    const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const runner = versionAndDaemon(setup.directory);
     await startEdge(setup, {
       drivers: drivers(new FakeClock(1_000)),
@@ -2555,7 +2856,7 @@ describe("startDaemon with the agent-device edge", () => {
 
   it("still starts and grants a lease when agent-device is not found", async () => {
     const setup = await setUp({
-      agentDevice: { command: "/opt/missing/agent-device", enabled: true },
+      capabilities: { "agent-device": { command: "/opt/missing/agent-device", enabled: true } },
     });
     const runner = new ScriptedProcessRunner([]);
 
@@ -2574,7 +2875,7 @@ describe("startDaemon with the agent-device edge", () => {
   it("builds no supervisor in gateway mode: no ps and no agent-device process run, and no signal is sent", async () => {
     const setup = await setUp(
       {
-        agentDevice: { command, enabled: true },
+        capabilities: { "agent-device": { command, enabled: true } },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         mode: "gateway",
       },
@@ -2590,14 +2891,99 @@ describe("startDaemon with the agent-device edge", () => {
     expect(processSupervisor.signals).toEqual([]);
   });
 
+  it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
+    const admin = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "op",
+      role: "admin",
+    } as const;
+    for (const config of [{}, { capabilities: { "agent-device": { enabled: false } } }]) {
+      const setup = await setUp(config);
+      const { daemon } = await startEdge(setup, {
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+
+      const status = await daemon.dispatch("status.get", {}, admin);
+
+      expect(status.capabilities).toEqual([{ name: "agent-device", state: "off" }]);
+    }
+  });
+
+  it("a worker with agent-device off never calls agent-device's loadWorker", async () => {
+    let loads = 0;
+    const spying: OptionalModuleDefinition<unknown> = {
+      ...agentDeviceModule,
+      loadWorker: () => {
+        loads += 1;
+        return agentDeviceModule.loadWorker();
+      },
+    } as OptionalModuleDefinition<unknown>;
+    const setup = await setUp({ capabilities: { "agent-device": { enabled: false } } });
+    const { daemon } = await startEdge(setup, {
+      agentDevice: spying,
+      processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(),
+    });
+    await daemon.stop("test");
+
+    expect(loads).toBe(0);
+
+    const on = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
+    await startEdge(on, {
+      agentDevice: spying,
+      processRunner: versionAndDaemon(on.directory),
+      processSupervisor: new FakeProcessSupervisor(),
+    });
+    expect(loads).toBe(1);
+  });
+
+  it('a worker whose config has only the old agentDevice key warns `Unknown config key: "agentDevice"` and reports agent-device off', async () => {
+    const admin = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "op",
+      role: "admin",
+    } as const;
+    const setup = await setUp({ agentDevice: { command, enabled: true } });
+
+    const { daemon, sink } = await startEdge(setup, {
+      processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(),
+    });
+
+    expect(sink.records.map((record) => record.message)).toContain(
+      'Unknown config key: "agentDevice"',
+    );
+    expect((await daemon.dispatch("status.get", {}, admin)).capabilities).toEqual([
+      { name: "agent-device", state: "off" },
+    ]);
+  });
+
+  it("a worker with agent-device off starts no supervisor: no ps runs and no signal is sent, even with a recorded daemon on disk", async () => {
+    const setup = await setUp(
+      { capabilities: { "agent-device": { command, enabled: false } } },
+      { record: { pid: 900 } },
+    );
+    const runner = new ScriptedProcessRunner([]);
+    const processSupervisor = new FakeProcessSupervisor([900]);
+
+    await startEdge(setup, { processRunner: runner, processSupervisor });
+    await pollUntil(() => false, 100);
+
+    expect(runner.calls).toEqual([]);
+    expect(processSupervisor.signals).toEqual([]);
+  });
+
   it("runs no ps and sends no signal in a second daemon on the same home that loses the socket claim", async () => {
-    const first = await setUp({ agentDevice: { enabled: false } });
+    const first = await setUp({ capabilities: { "agent-device": { enabled: false } } });
     await startEdge(first, {
       processRunner: new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(),
     });
     const second = await setUp(
-      { agentDevice: { command, enabled: true } },
+      { capabilities: { "agent-device": { command, enabled: true } } },
       { directory: first.directory, record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
@@ -2613,6 +2999,7 @@ describe("startDaemon with the agent-device edge", () => {
   describe("doctor.run", () => {
     const operator = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -2622,10 +3009,10 @@ describe("startDaemon with the agent-device edge", () => {
     };
 
     const agentDeviceFinding = (report: Report) =>
-      report.findings.find((finding) => finding.kind === "agent-device-unavailable");
+      report.findings.find((finding) => finding.kind === "module-unavailable");
 
-    it("reports agent-device-unavailable naming the found and needed versions, and an ordinary client is still granted a lease", async () => {
-      const setup = await setUp({ agentDevice: { command, enabled: true } });
+    it("reports module-unavailable for agent-device, naming the found and needed versions, and an ordinary client is still granted a lease", async () => {
+      const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
       const runner = new ScriptedProcessRunner([
         {
           match: { args: [realCli, "--version"], command: process.execPath },
@@ -2646,8 +3033,9 @@ describe("startDaemon with the agent-device edge", () => {
           },
         )
         .toMatchObject({
-          kind: "agent-device-unavailable",
-          message: expect.stringContaining("found 0.20.3, need 0.21.25 or later"),
+          kind: "module-unavailable",
+          module: "agent-device",
+          message: expect.stringContaining("found 0.20.3, need 0.21.28 or later"),
           remedy: expect.any(String),
         });
       await expect(daemon.dispatch("lease.request", lease, agent)).resolves.toMatchObject({
@@ -2655,9 +3043,42 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
-    it("reports agent-device-unavailable naming the command when agentDevice.command is found nowhere", async () => {
+    it("lists agent-device's module-unavailable finding before a module's own", async () => {
       const setup = await setUp({
-        agentDevice: { command: "/opt/missing/agent-device", enabled: true },
+        capabilities: {
+          "agent-device": { command: "/opt/missing/agent-device", enabled: true },
+          alpha: { enabled: true },
+        },
+      });
+      const { daemon } = await startEdge(setup, {
+        modules: [
+          fakeModule({
+            findings: () => [{ message: "it is down", remedy: "bring it up" }],
+            name: "alpha",
+          }),
+        ],
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+
+      await expect
+        .poll(
+          async () =>
+            (
+              (await daemon.dispatch("doctor.run", {}, operator)) as {
+                readonly findings: readonly { readonly kind: string; readonly module?: string }[];
+              }
+            ).findings
+              .filter((finding) => finding.kind === "module-unavailable")
+              .map((finding) => finding.module),
+          { timeout: 4_000 },
+        )
+        .toEqual(["agent-device", "alpha"]);
+    });
+
+    it("reports module-unavailable for agent-device, naming the command when capabilities.agent-device.command is found nowhere", async () => {
+      const setup = await setUp({
+        capabilities: { "agent-device": { command: "/opt/missing/agent-device", enabled: true } },
       });
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
@@ -2673,13 +3094,14 @@ describe("startDaemon with the agent-device edge", () => {
           },
         )
         .toMatchObject({
-          kind: "agent-device-unavailable",
+          kind: "module-unavailable",
+          module: "agent-device",
           message: expect.stringContaining("/opt/missing/agent-device"),
         });
     }, 10_000);
 
-    it("reports no agent-device-unavailable with agentDevice.enabled false", async () => {
-      const setup = await setUp({ agentDevice: { enabled: false } });
+    it("reports no module-unavailable finding with capabilities.agent-device.enabled false", async () => {
+      const setup = await setUp({ capabilities: { "agent-device": { enabled: false } } });
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
         processSupervisor: new FakeProcessSupervisor(),
@@ -2690,8 +3112,8 @@ describe("startDaemon with the agent-device edge", () => {
       expect(agentDeviceFinding(report)).toBeUndefined();
     });
 
-    it("reports no agent-device-unavailable while agent-device's /health never answers and the readiness budget has not run out", async () => {
-      const setup = await setUp({ agentDevice: { command, enabled: true } });
+    it("reports no module-unavailable finding while agent-device's /health never answers and the readiness budget has not run out", async () => {
+      const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
       const runner = versionAndDaemon(setup.directory);
       const { daemon } = await startEdge(setup, {
         processRunner: runner,
@@ -2744,7 +3166,12 @@ describe("startDaemon host load", () => {
     return (await daemon.dispatch(
       "status.get",
       {},
-      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
     )) as Record<string, unknown>;
   }
 
@@ -2954,6 +3381,7 @@ describe("startDaemon in gateway mode host load", () => {
   };
   const operator = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "test-operator",
     role: "admin",
   } as const;

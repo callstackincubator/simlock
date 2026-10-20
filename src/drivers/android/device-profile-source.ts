@@ -131,11 +131,18 @@ export class DeviceProfileRegistry {
       const profile = matchProfile(profiles, model);
       return profile !== undefined && isCustom(profile);
     });
+    // why: a lease of a name creates the profile that name resolves to, so its class in
+    // the catalog must come from that profile, not the one it happened to be listed from.
     const modelClasses: Record<string, DeviceClass> = {};
-    for (const profile of listed.values()) {
+    for (const model of models) {
+      const profile = matchProfile(profiles, model);
       const deviceClass =
-        profile.kind === "properties" ? classOfTag(profile.imageKind) : profile.deviceClass;
-      if (deviceClass !== undefined) modelClasses[profile.name] = deviceClass;
+        profile === undefined
+          ? undefined
+          : profile.kind === "properties"
+            ? classOfTag(profile.imageKind)
+            : profile.deviceClass;
+      if (deviceClass !== undefined) modelClasses[model] = deviceClass;
     }
     const modelProfiles = new Map<string, DeviceProfile>();
     for (const model of models) {

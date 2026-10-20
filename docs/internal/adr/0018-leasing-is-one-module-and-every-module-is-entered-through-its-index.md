@@ -1,6 +1,6 @@
 # 0018. Leasing is one module, and every module is entered through its index
 
-- **Status:** Accepted — not yet implemented; §4's path rules superseded by
+- **Status:** Accepted — partly implemented: §3 (24 entry-point violations are grandfathered) and §4's rule on warm-pool names; §4's path rules superseded by
   [0027](0027-dependency-cruiser-checks-every-component-boundary.md)
 - **Date:** 2026-10-05
 - **Issue:** [#358](https://github.com/callstackincubator/simlock/issues/358)

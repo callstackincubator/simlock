@@ -15,6 +15,7 @@ import {
   leaseRequestRecordSchema,
   platformCatalogSchema,
   statusDeviceSchema,
+  waitingRequestSchema,
   workerViewSchema,
 } from "./schemas.js";
 
@@ -44,6 +45,7 @@ describe("leaseGrantSchema's device projection", () => {
     "quarantinedAt",
     "quarantineAttempts",
     "quarantineNextRetryAt",
+    "quarantineCause",
     "leaseIdentity",
     "transitionAgeMs",
   ] as const;
@@ -67,6 +69,7 @@ describe("leaseGrantSchema's device projection", () => {
       quarantinedAt: 50,
       quarantineAttempts: 3,
       quarantineNextRetryAt: 60,
+      quarantineCause: { kind: "purge-failed", message: "Error: boom" },
       address: "127.0.0.1:1234",
       mode: "slim",
       leaseIdentity: "fresh",
@@ -258,6 +261,43 @@ describe("statusDeviceSchema's device projection", () => {
       expect(() =>
         schema.parse({ ...physical, presence: { present: false, reason: "unplugged" } }),
       ).toThrow();
+    }
+  });
+
+  it("statusDeviceSchema and deviceRecordSchema accept each of the four quarantine cause kinds and refuse every malformed cause", () => {
+    const device = { ...fullCoreShapedDevice(), servesDefaultMode: true };
+    const accepted = [
+      { kind: "purge-failed", message: "DriverCrashError: simctl erase exited 164" },
+      { kind: "shutdown-failed", message: "Error: shutdown exploded" },
+      { kind: "delete-failed", message: "x".repeat(300) },
+      { kind: "purge-failed" },
+      { kind: "stalled", stalledState: "provisioning" },
+      { kind: "stalled", stalledState: "reclaiming" },
+    ];
+    const refused = [
+      { kind: "exploded", message: "Error: x" },
+      { kind: "stalled" },
+      { kind: "purge-failed", message: "Error: x", stalledState: "reclaiming" },
+      { kind: "stalled", message: "Error: x", stalledState: "reclaiming" },
+      { kind: "stalled", stalledState: "ready" },
+      { kind: "purge-failed", message: 7 },
+      { kind: "purge-failed", message: "" },
+      { kind: "purge-failed", message: "x".repeat(301) },
+      { kind: "purge-failed", message: "Error: a\nb" },
+      { kind: "purge-failed", message: "Error: a\u2028b" },
+    ];
+
+    for (const schema of [statusDeviceSchema, deviceRecordSchema]) {
+      for (const quarantineCause of accepted) {
+        expect(schema.parse({ ...device, quarantineCause })).toMatchObject({ quarantineCause });
+      }
+      expect(schema.parse(device)).not.toHaveProperty("quarantineCause");
+      for (const quarantineCause of refused) {
+        expect(
+          () => schema.parse({ ...device, quarantineCause }),
+          JSON.stringify(quarantineCause),
+        ).toThrow();
+      }
     }
   });
 
@@ -656,22 +696,40 @@ describe("the status device entry's absent state (ADR 0022 §7)", () => {
   });
 });
 
-describe("doctorReportSchema's agent-device-unavailable finding", () => {
+describe("doctorReportSchema's module-unavailable finding", () => {
   const finding = {
-    kind: "agent-device-unavailable",
-    message: "found 0.20.3, need 0.21.25 or later",
-    remedy: "install agent-device 0.21.25 or later",
+    kind: "module-unavailable",
+    module: "agent-device",
+    message: "found 0.20.3, need 0.21.28 or later",
+    remedy: "install agent-device 0.21.28 or later",
   };
+  const parses = (candidate: unknown) =>
+    doctorReportSchema.safeParse({ findings: [candidate] }).success;
 
-  it("parses a report with the finding, and refuses one without message or without remedy", () => {
+  it("parses a module-unavailable finding, and refuses one without module, without message or without remedy", () => {
     expect(doctorReportSchema.parse({ findings: [finding] })).toStrictEqual({
       findings: [finding],
     });
 
+    const { module: _module, ...withoutModule } = finding;
     const { message: _message, ...withoutMessage } = finding;
     const { remedy: _remedy, ...withoutRemedy } = finding;
-    expect(doctorReportSchema.safeParse({ findings: [withoutMessage] }).success).toBe(false);
-    expect(doctorReportSchema.safeParse({ findings: [withoutRemedy] }).success).toBe(false);
+    expect(parses(withoutModule)).toBe(false);
+    expect(parses(withoutMessage)).toBe(false);
+    expect(parses(withoutRemedy)).toBe(false);
+  });
+
+  it("refuses a module that fails the capability name check", () => {
+    for (const module of ["", "Agent-Device", "1abc", "has space", `a${"b".repeat(32)}`]) {
+      expect(parses({ ...finding, module })).toBe(false);
+    }
+    expect(parses({ ...finding, module: `a${"b".repeat(31)}` })).toBe(true);
+  });
+
+  it("refuses the old agent-device-unavailable kind", () => {
+    const { module: _module, ...rest } = finding;
+    expect(parses({ ...rest, kind: "agent-device-unavailable" })).toBe(false);
+    expect(parses({ ...finding, kind: "agent-device-unavailable" })).toBe(false);
   });
 });
 
@@ -685,7 +743,7 @@ describe("a worker status's capabilities list", () => {
   const entry = (overrides: Record<string, unknown> = {}) => ({
     name: "agent-device",
     state: "unavailable",
-    reason: "found 0.20.1, need 0.21.25 or later",
+    reason: "found 0.20.1, need 0.21.28 or later",
     ...overrides,
   });
 
@@ -875,5 +933,102 @@ describe("the worker view's load", () => {
         load: { ...load, cpu: { ...load.cpu, busyPercent: 100.5 } },
       }),
     ).toThrow();
+  });
+});
+
+describe("waitingRequestSchema's reason", () => {
+  const reasons = [
+    "behind-earlier-request",
+    "device-limit",
+    "ram-budget",
+    "global-running-limit",
+    "platform-running-limit",
+    "waiting-for-device",
+    "no-free-physical",
+  ] as const;
+  const queued = {
+    createdAt: 1,
+    id: "req_1",
+    queuePosition: 1,
+    requesterId: "agent",
+    spec: { model: "iPhone 16", platform: "ios" },
+    stage: "queued",
+  } as const;
+
+  it("accepts each of the eight reasons on a queued entry and keeps it", () => {
+    expect(waitingRequestSchema.safeParse(queued).success).toBe(true);
+    for (const reason of reasons) {
+      expect(waitingRequestSchema.parse({ ...queued, reason })).toMatchObject({ reason });
+    }
+  });
+
+  it("refuses a reason outside the eight on a queued entry", () => {
+    expect(waitingRequestSchema.safeParse({ ...queued, reason: "bogus" }).success).toBe(false);
+  });
+
+  it("refuses any reason on a starting entry", () => {
+    const { queuePosition: _position, ...rest } = queued;
+    const starting = { ...rest, stage: "starting" } as const;
+
+    expect(waitingRequestSchema.safeParse(starting).success).toBe(true);
+    for (const reason of reasons) {
+      expect(waitingRequestSchema.safeParse({ ...starting, reason }).success).toBe(false);
+    }
+  });
+});
+
+describe("waitingRequestSchema's workers", () => {
+  const reasons = [
+    "disconnected",
+    "incompatible",
+    "not-ready",
+    "unhealthy",
+    "drained",
+    "busy",
+    "no-driver",
+    "unknown-model",
+    "runtime-missing",
+    "capability-missing",
+    "full",
+    "no-free-physical",
+    "not-chosen",
+  ] as const;
+  const queued = {
+    createdAt: 1,
+    id: "req_1",
+    queuePosition: 1,
+    requesterId: "agent",
+    spec: { model: "iPhone 16", platform: "ios" },
+    stage: "queued",
+  } as const;
+  const withWorkers = (workers: unknown) => waitingRequestSchema.safeParse({ ...queued, workers });
+
+  it("accepts each of the thirteen reasons and a capacity reason with full, and keeps them", () => {
+    for (const reason of reasons) {
+      expect(withWorkers([{ reason, workerId: "wrk_a" }]).success).toBe(true);
+    }
+    expect(
+      waitingRequestSchema.parse({
+        ...queued,
+        workers: [{ capacityReason: "ram-budget", reason: "full", workerId: "wrk_a" }],
+      }),
+    ).toMatchObject({ workers: [{ capacityReason: "ram-budget", reason: "full" }] });
+  });
+
+  it("refuses an unknown reason, a capacity reason with drained, an unknown capacity reason and one workerId twice", () => {
+    expect(withWorkers([{ reason: "full", workerId: "wrk_a" }]).success).toBe(true);
+    expect(withWorkers([{ reason: "bogus", workerId: "wrk_a" }]).success).toBe(false);
+    expect(
+      withWorkers([{ capacityReason: "ram-budget", reason: "drained", workerId: "wrk_a" }]).success,
+    ).toBe(false);
+    expect(
+      withWorkers([{ capacityReason: "bogus", reason: "full", workerId: "wrk_a" }]).success,
+    ).toBe(false);
+    expect(
+      withWorkers([
+        { reason: "drained", workerId: "wrk_a" },
+        { reason: "full", workerId: "wrk_a" },
+      ]).success,
+    ).toBe(false);
   });
 });

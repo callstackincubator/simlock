@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { TokenIdentity } from "../../http/token-store.js";
+import { tokenIdentity } from "../../auth/testing.js";
+import type { Identity } from "../../auth/index.js";
 import { FakeClock } from "../../ports/index.js";
 import { FrontMap } from "./front-map.js";
 
-const agent: TokenIdentity = { requesterId: "tok_a", role: "agent" };
+const agent: Identity = tokenIdentity("tok_a");
 const ttlMs = 60_000;
 
 function entry(deadline: number) {
@@ -80,14 +81,14 @@ describe("the front map", () => {
     const clock = new FakeClock(1_000);
     const map = new FrontMap(clock);
     for (let n = 0; n < 101; n += 1) {
-      const identity: TokenIdentity = { requesterId: `tok_${n}`, role: "agent" };
+      const identity: Identity = tokenIdentity(`tok_${n}`);
       map.add(`lease-${n}`, { address: "a", deadline: 2_100 - n, identity, ttlMs });
     }
     clock.advance(10_000);
     const asked: string[] = [];
 
     await map.refresh(async (who) => {
-      asked.push(who.requesterId);
+      asked.push(who.principal);
       return [];
     });
 

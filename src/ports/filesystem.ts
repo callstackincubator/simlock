@@ -37,6 +37,12 @@ export interface WriteFileAtomicOptions {
   readonly mode?: number;
 }
 
+/** why: Same shape as {@link WriteFileAtomicOptions}: `writeFileExclusive` publishes through a
+ * hard-linked temp file, so the mode rides on that file's create and the link preserves it. */
+export interface WriteFileExclusiveOptions {
+  readonly mode?: number;
+}
+
 /**
  * What an un-followed `lstat` reports, narrowed to what ownership validation asks of a
  * path: what it really is, who owns it, and how exposed it is. Anything richer would be
@@ -61,7 +67,11 @@ export interface Filesystem {
    * end up agreeing about what it says. The file appears with its full contents, never
    * empty, so a loser that reads it straight away reads what the winner wrote.
    */
-  writeFileExclusive(path: string, contents: string): Promise<void>;
+  writeFileExclusive(
+    path: string,
+    contents: string,
+    options?: WriteFileExclusiveOptions,
+  ): Promise<void>;
   mkdirp(path: string): Promise<void>;
   /**
    * Moves a path in one step, so what it names becomes visible complete or not at all.
@@ -136,7 +146,11 @@ export class NodeFilesystem implements Filesystem {
     }
   }
 
-  async writeFileExclusive(path: string, contents: string): Promise<void> {
+  async writeFileExclusive(
+    path: string,
+    contents: string,
+    options?: WriteFileExclusiveOptions,
+  ): Promise<void> {
     // `writeFile` with the `wx` flag creates the file empty and fills it a moment later, so a
     // racer that loses the create can read it in between and find nothing. Write the contents
     // aside first and hard-link them into place: `link` fails `EEXIST` like `wx` does, but the
@@ -145,7 +159,16 @@ export class NodeFilesystem implements Filesystem {
       dirname(path),
       `.${basename(path)}.${process.pid}.${crypto.randomUUID()}.tmp`,
     );
-    await writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+    // why: the mode rides on the temp file's create -- a hard link carries it over, so the
+    // published file is never world-readable even briefly. A `chmod` after the link is the
+    // window this port's own doc rules out.
+    await writeFile(
+      temporaryPath,
+      contents,
+      options?.mode === undefined
+        ? { encoding: "utf8", flag: "wx" }
+        : { encoding: "utf8", flag: "wx", mode: options.mode },
+    );
     try {
       await link(temporaryPath, path);
     } finally {
@@ -267,8 +290,9 @@ const DEFAULT_MEMORY_MODE = 0o700;
 // A symlink cycle is a legitimate thing to model; resolving it forever is not.
 const MAX_SYMLINK_HOPS = 32;
 
-/** Node's default for a plain file, kept as the default `writeFileAtomic` creates with so a
- * caller that says nothing about permissions gets what it got before `mode` was an option. */
+/** why: Node's default for a plain file, kept as the default both `writeFileAtomic` and
+ * `writeFileExclusive` create with so a caller that says nothing about permissions gets what
+ * it got before `mode` was an option. */
 const DEFAULT_FILE_MODE = 0o644;
 
 export class MemoryFilesystem implements Filesystem {
@@ -314,7 +338,11 @@ export class MemoryFilesystem implements Filesystem {
     });
   }
 
-  async writeFileExclusive(path: string, contents: string): Promise<void> {
+  async writeFileExclusive(
+    path: string,
+    contents: string,
+    options?: WriteFileExclusiveOptions,
+  ): Promise<void> {
     this.#failIfDefined(path);
     path = this.#underResolvedParent(path);
 
@@ -323,7 +351,10 @@ export class MemoryFilesystem implements Filesystem {
     }
 
     this.#requireDirectory(parentPath(path));
-    this.#entries.set(path, this.#newEntry({ kind: "file", contents }));
+    this.#entries.set(path, {
+      ...this.#newEntry({ kind: "file", contents }),
+      mode: options?.mode ?? DEFAULT_FILE_MODE,
+    });
   }
 
   async mkdirp(path: string): Promise<void> {

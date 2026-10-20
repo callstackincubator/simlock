@@ -1,4 +1,4 @@
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { failure, frontReply, workerUnreachable } from "../shared/replies.js";
 import { readBounded, readReply } from "../shared/rpc.js";
 import { asRecord } from "../shared/selectors.js";
@@ -15,7 +15,7 @@ function emptyList(rpc: { readonly id: unknown }): Response {
 
 export async function filterDevices(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   response: Response,
   rpc: { readonly id: unknown },
 ): Promise<Response> {
@@ -44,7 +44,7 @@ export async function filterDevices(
 // why: one lease the gateway cannot reach makes the whole list unknown, so `devices` answers it rather than a list missing that device.
 export async function anyUnreachable(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   leases: readonly { readonly leaseId: string }[],
 ): Promise<boolean> {
   for (const lease of leases) {
@@ -55,7 +55,7 @@ export async function anyUnreachable(
 
 interface GatewayDevices {
   readonly request: Request;
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly read: { readonly id: unknown; readonly text: string };
   readonly forward: (request: Request, leaseId: string) => Promise<Response>;
 }

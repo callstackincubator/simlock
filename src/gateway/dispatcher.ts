@@ -1,5 +1,5 @@
 /**
- * The gateway's implementation of the daemon contract (ADR 0005 §32): "a second implementation
+ * why: the gateway's implementation of the daemon contract (ADR 0005 §32): "a second implementation
  * of the daemon contract's handlers, not a second contract". Same `runDispatch` pipeline, same
  * operation declarations, same role checks -- only the handlers differ, reading worker views
  * instead of a registry and leasing.
@@ -10,7 +10,8 @@
  *    `worker.*` (§8/§23, and ADR 0010 §7's `worker.install-component`, relayed to the workers it
  *    names by `./component-relay.ts`), `events.*` (the gateway's own bus, which carries every worker's
  *    republished events, §22), `config.get` (the gateway's own config, §34), `token.*` (a
- *    gateway mints its own credentials, §24), and -- as of #118 -- the lease *lifecycle*
+ *    gateway mints its own credentials, §24), `usage.get` (read from the gateway's own history by
+ *    `createUsageReader`), and -- as of #118 -- the lease *lifecycle*
  *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
  *    through `FleetLeaseCoordinator`.
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
@@ -31,19 +32,23 @@
  * the message say why. The table is typed total over the contract minus `daemon.stop`, so a
  * newly declared operation is a compile error here until someone decides where it belongs.
  */
+import type { TokenOperations } from "../auth/index.js";
 import type { z } from "zod";
 
-import type { EventHistory } from "../bus/index.js";
+import { createUsageReader, type UsageReader } from "../core/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
   OPERATIONS,
   requestedDevice,
   type OperationName,
-  type tokenRecordSchema,
+  withoutQuarantineMessages,
 } from "../contract/index.js";
 import {
   DispatchError,
+  identityGet,
   runDispatch,
+  usageAnswer,
   type DispatchSession,
   type ErasedHandler,
 } from "../daemon/dispatch.js";
@@ -61,8 +66,6 @@ type Handler<Op extends OperationName> = (
   session: DispatchSession,
 ) => Promise<unknown> | unknown;
 
-type TokenRecord = z.infer<typeof tokenRecordSchema>;
-
 type DeepReadonly<Value> = Value extends (infer Item)[]
   ? readonly DeepReadonly<Item>[]
   : Value extends object
@@ -78,30 +81,16 @@ type DeepReadonly<Value> = Value extends (infer Item)[]
  */
 export type GatewayConfig = DeepReadonly<z.infer<(typeof OPERATIONS)["config.get"]["output"]>>;
 
-/**
- * The token store, structurally. Narrower than importing `TokenStore` itself (which lives under
- * `src/http` for historical reasons): the gateway needs three methods, and depending on the
- * shape rather than the class is what keeps `src/gateway` from importing a frontend.
- */
-export interface GatewayTokenStore {
-  create(
-    role: "agent" | "operator" | "worker",
-    label?: string,
-  ): Promise<{ record: TokenRecord; secret: string }>;
-  list(): Promise<TokenRecord[]>;
-  revoke(id: string): Promise<boolean>;
-}
-
 export interface GatewayDispatcherOptions {
+  readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
-  /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
   readonly workers: WorkerRegistry;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
   readonly directory: WorkerDirectory;
-  readonly tokens?: GatewayTokenStore;
+  readonly tokens?: TokenOperations;
   /**
    * C-2, ADR 0005 §8: "revoking closes the uplink". Called after a successful `token.revoke`
    * with the revoked token's id, so any uplink that token authenticated is closed immediately
@@ -136,22 +125,43 @@ export interface GatewayDispatcherOptions {
     | "pendingRequestOwner"
     | "waitingRequests"
   >;
-  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all" | "isGatewayRequester">;
+  readonly leaseIndex: Pick<
+    FleetLeaseIndex,
+    "project" | "all" | "isGatewayRequester" | "requesterPrefix"
+  >;
 }
 
 export class GatewayDispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
   readonly #handlers: Record<Exclude<OperationName, "daemon.stop">, ErasedHandler>;
+  readonly #usage: UsageReader;
 
   constructor(private readonly options: GatewayDispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#usage = createUsageReader({
+      fleet: { requesterPrefix: options.leaseIndex.requesterPrefix },
+      historyPath: options.historyPath ?? "",
+      opened: () => options.historyPath !== undefined && options.eventHistory.status().opened,
+      tokenLabels: async () =>
+        new Map(
+          ((await options.tokens?.list()) ?? []).flatMap((token) =>
+            token.label === undefined ? [] : [[token.id, token.label] as const],
+          ),
+        ),
+      workers: () =>
+        options.workers.views().map(({ id, label }) => ({
+          id,
+          ...(label === undefined ? {} : { label }),
+        })),
+    });
     this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
       "status.get": this.#statusGet,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
+      "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
@@ -164,6 +174,7 @@ export class GatewayDispatcher {
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
+      "identity.get": identityGet,
 
       "nuke.run": unsupportedByDesign("nuke.run"),
       "cleanup.run": unsupportedByDesign("cleanup.run"),
@@ -206,6 +217,10 @@ export class GatewayDispatcher {
     };
   }
 
+  dispose(): void {
+    void this.#usage.stop();
+  }
+
   dispatch<Op extends OperationName>(
     operation: Op,
     rawInput: unknown,
@@ -233,13 +248,15 @@ export class GatewayDispatcher {
     });
   }
 
-  #statusGet: Handler<"status.get"> = () => {
+  #statusGet: Handler<"status.get"> = (_input, session) => {
     const consoleUrl = consoleUrlField(this.options.config.http);
     const load = this.options.load?.();
     const loadField = load === undefined ? {} : { load };
+    const history = this.options.eventHistory.status();
     if (this.options.health() === "starting") {
       return {
         daemon: { health: "starting", mode: "gateway", ...consoleUrl },
+        history,
         host: this.options.host,
         ...loadField,
       };
@@ -253,13 +270,16 @@ export class GatewayDispatcher {
       waiting: [...this.options.coordinator.waitingRequests()],
       leaseIndex: this.options.leaseIndex,
     });
-    return { ...status, daemon: { ...status.daemon, ...consoleUrl } };
+    const answer = { ...status, daemon: { ...status.daemon, ...consoleUrl }, history };
+    return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
   };
 
   #catalogGet: Handler<"catalog.get"> = (input) =>
     aggregateCatalog(this.options.workers.views(), input.platform);
 
   #configGet: Handler<"config.get"> = () => this.options.config;
+
+  #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
@@ -391,7 +411,7 @@ export class GatewayDispatcher {
       .flatMap((view) =>
         (view.waiting ?? [])
           .filter((request) => !leaseIndex.isGatewayRequester(request.requesterId))
-          .map((request) => ({ ...request, workerId: view.id })),
+          .map(({ workers: _workers, ...request }) => ({ ...request, workerId: view.id })),
       );
     return [...this.options.coordinator.waitingRequests(), ...onWorkers];
   }
@@ -525,7 +545,7 @@ export class GatewayDispatcher {
     }
   }
 
-  #requireTokens(): GatewayTokenStore {
+  #requireTokens(): TokenOperations {
     if (this.options.tokens === undefined) {
       throw new DispatchError("INTERNAL", "Token store is unavailable");
     }

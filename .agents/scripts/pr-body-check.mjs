@@ -81,6 +81,9 @@ if (review === null) {
   if (!ROUNDS.test(review.join("\n"))) {
     warnings.push('the `## Review` section has no "Rounds: <n>. Tokens: <n>M." line');
   }
+  if (/^Assessment: incomplete\b/im.test(review.join("\n"))) {
+    failures.push("review assessment is incomplete; resolve missing coverage before ready");
+  }
   const at = review.findIndex((l) => /^Rejected:\s*$/.test(l));
   if (at !== -1) {
     for (const l of review.slice(at + 1)) {

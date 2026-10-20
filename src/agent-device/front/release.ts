@@ -1,10 +1,10 @@
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { leaseCallFields, leaseIdOf, type RpcRead } from "../shared/rpc.js";
 import { exchange, relay, releaseSimlock, unreachableReply, type FrontContext } from "./context.js";
 
 export async function release(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   call: RpcRead & { readonly kind: "request" },
   forwarded: Request,
 ): Promise<Response> {
@@ -14,8 +14,17 @@ export async function release(
     return unreachableReply(reply, call, "agent-device did not answer the release");
   }
   if (leaseId === undefined || reply.reading.kind !== "success") return relay(reply);
+  await endSimlockLease(context, identity, leaseId);
+  return relay(reply);
+}
+
+export async function endSimlockLease(
+  context: FrontContext,
+  identity: Identity,
+  leaseId: string,
+): Promise<void> {
   const entry = context.map.get(leaseId);
-  if (entry === undefined || entry.identity.requesterId !== identity.requesterId) {
+  if (entry === undefined || entry.identity.principal !== identity.principal) {
     // why: a lease the map does not hold for this token (as after a daemon restart) is freed by simlock's own ownership check, which refuses another token's lease.
     await releaseSimlock(context, identity, leaseId);
   } else if (entry.endedAt === undefined) {
@@ -28,5 +37,4 @@ export async function release(
     }
     context.renewals.cancelIfEnded(context, leaseId);
   }
-  return relay(reply);
 }

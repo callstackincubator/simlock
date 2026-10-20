@@ -1,5 +1,5 @@
 import type { HttpMount } from "../../http/app.js";
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { FRONT_MOUNT, FRONT_PREFIX, LEASE_HEADER } from "../shared/paths.js";
 import {
   failure,
@@ -26,13 +26,14 @@ import { relay, type FrontContext } from "./context.js";
 import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-filter.js";
 import { heartbeat } from "./heartbeat.js";
 import type { LinkStatus } from "./host-link.js";
+import { releaseEndedLeases } from "./ended.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
 
 type RpcRequest = RpcRead & { readonly kind: "request" };
 
 interface Routed {
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly kind: CallClass;
   readonly leaseMaxTtlMs: number | undefined;
   readonly read: RpcRequest;
@@ -81,7 +82,7 @@ const FAILED_BODY_LOG_CHARS = 500;
 // why: `devices` names no lease, so a gateway with no capable worker still answers "try again" when one of the token's own leases is only unreachable.
 async function notRunning(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   read: RpcRequest,
   status: Exclude<LinkStatus, { state: "running" }>,
 ): Promise<Response> {
@@ -90,7 +91,7 @@ async function notRunning(
     !(
       isDevicesCall(read) &&
       context.link.readsLeaseHeader &&
-      (await anyUnreachable(context, identity, context.map.liveOf(identity.requesterId)))
+      (await anyUnreachable(context, identity, context.map.liveOf(identity.principal)))
     )
   ) {
     return frontReply(notAvailable(status.reason), read);
@@ -101,7 +102,7 @@ async function notRunning(
 async function handleRpc(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
 ): Promise<Response> {
   const read = await readRpcBody(request);
   if (read.kind === "too-large") {
@@ -153,11 +154,11 @@ async function routeCall(
 async function runCommand(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
   read: RpcRequest,
   leaseId: string,
 ): Promise<Response> {
-  const end = context.renewals.begin(context, leaseId, identity.requesterId, context.maxRunMs);
+  const end = context.renewals.begin(context, leaseId, identity.principal, context.maxRunMs);
   request.signal.addEventListener("abort", end, { once: true });
   let response: Response;
   try {
@@ -166,7 +167,9 @@ async function runCommand(
     end();
     throw error;
   }
-  return isUnreachableAnswer(response) ? response : untilBodyEnds(response, end);
+  if (isUnreachableAnswer(response)) return response;
+  releaseEndedLeases(context, identity, response);
+  return untilBodyEnds(response, end);
 }
 
 // why: a command counts as running until its body has gone out, since the stream is what the CLI waits on.
@@ -212,7 +215,7 @@ function isDevicesCall(read: RpcRequest): boolean {
 async function forwardCommand(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
   read: RpcRequest,
   leaseId: string | undefined,
 ): Promise<Response> {
@@ -258,7 +261,7 @@ async function readStart(response: Response, chars: number): Promise<string> {
 async function passThrough(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
   rpc: { readonly id: unknown } | undefined,
   leaseId?: string,
   probe = false,
@@ -312,7 +315,7 @@ function readLeaseHeader(request: Request): HeaderLease {
 async function routeByHeader(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
 ): Promise<Response> {
   const read = readLeaseHeader(request);
   if ("refused" in read) return read.refused;
@@ -337,7 +340,7 @@ function namesLease(context: FrontContext, request: Request, probe: boolean): bo
 async function handlePlain(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
 ): Promise<Response> {
   const status = await context.link.status();
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
@@ -356,7 +359,7 @@ async function handlePlain(
 }
 
 // why: after a gateway restart the map is empty, so the token's leases are rebuilt from what the gateway knows before any rule reads the map.
-function adoptLeases(context: FrontContext, identity: TokenIdentity): void {
+function adoptLeases(context: FrontContext, identity: Identity): void {
   for (const lease of context.link.adoptable?.(identity) ?? []) {
     if (context.map.get(lease.leaseId) !== undefined) continue;
     context.map.add(lease.leaseId, {

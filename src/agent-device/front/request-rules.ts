@@ -1,6 +1,6 @@
 import { findCatalogModel } from "../../core/index.js";
 import { buildHttpSession } from "../../http/dispatcher-session.js";
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { failure, refusal, type FrontReply } from "../shared/replies.js";
 import { validDeviceKey } from "../shared/release-scope.js";
 import { isKnownRpcMethod } from "../shared/routes.js";
@@ -40,7 +40,7 @@ class Refused extends Error {
 const refuse = (message: string): Refused => new Refused(refusal(message));
 
 interface Unit {
-  readonly kind: "command" | "allocate" | "install";
+  readonly kind: "command" | "allocate";
   readonly owner: Fields;
   readonly command: string;
   readonly isStep: boolean;
@@ -48,7 +48,7 @@ interface Unit {
 
 interface Check {
   readonly context: FrontContext;
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly platforms: readonly string[];
   readonly leaseId: string | undefined;
   readonly leased: TokenDevice | undefined;
@@ -215,7 +215,6 @@ function ruleAddresses(check: Check, unit: Unit): void {
 }
 
 async function ruleSelectors(check: Check, unit: Unit): Promise<void> {
-  if (unit.kind === "install") return;
   ruleAddresses(check, unit);
   if (unit.kind === "allocate") return;
   if (unit.command === "test") return ruleShardList(check, unit);
@@ -291,7 +290,6 @@ async function applyRules(check: Check, unit: Unit): Promise<void> {
     }
   }
   rulePlatform(check, unit);
-  if (unit.kind === "install") return;
   ruleDeviceSet(unit);
   await ruleSelectors(check, unit);
   await ruleSharding(check, unit);
@@ -312,15 +310,12 @@ function unitFor(name: string, params: Fields): Unit | undefined {
   if (name === "lease.allocate") {
     return { command: "", isStep: false, kind: "allocate", owner: params };
   }
-  if (name === "install_from_source") {
-    return { command: "", isStep: false, kind: "install", owner: params };
-  }
   return undefined;
 }
 
 function buildCheck(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   platforms: readonly string[],
   params: Fields,
   kind: Unit["kind"],
@@ -335,7 +330,7 @@ function buildCheck(
     identity,
     leaseId,
     leased:
-      leaseId !== undefined && held?.identity.requesterId === identity.requesterId
+      leaseId !== undefined && held?.identity.principal === identity.principal
         ? { ...held, leaseId }
         : undefined,
     meta,
@@ -346,7 +341,7 @@ function buildCheck(
 
 export async function checkRequest(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   read: RpcRequest,
   platforms: readonly string[],
 ): Promise<RulesOutcome> {
@@ -368,7 +363,7 @@ function checkMeta(check: Check): void {
 
 async function run(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   read: RpcRequest,
   platforms: readonly string[],
 ): Promise<RulesOutcome> {

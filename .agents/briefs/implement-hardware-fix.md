@@ -15,7 +15,8 @@ loop ends with one review over all of them.
    answers differently from the real one is a cause too: fix the fake from
    the real reply, so the fast tests catch it next time.
 3. **Fix it on this branch**, even when the code came from an earlier PR of
-   the stack: a fast test that fails without the fix, then the fix. Fix the
+   the stack: a fast test that fails without the fix (testing rule 10),
+   then the fix. Fix the
    code, not the test, unless the test is wrong; then the commit says why.
    A machine problem (disk, a build at the wrong commit, a missing tool
    part) is not yours to fix: report it under `open`.

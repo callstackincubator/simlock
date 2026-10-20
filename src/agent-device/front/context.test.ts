@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Logger } from "../../ports/index.js";
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { exchange, type FrontContext } from "./context.js";
 
 function rig(reply: () => Promise<Response>) {
@@ -14,7 +14,7 @@ function rig(reply: () => Promise<Response>) {
 }
 
 const request = new Request("http://127.0.0.1/rpc", { method: "POST" });
-const identity = {} as TokenIdentity;
+const identity = {} as Identity;
 
 describe("exchange", () => {
   it("a reply that is not JSON-RPC is logged with its status and the start of its body", async () => {

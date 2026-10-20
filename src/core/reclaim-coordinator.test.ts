@@ -356,6 +356,7 @@ describe("ReclaimCoordinator", () => {
         deviceId: harness.reclaiming.id,
         duration: 0,
         error: "Error: purge exploded",
+        kind: "purge-failed",
         leaseId: "lease-1",
       },
     ]);
@@ -366,7 +367,7 @@ describe("ReclaimCoordinator", () => {
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
-  it("recovers an unleased interrupted reclaim through shutdown and a committed fact", async () => {
+  it("recovers an unleased interrupted reclaim through shutdown, a committed fact, and itself as the emitter", async () => {
     const harness = await createHarness();
     let stateAtFact: VirtualDevice["state"] | undefined;
     harness.bus.subscribe("device.shutdown", () => {
@@ -378,6 +379,20 @@ describe("ReclaimCoordinator", () => {
     expect(stateAtFact).toBe("shutdown");
     expect(harness.driver.calls.map((call) => call.operation)).toContain("shutdown");
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
+    // why: Events rule 7 binds the emitting module onto every event, and both EVENTS.md cuts name
+    // the reclaim coordinator as this shutdown's emitter — `simlock events` and the `events.jsonl`
+    // audit trail print that string, so it must name the module that actually did it.
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "device.shutdown")
+        .map((event) => ({ module: event.module, payload: event.payload })),
+    ).toEqual([
+      {
+        module: "reclaim-coordinator",
+        payload: { deviceId: harness.reclaiming.id, initiator: "startup-interrupted-reclaim" },
+      },
+    ]);
   });
 
   describe("a device whose wipe a daemon start put off", () => {
@@ -434,7 +449,7 @@ describe("ReclaimCoordinator", () => {
       await harness.coordinator.settle();
 
       expect(harness.quarantined).toMatchObject([
-        { deviceId: harness.target.id, leaseId: "lease-deferred" },
+        { deviceId: harness.target.id, kind: "purge-failed", leaseId: "lease-deferred" },
       ]);
       expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
     });
@@ -539,6 +554,7 @@ describe("ReclaimCoordinator", () => {
           deviceId: harness.target.id,
           duration: 0,
           error: "Error: delete exploded",
+          kind: "delete-failed",
           leaseId: "lease-1",
         },
       ]);
@@ -554,7 +570,7 @@ describe("ReclaimCoordinator", () => {
       expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
       expect(harness.operations()).toEqual(["shutdown"]);
       expect(harness.quarantined).toMatchObject([
-        { attemptedStrategy: "delete", error: "Error: shutdown exploded" },
+        { attemptedStrategy: "delete", error: "Error: shutdown exploded", kind: "shutdown-failed" },
       ]);
     });
 
@@ -652,7 +668,9 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     const claims = new DeviceOperationClaims();
     const decisions = new SerializedDecision();
     const notifyAvailability = vi.fn();
-    const mockedQuarantine = { enter: vi.fn(async () => undefined) };
+    const mockedQuarantine = {
+      enter: vi.fn(async (_failure: QuarantinePurgeFailure) => undefined),
+    };
     const quarantine: ReclaimQuarantine =
       options.realQuarantine === true
         ? new QuarantineCoordinator({
@@ -743,6 +761,21 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     expect(harness.events()).not.toContain("device.absence-detected");
     const quarantined = harness.bus.replay().find((event) => event.event === "device.quarantined");
     expect(quarantined?.payload).toMatchObject({ deviceId: "dev_physical" });
+    expect(harness.device()).toMatchObject({
+      quarantineCause: { kind: "purge-failed", message: "Error: uninstall exploded" },
+    });
+  });
+
+  it("a physical device's purge that fails while present after its lease is handed to quarantine as purge-failed", async () => {
+    const harness = await physicalHarness("reclaiming");
+    harness.driver.setPhysicalPresence(PHYSICAL_ID, true);
+    harness.driver.failOn("reclaim", 1, new Error("uninstall exploded"));
+
+    await harness.coordinator.reclaim(releasedPhysical(harness.device()));
+
+    expect(harness.mockedQuarantine.enter.mock.calls.map(([failure]) => failure)).toMatchObject([
+      { deviceId: "dev_physical", error: "Error: uninstall exploded", kind: "purge-failed" },
+    ]);
   });
 
   it("a failed physical reclaim whose presence read rejects, or whose platform has no driver, commits absent with not-present", async () => {

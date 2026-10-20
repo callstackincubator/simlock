@@ -1,13 +1,14 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testComponentWiring } from "../core/testing.js";
 
-import { EventBus, EventHistory } from "../bus/index.js";
+import { EventBus } from "../bus/index.js";
+import { ringEventHistory, seedHistory } from "../history/testing.js";
 import { CleanupReaper, type Config, Registry } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import {
@@ -17,6 +18,7 @@ import {
   FakeParentWatch,
   MemoryFilesystem,
   MemoryIpcTransport,
+  FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -24,12 +26,16 @@ import {
   type IdGenerator,
 } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
-import { TokenStore } from "../http/token-store.js";
+import { type Auth, createAuth } from "../auth/index.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
-import { AdminSecretManager } from "../daemon/admin-secret.js";
-import { createCredentialRoleResolver } from "../daemon/session.js";
-import { fromWireError, SimlockError, type AnySimlockError } from "../contract/index.js";
+import {
+  fromWireError,
+  SimlockError,
+  waitingRequestSchema,
+  type AnySimlockError,
+  type UsageOutput,
+} from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -47,26 +53,21 @@ import type {
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
-import {
-  buildCliEnvironment,
-  parseDuration,
-  readLogFile,
-  readPipedStdin,
-  runCli,
-  type CliEnvironment,
-  type CliEnvironmentPorts,
-} from "./index.js";
+import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
+import { buildCliEnvironment } from "./environment.js";
+import { readLogFile } from "./log-file.js";
+import { readPipedStdin } from "./stdio.js";
+import { parseDuration } from "./duration.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 
 /**
- * Yields to the macrotask queue, so `runLease` gets past `requestLease` and reaches its wait
+ * why: Yields to the macrotask queue, so `runLease` gets past `requestLease` and reaches its wait
  * point -- its push listeners registered and its renew timer armed -- before a test fires a
  * push or advances the clock.
  */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-/** A minimal daemon lease response, for the tests that only care what the CLI prints. */
 const detachedGrant: LeaseGrant = {
   device: {
     physical: false,
@@ -131,27 +132,6 @@ describe("readLogFile", () => {
   });
 });
 
-/**
- * ADR 0003 §12: "one smoke test per frontend ... frontends are now serialization". This suite
- * -- the CLI's own -- keeps: exit-code mapping off `ERROR_TABLE` (not a second map), the
- * admin-credential resolution order and its agent-fallback notice (ADR §5), `daemon status`'s
- * absent-vs-refused distinction (ADR §11), `config set`'s validate-before-write, `--json` shape
- * (no snake_case renderings), the `--yes`/confirm guards on destructive commands (safety rule
- * 5), and (see "CLI: lease pushes and exit codes" / "CLI: mcp command" / "CLI: daemon logs"
- * below) the CLI's own process-lifecycle and stderr-rendering behaviour that no other suite
- * exercises: the lost-lease exit code and its non-re-release, the `{push:...}` stderr lines
- * including the own-lease-id filter, the `--mode`/`--no-wait` flag mapping, the `mcp` command's
- * lazy module load and startup-failure reporting, and `daemon logs` working without a
- * connection. Deleted from the pre-ADR suite: every test that only re-walked a daemon
- * operation's request/response shape through the CLI (lease grant field-by-field, doctor
- * findings, cleanup/nuke proposals, catalog/list passthrough, events replay/follow wire format,
- * renew) -- that behaviour is the daemon's contract now, covered once at
- * `daemon/dispatcher.test.ts`, and `SimlockClientImpl`'s own suite in
- * `simlock-client/client.test.ts`; re-asserting it a third time through the CLI tested only that
- * this module still calls `client.foo()`, which the TypeScript compiler already guarantees
- * against `SimlockAdminClient`'s interface. `--bind-pid`/parent-watch termination is covered
- * across real processes by the fast e2e lane (`e2e/parent-watch.test.ts`), not here.
- */
 describe("CLI: exit codes", () => {
   it.each([
     ["QUEUE_TIMEOUT", 10],
@@ -198,7 +178,7 @@ describe("CLI: exit codes", () => {
     const output = outputCapture();
     const grant: LeaseGrant = {
       ...detachedGrant,
-      // A device root is a user-configurable path, so it can hold a space or an apostrophe;
+      // why: A device root is a user-configurable path, so it can hold a space or an apostrophe;
       // both have to survive `eval "$(...)"` byte for byte.
       environment: {
         SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios",
@@ -233,7 +213,7 @@ describe("CLI: exit codes", () => {
         }),
       ),
     ).resolves.toBe(0);
-    // stdout stays empty so `eval "$(...)"` is unaffected, but the lease is committed and
+    // why: stdout stays empty so `eval "$(...)"` is unaffected, but the lease is committed and
     // TTL-bound: a caller told nothing at all could neither renew nor release it.
     expect(output.stdout).toBe("");
     expect(output.stderr).toContain(detachedGrant.lease.id);
@@ -244,7 +224,7 @@ describe("CLI: exit codes", () => {
     const output = outputCapture();
     const grant: LeaseGrant = {
       ...detachedGrant,
-      // Not reachable through the shipped drivers, whose keys are literals -- but
+      // why: Not reachable through the shipped drivers, whose keys are literals -- but
       // `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
       environment: { "K=1; touch /tmp/probe/PWNED_KEY; X": "1" },
     };
@@ -375,7 +355,7 @@ describe("CLI: exit codes", () => {
   });
 
   /**
-   * ADR 0005 §19c's other half. Same command, same refusals, same exit code -- the only thing
+   * why: ADR 0005 §19c's other half. Same command, same refusals, same exit code -- the only thing
    * that changes is where the process runs and how its output gets here. `runPassthrough` is
    * deliberately wired in each of these: a remote invocation that quietly spawned locally
    * would pass every assertion about output and exit code while doing the wrong thing.
@@ -430,7 +410,7 @@ describe("CLI: exit codes", () => {
       ).resolves.toBe(9);
 
       expect(ranLocally).toBe(false);
-      // `requesterId` rides along because this connection resolved to the admin role, where
+      // why: `requesterId` rides along because this connection resolved to the admin role, where
       // the operation reads it (and requires it to match the lease). See the agent-role case
       // below for the other half.
       expect(seen).toEqual([
@@ -441,16 +421,16 @@ describe("CLI: exit codes", () => {
           tool: "adb",
         },
       ]);
-      // Chunks land on the stream they were written to, unjoined and in order -- a caller
+      // why: Chunks land on the stream they were written to, unjoined and in order -- a caller
       // piping this sees what it would have seen locally.
       expect(output.stdout).toBe("ro.build.version=15\n");
-      // The agent-fallback notice this fixture's credential-less connection writes is the only
+      // why: The agent-fallback notice this fixture's credential-less connection writes is the only
       // other thing on stderr; the command's own chunk lands there verbatim.
       expect(output.stderr).toContain("a warning\n");
     });
 
     it("names the lease from the requester id rather than from a flag of its own", async () => {
-      // Every argument after the tool name belongs to the tool (docs/CLI.md), so identity is
+      // why: Every argument after the tool name belongs to the tool (docs/CLI.md), so identity is
       // the only thing left to select a lease with -- and `--agent-id`/`SIMLOCK_AGENT_ID`
       // already is that identity. A requester holding no lease is a usage error naming it.
       const output = outputCapture();
@@ -505,7 +485,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("exits 10 when the daemon killed the command for outrunning exec.timeoutMs", async () => {
-      // The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7): 10, the same code
+      // why: The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7): 10, the same code
       // the other "you ran out of time" outcome (`QUEUE_TIMEOUT`) uses, rather than the
       // generic 1 a command that merely failed would get.
       const output = outputCapture();
@@ -564,7 +544,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("takes `--lease <id>` out of the arguments and runs against that lease", async () => {
-      // The flag exists only on this path, so it is stripped here rather than parsed with the
+      // why: The flag exists only on this path, so it is stripped here rather than parsed with the
       // CLI's own flags: locally every argument after the tool name belongs to the tool.
       const output = outputCapture();
       const seen: unknown[] = [];
@@ -596,7 +576,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("sends whatever readStdin resolves with as the command's one-shot stdin", async () => {
-      // `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
+      // why: `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
       // the wiring from that port's result to `device.exec`'s `stdin`, not the default
       // `readPipedStdin` implementation that reads a real pipe to EOF; that one is tested on
       // its own below, since a fake here would not exercise it at all.
@@ -632,7 +612,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("sends no requesterId when the connection fell back to the agent role", async () => {
-      // An agent session is gated on the lease it owns and its `requesterId` is ignored
+      // why: An agent session is gated on the lease it owns and its `requesterId` is ignored
       // entirely, so sending one would be noise that reads like authorization.
       const output = outputCapture();
       const seen: unknown[] = [];
@@ -658,7 +638,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("spawns locally against a worker, accepting and ignoring --lease", async () => {
-      // The other half of the same switch, and the reason `--lease` is accepted on both: one
+      // why: The other half of the same switch, and the reason `--lease` is accepted on both: one
       // command line has to work against either kind of daemon (docs/CLI.md). A worker takes
       // the flag, drops it, and passes the rest to the tool untouched.
       const output = outputCapture();
@@ -689,7 +669,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("relabels an unknown passthrough tool as USAGE, like a refusal", async () => {
-      // ADR 0005 §19c: the CLI keeps no copy of the refusal list and relabels whatever the
+      // why: ADR 0005 §19c: the CLI keeps no copy of the refusal list and relabels whatever the
       // daemon answers. `UNKNOWN_PASSTHROUGH_TOOL` is the other half of that answer, and it
       // has to read the same as a refused verb does -- exit 2, one `USAGE` line.
       const output = outputCapture();
@@ -795,7 +775,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("fails a local passthrough with the status.get error when the daemon cannot answer", async () => {
-      // The switch reads `mode` off `status.get`, so an unreachable daemon fails there rather
+      // why: The switch reads `mode` off `status.get`, so an unreachable daemon fails there rather
       // than at the passthrough -- and the CLI reports that call's own error rather than
       // dressing it up as a passthrough failure.
       const output = outputCapture();
@@ -831,7 +811,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("uses an agent connection's own lease list without filtering it by requester", async () => {
-      // `lease.list` already answers per role: an agent sees only what it owns. Filtering that
+      // why: `lease.list` already answers per role: an agent sees only what it owns. Filtering that
       // by `requesterId` as well would drop a lease it demonstrably owns whenever the two
       // differ -- an `--agent-id` used on the lease but not on this invocation.
       const output = outputCapture();
@@ -861,7 +841,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("stops scanning for --lease at the tool's own first argument", async () => {
-      // Everything from the tool's subcommand onwards is the tool's, so a `--lease` there is
+      // why: Everything from the tool's subcommand onwards is the tool's, so a `--lease` there is
       // an argument to *it* -- typed text, a filter, an operand -- and travels through.
       const output = outputCapture();
       const seen: unknown[] = [];
@@ -961,7 +941,7 @@ describe("CLI: exit codes", () => {
     );
 
     await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    // The captured parent is not the one being watched any more, so its death is ignored.
+    // why: The captured parent is not the one being watched any more, so its death is ignored.
     parentWatch.exit(4321);
     expect(released).toEqual([]);
     parentWatch.exit(9876);
@@ -986,6 +966,28 @@ describe("CLI: exit codes", () => {
     const output = outputCapture();
     await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
     expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
+
+  // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
+  // pointer, and guards reach it two ways -- an explicit `withHelpHint` call or
+  // `requiredPositional` -- either of which can be dropped silently, so a sample of both
+  // paths (a command guard and the router's unknown command) is pinned here.
+  it("points a missing required argument at simlock --help", async () => {
+    const output = outputCapture();
+    await expect(runCli(["lease"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: "lease requires --platform <ios|android> (run `simlock --help` for usage)",
+    });
+  });
+
+  it("points an unknown command at simlock --help", async () => {
+    const output = outputCapture();
+    await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error).toMatchObject({
+      code: "USAGE",
+      message: "Unknown command: nope (run `simlock --help` for usage)",
+    });
   });
 });
 
@@ -1084,7 +1086,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
   });
 
   it("does not read the admin.token file at all when --token is given (B2 ordering)", async () => {
-    // The file source must never be consulted -- let alone before the connection exists -- when
+    // why: The file source must never be consulted -- let alone before the connection exists -- when
     // a higher-priority source already answered. Also guards against a regression back to
     // resolving credentials before `connectAdmin` is even called.
     const output = outputCapture();
@@ -1203,7 +1205,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
     expect(launcher.launches).toBe(1);
     const grant = JSON.parse(output.stdout) as LeaseGrant & { role: string };
     expect(grant.role).toBe("admin");
-    // Provisioning progress pushes are expected noise on stderr; the agent-fallback notice is
+    // why: Provisioning progress pushes are expected noise on stderr; the agent-fallback notice is
     // the thing that must be absent.
     expect(output.stderr).not.toContain("notice");
   });
@@ -1239,7 +1241,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
     const ipcTransport = new MemoryIpcTransport();
     const socketPath = "/simlock/daemon.sock";
     const adminTokenPath = "/simlock/admin.token";
-    // A daemon actually runs and persists its own secret first, then the file is overwritten
+    // why: A daemon actually runs and persists its own secret first, then the file is overwritten
     // with a value that hashes to nothing the running daemon recognizes -- exactly what a
     // `kill -9`'d daemon's leftover `admin.token` looks like to the *next* daemon incarnation,
     // which never touches a file it did not itself just persist.
@@ -1262,11 +1264,183 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       output.environmentWith(),
     );
     expect(exitCode).toBe(0);
-    // The daemon was already running -- a bad credential must never trigger an auto-launch.
     expect(launcher.launches).toBe(0);
     const grant = JSON.parse(output.stdout) as LeaseGrant & { role: string };
     expect(grant.role).toBe("agent");
     expect(output.stderr).toContain("admin.token");
+  });
+});
+
+describe("CLI: auto-launch's startup deadline (#663)", () => {
+  /**
+   * why: the launcher hands back a daemon that claims its socket only `bootMs` later, the way
+   * `NodeDaemonLauncher` returns while the detached process it spawned is still booting; what
+   * the CLI can see is how long the socket stays absent, not how long `launch` itself blocks.
+   */
+  function slowBootPorts(bootMs: number): {
+    readonly ports: CliEnvironmentPorts;
+    readonly clock: FakeClock;
+  } {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(0);
+    const ipcTransport = new MemoryIpcTransport();
+    const ports: CliEnvironmentPorts = {
+      filesystem,
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: ipcTransport,
+      launcher: new FakeDaemonLauncher(() => {
+        clock.setTimer(bootMs, () => {
+          void startInMemoryDaemon({
+            adminTokenPath: "/simlock/admin.token",
+            filesystem,
+            ipcTransport,
+            socketPath: "/simlock/daemon.sock",
+          });
+        });
+      }),
+      dataDirectory: "/simlock",
+    };
+    return { clock, ports };
+  }
+
+  /**
+   * why: turns the clock at the auto-launch poll's own 50 ms step, with room to run past the
+   * startup deadline and keep pumping the boot the CLI abandoned; the clock is fake, so the
+   * extra ticks cost nothing. The `settled` guard makes a hang fail on a named assertion
+   * instead of on a test timeout.
+   */
+  async function runWithTicks(
+    command: readonly string[],
+    ports: CliEnvironmentPorts,
+    clock: FakeClock,
+    runOnMs: number,
+  ): Promise<{ readonly exitCode: number; readonly output: ReturnType<typeof outputCapture> }> {
+    const output = outputCapture(ports);
+    let settled = false;
+    const exitCode = runCli(command, output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 500 && (!settled || clock.now() < runOnMs); tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(
+      settled,
+      `simlock ${command.join(" ")} still had not settled at ${String(clock.now())}ms`,
+    ).toBe(true);
+    return { exitCode: await exitCode, output };
+  }
+
+  it("waits 20 s for a daemon it auto-launched: within the deadline it reports as running, past it the command reports a failed start", async () => {
+    const cases = [
+      { bootMs: 19_900, label: "19.9 s" },
+      { bootMs: 20_100, label: "20.1 s" },
+    ];
+
+    // why: every case runs before anything is asserted, so the case that passes cannot hide
+    // what the case that fails did to the daemon it launched.
+    const outcomes = await Promise.all(
+      cases.map(async (testCase) => {
+        const { clock, ports } = slowBootPorts(testCase.bootMs);
+        const { exitCode, output } = await runWithTicks(
+          ["daemon", "start", "--json"],
+          ports,
+          clock,
+          testCase.bootMs + 1_000,
+        );
+        const after = outputCapture(ports);
+        const statusExit = await runCli(["daemon", "status", "--json"], after.environmentWith());
+        const status = JSON.parse(after.stdout || "{}") as { daemon?: { health?: string } };
+        return {
+          exitCode,
+          label: testCase.label,
+          timedOutStarting: output.stderr.includes("Timed out starting simlock daemon"),
+          stdout: output.stdout,
+          statusHealth: status.daemon?.health ?? after.stdout,
+          statusExit,
+        };
+      }),
+    );
+
+    expect(
+      outcomes.map((outcome) => ({
+        exitCode: outcome.exitCode,
+        label: outcome.label,
+        // why: the failed start is asserted as the timeout's wording, not the whole line or
+        // its error code, so what the code reports can change without moving this test.
+        timedOutStarting: outcome.timedOutStarting,
+        stdout: outcome.stdout,
+      })),
+    ).toEqual([
+      {
+        exitCode: 0,
+        label: "19.9 s",
+        timedOutStarting: false,
+        stdout: '{"status":"running"}\n',
+      },
+      {
+        exitCode: 1,
+        label: "20.1 s",
+        timedOutStarting: true,
+        stdout: "",
+      },
+    ]);
+
+    // why: asserted apart from the exit code so a fix that only softens the timeout message
+    // fails here -- `daemon status` never launches one, so what it reaches is the daemon this
+    // command launched and then gave up on.
+    for (const outcome of outcomes) {
+      expect(outcome.statusExit, `${outcome.label}: status stderr`).toBe(0);
+      expect(
+        ["starting", "running"].includes(outcome.statusHealth as string),
+        `${outcome.label}: status says ${JSON.stringify(outcome.statusHealth)}`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("CLI: auto-launch's failed start (#672)", () => {
+  it("reports a daemon it launched but never reached as DAEMON_STARTUP_FAILED, exit 1", async () => {
+    // why: nothing ever claims the socket, which is what a daemon still booting past the
+    // deadline looks like to the CLI. The run goes well past any deadline the loop could hold,
+    // so the code asserted here is the one the CLI chose for giving up, never one a clock reached.
+    const clock = new FakeClock(0);
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    let settled = false;
+    const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
+      (code) => {
+        settled = true;
+        return code;
+      },
+    );
+    for (let tick = 0; tick < 700 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, `simlock daemon start still had not settled at ${String(clock.now())}ms`).toBe(
+      true,
+    );
+    expect(await exitCode).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: expect.stringContaining("Timed out starting simlock daemon"),
+      },
+    });
+    expect(launcher.launches).toBe(1);
   });
 });
 
@@ -1334,6 +1508,19 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(launched).toBe(false);
   });
 
+  it("prints the human view for daemon status when --json is absent", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["daemon", "status"],
+        output.environmentWith({ connectExistingAdmin: async () => fakeClient() }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
+  });
+
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
@@ -1386,7 +1573,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       ),
     ).resolves.toBe(0);
 
-    // The harness has no admin credential, so a connection notice precedes these lines.
+    // why: The harness has no admin credential, so a connection notice precedes these lines.
     expect(output.stderr.split("\n").filter((line) => line.startsWith("Missing"))).toEqual([
       "Missing [android] android-emulator: The Android emulator package is not installed. " +
         "Run `sdkmanager --install emulator`.",
@@ -1421,13 +1608,14 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     );
   });
 
-  it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
+  it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr for a module-unavailable finding, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
     const output = outputCapture();
     const findings = [
       {
-        kind: "agent-device-unavailable" as const,
+        kind: "module-unavailable" as const,
+        module: "agent-device",
         message: `found 0.20.3,\n  need ${"x".repeat(600)}`,
-        remedy: `install agent-device 0.21.25 or later,\nthen ${"y".repeat(600)}`,
+        remedy: `install agent-device 0.21.28 or later,\nthen ${"y".repeat(600)}`,
       },
       {
         kind: "warm-pool-target-unreachable" as const,
@@ -1466,7 +1654,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     const index = lines.findIndex((line) => line.startsWith("agent-device  fail  "));
     expect(index).toBeGreaterThan(-1);
     expect(lines[index]).toBe(
-      `agent-device  fail  found 0.20.3, need ${"x".repeat(500 - "found 0.20.3, need ".length)}; ${("install agent-device 0.21.25 or later, then " + "y".repeat(600)).slice(0, 500)}`,
+      `agent-device  fail  found 0.20.3, need ${"x".repeat(500 - "found 0.20.3, need ".length)}; ${("install agent-device 0.21.28 or later, then " + "y".repeat(600)).slice(0, 500)}`,
     );
     expect(lines.filter((line) => line.startsWith("agent-device"))).toHaveLength(1);
     for (const earlier of ["Warning [ios]", "Missing [ios]", "warm-pool-target-unreachable"]) {
@@ -1474,6 +1662,29 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       expect(lines.findIndex((line) => line.startsWith(earlier))).toBeGreaterThan(-1);
     }
     expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
+  it("simlock doctor writes <module>  fail  … for a finding of another module", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        kind: "module-unavailable" as const,
+        message: "needs\n  tmux",
+        module: "other-mod",
+        remedy: "install tmux",
+      },
+    ];
+
+    await runCli(
+      ["doctor"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+      }),
+    );
+
+    expect(output.stderr.split("\n")).toContain("other-mod  fail  needs tmux; install tmux");
+    expect(output.stderr).not.toContain("agent-device");
   });
 
   it("simlock doctor writes no agent-device line when the report has no such finding", async () => {
@@ -1509,14 +1720,14 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       ),
     ).resolves.toBe(0);
 
-    // The upgrade contract: `doctor --fix` running unattended in CI never becomes
+    // why: The upgrade contract: `doctor --fix` running unattended in CI never becomes
     // destructive on its own (ADR 0001, decision 6).
     expect(seen).toEqual([{ fix: true, purgeOrphans: false }]);
   });
 
   it.each([
     ["declined", async () => false],
-    // Explicitly absent: the shared harness defaults `confirm` to an auto-yes, so leaving it
+    // why: Explicitly absent: the shared harness defaults `confirm` to an auto-yes, so leaving it
     // out would test the default rather than the no-terminal case.
     ["unavailable", undefined],
   ] as const)(
@@ -1529,7 +1740,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         runCli(
           ["doctor", "--purge-orphans"],
           output.environmentWith({
-            // `exactOptionalPropertyTypes`: an explicitly-absent confirm has to be spread in,
+            // why: `exactOptionalPropertyTypes`: an explicitly-absent confirm has to be spread in,
             // not passed as `undefined`.
             ...(confirm === undefined ? { confirm: undefined } : { confirm }),
             connectAdmin: async () => {
@@ -1790,7 +2001,7 @@ describe("CLI: component remove (ADR 0010 §8)", () => {
 
   it.each([
     ["declined", async () => false],
-    // No terminal to ask on: the CLI's own `confirmTerminal` is not installed, so this is the
+    // why: No terminal to ask on: the CLI's own `confirmTerminal` is not installed, so this is the
     // no-terminal case rather than the default.
     ["unavailable", undefined],
   ] as const)(
@@ -1986,7 +2197,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     const output = outputCapture(realCliEnvironmentPorts());
     let written: Record<string, unknown> | undefined;
     const exitCode = await runCli(
-      // Comfortably under the default `lease.maxTtlMs` (4h), so this doesn't also trip the
+      // why: Comfortably under the default `lease.maxTtlMs` (4h), so this doesn't also trip the
       // TTL pair rule -- this test is only about the key itself validating clean.
       ["config", "set", "lease.defaultTtlMs", "2400000"],
       output.environmentWith({
@@ -2001,7 +2212,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   });
 
   it("does not let a stray file at the scratch validation path change the outcome", async () => {
-    // Guards against B9's second bug: the validation scratch path must never be able to read a
+    // why: Guards against B9's second bug: the validation scratch path must never be able to read a
     // real file, whether one happens to already exist there or not.
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/");
@@ -2025,9 +2236,53 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   });
 });
 
+describe("CLI: config set and the retired eventLog.rotateBytes", () => {
+  const configSet = async (file: Record<string, unknown>) => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let written: Record<string, unknown> | undefined;
+    const environment = output.environmentWith({
+      readConfigFile: async () => structuredClone(file),
+      writeConfigFile: async (contents) => {
+        written = contents;
+      },
+    });
+    const exitCode = await runCli(["config", "set", "log.level", "debug"], environment);
+    return { configPath: environment.configPath, exitCode, output, written };
+  };
+
+  it("simlock config set on a file holding eventLog.rotateBytes writes it without that key and prints the Removed line once; on a file without it, no such line", async () => {
+    const holding = await configSet({
+      eventLog: { retention: 86_400_000, rotateBytes: 1_048_576 },
+      log: { level: "info" },
+    });
+    const without = await configSet({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "info" },
+    });
+
+    expect(holding.exitCode).toBe(0);
+    expect(holding.written).toEqual({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "debug" },
+    });
+    expect(holding.output.stderr).toBe(
+      `Removed eventLog.rotateBytes from ${holding.configPath}: it is no longer used.\n`,
+    );
+    expect(holding.output.stdout).toBe(
+      `Updated log.level in ${holding.configPath}; takes effect on daemon restart.\n`,
+    );
+    expect(without.exitCode).toBe(0);
+    expect(without.written).toEqual({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "debug" },
+    });
+    expect(without.output.stderr).toBe("");
+  });
+});
+
 describe("CLI: config set and the file mode of config.json (#252)", () => {
   it("writes the config.json holding gateway.token owner-only, whether it creates the file or replaces an owner-only one", async () => {
-    // Two homes, one per way `config set` comes to write the join token. `MemoryFilesystem`
+    // why: Two homes, one per way `config set` comes to write the join token. `MemoryFilesystem`
     // gives a file written without a `mode` Node's default (0644), so the assertion pins what
     // the CLI asks for, independent of the umask of whoever runs the suite.
     const fresh = new MemoryFilesystem();
@@ -2060,7 +2315,7 @@ describe("CLI: config set and the file mode of config.json (#252)", () => {
   });
 
   it("makes a config.json that others could read owner-only on the next config set", async () => {
-    // A file written by hand or by an older simlock: readable by group and others. `config set`
+    // why: A file written by hand or by an older simlock: readable by group and others. `config set`
     // must not carry that mode over to the file it writes in its place.
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock");
@@ -2549,7 +2804,7 @@ describe("CLI: component install (ADR 0010 §6)", () => {
     ).resolves.toBe(0);
 
     expect(asked).toEqual([{ platform: "android", version: "35" }]);
-    // The fake connection resolves no credential, so the agent-fallback notice comes first.
+    // why: The fake connection resolves no credential, so the agent-fallback notice comes first.
     const stderrLines = output.stderr
       .trim()
       .split("\n")
@@ -2643,7 +2898,6 @@ describe("CLI: component install (ADR 0010 §6)", () => {
 });
 
 describe("CLI: component install on a gateway's workers (ADR 0010 §7)", () => {
-  /** Every stderr line but the agent-fallback notice the fake connection causes. */
   function progressLines(stderr: string): unknown[] {
     return stderr
       .trim()
@@ -2760,6 +3014,7 @@ describe("CLI: component install on a gateway's workers (ADR 0010 §7)", () => {
     const output = outputCapture();
     await runCli(["--help"], output.environmentWith({}));
     expect(output.stdout).toContain("component install <ios|android> <version>");
+    expect(output.stdout).toContain("events, stats,");
   });
 });
 
@@ -2905,7 +3160,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     await expect(runCli(["worker", "list"], environment)).resolves.toBe(0);
 
     expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected -- ios 1/2");
-    // No host facts on this view yet, so the line ends at the lease count.
+    // why: No host facts on this view yet, so the line ends at the lease count.
     expect(output.stdout).toContain("1 lease(s)\n");
   });
 
@@ -3364,7 +3619,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     await runCli(["status"], environment);
 
     expect(output.stdout).toContain("Daemon: running (gateway)");
-    // A gateway runs no drivers: its host line names the machine and nothing after it.
+    // why: A gateway runs no drivers: its host line names the machine and nothing after it.
     expect(output.stdout).toContain("Host: Linux 6.8.0 x64\n");
     expect(output.stdout).toContain("wrk_1: connected, drained");
     expect(output.stdout).toContain(
@@ -3601,7 +3856,6 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
   });
 
   describe("against a starting daemon", () => {
-    // A starting daemon answers `status.get` with `daemon` and `host` only.
     const STARTING: StatusGetOutput = {
       daemon: { health: "starting", mode: "worker" },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
@@ -3834,6 +4088,58 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       "Daemon running\nConsole: http://127.0.0.1:4700/\n",
     );
     expect(await start(EMPTY_STATUS)).toBe("Daemon running\n");
+  });
+
+  describe("the history lines of simlock status", () => {
+    const NOT_WRITTEN = "History: the event history is not being written; see daemon.log.";
+    const SET_ASIDE_AT = Date.UTC(2026, 9, 16, 9, 12, 30);
+    const pad = (value: number): string => String(value).padStart(2, "0");
+    const local = new Date(SET_ASIDE_AT);
+    const setAside = `History: the event history was damaged and set aside at ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}; a fresh one was started.`;
+
+    const statusLines = async (history: StatusGetOutput["history"]): Promise<string[]> => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({
+                  ...EMPTY_STATUS,
+                  ...(history === undefined ? {} : { history }),
+                } as StatusGetOutput),
+            }),
+        }),
+      );
+      return output.stdout.trimEnd().split("\n");
+    };
+
+    it("prints the not-written line when writing is false, the set-aside line with the local time when setAsideAt is set, both when both hold, and neither otherwise", async () => {
+      const healthy = await statusLines({ opened: true, writing: true });
+      const notWritten = await statusLines({ opened: false, writing: false });
+      const aside = await statusLines({ opened: true, setAsideAt: SET_ASIDE_AT, writing: true });
+      const both = await statusLines({ opened: true, setAsideAt: SET_ASIDE_AT, writing: false });
+
+      expect(healthy.filter((line) => line.startsWith("History:"))).toEqual([]);
+      expect(notWritten.filter((line) => line.startsWith("History:"))).toEqual([NOT_WRITTEN]);
+      expect(aside.filter((line) => line.startsWith("History:"))).toEqual([setAside]);
+      expect(both.filter((line) => line.startsWith("History:")).sort()).toEqual(
+        [NOT_WRITTEN, setAside].sort(),
+      );
+    });
+
+    it("prints the rebuilt line with the local time when rebuiltAt is set and the could-not-rebuild line when rebuildFailed is set, and neither otherwise", async () => {
+      const rebuiltLine = `History: figures were rebuilt from the event history at ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}.`;
+      const failedLine = "History: figures could not be rebuilt; see daemon.log.";
+      const plain = await statusLines({ opened: true, writing: true });
+      const rebuilt = await statusLines({ opened: true, rebuiltAt: SET_ASIDE_AT, writing: true });
+      const failed = await statusLines({ opened: true, rebuildFailed: true, writing: true });
+
+      expect(plain.filter((line) => line.startsWith("History:"))).toEqual([]);
+      expect(rebuilt.filter((line) => line.startsWith("History:"))).toEqual([rebuiltLine]);
+      expect(failed.filter((line) => line.startsWith("History:"))).toEqual([failedLine]);
+    });
   });
 
   it("prints an install line while one runs and none after", async () => {
@@ -4073,6 +4379,62 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(lines).toContain("Device dev_v1: ready, mode full, serves default mode: yes");
   });
 
+  it("status ends a quarantined device's marker with ; and the cause for each kind, and prints today's marker when there is no cause", async () => {
+    const quarantined = (
+      id: string,
+      quarantineCause?: Record<string, unknown>,
+    ): Record<string, unknown> => ({
+      id,
+      mode: "full",
+      physical: false,
+      quarantineAttempts: 1,
+      quarantineNextRetryAt: 1_760_619_150_000,
+      servesDefaultMode: true,
+      spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+      state: "quarantined",
+      ...(quarantineCause === undefined ? {} : { quarantineCause }),
+    });
+    const status = {
+      ...EMPTY_STATUS,
+      devices: [
+        quarantined("dev_purge", {
+          kind: "purge-failed",
+          message: "DriverCrashError: simctl erase exited 164, then stalled",
+        }),
+        quarantined("dev_shutdown", {
+          kind: "shutdown-failed",
+          message: "Error: shutdown exploded",
+        }),
+        quarantined("dev_delete", { kind: "delete-failed", message: "Error: delete exploded" }),
+        quarantined("dev_prov", { kind: "stalled", stalledState: "provisioning" }),
+        quarantined("dev_recl", { kind: "stalled", stalledState: "reclaiming" }),
+        quarantined("dev_none"),
+      ],
+    } as unknown as StatusGetOutput;
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    const head =
+      "quarantined, mode full, serves default mode: yes (purge retry 1, next retry at 1760619150000";
+    expect(lines).toContain(
+      `Device dev_purge: ${head}; purge failed: DriverCrashError: simctl erase exited 164, then stalled)`,
+    );
+    expect(lines).toContain(
+      `Device dev_shutdown: ${head}; shutdown failed: Error: shutdown exploded)`,
+    );
+    expect(lines).toContain(`Device dev_delete: ${head}; delete failed: Error: delete exploded)`);
+    expect(lines).toContain(`Device dev_prov: ${head}; stalled while provisioning)`);
+    expect(lines).toContain(`Device dev_recl: ${head}; stalled while reclaiming)`);
+    expect(lines).toContain(`Device dev_none: ${head})`);
+  });
+
   it("status prints absent (<reason>) as the state of an absent device", async () => {
     const physical = (id: string, state: string, absentReason?: string) => ({
       class: "phone",
@@ -4191,13 +4553,13 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
       output.environmentWith({ connectAdmin: async () => client }),
     );
-    // Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
+    // why: Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
     // the push -- otherwise the listener registered by `client.onLeaseLost` may not exist yet.
     await settle();
     leaseLostListener?.({ leaseId: "lse_1", deviceId: "dev_1", reason: "ttl-backstop" });
     const exitCode = await runPromise;
     expect(exitCode).toBe(14);
-    // The daemon already released it -- asking again would only raise UNKNOWN_LEASE.
+    // why: The daemon already released it -- asking again would only raise UNKNOWN_LEASE.
     expect(released).toBe(false);
   });
 
@@ -4226,8 +4588,6 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       }),
     );
     await settle();
-    // A push for another lease this same principal owns (e.g. an earlier `--detach`'d lease) --
-    // must not be treated as this invocation's own lease being lost.
     leaseLostListener?.({ leaseId: "some-other-lease", deviceId: "dev_2", reason: "ttl-backstop" });
     await settle();
     signals.emit("SIGINT");
@@ -4517,12 +4877,6 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
   });
 });
 
-/**
- * ADR 0004 §2/§3: holding is a client policy -- this process renews on a timer at a third of
- * the remaining TTL and releases explicitly, and the daemon does neither on its behalf. There
- * is no mode on the wire any more, so what is asserted here is entirely the CLI's own
- * behaviour while it holds, and what it does when the connection under it dies.
- */
 describe("CLI: holder renew and release (ADR 0004 §2)", () => {
   it("renews at a third of the TTL the daemon returned, re-deriving the cadence from each renewal", async () => {
     const clock = new FakeClock(0);
@@ -4533,7 +4887,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     const client = fakeClient({
       renewLease: (input) => {
         renewals.push({ at: clock.now(), leaseId: input.leaseId });
-        // Half the grant's TTL comes back, so the next renewal must be half as far out too.
+        // why: Half the grant's TTL comes back, so the next renewal must be half as far out too.
         return Promise.resolve({
           deviceId: "dev_1",
           grantedAt: 0,
@@ -4561,7 +4915,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     );
     await settle();
 
-    // The grant's deadline is 60_000, so the first renewal is due at 20_000 -- and not before.
+    // why: The grant's deadline is 60_000, so the first renewal is due at 20_000 -- and not before.
     clock.advance(19_999);
     await settle();
     expect(renewals).toEqual([]);
@@ -4569,7 +4923,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     await settle();
     expect(renewals).toEqual([{ at: 20_000, leaseId: "lse_1" }]);
 
-    // 30_000ms of TTL came back at 20_000, so the next renewal is at 30_000, not at 40_000.
+    // why: 30_000ms of TTL came back at 20_000, so the next renewal is at 30_000, not at 40_000.
     clock.advance(10_000);
     await settle();
     expect(renewals).toEqual([
@@ -4579,9 +4933,9 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
 
     signals.emit("SIGINT");
     expect(await runPromise).toBe(0);
-    // The release is the CLI's own call, not a side effect of the socket closing.
+    // why: The release is the CLI's own call, not a side effect of the socket closing.
     expect(released).toBe("lse_1");
-    // And the timer is gone with it: no renewal can race the release, and nothing keeps the
+    // why: And the timer is gone with it: no renewal can race the release, and nothing keeps the
     // process alive after the command returns.
     expect(clock.pendingTimerCount).toBe(0);
     clock.advance(600_000);
@@ -4589,7 +4943,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
   });
 
   it("exits 1 on a dead connection, naming the lease that outlived it, and releases nothing", async () => {
-    // ADR 0004 §3: the daemon released nothing when the socket died, so the lease is still
+    // why: ADR 0004 §3: the daemon released nothing when the socket died, so the lease is still
     // granted -- the holder says so, says until when, and does not pretend to release it.
     const output = outputCapture();
     let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
@@ -4608,7 +4962,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
       output.environmentWith({ connectAdmin: async () => client }),
     );
-    // Let `requestLease` resolve and `runLease` reach its wait point, so the listener exists.
+    // why: Let `requestLease` resolve and `runLease` reach its wait point, so the listener exists.
     await settle();
     connectionLostListener?.(
       new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
@@ -4621,12 +4975,11 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     expect(line.error.code).toBe("DAEMON_CONNECTION_LOST");
     expect(line.error.message).toContain("lse_1");
     expect(line.error.message).toContain("60000");
-    // Nothing to release over a connection that is already gone -- and nothing that should be.
     expect(released).toBe(false);
   });
 
   it("names the latest deadline in that line, not the one the grant carried", async () => {
-    // The deadline moves on every renewal, and this line is the only place a holder reports
+    // why: The deadline moves on every renewal, and this line is the only place a holder reports
     // it. Quoting the grant-time one would, after about a TTL of uptime, name a moment in the
     // past on a lease that is perfectly alive.
     const clock = new FakeClock(0);
@@ -4656,7 +5009,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     );
     await settle();
 
-    // Two renewals: the grant's deadline was 60_000, so they land at 20_000 and 40_000, each
+    // why: Two renewals: the grant's deadline was 60_000, so they land at 20_000 and 40_000, each
     // answering with a deadline a full TTL further out.
     clock.advance(20_000);
     await settle();
@@ -4672,12 +5025,11 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       error: { message: string };
     };
     expect(line.error.message).toContain("100000");
-    // The grant-time deadline (60_000) is not what it reports any more.
     expect(line.error.message).not.toContain("60000");
   });
 
   it("writes one line for a lost connection, even with a renewal in flight when it dies", async () => {
-    // The same socket carries both: the connection-lost listener writes the line that names
+    // why: The same socket carries both: the connection-lost listener writes the line that names
     // the lease and its deadline, and the `lease.renew` that was in flight rejects with
     // `DAEMON_CONNECTION_LOST`. That rejection is a retryable failure as far as
     // `startLeaseRenewal` knows -- not a `lease-lost` -- so the holder must not answer it with
@@ -4706,12 +5058,12 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     );
     await settle();
 
-    // The grant's deadline is 60_000: the first renewal starts at 20_000 and never answers.
+    // why: The grant's deadline is 60_000: the first renewal starts at 20_000 and never answers.
     clock.advance(20_000);
     await settle();
     expect(rejectRenew).toBeDefined();
 
-    // The socket dies. In that order, deliberately: `SimlockClient.onConnectionLost` promises
+    // why: The socket dies. In that order, deliberately: `SimlockClient.onConnectionLost` promises
     // that "every in-flight call has already rejected `DAEMON_CONNECTION_LOST` by the time
     // this listener runs", so the renewal's rejection is queued first and its handler runs
     // after the listener has had its say.
@@ -4756,7 +5108,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       environment,
     );
 
-    // ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
+    // why: ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
     // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
     expect(requested).toEqual([30 * 60_000, undefined]);
   });
@@ -4788,7 +5140,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     answer = "taken";
     const exitCode = await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
 
-    // The flag's value goes out as typed and an omitted flag sends none: the contract decides
+    // why: The flag's value goes out as typed and an omitted flag sends none: the contract decides
     // what an ID may look like.
     expect(requested).toEqual(["ad-7f3a", "absent", "ad-7f3a"]);
     expect(exitCode).toBe(13);
@@ -4857,10 +5209,44 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       error: { code: "INTERNAL", message: "could not persist the lease" },
     });
 
-    // A failed renewal is not an exit condition: the holder still holds, and still releases.
+    // why: A failed renewal is not an exit condition: the holder still holds, and still releases.
     signals.emit("SIGINT");
     expect(await runPromise).toBe(0);
     expect(released).toBe("lse_1");
+  });
+
+  it("still closes the connection when stderr cannot take the failed release's error line", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    let closed = false;
+    const client = fakeClient({
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+      releaseLease: () => Promise.reject(new Error("release failed")),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock: new FakeClock(0),
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+        stderr: {
+          write: (value: string) => {
+            if (value.includes("release failed")) throw new Error("EPIPE");
+            return undefined;
+          },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+
+    signals.emit("SIGINT");
+
+    // why: a closed stderr pipe must not skip the dispose and the close that follow the release.
+    expect(await runPromise).toBe(0);
+    expect(closed).toBe(true);
   });
 
   it("exits 14 without a farewell release when a renewal is answered UNKNOWN_LEASE", async () => {
@@ -4887,14 +5273,14 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     await settle();
     clock.advance(20_000);
 
-    // The daemon's answer is final: this ends the same way the lease-lost push does, rather
+    // why: The daemon's answer is final: this ends the same way the lease-lost push does, rather
     // than repeating the rejection until the deadline and then sitting alive.
     expect(await runPromise).toBe(14);
     expect(released, "asking again would only raise UNKNOWN_LEASE").toBe(false);
     expect(renewals).toBe(1);
     expect(clock.pendingTimerCount).toBe(0);
 
-    // The same stderr line the push path writes, so a script tailing for `push: "lease-lost"`
+    // why: The same stderr line the push path writes, so a script tailing for `push: "lease-lost"`
     // sees this way of losing a lease too, with the error line after it as the detail.
     const lines = output.stderr
       .trim()
@@ -4916,7 +5302,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     const output = outputCapture();
     let released = false;
     const client = fakeClient({
-      // Never terminal, never successful: the ladder retries until the lease's own deadline
+      // why: Never terminal, never successful: the ladder retries until the lease's own deadline
       // passes, and then there is nothing left to hold.
       renewLease: () =>
         Promise.reject(new SimlockError("INTERNAL", "domain", "could not persist", {})),
@@ -4971,7 +5357,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     await settle();
     clock.advance(20_000);
     await settle();
-    // The daemon's own push for the same lease follows the renewal's answer. One ending, one
+    // why: The daemon's own push for the same lease follows the renewal's answer. One ending, one
     // line: a script tailing stderr must not read this as two devices lost.
     leaseLostListener?.({ deviceId: "dev_1", leaseId: "lse_1", reason: "expired" });
 
@@ -5024,7 +5410,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
             spec: { physical: false, platform: "ios", model: "x", osVersion: "26.5" },
             mode: "full",
           },
-          // A driver-supplied key that is not a shell identifier fails the command rather than
+          // why: A driver-supplied key that is not a shell identifier fails the command rather than
           // being silently dropped -- and that throw must not cost the device.
           environment: { "NOT A KEY": "value" },
           lease: {
@@ -5187,33 +5573,81 @@ describe("CLI: events history", () => {
   }
 
   function printed(stdout: string): unknown[] {
+    if (stdout.trim() === "") return [];
     return stdout
       .trimEnd()
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
   }
 
-  it("events --since with nothing listening prints the file's events and launches no daemon", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/simlock");
-    await filesystem.writeFileAtomic(
-      "/simlock/events.jsonl",
-      [envelope(1, 500), envelope(2, hour + 500)].map((entry) => JSON.stringify(entry)).join("\n"),
-    );
+  async function historyDirectory(
+    prepare: (directory: string) => Promise<void>,
+  ): Promise<CliEnvironmentPorts> {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-cli-history-"));
+    temporaryDirectories.push(directory);
+    await prepare(directory);
+    return {
+      ...realCliEnvironmentPorts(new NodeFilesystem()),
+      clock: new FakeClock(2 * hour),
+      dataDirectory: directory,
+    };
+  }
+
+  const stopped = (seq: number, timestamp: number) => ({
+    event: "daemon.stopping",
+    id: `evt_${seq}`,
+    module: "daemon",
+    payload: { reason: `r${seq}` },
+    seq,
+    timestamp,
+  });
+
+  it("events --since with nothing listening reads history.db and launches no daemon", async () => {
+    const ports = await historyDirectory((directory) => seedHistory(directory, [500, hour + 500]));
     const launcher = new FakeDaemonLauncher(() => {
       throw new Error("a daemon was launched");
     });
-    const output = outputCapture({
-      ...realCliEnvironmentPorts(filesystem),
-      clock: new FakeClock(2 * hour),
-      launcher,
-    });
+    const output = outputCapture({ ...ports, launcher });
 
     const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
 
     expect(launcher.launches).toBe(0);
     expect(exitCode).toBe(0);
-    expect(printed(output.stdout)).toEqual([envelope(2, hour + 500)]);
+    expect(printed(output.stdout)).toEqual([stopped(2, hour + 500)]);
+  });
+
+  it("events --since with nothing listening and no history.db prints nothing, exit 0, even beside an old events.jsonl", async () => {
+    const bare = outputCapture(await historyDirectory(async () => {}));
+    const withOldFile = outputCapture(
+      await historyDirectory((directory) =>
+        writeFile(join(directory, "events.jsonl"), `${JSON.stringify(envelope(1, hour + 500))}\n`),
+      ),
+    );
+
+    const codes = [
+      await runCli(["events", "--since", "1h"], bare.environmentWith()),
+      await runCli(["events", "--since", "1h"], withOldFile.environmentWith()),
+    ];
+
+    expect(codes).toEqual([0, 0]);
+    expect([bare.stdout, withOldFile.stdout]).toEqual(["", ""]);
+  });
+
+  it("events --since with nothing listening and an unreadable history.db prints one JSON error and exits 1", async () => {
+    const output = outputCapture(
+      await historyDirectory((directory) =>
+        writeFile(join(directory, "history.db"), "this is not a sqlite database ".repeat(20)),
+      ),
+    );
+
+    const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
+
+    expect(exitCode).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(output.stderr.trimEnd().split("\n")).toHaveLength(1);
+    const printedError = JSON.parse(output.stderr) as { error: { code: string; message: string } };
+    expect(printedError.error.code).toBe("INTERNAL");
+    expect(printedError.error.message).toMatch(/not a database/);
   });
 
   it("events --since reports a daemon that refuses the handshake rather than reading the file", async () => {
@@ -5229,7 +5663,7 @@ describe("CLI: events history", () => {
             daemonVersion: "0.9.0",
           });
         },
-        readEventFile: async () => {
+        readEventHistory: async () => {
           fileRead = true;
           return [];
         },
@@ -5256,7 +5690,7 @@ describe("CLI: events history", () => {
               return [envelope(7, hour + 1)];
             },
           }),
-        readEventFile: async () => {
+        readEventHistory: async () => {
           fileRead = true;
           return [];
         },
@@ -5287,11 +5721,11 @@ describe("CLI: events history", () => {
               return async () => {};
             },
             replayEvents: async () => {
-              // Emitted after the subscribe and before the replay answers: the replay holds
+              // why: Emitted after the subscribe and before the replay answers: the replay holds
               // seq 2, and seq 3 lands just after its snapshot.
               listener?.(push(2));
               listener?.(push(3));
-              // Same seq and timestamp as the replayed event 2, another id: another event.
+              // why: Same seq and timestamp as the replayed event 2, another id: another event.
               listener?.({ subscriptionId: "sub_1", event: envelope(2, 2, "evt_other") });
               return [envelope(1, 1), envelope(2, 2)];
             },
@@ -5422,8 +5856,6 @@ describe("CLI: daemon logs (ADR 0003 §11 -- must work when the daemon is dead)"
 });
 
 describe("CLI: daemon logs --follow", () => {
-  /** Runs `daemon logs --follow` against an in-memory log, driven by a fake clock and a fake
-   * signal source. `tick` advances one poll interval and lets the poll's reads settle. */
   async function follow(filesystem: MemoryFilesystem) {
     const clock = new FakeClock(0);
     const signals = new EventEmitter();
@@ -5434,8 +5866,26 @@ describe("CLI: daemon logs --follow", () => {
     };
     const output = outputCapture(ports);
     const exit = runCli(["daemon", "logs", "--follow"], output.environmentWith());
-    const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+    // why: `followLogFile` loads its follower module on first use, so settling once is no
+    // longer enough for the tail read to have started; this yields to the event loop until the
+    // poll timer is armed, which is the point the old single settle proved the follower was
+    // live. The wait is a real timer: the lazy import resolves through I/O callbacks, which
+    // `setImmediate` turns alone would not drain.
+    const settle = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (clock.pendingTimerCount > 0) return;
+      }
+      throw new Error("the follower never armed its poll timer -- lazy load of the module hung");
+    };
     await settle();
+    /** why: unlike the first settle this cannot require a timer -- after a signal the follower
+     * is meant to leave none armed -- and the lazy import is resolved by now, so immediate
+     * turns are enough to drain the poll's reads. */
+    const settleTick = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 20; attempt += 1)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+    };
     return {
       clock,
       exit,
@@ -5444,7 +5894,7 @@ describe("CLI: daemon logs --follow", () => {
       settle,
       tick: async () => {
         clock.advance(250);
-        await settle();
+        await settleTick();
       },
     };
   }
@@ -5472,7 +5922,7 @@ describe("CLI: daemon logs --follow", () => {
     await filesystem.writeFileAtomic(LOG, "a\n");
     const run = await follow(filesystem);
 
-    // Between two polls: one more line in the old file, a rotation, and a new file already
+    // why: Between two polls: one more line in the old file, a rotation, and a new file already
     // longer than everything the follower had read of the old one.
     await filesystem.writeFileAtomic(LOG, "a\nb\n");
     await filesystem.rename(LOG, `${LOG}.1`);
@@ -5565,7 +6015,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
     );
     expect(leaseExit).toBe(0);
     const grant = JSON.parse(leaseOut.stdout) as LeaseGrant;
-    // ADR 0004: one kind of lease -- what `--detach` changes is this process, not the grant.
+    // why: ADR 0004: one kind of lease -- what `--detach` changes is this process, not the grant.
     expect(grant.lease).toMatchObject({ ttlMs: expect.any(Number) });
 
     const statusOut = outputCapture();
@@ -5596,7 +6046,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
 });
 
 /**
- * `docs/CLI.md` promises exactly one structured error line per failure, and binds `USAGE` to
+ * why: `docs/CLI.md` promises exactly one structured error line per failure, and binds `USAGE` to
  * exit 2. A `SIMLOCK_HOME` whose socket path exceeds the platform limit had neither: the path
  * was resolved while *building* the environment, and `runCli` takes its environment as a
  * default parameter -- whose initializer runs before the function body, and therefore before
@@ -5698,9 +6148,6 @@ describe("CLI: pure helpers", () => {
   });
 });
 
-// Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
-// `readStdin` directly and never exercises this function at all -- documented in
-// `docs/internal/KNOWN-PITFALLS.md` as an unbounded read, and until now entirely untested.
 describe("readPipedStdin", () => {
   function fakeStdin(chunks: readonly string[], isTTY: boolean): typeof process.stdin {
     const stream = Readable.from(chunks);
@@ -5730,7 +6177,7 @@ describe("readPipedStdin", () => {
   });
 
   it("returns an empty string, not undefined, for a piped stdin that carries nothing", async () => {
-    // `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
+    // why: `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
     // (empty) answer -- the two must stay distinguishable to a caller.
     const stdin = fakeStdin([], false);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
@@ -5742,8 +6189,6 @@ describe("readPipedStdin", () => {
     }
   });
 });
-
-// ---- test doubles -----------------------------------------------------------------------------
 
 function simlockError(code: AnySimlockError["code"]): AnySimlockError {
   const messages: Partial<Record<string, string>> = {
@@ -5776,7 +6221,7 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
   ) as unknown as AnySimlockError;
 }
 
-/** Hoisted out of `fakeClient` so a test can hand back the same status with a different
+/** why: Hoisted out of `fakeClient` so a test can hand back the same status with a different
  * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
 const EMPTY_STATUS = {
   devices: [],
@@ -5848,6 +6293,13 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
     getStatus: () => Promise.resolve(EMPTY_STATUS),
+    identity: () =>
+      Promise.resolve({
+        name: "test-requester",
+        principal: "test-requester",
+        role: "admin",
+        via: "socket",
+      }),
     listComponents: () => Promise.resolve({ components: [] }),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
@@ -5869,6 +6321,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
     replayEvents: () => Promise.resolve([]),
+    usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
     createToken: (input) =>
       Promise.resolve({
@@ -5928,7 +6381,6 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
       const stdoutOut = { write: (value: string) => (capture.stdout += value) };
       if (ports === undefined) {
         return {
-          // Overridable through `environmentWith({ clock })` -- see the renew-cadence suite.
           clock: new FakeClock(0),
           configPath: "/simlock/config.json",
           requesterId: "test-requester",
@@ -5940,7 +6392,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           writeConfigFile: async () => {},
           validateConfig: async () => {},
           readLogFile: async () => "",
-          readEventFile: async () => [],
+          readEventHistory: async () => [],
           signals: new EventEmitter() as unknown as CliEnvironment["signals"],
           parentWatch: new FakeParentWatch(),
           stderr: stderrOut,
@@ -5967,8 +6419,6 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
   };
   return capture;
 }
-
-// ---- real-daemon harness for the smoke test ----------------------------------------------------
 
 function sequence(): IdGenerator {
   let next = 0;
@@ -6018,11 +6468,14 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     filesystem,
     registry,
   });
-  const tokens = new TokenStore({
+  const auth = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
     secrets: new CryptoTokenSecrets(),
   });
   const daemon = new DaemonServer({
@@ -6036,12 +6489,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: ringEventHistory(eventBus),
     host: new DaemonEndpointHost({
       connector: new NodeIpcTransport(),
       endpoint: socketPath,
@@ -6054,7 +6502,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     reaper,
     registry,
     resolveRole: { resolve: () => "admin" },
-    tokens,
+    tokens: auth.tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
@@ -6062,7 +6510,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   return { socketPath, daemon };
 }
 
-/** Bare-minimum ports for exercising `buildCliEnvironment`'s real `validateConfig` (B9) without
+/** why: Bare-minimum ports for exercising `buildCliEnvironment`'s real `validateConfig` (B9) without
  * a daemon connection -- `config set` never calls `connectAdmin`, so `ipc`/`launcher` are inert
  * placeholders. */
 function realCliEnvironmentPorts(
@@ -6082,9 +6530,9 @@ function realCliEnvironmentPorts(
 }
 
 /**
- * A real `DaemonServer` wired against in-memory ports (`MemoryFilesystem` + `MemoryIpcTransport`
+ * why: A real `DaemonServer` wired against in-memory ports (`MemoryFilesystem` + `MemoryIpcTransport`
  * shared with the CLI environment under test), with the genuine credential handshake
- * (`AdminSecretManager` + `createCredentialRoleResolver`) instead of `startTestDaemon`'s
+ * (`createAuth`) instead of `startTestDaemon`'s
  * `resolveRole: { resolve: () => "admin" }` shortcut -- B1 and B2 both hinge on that handshake
  * actually running.
  */
@@ -6093,7 +6541,7 @@ async function startInMemoryDaemon(options: {
   readonly ipcTransport: MemoryIpcTransport;
   readonly socketPath: string;
   readonly adminTokenPath: string;
-}): Promise<{ daemon: DaemonServer; adminSecret: AdminSecretManager }> {
+}): Promise<{ daemon: DaemonServer; adminSecret: Auth["adminSecret"] }> {
   const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -6133,24 +6581,18 @@ async function startInMemoryDaemon(options: {
     filesystem,
     registry,
   });
-  const tokens = new TokenStore({
+  const auth = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: dirname(adminTokenPath),
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
     secrets: new CryptoTokenSecrets(),
-  });
-  const adminSecret = new AdminSecretManager({
-    filesystem,
-    secrets: new CryptoTokenSecrets(),
-    path: adminTokenPath,
-  });
-  const resolveRole = createCredentialRoleResolver({
-    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
-    verifyAdminSecret: (secret) => adminSecret.verify(secret),
   });
   const daemon = new DaemonServer({
-    adminSecret,
+    adminSecret: auth.adminSecret,
     capacity: engine,
     warmPool: engine,
     deviceModes: engine,
@@ -6161,12 +6603,7 @@ async function startInMemoryDaemon(options: {
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: ringEventHistory(eventBus),
     host: new DaemonEndpointHost({
       connector: ipcTransport,
       endpoint: socketPath,
@@ -6178,19 +6615,19 @@ async function startInMemoryDaemon(options: {
     queue: engine,
     reaper,
     registry,
-    resolveRole,
-    tokens,
+    resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
+    tokens: auth.tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
   await daemon.start();
-  return { daemon, adminSecret };
+  return { daemon, adminSecret: auth.adminSecret };
 }
 
 function testConfig(): Config {
   return {
+    capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     gateway: {
@@ -6240,10 +6677,10 @@ function testConfig(): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -6284,7 +6721,7 @@ describe("simlock list --requests", () => {
             workerId: "wrk_1",
           },
           {
-            // Stamped by a worker whose clock runs ahead of this one.
+            // why: Stamped by a worker whose clock runs ahead of this one.
             createdAt: 5_000,
             id: "req_3",
             queuePosition: 1,
@@ -6307,6 +6744,218 @@ describe("simlock list --requests", () => {
         "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
         "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
     );
+  });
+
+  describe("the reason a queued request waits", () => {
+    const queued = (
+      reason: string | undefined,
+      platform: "ios" | "android" = "ios",
+    ): Record<string, unknown> => ({
+      createdAt: 0,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent",
+      spec: { model: "Device", platform },
+      stage: "queued",
+      ...(reason === undefined ? {} : { reason }),
+    });
+
+    async function printed(entry: Record<string, unknown>): Promise<string> {
+      const output = outputCapture();
+      const client = fakeClient({ list: async () => [entry] as never });
+      await runCli(
+        ["list", "--requests"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      );
+      return output.stdout.trimEnd();
+    }
+
+    it.each([
+      ["behind-earlier-request", "ios", "behind an earlier request"],
+      ["device-limit", "ios", "full: device limit"],
+      ["ram-budget", "ios", "full: RAM budget"],
+      ["global-running-limit", "ios", "full: running limit"],
+      ["platform-running-limit", "ios", "full: running limit for iOS"],
+      ["platform-running-limit", "android", "full: running limit for Android"],
+      ["waiting-for-device", "ios", "a matching device is starting"],
+      ["no-free-physical", "ios", "every matching device is leased or absent"],
+    ] as const)(
+      "ends the line of a queued request with %s on %s as ' — %s'",
+      async (reason, platform, text) => {
+        expect(await printed(queued(reason, platform))).toBe(
+          `Request req_1: agent, ${platform} Device, queued at 1, waiting 0s — ${text}`,
+        );
+      },
+    );
+
+    it("ends the line of a queued request with no reason as it ended before", async () => {
+      expect(await printed(queued(undefined))).toBe(
+        "Request req_1: agent, ios Device, queued at 1, waiting 0s",
+      );
+    });
+
+    it("has a text for every reason the contract's enum lists", async () => {
+      const field = (waitingRequestSchema.shape as Record<string, unknown>)["reason"];
+      expect(field).toBeDefined();
+      const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
+
+      expect(listed).toHaveLength(7);
+      for (const reason of listed) {
+        const line = await printed(queued(reason));
+        expect(line).toMatch(/ — [a-z]/);
+        expect(line).not.toContain(reason);
+      }
+    });
+  });
+
+  describe("the reason each worker cannot take a request on a gateway", () => {
+    const gatewayEntry = (
+      workers: readonly Record<string, unknown>[],
+      platform: "ios" | "android" = "ios",
+    ): Record<string, unknown> => ({
+      createdAt: 0,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "ci",
+      spec: { model: "Device", platform },
+      stage: "queued",
+      workers,
+    });
+
+    async function printedGateway(
+      entries: readonly Record<string, unknown>[],
+      known: readonly { id: string; label?: string }[] = [],
+    ): Promise<{ stdout: string; listed: number }> {
+      const output = outputCapture();
+      let listed = 0;
+      const client = fakeClient({
+        list: async () => entries as never,
+        listWorkers: () => {
+          listed += 1;
+          return Promise.resolve({
+            workers: known.map((worker) => ({
+              catalog: [],
+              connection: "connected" as const,
+              devices: [],
+              drained: false,
+              lastSeenAt: 1,
+              leases: [],
+              ...worker,
+            })),
+          } as never);
+        },
+      });
+      await runCli(
+        ["list", "--requests"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      );
+      return { listed, stdout: output.stdout };
+    }
+
+    it("prints one indented line per worker under the request, named by its label, else its id", async () => {
+      const { stdout } = await printedGateway(
+        [
+          gatewayEntry([
+            { reason: "drained", workerId: "wrk_a" },
+            { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_b" },
+            { reason: "runtime-missing", workerId: "wrk_c" },
+            { reason: "busy", workerId: "wrk_d" },
+          ]),
+        ],
+        [{ id: "wrk_a", label: "mac-mini-1" }, { id: "wrk_b" }, { id: "wrk_c", label: "lab" }],
+      );
+
+      expect(stdout).toBe(
+        "Request req_1: ci, ios Device, queued at 1, waiting 0s\n" +
+          "  mac-mini-1: drained\n" +
+          "  wrk_b: full: running limit for iOS\n" +
+          "  lab: oS not installed\n" +
+          "  wrk_d: busy with its own queue\n",
+      );
+    });
+
+    it.each([
+      ["disconnected", "ios", undefined, "not connected"],
+      ["incompatible", "ios", undefined, "protocol mismatch"],
+      ["not-ready", "ios", undefined, "not ready yet"],
+      ["unhealthy", "ios", undefined, "not running"],
+      ["drained", "ios", undefined, "drained"],
+      ["busy", "ios", undefined, "busy with its own queue"],
+      ["no-driver", "ios", undefined, "no iOS support"],
+      ["no-driver", "android", undefined, "no Android support"],
+      ["unknown-model", "ios", undefined, "model not offered"],
+      ["runtime-missing", "ios", undefined, "oS not installed"],
+      ["capability-missing", "ios", undefined, "missing capability"],
+      ["full", "ios", undefined, "full"],
+      ["full", "ios", "device-limit", "full: device limit"],
+      ["full", "ios", "ram-budget", "full: RAM budget"],
+      ["full", "ios", "global-running-limit", "full: running limit"],
+      ["full", "ios", "platform-running-limit", "full: running limit for iOS"],
+      ["full", "android", "platform-running-limit", "full: running limit for Android"],
+      ["no-free-physical", "ios", undefined, "every matching device is leased or absent"],
+      ["not-chosen", "ios", undefined, "not chosen this time"],
+    ] as const)(
+      "prints %s on %s with capacity reason %s as '  wrk_a: %s'",
+      async (reason, platform, capacityReason, text) => {
+        const { stdout } = await printedGateway([
+          gatewayEntry(
+            [
+              {
+                ...(capacityReason === undefined ? {} : { capacityReason }),
+                reason,
+                workerId: "wrk_a",
+              },
+            ],
+            platform,
+          ),
+        ]);
+
+        expect(stdout.split("\n")[1]).toBe(`  wrk_a: ${text}`);
+      },
+    );
+
+    it("asks worker.list once for names, and not at all when no entry has workers", async () => {
+      const gateway = await printedGateway([
+        gatewayEntry([{ reason: "drained", workerId: "wrk_a" }]),
+        { ...gatewayEntry([{ reason: "busy", workerId: "wrk_a" }]), id: "req_2" },
+      ]);
+      const plain = await printedGateway([{ ...gatewayEntry([]), workers: undefined }]);
+
+      expect(gateway.listed).toBe(1);
+      expect(plain.listed).toBe(0);
+    });
+
+    it("prints a worker's own entry with its reason after ' — ' and no indented lines", async () => {
+      const { stdout } = await printedGateway([
+        {
+          ...gatewayEntry([]),
+          reason: "ram-budget",
+          workers: undefined,
+          workerId: "wrk_1",
+        },
+      ]);
+
+      expect(stdout).toBe(
+        "Request req_1: ci on wrk_1, ios Device, queued at 1, waiting 0s — full: RAM budget\n",
+      );
+    });
+
+    it("has a text for every gateway reason the contract's enum lists", async () => {
+      const field = (waitingRequestSchema.shape as Record<string, unknown>)["workers"];
+      expect(field).toBeDefined();
+      const element = (
+        field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
+      ).unwrap().element;
+      const listed = element.shape.reason.options;
+
+      expect(listed).toHaveLength(13);
+      for (const reason of listed) {
+        const { stdout } = await printedGateway([gatewayEntry([{ reason, workerId: "wrk_a" }])]);
+        const line = stdout.split("\n")[1] ?? "";
+        expect(line).toMatch(/^ {2}wrk_a: [a-zA-Z]/);
+        expect(line).not.toContain("-");
+      }
+    });
   });
 
   it.each([["--devices"], ["--leases"], ["--rules"]])(
@@ -6576,7 +7225,7 @@ describe("CLI: a worker's capabilities", () => {
         capabilities: [
           {
             name: "agent-device",
-            reason: "found 0.20.1, need 0.21.25 or later",
+            reason: "found 0.20.1, need 0.21.28 or later",
             state: "unavailable",
           },
         ],
@@ -6588,7 +7237,7 @@ describe("CLI: a worker's capabilities", () => {
     expect(shown).toMatch(/^wrk_1 .* -- agent-device available$/m);
     expect(shown).toMatch(/^wrk_2 .* -- agent-device off$/m);
     expect(shown).toMatch(
-      /^wrk_3 .* -- agent-device unavailable: found 0\.20\.1, need 0\.21\.25 or later$/m,
+      /^wrk_3 .* -- agent-device unavailable: found 0\.20\.1, need 0\.21\.28 or later$/m,
     );
   });
 
@@ -6662,5 +7311,321 @@ describe("CLI: a worker's capabilities", () => {
     await runCli(["status"], environment);
 
     expect(output.stdout).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+  });
+});
+
+function usageAnswer(
+  window: { readonly from: number; readonly to: number },
+  overrides: Partial<UsageOutput> = {},
+): UsageOutput {
+  const samples = { count: 0, max: null, p50: null, p95: null };
+  const figures = {
+    boot: samples,
+    bySource: { booted: 0, provisioned: 0, warm: 0 },
+    declined: 0,
+    failures: { byEvent: {} },
+    granted: 0,
+    held: samples,
+    incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+    provisioning: samples,
+    queue: { meanDepth: null, peakDepth: null },
+    rejected: { byReason: {}, total: 0 },
+    requests: 0,
+    turnaround: samples,
+    utilisation: { slots: { max: null, mean: null, peak: null } },
+    wait: samples,
+  };
+  return {
+    bucketMs: 60_000,
+    coversFrom: window.from,
+    partial: false,
+    platforms: { android: figures, ios: figures },
+    requesters: [],
+    series: [],
+    totals: figures,
+    window,
+    workers: [],
+    ...overrides,
+  };
+}
+
+describe("CLI: stats", () => {
+  const NOW = Date.parse("2026-10-05T12:00:00.000Z");
+  const HOUR = 3_600_000;
+
+  function statsRun(argv: readonly string[], usage: SimlockAdminClient["usage"]) {
+    const output = outputCapture();
+    const asked: { from: number; to: number; includeLedger?: boolean | undefined }[] = [];
+    const run = runCli(
+      ["stats", ...argv],
+      output.environmentWith({
+        adminTokenFromEnv: "admin-token",
+        clock: new FakeClock(NOW),
+        connectAdmin: async (resolveCredential) => {
+          await resolveCredential();
+          return fakeClient({
+            usage: async (window) => {
+              asked.push(window);
+              return usage(window);
+            },
+          });
+        },
+      }),
+    );
+    return { asked, output, run };
+  }
+
+  it("simlock stats words each refusal as the Inputs table says, exits 2, and asks nothing of the daemon", async () => {
+    for (const argv of [["--since", "1h"], ["--from", "2026-10-05T10:00:00Z"], ["--json"]]) {
+      const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
+      await expect(run, argv.join(" ")).resolves.toBe(0);
+      expect(output.stderr, argv.join(" ")).not.toContain("USAGE");
+    }
+    for (const [argv, message] of [
+      [
+        ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],
+        "stats takes --since or --from, not both",
+      ],
+      [["--to", "2026-10-04T10:00:00Z"], "--to needs --from"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-03T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [
+        ["--from", "2026-10-05T13:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [["--since", "soon"], "Invalid duration: soon"],
+      [["--from", "2026-10-15"], "Invalid time: 2026-10-15 (use ISO 8601 with Z or an offset)"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "10/15/2026"],
+        "Invalid time: 10/15/2026 (use ISO 8601 with Z or an offset)",
+      ],
+    ] as const) {
+      const { asked, output, run } = statsRun(argv, async (window) => usageAnswer(window));
+
+      await expect(run, argv.join(" ")).resolves.toBe(2);
+      expect(output.stderr, argv.join(" ")).toContain('"code":"USAGE"');
+      expect(output.stderr, argv.join(" ")).toContain(`"message":"${message}"`);
+      expect(asked, argv.join(" ")).toEqual([]);
+      expect(output.stdout).toBe("");
+    }
+  });
+
+  it("simlock stats --json prints the operation's output unchanged", async () => {
+    const answer = usageAnswer(
+      { from: NOW - HOUR, to: NOW },
+      {
+        partial: true,
+        requesters: [
+          { granted: 1, heldTotalMs: 5, id: "tok_a", label: "ci", rejected: 0, requests: 1 },
+        ],
+      },
+    );
+    const { output, run } = statsRun(["--since", "1h", "--json"], async () => answer);
+
+    await expect(run).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual(answer);
+    expect(output.stdout.endsWith("\n")).toBe(true);
+  });
+
+  it("asks for the last 24 hours by default, and for --since up to now", async () => {
+    const byDefault = statsRun([], async (window) => usageAnswer(window));
+    const since = statsRun(["--since", "90m"], async (window) => usageAnswer(window));
+
+    await byDefault.run;
+    await since.run;
+
+    expect(byDefault.asked).toEqual([{ from: NOW - 24 * HOUR, to: NOW }]);
+    expect(since.asked).toEqual([{ from: NOW - 90 * 60_000, to: NOW }]);
+  });
+
+  it("asks for the ISO window --from and --to name, and for --from up to now", async () => {
+    const both = statsRun(
+      ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T12:00:00Z"],
+      async (window) => usageAnswer(window),
+    );
+    const open = statsRun(["--from", "2026-10-05T10:00:00Z"], async (window) =>
+      usageAnswer(window),
+    );
+
+    await both.run;
+    await open.run;
+
+    expect(both.asked).toEqual([
+      { from: Date.parse("2026-10-04T10:00:00Z"), to: Date.parse("2026-10-04T12:00:00Z") },
+    ]);
+    expect(open.asked).toEqual([{ from: Date.parse("2026-10-05T10:00:00Z"), to: NOW }]);
+  });
+
+  it("prints the figures as a table, with the partial note above them", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async (window) =>
+      usageAnswer(window, { coversFrom: NOW - 60_000, partial: true }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    const lines = output.stdout.split("\n");
+    expect(lines[0]).toBe("Usage from 2026-09-05T12:00:00.000Z to 2026-10-05T12:00:00.000Z");
+    expect(lines[1]).toContain("Figures cover from 2026-10-05T11:59:00.000Z");
+    expect(lines).toContain("Totals");
+  });
+
+  it("prints the HISTORY_NOT_KEPT message and exits with its code when the window ends before the history", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async () => {
+      throw fromWireError(
+        "HISTORY_NOT_KEPT",
+        "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
+        { oldestTs: NOW - 60_000 },
+      );
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+    expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
+  });
+
+  const LEDGER_HEADER =
+    "requestId,requester,label,platform,model,workerId,source,requestedAt,grantedAt,rejectedAt,endedAt,waitMs,heldMs,turnaroundMs,outcome,probe,reason,endReason";
+  const TRUNCATION_NOTICE =
+    "The ledger holds the newest 100000 requests of the window; ask for a shorter window for the rest.";
+
+  it("simlock stats --csv prints the header row and one row per ledger entry with times as ISO 8601, durations as whole milliseconds (400, not 400.0), probe as true or false, and asks usage.get with includeLedger: true", async () => {
+    const requests = [
+      {
+        endReason: "explicit",
+        endedAt: Date.parse("2026-10-05T11:09:30.000Z"),
+        grantedAt: Date.parse("2026-10-05T11:01:02.400Z"),
+        heldMs: 507_600.4,
+        label: "ci-runner",
+        model: "iPhone 16",
+        outcome: "granted" as const,
+        platform: "ios",
+        probe: false,
+        requestId: "req_8f2",
+        requestedAt: Date.parse("2026-10-05T11:01:02.000Z"),
+        requester: "tok_ci",
+        source: "warm",
+        turnaroundMs: 508_000,
+        waitMs: 400,
+      },
+      {
+        outcome: "open" as const,
+        platform: "android",
+        probe: true,
+        requestId: "req_9",
+        requestedAt: Date.parse("2026-10-05T11:02:00.000Z"),
+        requester: "gw:gw-1:tok_a",
+      },
+    ];
+    const { asked, output, run } = statsRun(["--since", "1h", "--csv"], async (window) =>
+      usageAnswer(window, { requests }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    expect(asked[0]?.includeLedger).toBe(true);
+    expect(output.stdout.split("\r\n")).toEqual([
+      LEDGER_HEADER,
+      "req_8f2,tok_ci,ci-runner,ios,iPhone 16,,warm,2026-10-05T11:01:02.000Z,2026-10-05T11:01:02.400Z,,2026-10-05T11:09:30.000Z,400,507600,508000,granted,false,,explicit",
+      "req_9,gw:gw-1:tok_a,,android,,,,2026-10-05T11:02:00.000Z,,,,,,,open,true,,",
+      "",
+    ]);
+  });
+
+  it("simlock stats --csv writes the truncation notice on stderr and exits 0 when ledgerTruncated, and writes no notice otherwise", async () => {
+    const truncated = statsRun(["--csv"], async (window) =>
+      usageAnswer(window, { ledgerTruncated: true, requests: [] }),
+    );
+    const whole = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
+
+    await expect(truncated.run).resolves.toBe(0);
+    await expect(whole.run).resolves.toBe(0);
+
+    expect(truncated.output.stderr).toBe(`${JSON.stringify({ notice: TRUNCATION_NOTICE })}\n`);
+    expect(truncated.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
+    expect(whole.output.stderr).toBe("");
+    expect(whole.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
+  });
+
+  it("simlock stats --csv on an error (HISTORY_NOT_KEPT) writes the error line on stderr, nothing on stdout, and exits 12", async () => {
+    const { output, run } = statsRun(["--since", "30d", "--csv"], async () => {
+      throw fromWireError("HISTORY_NOT_KEPT", "The history does not reach back.", {
+        oldestTs: NOW - 60_000,
+      });
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+  });
+
+  it("simlock stats refuses --csv with --json as a usage error, exit 2", async () => {
+    const accepted = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
+    const both = statsRun(["--csv", "--json"], async (window) => usageAnswer(window));
+
+    await expect(accepted.run).resolves.toBe(0);
+    await expect(both.run).resolves.toBe(2);
+
+    expect(both.output.stderr).toContain('"code":"USAGE"');
+    expect(both.output.stderr).toContain('"message":"stats takes --csv or --json, not both"');
+    expect(both.asked).toEqual([]);
+    expect(both.output.stdout).toBe("");
+  });
+
+  it("closes the connection after the answer, and after a failure", async () => {
+    let closed = 0;
+    const output = outputCapture();
+    const connect = (usage: SimlockAdminClient["usage"]) => async () =>
+      fakeClient({
+        close: async () => {
+          closed += 1;
+        },
+        usage,
+      });
+
+    await runCli(
+      ["stats"],
+      output.environmentWith({ connectAdmin: connect(async (window) => usageAnswer(window)) }),
+    );
+    await runCli(
+      ["stats"],
+      output.environmentWith({
+        connectAdmin: connect(async () => {
+          throw new Error("boom");
+        }),
+      }),
+    );
+
+    expect(closed).toBe(2);
+  });
+
+  it("prints its usage on --help without connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+
+    const exitCode = await runCli(
+      ["stats", "--help"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(output.stdout).toBe(
+      "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]\n",
+    );
   });
 });

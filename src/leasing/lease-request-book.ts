@@ -1,4 +1,5 @@
 import type { Clock, IdGenerator } from "../ports/index.js";
+import type { WaitingReason } from "./acquisition-planner.js";
 import {
   isSettled,
   type LeaseProgress,
@@ -71,6 +72,7 @@ export interface WaitingRequest {
   readonly createdAt: number;
   readonly stage: "queued" | "starting";
   readonly queuePosition?: number;
+  readonly reason?: WaitingReason;
 }
 
 function waitingRequest(
@@ -85,7 +87,11 @@ function waitingRequest(
     spec: { ...named, ...(physical === true ? { physical: true as const } : {}) },
     ...(place.queuePosition === undefined
       ? { stage: "starting" }
-      : { queuePosition: place.queuePosition, stage: "queued" }),
+      : {
+          queuePosition: place.queuePosition,
+          ...(place.reason === undefined ? {} : { reason: place.reason }),
+          stage: "queued",
+        }),
   };
 }
 

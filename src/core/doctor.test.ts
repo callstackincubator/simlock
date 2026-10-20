@@ -1512,7 +1512,7 @@ describe("Doctor", () => {
       ttlMs: 60_000,
     });
     await registry.beginRelease(lease.id);
-    await registry.enterQuarantine(device.id, 10_100);
+    await registry.enterQuarantine(device.id, 10_100, { kind: "purge-failed" });
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
     const listed = {
       devices: [
@@ -2650,9 +2650,10 @@ describe("Doctor with a platform it cannot observe", () => {
 
 describe("Doctor: optional module findings", () => {
   const unavailable: OptionalModuleFinding = {
-    kind: "agent-device-unavailable",
-    message: "found 0.20.3, need 0.21.25 or later",
-    remedy: "install agent-device 0.21.25 or later, then restart the daemon",
+    kind: "module-unavailable",
+    module: "agent-device",
+    message: "found 0.20.3, need 0.21.28 or later",
+    remedy: "install agent-device 0.21.28 or later, then restart the daemon",
   };
 
   async function setup(
@@ -2740,12 +2741,12 @@ describe("Doctor: optional module findings", () => {
 
     expect(report.findings.map((finding) => finding.kind)).toEqual([
       "warm-pool-target-unreachable",
-      "agent-device-unavailable",
+      "module-unavailable",
     ]);
     expect(report.findings.at(-1)).toStrictEqual(unavailable);
   });
 
-  it("returns no agent-device-unavailable when optionalModules is omitted or returns none", async () => {
+  it("returns no module-unavailable finding when optionalModules is omitted or returns none", async () => {
     const omitted = await (await setup()).doctor.reconcile();
     const none = await (await setup({ optionalModules: () => [] })).doctor.reconcile();
 
@@ -2788,7 +2789,7 @@ describe("Doctor: optional module findings", () => {
     expect(destroysWhenCalled).toBe(1);
     expect(report.findings.map((finding) => finding.kind)).toEqual([
       "registry-device-missing",
-      "agent-device-unavailable",
+      "module-unavailable",
     ]);
   });
 
@@ -3223,8 +3224,8 @@ function withAdvisories(
 
 function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
   return {
+    capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 1 },
     gateway: {
@@ -3266,10 +3267,10 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,

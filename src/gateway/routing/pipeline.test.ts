@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { catalogFixture, statusFixture } from "../test-support.js";
 import type { WorkerView } from "../worker-registry.js";
-import { type FilterStage, type RankStage, runStages } from "./pipeline.js";
+import {
+  explainStages,
+  type FilterStage,
+  type RankStage,
+  runStages,
+  type WorkerReason,
+} from "./pipeline.js";
 
 const REQUEST = { model: "iPhone 17", platform: "ios" as const };
 
@@ -34,8 +40,21 @@ function rank(name: string, scores: Record<string, number>, settles = false): Ra
 function only(...ids: string[]): FilterStage {
   return {
     appliesToPhysical: true,
-    keeps: (worker) => ids.includes(worker.id),
+    check: (worker) => (ids.includes(worker.id) ? undefined : { reason: "busy" }),
     kind: "filter",
+  };
+}
+function dropping(drops: Record<string, WorkerReason>): FilterStage {
+  return {
+    appliesToPhysical: true,
+    check: (worker) => drops[worker.id],
+    kind: "filter",
+  };
+}
+function zeroing(scores: Record<string, number>, reasons: Record<string, WorkerReason>): RankStage {
+  return {
+    ...rank("zeroing", scores),
+    zeroReason: (worker) => reasons[worker.id],
   };
 }
 
@@ -158,9 +177,9 @@ describe("routing pipeline", () => {
     const calls: string[] = [];
     const skippedFilter = {
       appliesToPhysical: false,
-      keeps: () => {
+      check: () => {
         calls.push("skipped-filter");
-        return true;
+        return undefined;
       },
       kind: "filter",
     } as FilterStage;
@@ -201,5 +220,50 @@ describe("routing pipeline", () => {
 
     expect(calls).toContain("skipped-filter");
     expect(calls).toContain("skipped-rank");
+  });
+});
+
+describe("explainStages", () => {
+  const workers = [view("wrk_a"), view("wrk_b"), view("wrk_c"), view("wrk_d")];
+  const drained: WorkerReason = { reason: "drained" };
+  const busy: WorkerReason = { reason: "busy" };
+  const ramFull: WorkerReason = { capacityReason: "ram-budget", reason: "full" };
+  const noPhysical: WorkerReason = { reason: "no-free-physical" };
+
+  it("gives each view its first filter reason in stage order, else its first rank zero reason, else none", () => {
+    const first = dropping({ wrk_a: drained });
+    const second = dropping({ wrk_a: busy, wrk_b: busy });
+    const ranks = zeroing(
+      { wrk_a: 0, wrk_b: 0, wrk_c: 0, wrk_d: 1 },
+      { wrk_b: ramFull, wrk_c: ramFull },
+    );
+    const later = {
+      ...rank("later", { wrk_a: 0, wrk_b: 0, wrk_c: 0, wrk_d: 1 }),
+      zeroReason: () => noPhysical,
+    };
+
+    expect(explainStages([first, second, ranks, later], REQUEST, workers)).toEqual([
+      { reason: drained, workerId: "wrk_a" },
+      { reason: busy, workerId: "wrk_b" },
+      { reason: ramFull, workerId: "wrk_c" },
+      { workerId: "wrk_d" },
+    ]);
+  });
+
+  it("answers in worker id order, and skips a stage a physical request does not meet", () => {
+    const virtualOnly: FilterStage = { ...dropping({ wrk_a: busy }), appliesToPhysical: false };
+    const unsorted = [workers[1] as WorkerView, workers[0] as WorkerView];
+
+    expect(explainStages([virtualOnly], REQUEST, unsorted).map((entry) => entry.workerId)).toEqual([
+      "wrk_a",
+      "wrk_b",
+    ]);
+    expect(explainStages([virtualOnly], { ...REQUEST, physical: true }, workers)[0]).toEqual({
+      workerId: "wrk_a",
+    });
+    expect(explainStages([virtualOnly], REQUEST, workers)[0]).toEqual({
+      reason: busy,
+      workerId: "wrk_a",
+    });
   });
 });

@@ -21,6 +21,7 @@ import {
   type SerializedDecision,
 } from "../core/index.js";
 import { createLeasing, type Leasing } from "./create-leasing.js";
+import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import type {
   DeviceModeReader,
   LeaseCommands,
@@ -99,7 +100,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     config: options.config,
     core,
     defaultModes: options.defaultModes,
-    describeFailure: options.describeFailure,
+    describeFailure: options.describeFailure ?? describeTestFailure,
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
     leaseEndParticipants: options.leaseEndParticipants,
@@ -158,5 +159,13 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     listCatalog: (platform) => core.catalog.listCatalog(platform),
     passthrough: (tool, device, args, context) =>
       core.catalog.passthrough(tool, device, args, context),
+  };
+}
+
+// why: the daemon's classifier is out of reach from leasing, and a replay answers the stored code.
+function describeTestFailure(error: unknown): { code: string; message: string } {
+  return {
+    code: error instanceof NoCapacityError ? "NO_CAPACITY" : "INTERNAL",
+    message: error instanceof Error ? error.message : String(error),
   };
 }

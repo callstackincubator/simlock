@@ -5,8 +5,6 @@ const RPC_METHODS: ReadonlySet<string> = new Set([
   "lease.allocate",
   "lease.heartbeat",
   "lease.release",
-  "install_from_source",
-  "release_materialized_paths",
 ]);
 
 export function isKnownRpcMethod(method: string): boolean {

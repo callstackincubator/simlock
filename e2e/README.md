@@ -67,5 +67,5 @@ running test body silently never fires — see the comment in `helpers/env.ts`.
   60s limit on a cold boot ([#206](https://github.com/callstackincubator/simlock/issues/206)). Treat the slow lane as a manual,
   one-flow-at-a-time tool until both are fixed.
 - Android is exercised through the fake driver in the fast lane; only
-  `slow-android-smoke.test.ts`, `slow-warm-pool.test.ts`, `slow-agent-device.test.ts` and
-  `slow-agent-device-gateway.test.ts` touch a real emulator.
+  `slow-android-smoke.test.ts`, `slow-android-stream.test.ts`, `slow-warm-pool.test.ts`,
+  `slow-agent-device.test.ts` and `slow-agent-device-gateway.test.ts` touch a real emulator.
