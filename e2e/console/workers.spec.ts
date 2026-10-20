@@ -1,7 +1,12 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { answerMemory, answerWithoutLoad, type MemoryClaim } from "./workers-answers.js";
+import {
+  answerMemory,
+  answerWithLoad,
+  answerWithoutLoad,
+  type MemoryClaim,
+} from "./workers-answers.js";
 import {
   disposeFleet,
   expect,
@@ -21,6 +26,7 @@ interface WorkerView {
   readonly drained: boolean;
   readonly health?: string;
   readonly version?: string;
+  readonly host?: { readonly os: string; readonly osVersion: string };
   readonly protocol?: {
     readonly gateway: { readonly min: number; readonly max: number };
     readonly worker: { readonly min: number; readonly max: number };
@@ -269,51 +275,60 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("the workers page", () => {
-  test("on a gateway, every worker appears as a row with its state square, its name and its running over limit, and opens in the inspector", async ({
+  test("the Fleet table lists every worker with its name, system, state word, slots group and its label, running of limit, and CPU, memory and disk", async ({
     page,
   }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
     ]);
+    let hangUp = () => {};
     try {
+      hangUp = await joinOldWorker(fleet.gateway, { id: "wrk_old", label: "old-worker" });
       const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
-      const drained = found(b, "worker-b").id;
-      expect((await fleet.gateway.cli(["worker", "drain", drained])).code).toBe(0);
+      expect((await fleet.gateway.cli(["worker", "drain", found(b, "worker-b").id])).code).toBe(0);
       await lease(fleet.workers[0] as RunningDaemon, "console-e2e");
       await waitFor(
         async () => (await workerList(fleet.gateway)).some((view) => view.leases.length === 1),
         { label: "the gateway's view of worker-a carries its lease" },
       );
+      await incompatibleWorker(fleet.gateway, "wrk_old");
       const listed = await workerList(fleet.gateway);
 
-      await answerWithoutLoad(page);
+      await answerWithLoad(page, { cpu: 12, disk: 40, memory: 50 });
       await openConsole(page, fleet.gateway);
 
-      await expect(
-        page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem"),
-      ).toHaveCount(listed.length);
-      await expect(page.locator(".list-meta")).toHaveText(`${listed.length} / ${listed.length} up`);
+      await expect(page.getByRole("row")).toHaveCount(listed.length + 1);
+      await expect(page.getByText(`${listed.length - 1} / ${listed.length} up`)).toBeVisible();
       for (const view of listed) {
-        const shown = row(page, view.label ?? view.id);
-        await expect(shown, view.label).toHaveText(`${view.label}${runningOverLimit(view)}`);
-        await expect(
-          shown.getByRole("img", { name: view.drained ? "drained" : "connected" }),
-        ).toBeVisible();
+        const name = view.label ?? view.id;
+        const shown = row(page, name);
+        const cells = shown.getByRole("cell");
+        const incompatible = view.connection === "incompatible";
+        const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
+        const leased = view.leases.length;
+        await expect(cells.nth(0), name).toHaveText(
+          view.host === undefined ? name : `${name}${view.host.os} ${view.host.osVersion}`,
+        );
+        await expect(cells.nth(1), name).toHaveText(
+          incompatible ? "incompatible" : view.drained ? "drained" : "connected",
+        );
+        await expect(cells.nth(2).getByRole("img"), name).toHaveAttribute(
+          "aria-label",
+          incompatible
+            ? "No devices"
+            : leased === 0
+              ? `${limit} free`
+              : `${leased} leased, ${limit - leased} free`,
+        );
+        await expect(cells.nth(3), name).toHaveText(incompatible ? "—" : runningOverLimit(view));
+        await expect(cells.nth(4), name).toHaveText(incompatible ? "—" : "12%");
+        await expect(cells.nth(5), name).toHaveText(incompatible ? "—" : "50%");
+        await expect(cells.nth(6), name).toHaveText(incompatible ? "—" : "40%");
+        await expect(shown.locator(".load-bar"), name).toHaveCount(incompatible ? 0 : 3);
       }
-
-      await row(page, "worker-a").getByRole("link").click();
-      const a = found(
-        listed.find((view) => view.label === "worker-a"),
-        "worker-a",
-      );
-      await expect(page).toHaveURL(new RegExp(`/fleet/${a.id}$`));
-      await expect(title(page, "worker-a")).toBeVisible();
-      await expect(fact(page.locator("#main"), "Leases").or(figure(page, "Leases"))).toContainText(
-        "1",
-      );
-      await expect(row(page, "worker-a").getByRole("link")).toHaveAttribute("aria-current", "page");
     } finally {
+      hangUp();
       await disposeFleet(fleet);
     }
   });

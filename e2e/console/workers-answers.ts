@@ -75,3 +75,39 @@ export async function answerWithoutLoad(page: Page): Promise<void> {
     },
   );
 }
+
+/**
+ * why: a table test that states exact CPU, memory and disk figures cannot use the machine's own
+ * reading, so every connected worker is answered with this one, in the shape the daemon sends it.
+ */
+export async function answerWithLoad(
+  page: Page,
+  load: { readonly cpu: number; readonly memory: number; readonly disk: number },
+): Promise<void> {
+  const GIB = 1024 ** 3;
+  await page.route(
+    (url) => url.pathname === "/v1/workers",
+    async (route: Route) => {
+      const response = await fetchOrDrop(route);
+      if (response === undefined) return;
+      const listed = (await response.json()) as {
+        workers: (WorkerPayload & { connection?: string })[];
+      };
+      for (const worker of listed.workers) {
+        if (worker.connection !== "connected") continue;
+        worker.load = {
+          cpu: { busyPercent: load.cpu, cores: 8, limited: false },
+          disk: { freeBytes: ((100 - load.disk) / 100) * 500 * GIB, totalBytes: 500 * GIB },
+          memory: {
+            availableBytes: ((100 - load.memory) / 100) * 32 * GIB,
+            limited: false,
+            swapUsedBytes: 0,
+            totalBytes: 32 * GIB,
+          },
+          readAt: Date.now(),
+        } as WorkerPayload["load"];
+      }
+      await route.fulfill({ json: listed, response });
+    },
+  );
+}
