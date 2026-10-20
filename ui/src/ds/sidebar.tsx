@@ -124,7 +124,7 @@ export function Page(props: {
   return (
     <div className="page">
       <header className="page-head">
-        <h1>{title}</h1>
+        <h1 tabIndex={-1}>{title}</h1>
         {actions === undefined ? null : <div className="page-actions">{actions}</div>}
       </header>
       {children}

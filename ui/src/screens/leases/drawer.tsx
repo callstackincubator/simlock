@@ -6,12 +6,20 @@ import { ScreenPanel } from "./screen-panel";
 
 // why: the drawer opens at once, named by the lease's id until the details arrive, and says so when
 // the lease is no longer held, so an address that outlives its lease still lands somewhere.
-export function LeaseDrawer(props: { readonly id: string; readonly onClose: () => void }) {
-  const { id, onClose } = props;
+export function LeaseDrawer(props: {
+  readonly id: string;
+  readonly onClose: () => void;
+  readonly finalFocus: () => HTMLElement | null;
+}) {
+  const { finalFocus, id, onClose } = props;
   const view = useLeaseInspection(id);
   const lease = view.kind === "ready" ? view.data : undefined;
   return (
-    <Drawer title={lease === undefined ? "Lease" : <LeaseTitle lease={lease} />} onClose={onClose}>
+    <Drawer
+      title={lease === undefined ? "Lease" : <LeaseTitle lease={lease} />}
+      onClose={onClose}
+      finalFocus={finalFocus}
+    >
       {view.kind === "ready" && lease === undefined ? (
         <p className="muted drawer-note">Lease not found.</p>
       ) : (

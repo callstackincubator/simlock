@@ -11,9 +11,11 @@ import { Icon } from "./icon";
 export function Drawer(props: {
   readonly title: ReactNode;
   readonly onClose: () => void;
+  // why: the element focus goes to on closing; with none found, focus goes where it was before.
+  readonly finalFocus?: () => HTMLElement | null;
   readonly children: ReactNode;
 }) {
-  const { children, onClose, title } = props;
+  const { children, finalFocus, onClose, title } = props;
   return (
     <Dialog.Root
       open
@@ -23,7 +25,7 @@ export function Drawer(props: {
     >
       <Dialog.Portal>
         <Dialog.Backdrop className="drawer-dim" />
-        <Dialog.Popup className="drawer">
+        <Dialog.Popup className="drawer" finalFocus={finalFocus}>
           <header className="drawer-head">
             <Dialog.Title className="drawer-title mono">{title}</Dialog.Title>
             <Dialog.Close className="icon-button" aria-label="Close">

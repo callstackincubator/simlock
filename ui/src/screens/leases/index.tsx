@@ -44,6 +44,7 @@ export function LeasesScreen() {
           key={urlId}
           id={urlId}
           onClose={() => closeDrawer(fromList, `/leases${search}`)}
+          finalFocus={() => focusAfterClosing(fromList, urlId)}
         />
       )}
     </Page>
@@ -106,4 +107,16 @@ function useOpenedFromList(urlId: string | undefined): boolean {
 function closeDrawer(fromList: boolean, list: string): void {
   if (fromList) window.history.back();
   else navigate(list, { replace: true });
+}
+
+// why: focus goes back to the row that opened the drawer, or to the page's heading when that row is
+// gone or the drawer was loaded directly.
+function focusAfterClosing(fromList: boolean, id: string): HTMLElement | null {
+  const prefix = `/leases/${encodeURIComponent(id)}/`;
+  const row = fromList
+    ? [...document.querySelectorAll<HTMLElement>("main tbody a")].find((link) =>
+        link.getAttribute("href")?.startsWith(prefix),
+      )
+    : undefined;
+  return row ?? document.querySelector<HTMLElement>("main h1");
 }
