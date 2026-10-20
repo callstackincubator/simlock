@@ -19,10 +19,13 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function writeError(write: (value: string) => unknown, error: unknown): Promise<void> {
-  await write(
-    `${JSON.stringify({ error: { code: await cliErrorCode(error), message: errorMessage(error) } })}\n`,
-  );
+export async function writeError(
+  write: (value: string) => unknown,
+  error: unknown,
+  hint?: string,
+): Promise<void> {
+  const message = hint === undefined ? errorMessage(error) : `${errorMessage(error)}. ${hint}`;
+  await write(`${JSON.stringify({ error: { code: await cliErrorCode(error), message } })}\n`);
 }
 
 async function cliErrorCode(error: unknown): Promise<string> {

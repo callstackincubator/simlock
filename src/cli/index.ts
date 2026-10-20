@@ -129,6 +129,24 @@ const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["mcp"],
 ];
 
+const GATEWAY_ALSO_HERE_HINT =
+  "A gateway also runs on this machine: run the command again with --gateway.";
+
+async function gatewayHintFor(
+  environment: CliEnvironment | undefined,
+  daemonFlag: DaemonFlag,
+  error: unknown,
+): Promise<string | undefined> {
+  if (environment === undefined || daemonFlag === "gateway") return undefined;
+  if (environment.daemonHome.role !== "worker" || !environment.daemonHome.gatewayPresent) {
+    return undefined;
+  }
+  const { isSimlockError } = await import("../contract/index.js");
+  return isSimlockError(error) && error.code === "UNSUPPORTED_IN_WORKER_MODE"
+    ? GATEWAY_ALSO_HERE_HINT
+    : undefined;
+}
+
 async function refuseWhenNoGateway(
   environment: CliEnvironment,
   path: readonly string[],
@@ -147,8 +165,11 @@ export async function runCli(
   argv: readonly string[],
   environment?: CliEnvironment,
 ): Promise<number> {
+  let resolved = environment;
+  let flag: DaemonFlag;
   try {
     const { token, daemonFlag, rest } = extractGlobalFlags(argv);
+    flag = daemonFlag;
     if (rest.length === 0 || isHelp(rest[0])) {
       (environment?.stdout ?? process.stdout).write(`${USAGE}\n`);
       return 0;
@@ -156,7 +177,7 @@ export async function runCli(
     const command = await resolveCommand(COMMANDS, rest);
     if (command === undefined)
       throw new UsageError(withHelpHint(`Unknown command: ${String(rest[0])}`));
-    const resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
+    resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
     if (daemonFlag === "gateway") await refuseWhenNoGateway(resolved, command.path, command.rest);
     return await command.module.run(command.rest, {
       path: command.path,
@@ -165,7 +186,11 @@ export async function runCli(
       daemonFlag,
     });
   } catch (error: unknown) {
-    await writeError((value) => (environment?.stderr ?? process.stderr).write(value), error);
+    await writeError(
+      (value) => (environment?.stderr ?? process.stderr).write(value),
+      error,
+      await gatewayHintFor(resolved, flag, error),
+    );
     return await errorExitCode(error);
   }
 }
