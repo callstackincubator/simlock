@@ -9,10 +9,14 @@
   Narrows [ADR 0001](0001-simlock-owned-device-roots.md) §1's layout
   (`state.json` becomes `state.db`), and the words "one `state.json` write"
   in [ADR 0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md)
-  §2, [ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md)
-  (Context, §4) and [ADR 0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
-  §1, which now read "one `state.db` transaction". What those sections
-  decide stays.
+  §2 and [ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md)
+  (Context, §4), which now read "one `state.db` transaction". What those
+  sections decide stays. Supersedes the storage paragraph of [ADR
+  0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
+  §1 (physical records in their own `physicalDevices` list, so an older
+  Simlock never sees them): a physical device is a `devices` row with
+  `physical = 1`, and an older Simlock reads no `state.db` at all. The rest
+  of §1 stays.
 
 ## Context
 
@@ -74,9 +78,10 @@ today's files, written without fsync.
 
 ### 2. Every value is a column; each owner keeps its own tables
 
-Every stored field is a column. A list is a child table: a physical
-device's enrolled apps, a component's receipt (its key and value pairs),
-and a grant's environment. Nothing is stored as JSON text.
+Every stored field is a column, in `STRICT` tables. A list is a child
+table: a physical device's enrolled apps, a component's receipt (its key
+and value pairs), and a grant's environment. Nothing is stored as JSON
+text, the test drivers' tables included.
 
 A device is one row in `devices`, which holds what every driver shares
 (id, platform, physical, state, spec, timestamps, quarantine fields,
@@ -134,10 +139,13 @@ stateDiagram-v2
 
 - **Old files.** A daemon whose folder still has `state.json`,
   `tokens.json` or `workers.json` refuses to start. Its message names the
-  file and the upgrade step: with the old version, release every lease and
-  run `simlock nuke --delete-devices`, then remove the file. Nothing is
-  imported. Tokens are created again with `simlock token create`, and
-  physical devices are added again with `simlock device add`.
+  file and its role's upgrade step. A worker: with the old version, release
+  every lease and run `simlock nuke --delete-devices`, then remove the
+  file. A gateway (which has no devices and refuses `nuke`): remove the
+  file, create each worker's join token again and set it as that worker's
+  `gateway.token`, and drain workers again. Nothing is imported. Tokens are
+  created again with `simlock token create`, and physical devices are added
+  again with `simlock device add`.
 - **Damage.** `PRAGMA quick_check` runs on open. A file that fails it, or
   will not open, refuses to start on both daemon kinds, naming the file.
   Nothing is set aside or deleted. A lock held by another process waits up
