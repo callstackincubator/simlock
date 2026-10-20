@@ -1959,17 +1959,17 @@ describe("gateway.alerts.destinations", () => {
 
   async function load(
     gateway: Record<string, unknown>,
-    mode: "gateway" | "worker" = "gateway",
+    role: "gateway" | "worker" = "gateway",
     warn: (message: string) => void = () => {},
   ): Promise<Config> {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode, gateway }));
-    return loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ gateway }));
+    return loadConfig({ configPath, filesystem, role, systemStats: createStats(), warn });
   }
 
-  function loadDestinations(destinations: unknown, mode: "gateway" | "worker" = "gateway") {
-    return load({ alerts: { destinations } }, mode);
+  function loadDestinations(destinations: unknown, role: "gateway" | "worker" = "gateway") {
+    return load({ alerts: { destinations } }, role);
   }
 
   it("loadConfig accepts a valid generic destination and defaults gateway.alerts.destinations to an empty list", async () => {
@@ -2106,11 +2106,16 @@ describe("gateway.alerts.destinations", () => {
 });
 
 describe("redactConfig", () => {
-  async function load(contents: unknown): Promise<Config> {
+  async function load(contents: unknown, role?: "gateway" | "worker"): Promise<Config> {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-    return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    return loadConfig({
+      configPath,
+      filesystem,
+      ...(role ? { role } : {}),
+      systemStats: createStats(),
+    });
   }
 
   it("replaces a set gateway.token with the marker, keeps every other key, and leaves the input untouched", async () => {
@@ -2151,10 +2156,7 @@ describe("redactConfig", () => {
       },
     ];
     for (const token of ["join-token", undefined]) {
-      const config = await load({
-        mode: "gateway",
-        gateway: { token, alerts: { destinations } },
-      });
+      const config = await load({ gateway: { token, alerts: { destinations } } }, "gateway");
       const before = structuredClone(config);
 
       const redacted = redactConfig(config);
