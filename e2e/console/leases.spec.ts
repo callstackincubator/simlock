@@ -381,6 +381,24 @@ test.describe("the leases page", () => {
     }
   });
 
+  test("the Events tab lists the events that name the lease", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-events");
+      await leaseOverSocket(host, "agent-other");
+      const [lease] = (await listLeases(host)) as [ListedLease, ListedLease];
+      await openLeases(page, host);
+      await leaseRow(page, lease.id).click();
+
+      await page.getByRole("tab", { name: "Events" }).click();
+
+      const events = page.getByRole("dialog").getByRole("tabpanel");
+      await expect(events.getByText("lease.granted")).toHaveCount(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("a lease opens to its details on a gateway", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
