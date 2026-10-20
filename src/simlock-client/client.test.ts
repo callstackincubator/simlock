@@ -75,6 +75,9 @@ describe("connectSimlock: handshake", () => {
     await expect(client.usage({ from: 0, to: 60_000 })).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
     });
+    await expect(client.testAlertDestination({ destination: "ops" })).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
     expect(connection.sent).toHaveLength(before);
 
     const stopPromise = client.stopDaemon();
@@ -239,6 +242,35 @@ describe("connectSimlock: handshake", () => {
     connection.reply(call.id, answer);
 
     await expect(callPromise).resolves.toEqual(answer);
+  });
+
+  it("the admin client's testAlertDestination sends alerts.test and returns its output", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+
+    const callPromise = client.testAlertDestination({ destination: "ops-slack" });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("alerts.test")!;
+    expect(call.payload).toEqual({ destination: "ops-slack" });
+    connection.reply(call.id, { destination: "ops-slack", status: 204 });
+
+    await expect(callPromise).resolves.toEqual({ destination: "ops-slack", status: 204 });
+
+    const failing = client.testAlertDestination({ destination: "ops-slack" });
+    await flushMicrotasks();
+    connection.fail(
+      connection.lastSentOf("alerts.test")!.id,
+      "ALERT_SEND_FAILED",
+      "ops-slack answered HTTP 404",
+      { destination: "ops-slack", status: 404 },
+    );
+    await expect(failing).rejects.toMatchObject({
+      code: "ALERT_SEND_FAILED",
+      details: { destination: "ops-slack", status: 404 },
+    });
   });
 
   it("enrolls a device from an admin client with device.add and removes it with device.remove, sending the input and returning the daemon's answer", async () => {

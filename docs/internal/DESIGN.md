@@ -1,8 +1,8 @@
 # Design guide
 
-How Simlock looks. The web console follows it today, and the landing page will
-follow it when it is built. The tokens live in `ui/src/ds/foundation.css`; change
-this guide and that file together.
+How the web console looks. The tokens live in `ui/src/ds/foundation.css`;
+change this guide and that file together. The website and every other brand
+visual follow [BRAND.md](BRAND.md) instead.
 
 The style is Callstack's console style, the one Apex uses: an off-white page,
 square cards a shade darker, mono labels in capitals, and one accent colour.
@@ -32,7 +32,7 @@ Simlock's accent is orange where Apex's is green.
   | `--text-md` | 16px | body text, page subtitles, card and panel titles |
   | `--text-lg` | 20px | a list's title, an inspector title that is an id |
   | `--text-xl` | 28px | a page's and an inspector's title, a tile's number |
-  | `--text-2xl` | 32px | the landing page's headings only |
+  | `--text-2xl` | 32px | a lease's countdown |
 
 - Weights: 400 for text, 500 for labels and big numbers, 600 for titles, 700
   for the wordmark.

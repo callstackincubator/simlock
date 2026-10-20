@@ -331,6 +331,10 @@ export class Dispatcher {
         "worker.install-component",
         "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",
       ),
+      "alerts.test": unsupportedOnWorker(
+        "alerts.test",
+        "alerts.test sends to a gateway's alert destinations, and this daemon is not a gateway; run it against the gateway",
+      ),
     };
   }
 

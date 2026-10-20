@@ -1,0 +1,777 @@
+---
+import Dither from '../site/Dither.astro';
+import { endEvents, endSlots, endWait, leases, mmss, slotWords, TTL, workers } from './console-story';
+
+const nav = ['Overview', 'Workers', 'Leases', 'Waiting', 'Attention', 'Events', 'Usage'];
+const leaseCount = (id: string) => endSlots[id]!.filter((k) => k === 'leased').length;
+const label =
+  'The Simlock console on a gateway with three workers: mac-studio-1, mac-studio-2 and linux-ci-1. Agents ask for devices and each request becomes a lease on its own device; agent-4 waits while an iPhone boots, and agent-1’s iPhone screen plays live.';
+---
+
+<div class="cv" data-console-view role="img" aria-label={label}>
+  <Dither scene="flow" />
+  <div class="browser">
+    <div class="browser-bar" aria-hidden="true">
+      <span class="browser-dots"><i></i><i></i><i></i></span>
+      <span class="browser-url">https://gw.example/</span>
+    </div>
+    <div class="con">
+      <aside class="con-side">
+        <span class="con-mark">Simlock</span>
+        <ul class="con-nav">
+          {nav.map((n, i) => <li class:list={[{ 'is-on': i === 0 }]}>{n}{n === 'Waiting' && <b data-nav-wait>1</b>}</li>)}
+        </ul>
+        <p class="con-conn"><i></i>Connected</p>
+      </aside>
+      <div class="con-main">
+        <p class="con-title">Overview</p>
+        <ul class="tiles">
+          <li><span class="t-k">Leases held</span><span class="t-v" data-tile="leases">3</span></li>
+          <li><span class="t-k">Waiting</span><span class="t-v" data-tile="waiting">1</span></li>
+          <li><span class="t-k">Longest wait</span><span class="t-v" data-tile="wait">{endWait.waited}s</span></li>
+          <li><span class="t-k">Workers</span><span class="t-v">3 <small>of 3</small></span></li>
+        </ul>
+
+        <div class="con-grid">
+          <div class="con-col">
+            <div class="panel">
+              <p class="panel-h"><span>Workers</span><span class="slot-key"><i class="slot slot--leased"></i>leased<i class="slot slot--ready"></i>ready<i class="slot slot--booting"></i>booting<i class="slot slot--free"></i>free</span></p>
+              <div class="wk wk-head"><span>Worker</span><span class="wk-plat">Platforms</span><span>Devices</span><span class="num">Leases</span></div>
+              {
+                workers.map((w) => (
+                  <div class="wk" data-worker={w.id}>
+                    <span class="wk-name">{w.id}</span>
+                    <span class="wk-plat">{w.platforms}</span>
+                    <span class="slots">
+                      {endSlots[w.id]!.map((k) => (
+                        <i class={`slot slot--${k}`} data-slot title={slotWords[k]} />
+                      ))}
+                    </span>
+                    <span class="num" data-wl>{leaseCount(w.id)}</span>
+                  </div>
+                ))
+              }
+            </div>
+
+            <div class="panel">
+              <p class="panel-h"><span>Waiting</span><span class="dim" data-wait-meta>1 request</span></p>
+              <div class="wait" data-wait>
+                <span class="wait-place">1</span>
+                <span class="wait-who"><b data-w="holder">{endWait.holder}</b><span class="dim" data-w="device">{endWait.device}</span></span>
+                <span class="wait-stage" data-w="stage">{endWait.stage}</span>
+                <span class="num" data-w="waited">{endWait.waited}s</span>
+              </div>
+              <p class="wait-empty dim" data-wait-empty hidden>No requests waiting.</p>
+            </div>
+
+            <div class="panel">
+              <p class="panel-h"><span>Leases</span><span class="dim" data-lease-meta>3 held</span></p>
+              {
+                leases.map((l, i) => (
+                  <div class:list={['lease', { 'is-picked': i === 0 }]} data-lease={i}>
+                    <span class="lease-who">{l.holder}</span>
+                    <span class="num" data-left>{mmss(l.left)}</span>
+                    <span class="lease-sub dim">
+                      {l.device} · {l.worker}
+                    </span>
+                    <span class="meter">
+                      <i data-meter style={`width:${Math.round((l.left / TTL) * 100)}%`} />
+                    </span>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+
+          <div class="panel screen" data-screen>
+            <p class="panel-h"><span>Screen</span><span class="live"><i></i>Live</span></p>
+            <p class="screen-of"><b>agent-1</b> <span class="dim">iPhone 17 Pro · mac-studio-1</span></p>
+            <div class="phone">
+              <div class="phone-screen" data-app>
+                <div class="app-bar"><i></i><i class="w"></i></div>
+                <div class="app-view app-list">
+                  {[0, 1, 2, 3, 4].map((r) => (
+                    <div class="app-row" data-row={r}>
+                      <i class="thumb" />
+                      <span>
+                        <i class="ln1" />
+                        <i class="ln2" />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div class="app-view app-detail">
+                  <i class="hero-img" />
+                  <i class="ln1" />
+                  <i class="ln2" />
+                  <i class="ln2 short" />
+                  <i class="app-btn" />
+                </div>
+                <i class="tap" data-tap />
+                <div class="phone-off dim">Select a lease.</div>
+              </div>
+            </div>
+            <div class="screen-foot">
+              <span><span class="dim">Expires in</span> <b data-expires>{mmss(leases[0]!.left)}</b></span>
+              <span class="stop">Stop</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel activity">
+          <p class="panel-h"><span>Activity</span><span class="dim">All events</span></p>
+          <ol class="ev" data-events>
+            {
+              endEvents.map((e) => (
+                <li>
+                  <span class="dim">{e.time}</span>
+                  <span class="ev-name">{e.name}</span>
+                  <span class="ev-text">{e.text}</span>
+                </li>
+              ))
+            }
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  import { whenNear } from '../site/lazy';
+
+  const root = document.querySelector<HTMLElement>('[data-console-view]');
+  if (root) whenNear(root, () => void import('./console-view').then((m) => m.default(root)));
+</script>
+
+<style>
+  .cv {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    padding: clamp(2rem, 5vw, 4rem) var(--pad);
+    border-top: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .browser {
+    position: relative;
+    width: min(100%, 62rem);
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: var(--text);
+  }
+  .browser-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .browser-dots {
+    display: flex;
+    gap: 0.375rem;
+  }
+  .browser-dots i {
+    width: 8px;
+    height: 8px;
+    border: 1px solid var(--line-strong);
+  }
+  .browser-url {
+    flex: 1;
+    max-width: 24rem;
+    padding: 0.25rem 0.625rem;
+    background: var(--field);
+    color: var(--muted);
+    letter-spacing: 0.02em;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .con {
+    display: grid;
+    grid-template-columns: 9.5rem minmax(0, 1fr);
+  }
+  .con-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    padding: 0.875rem 0;
+    border-right: 1px solid var(--line);
+  }
+  .con-mark {
+    align-self: flex-start;
+    margin-left: 0.875rem;
+    padding: 0 0.25rem;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+  }
+  .con-nav {
+    flex: 1;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .con-nav li {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    padding: 0.4375rem 0.875rem;
+    color: var(--faint);
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+    font-size: 0.625rem;
+  }
+  .con-nav li.is-on {
+    background: var(--surface);
+    color: var(--text);
+  }
+  .con-nav li.is-on::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 2px;
+    background: var(--accent);
+  }
+  .con-nav b {
+    font-weight: 400;
+    color: var(--text);
+  }
+  .con-conn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0 0.875rem;
+    color: var(--muted);
+  }
+  .con-conn i {
+    width: 6px;
+    height: 6px;
+    background: var(--text);
+  }
+
+  .con-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 0;
+    padding: 0.875rem;
+  }
+  .con-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+  }
+  .tiles li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.625rem 0.75rem;
+  }
+  .tiles li + li {
+    border-left: 1px solid var(--line);
+  }
+  .t-k {
+    color: var(--faint);
+    font-size: 0.625rem;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+  }
+  .t-v {
+    font-family: var(--font-display);
+    font-size: 1.375rem;
+    font-weight: 500;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .t-v small {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .con-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 15.5rem;
+    gap: 0.75rem;
+  }
+  .con-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+  .panel {
+    min-width: 0;
+    border: 1px solid var(--line);
+  }
+  .panel-h {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.625rem;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .dim {
+    color: var(--faint);
+  }
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .slot-key {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    color: var(--faint);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .slot-key .slot {
+    margin-left: 0.375rem;
+  }
+  .slot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    flex: none;
+  }
+  .slot--leased {
+    background: var(--accent);
+  }
+  .slot--ready {
+    background: rgb(255 255 255 / 0.62);
+  }
+  .slot--booting {
+    background: repeating-linear-gradient(90deg, rgb(255 255 255 / 0.62) 0 1px, transparent 1px 3px);
+    outline: 1px solid rgb(255 255 255 / 0.4);
+    outline-offset: -1px;
+  }
+  .slot--free {
+    border: 1px dashed var(--line-strong);
+  }
+
+  .wk {
+    display: grid;
+    grid-template-columns: 7.5rem 6.5rem minmax(0, 1fr) 3rem;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .wk:last-child {
+    border-bottom: 0;
+  }
+  .wk-head {
+    color: var(--faint);
+    font-size: 0.625rem;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+  }
+  .wk-plat {
+    color: var(--muted);
+  }
+  .wk-head .wk-plat {
+    color: var(--faint);
+  }
+  .slots {
+    display: flex;
+    gap: 4px;
+  }
+  .slots .slot {
+    width: 12px;
+    height: 12px;
+  }
+
+  .wait {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1fr) auto 2.5rem;
+    gap: 0.75rem;
+    align-items: center;
+    height: 2.5rem;
+    padding: 0 0.75rem;
+    white-space: nowrap;
+  }
+  .wait-place {
+    color: var(--faint);
+  }
+  .wait-who {
+    display: flex;
+    gap: 0.75rem;
+    overflow: hidden;
+  }
+  .wait-who b {
+    font-weight: 400;
+  }
+  .wait-stage {
+    padding: 0.125rem 0.375rem;
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+  }
+  .wait-empty {
+    display: flex;
+    align-items: center;
+    height: 2.5rem;
+    margin: 0;
+    padding: 0 0.75rem;
+  }
+  .wait-empty[hidden],
+  .wait[hidden] {
+    display: none;
+  }
+
+  .lease {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 0.75rem;
+    row-gap: 0.25rem;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .lease:last-child {
+    border-bottom: 0;
+  }
+  .lease.is-picked {
+    background: var(--surface);
+  }
+  .lease.is-picked::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 2px;
+    background: var(--accent);
+  }
+  .lease.is-off {
+    visibility: hidden;
+  }
+  .lease-sub {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .meter {
+    width: 4.5rem;
+    height: 2px;
+    background: var(--line-strong);
+  }
+  .meter i {
+    display: block;
+    height: 100%;
+    background: var(--text);
+  }
+
+  .screen {
+    display: flex;
+    flex-direction: column;
+  }
+  .live {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    color: var(--accent);
+  }
+  .live i {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+  }
+  .screen.is-off .live,
+  .screen.is-off .screen-of,
+  .screen.is-off .screen-foot {
+    visibility: hidden;
+  }
+  .screen-of {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.5rem;
+    margin: 0;
+    padding: 0.5rem 0.75rem 0;
+  }
+  .screen-of b {
+    font-weight: 400;
+  }
+
+  /* why: the phone's stepped outline is a filled shape clipped twice, 1px apart, so the border follows every step. */
+  .phone {
+    --st: polygon(
+      12px 0, calc(100% - 12px) 0, calc(100% - 12px) 4px, calc(100% - 8px) 4px, calc(100% - 8px) 8px,
+      calc(100% - 4px) 8px, calc(100% - 4px) 12px, 100% 12px, 100% calc(100% - 12px),
+      calc(100% - 4px) calc(100% - 12px), calc(100% - 4px) calc(100% - 8px), calc(100% - 8px) calc(100% - 8px),
+      calc(100% - 8px) calc(100% - 4px), calc(100% - 12px) calc(100% - 4px), calc(100% - 12px) 100%,
+      12px 100%, 12px calc(100% - 4px), 8px calc(100% - 4px), 8px calc(100% - 8px), 4px calc(100% - 8px),
+      4px calc(100% - 12px), 0 calc(100% - 12px), 0 12px, 4px 12px, 4px 8px, 8px 8px, 8px 4px, 12px 4px
+    );
+    position: relative;
+    align-self: center;
+    width: 10.5rem;
+    aspect-ratio: 9 / 19;
+    margin: 0.75rem 0;
+    background: #313131;
+    clip-path: var(--st);
+  }
+  .phone::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    background: #050505;
+    clip-path: var(--st);
+  }
+  .phone-screen {
+    position: absolute;
+    inset: 7px;
+    overflow: hidden;
+    background: var(--bg);
+    border: 1px solid var(--line);
+  }
+  .app-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 1.75rem;
+    padding: 0 0.625rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .app-bar i {
+    width: 2.25rem;
+    height: 4px;
+    background: rgb(255 255 255 / 0.62);
+  }
+  .app-bar i.w {
+    width: 0.75rem;
+    height: 0.75rem;
+    background: none;
+    border: 1px solid rgb(255 255 255 / 0.4);
+  }
+  .app-view {
+    position: absolute;
+    inset: 1.75rem 0 0;
+  }
+  .app-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.5rem 0.625rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .app-row span {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .thumb {
+    width: 1.75rem;
+    height: 1.75rem;
+    flex: none;
+    background-image: radial-gradient(rgb(255 255 255 / 0.5) 0.75px, transparent 1px);
+    background-size: 3px 3px;
+    border: 1px solid var(--line-strong);
+  }
+  .ln1,
+  .ln2 {
+    display: block;
+    height: 4px;
+    background: rgb(255 255 255 / 0.62);
+  }
+  .ln1 {
+    width: 70%;
+  }
+  .ln2 {
+    width: 45%;
+    background: rgb(255 255 255 / 0.25);
+  }
+  .app-row:nth-child(2n) .ln1 {
+    width: 55%;
+  }
+  .app-row.is-hit {
+    background: var(--surface);
+  }
+  .app-detail {
+    display: none;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.625rem;
+  }
+  .phone-screen.is-detail .app-detail {
+    display: flex;
+  }
+  .phone-screen.is-detail .app-list {
+    display: none;
+  }
+  .hero-img {
+    display: block;
+    height: 6rem;
+    margin-bottom: 0.25rem;
+    background-image: radial-gradient(rgb(255 255 255 / 0.45) 0.75px, transparent 1px);
+    background-size: 3px 3px;
+    border: 1px solid var(--line-strong);
+  }
+  .app-detail .ln2.short {
+    width: 30%;
+  }
+  .app-btn {
+    display: block;
+    height: 1.25rem;
+    margin-top: auto;
+    margin-bottom: 0.625rem;
+    border: 1px solid rgb(255 255 255 / 0.62);
+  }
+  .tap {
+    position: absolute;
+    left: 60%;
+    top: 30%;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    border: 2px solid var(--accent);
+    opacity: 0;
+  }
+  .phone-off {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+  }
+  .screen.is-off .phone-off {
+    display: flex;
+  }
+  .screen-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--line);
+  }
+  .screen-foot b {
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+  .stop {
+    padding: 0.25rem 0.5rem;
+    background: #1a1a1a;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+    font-size: 0.625rem;
+  }
+
+  .ev {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .ev li {
+    display: grid;
+    grid-template-columns: 4rem 8rem minmax(0, 1fr);
+    gap: 0.75rem;
+    height: 1.875rem;
+    align-items: center;
+    padding: 0 0.75rem;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .ev li:last-child {
+    border-bottom: 0;
+  }
+  .ev-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+  }
+
+  @media (max-width: 64rem) {
+    .con {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    /* why: on a phone the console folds its sidebar into a bar along the top. */
+    .con-side {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.625rem 0.875rem;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .con-mark {
+      margin: 0;
+    }
+    .con-nav {
+      flex: none;
+    }
+    .con-nav li:not(.is-on) {
+      display: none;
+    }
+    .con-nav li.is-on {
+      background: none;
+      padding: 0;
+    }
+    .con-nav li.is-on::before {
+      display: none;
+    }
+    .con-conn {
+      padding: 0;
+    }
+  }
+  @media (max-width: 48rem) {
+    .cv {
+      padding: 1.5rem 0.75rem;
+    }
+    .tiles {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .tiles li:nth-child(3) {
+      border-left: 0;
+    }
+    .tiles li:nth-child(n + 3) {
+      border-top: 1px solid var(--line);
+    }
+    .con-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .wk {
+      grid-template-columns: 6.75rem minmax(0, 1fr) 3rem;
+    }
+    .wk-plat,
+    .slot-key {
+      display: none;
+    }
+    .phone {
+      width: 9rem;
+    }
+    .ev li {
+      grid-template-columns: 6.5rem minmax(0, 1fr);
+    }
+    .ev li > :first-child,
+    .ev li:nth-child(n + 4) {
+      display: none;
+    }
+  }
+</style>

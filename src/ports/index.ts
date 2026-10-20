@@ -125,3 +125,4 @@ export {
   SqliteUnavailableError,
 } from "./sqlite.js";
 export type { SqliteDatabase, SqliteOpener, SqliteStatement } from "./sqlite.js";
+export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";

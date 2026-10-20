@@ -84,6 +84,7 @@ const ROLE_MATRIX: ReadonlyArray<{
     role: "admin",
   },
   { name: "relay.cancel", input: { relayId: "r-1" }, role: "admin" },
+  { name: "alerts.test", input: { destination: "ops" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -167,6 +168,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
     effect: "write",
   },
   { name: "relay.cancel", input: { relayId: "r-1" }, effect: "write" },
+  { name: "alerts.test", input: { destination: "ops" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {
@@ -1082,6 +1084,7 @@ describe("operation input/output round trips", () => {
         execTimeoutMs: 660_000,
         leaseRequestTimeoutMs: 300_000,
         routing: "warm-then-free",
+        alerts: { destinations: [] },
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
@@ -1151,6 +1154,7 @@ describe("operation input/output round trips", () => {
         execTimeoutMs: 1,
         leaseRequestTimeoutMs: 1,
         routing: "warm-then-free",
+        alerts: { destinations: [] },
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },

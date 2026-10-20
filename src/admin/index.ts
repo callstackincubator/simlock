@@ -12,6 +12,8 @@ import {
 } from "../simlock-client/client.js";
 
 export type {
+  AlertsTestInput,
+  AlertsTestOutput,
   AnySimlockError,
   CatalogGetInput,
   CatalogGetOutput,

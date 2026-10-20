@@ -2,8 +2,8 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry; gateway from `main.ts` only.
-Never imports: gateway outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
+Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry; gateway and alerts from `main.ts` only.
+Never imports: gateway or alerts outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
 Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs/internal/flows/device-exec.md), [gateway](../gateway/AGENTS.md).
@@ -37,8 +37,9 @@ Both modes: config (`config.json`) → `Logger` → host info → `EventBus` →
   HTTP starts only when `http.enabled`.
 - **Gateway** — instance id → `TokenStore`, `AdminSecretManager` → `FleetLeaseIndex`
   (requester prefix `gw:<instanceId>:`) → `GatewayService` (uplink listener, `workers.json`)
-  → `FleetLeaseCoordinator` → `DaemonServer` with `GatewayDispatcher`. HTTP always
-  starts; the uplink upgrades on the same listener.
+  → `FleetLeaseCoordinator` → `createAlerts` when `gateway.alerts.destinations` is not empty
+  (before `start()`; stopped first in `stopAuxiliary`) → `DaemonServer` with `GatewayDispatcher`.
+  HTTP always starts; the uplink upgrades on the same listener.
 
 An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 
@@ -51,7 +52,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
    Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
    Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   (`src/contract/protocol.ts`) is the daemon's range. No overlap → the
+   is `{ min: 51, max: 51 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.

@@ -81,12 +81,27 @@ type DeepReadonly<Value> = Value extends (infer Item)[]
  */
 export type GatewayConfig = DeepReadonly<z.infer<(typeof OPERATIONS)["config.get"]["output"]>>;
 
+/** why: ADR 0035 §1; what `alerts.test` needs of a send, declared here because `src/gateway` may not import `src/alerts`. */
+export type AlertTestOutcome =
+  | { readonly ok: true; readonly status: number }
+  | {
+      readonly ok: false;
+      readonly reason: "unknown-destination" | "stopped" | "status" | "unreachable" | "timeout";
+      readonly status?: number;
+      readonly error?: string;
+    };
+
 export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
   readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
   readonly workers: WorkerRegistry;
+  /**
+   * why: ADR 0035 §1; declared here, not imported from `src/alerts`, which this module may not
+   * import. Posts one sample to the named alert destination and says what came of it.
+   */
+  readonly testDestination?: (destination: string) => Promise<AlertTestOutcome>;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
   readonly directory: WorkerDirectory;
@@ -131,6 +146,49 @@ export interface GatewayDispatcherOptions {
   >;
 }
 
+const UNKNOWN_DESTINATION: AlertTestOutcome = { ok: false, reason: "unknown-destination" };
+
+function alertTestError(
+  destination: string,
+  result: Extract<AlertTestOutcome, { ok: false }>,
+): DispatchError {
+  switch (result.reason) {
+    case "unknown-destination":
+      return new DispatchError(
+        "UNKNOWN_ALERT_DESTINATION",
+        `No alert destination named "${destination}". Check gateway.alerts.destinations in the gateway's config.`,
+        { destination },
+      );
+    case "stopped":
+      return new DispatchError("DAEMON_STOPPING", "Gateway is stopping");
+    case "status":
+      return new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} answered HTTP ${result.status}`,
+        {
+          destination,
+          status: result.status,
+        },
+      );
+    case "timeout":
+      return new DispatchError("ALERT_SEND_FAILED", `${destination} did not answer within 10 s`, {
+        destination,
+        error: "timeout",
+      });
+    case "unreachable": {
+      const error = result.error ?? "network-error";
+      return new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} could not be reached: ${error}`,
+        {
+          destination,
+          error,
+        },
+      );
+    }
+  }
+}
+
 export class GatewayDispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
@@ -171,6 +229,7 @@ export class GatewayDispatcher {
       "worker.drain": this.#workerDrain,
       "worker.undrain": this.#workerUndrain,
       "worker.remove": this.#workerRemove,
+      "alerts.test": this.#alertsTest,
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
@@ -323,6 +382,13 @@ export class GatewayDispatcher {
   #workerUndrain: Handler<"worker.undrain"> = async (input) => {
     await this.options.workers.setDrained(input.workerId, false);
     return { drained: false, workerId: input.workerId };
+  };
+
+  #alertsTest: Handler<"alerts.test"> = async (input) => {
+    const { destination } = input;
+    const result = (await this.options.testDestination?.(destination)) ?? UNKNOWN_DESTINATION;
+    if (result.ok) return { destination, status: result.status };
+    throw alertTestError(destination, result);
   };
 
   #workerRemove: Handler<"worker.remove"> = async (input) => ({

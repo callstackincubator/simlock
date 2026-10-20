@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="website/public/banner.jpg" alt="Simlock by Callstack. Your own simulator cloud. One device per agent." width="100%" />
+</p>
+
 ### A control plane so parallel coding agents stop fighting over the same simulator
 
 Simlock is a CLI-first control plane for iOS simulators and Android

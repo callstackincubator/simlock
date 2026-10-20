@@ -25,7 +25,8 @@ agents.
 | Issues, specs, delivery           | [DELIVERY.md](docs/internal/DELIVERY.md), [templates/](docs/internal/templates/) |
 | Review protocol                   | [REVIEW.md](docs/internal/REVIEW.md)                                             |
 | Business events                   | [EVENTS.md](docs/internal/EVENTS.md) (with rationale)                            |
-| Console and landing design        | [DESIGN.md](docs/internal/DESIGN.md)                                             |
+| Console design                    | [DESIGN.md](docs/internal/DESIGN.md)                                             |
+| Website and brand visuals         | [BRAND.md](docs/internal/BRAND.md)                                               |
 | Third-party code                  | [VENDORED-CODE.md](docs/internal/VENDORED-CODE.md)                               |
 | Post-v1 ideas (not unless asked)  | [IDEAS.md](docs/internal/IDEAS.md)                                               |
 | Skills and agents                 | `.claude/skills/`, `.claude/agents/`, briefs in `.agents/briefs/`                |
