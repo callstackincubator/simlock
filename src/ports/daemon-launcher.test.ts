@@ -127,6 +127,28 @@ describe("NodeDaemonLauncher's LaunchedDaemon", () => {
       await rm(directory, { force: true, recursive: true });
     }
   });
+
+  it("refuses to read the log when neither file is the one the daemon was launched into", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+    const logPath = join(directory, "daemon.log");
+    try {
+      await writeFile(logPath, "older\n");
+      const launched = await new NodeDaemonLauncher({
+        args: [
+          "-e",
+          "require('node:fs').rmSync(process.argv[1]); require('node:fs').writeFileSync(process.argv[1], 'x'); require('node:fs').writeFileSync(process.argv[1] + '.1', 'y')",
+          logPath,
+        ],
+        command: process.execPath,
+        logPath,
+        simlockHome: directory,
+      }).launch();
+      await launched.exited;
+      await expect(launched.readOutput()).rejects.toThrow("daemon.log was replaced");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
 });
 
 describe("NodeDaemonLauncher in a parent that awaits nothing", () => {
@@ -165,7 +187,8 @@ describe("NodeDaemonLauncher in a parent that awaits nothing", () => {
       if (childPid !== undefined) process.kill(childPid);
       await rm(directory, { force: true, recursive: true });
     }
-  });
+    // why: the 8 s guard above must be able to fire before vitest's own 5 s default does.
+  }, 20_000);
 });
 
 describe("startErrorFrom", () => {

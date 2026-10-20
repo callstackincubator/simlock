@@ -1524,6 +1524,41 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       },
     });
   });
+
+  it("status names the exit code when the launched daemon's output cannot be read", async () => {
+    const clock = new FakeClock(0);
+    const launcher = {
+      launch: async () => ({
+        exited: Promise.resolve({ code: 3, signal: null }),
+        readOutput: async (): Promise<string> => {
+          throw new Error("daemon.log was replaced");
+        },
+      }),
+    };
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    });
+    let settled = false;
+    const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 100 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, "status had not settled by 5 s").toBe(true);
+    expect(await exitCode).toBe(1);
+    expect(JSON.parse(output.stderr).error.message).toBe(
+      "The daemon exited with code 3 while starting; see `simlock daemon logs`",
+    );
+  });
 });
 
 describe("CLI: auto-launch's daemon that lost the socket to another daemon (#760)", () => {

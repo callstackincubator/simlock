@@ -136,4 +136,27 @@ describe("MCP: auto-launch's daemon that exits while starting (#760)", () => {
       raced: { result: "connected as agent", elapsed: 0 },
     });
   });
+
+  it("names the exit code when the launched daemon's output cannot be read", async () => {
+    const clock = new FakeClock(0);
+    const launcher = {
+      launch: async () => ({
+        exited: Promise.resolve({ code: 3, signal: null }),
+        readOutput: async (): Promise<string> => {
+          throw new Error("daemon.log was replaced");
+        },
+      }),
+    };
+    const result = await connectWithAutoLaunch({
+      clock,
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      principal: "agent-1",
+      socketPath: "/simlock/daemon.sock",
+    }).then(
+      () => "connected",
+      (error: unknown) => (error as Error).message,
+    );
+    expect(result).toBe("The daemon exited with code 3 while starting; see `simlock daemon logs`");
+  });
 });
