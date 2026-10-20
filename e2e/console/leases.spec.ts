@@ -243,6 +243,29 @@ test.describe("the leases page", () => {
     }
   });
 
+  test("loaded directly at a lease's address, closing the drawer replaces the address with /leases and focus goes to the heading", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-direct");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+      const drawer = page.getByRole("dialog", { name: /agent-direct/ });
+      await expect(drawer).toBeVisible();
+      const entries = await page.evaluate(() => window.history.length);
+
+      await page.keyboard.press("Escape");
+
+      await expect(drawer).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe("/leases");
+      expect(await page.evaluate(() => window.history.length)).toBe(entries);
+      await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeFocused();
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("a lease opens to its details on a gateway", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
