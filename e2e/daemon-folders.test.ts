@@ -260,6 +260,42 @@ describe("daemon folders (ADR 0034)", () => {
     }
   });
 
+  it("on a machine with only a gateway, plain daemon logs and events --since read the gateway's files", async () => {
+    const env = await withDaemon({ mode: "auto" });
+
+    try {
+      await startGateway(env);
+      await stopGateway(env);
+      const gatewayLog = await readFile(join(gatewayFolder(env), "daemon.log"), "utf8");
+
+      const logs = await env.cli(["daemon", "logs"]);
+      const events = await env.cli(["events", "--since", "1h"]);
+
+      expect(logs.code, logs.stderr).toBe(0);
+      expect(gatewayLog).toContain("Daemon started");
+      expect(logs.stdout).toBe(gatewayLog);
+      expect(events.code, events.stderr).toBe(0);
+      expect(existsSync(join(env.home, "daemon.log"))).toBe(false);
+    } finally {
+      await stopGateway(env);
+    }
+  });
+
+  it("with a worker and a present gateway, a plain status reaches the worker", async () => {
+    const env = await withDaemon();
+
+    try {
+      await startGateway(env);
+
+      const status = await env.cli(["status", "--json"]);
+
+      expect(status.code, status.stderr).toBe(0);
+      expect(daemonMode(status)).toBe("worker");
+    } finally {
+      await stopGateway(env);
+    }
+  });
+
   describe("MCP", () => {
     it("simlock --gateway mcp lists the gateway's catalog, plain simlock mcp lists the worker's", async () => {
       const env = await withDaemon();
@@ -310,6 +346,26 @@ describe("daemon folders (ADR 0034)", () => {
           ]),
         });
         expect(existsSync(join(env.home, "instance.json"))).toBe(true);
+      } finally {
+        await stopGateway(env);
+      }
+    });
+
+    it("plain simlock mcp on a machine with only a present gateway lists the gateway's catalog", async () => {
+      const env = await withDaemon({ mode: "auto" });
+      await env.driverScript.set({
+        ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+      });
+      const mcp = await env.mcpClient();
+
+      try {
+        await makeGatewayPresent(env);
+
+        const catalog = await mcp.client.callTool({ name: "list_devices", arguments: {} });
+
+        expect(catalog.isError).toBeFalsy();
+        expect(catalog.structuredContent).toEqual({ platforms: [] });
+        expect(existsSync(join(env.home, "instance.json"))).toBe(false);
       } finally {
         await stopGateway(env);
       }
