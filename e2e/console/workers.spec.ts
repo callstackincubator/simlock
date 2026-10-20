@@ -453,6 +453,51 @@ test.describe("the workers page", () => {
     }
   });
 
+  test("the search box filters by any part of the worker's name, id or system, ignoring case, keeps ?q=, and clearing it brings every row back", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+    ]);
+    try {
+      const [a, b] = await workerList(fleet.gateway);
+      const first = found(a?.label === "worker-a" ? a : b, "worker-a");
+      const second = found(a?.label === "worker-b" ? a : b, "worker-b");
+      const system = found(first.host, "worker-a's host");
+      await answerWithoutLoad(page);
+      await openConsole(page, fleet.gateway);
+      const search = page.getByRole("searchbox", { name: "Search workers" });
+      await expect(search).toBeVisible();
+
+      await search.fill("WORKER-A");
+      await expect(row(page, "worker-a")).toBeVisible();
+      await expect(row(page, "worker-b")).toHaveCount(0);
+      await expect(page).toHaveURL(/\/fleet\?q=WORKER-A$/);
+
+      await search.fill(second.id.slice(2, 9).toUpperCase());
+      await expect(row(page, "worker-b")).toBeVisible();
+      await expect(row(page, "worker-a")).toHaveCount(0);
+
+      await search.fill(`${system.os} ${system.osVersion}`.slice(1, 7).toUpperCase());
+      await expect(row(page, "worker-a")).toBeVisible();
+      await expect(row(page, "worker-b")).toBeVisible();
+
+      await search.fill("no such worker");
+      await expect(page.getByText("No worker matches.")).toBeVisible();
+      await page.reload();
+      await expect(search).toHaveValue("no such worker");
+      await expect(page.getByText("No worker matches.")).toBeVisible();
+
+      await search.fill("");
+      await expect(row(page, "worker-a")).toBeVisible();
+      await expect(row(page, "worker-b")).toBeVisible();
+      await expect(page).toHaveURL(/\/fleet$/);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
   test("a worker's devices list every device it has, with state and, where the data has one, time in that state", async ({
     page,
   }) => {
