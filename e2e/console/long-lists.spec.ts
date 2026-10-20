@@ -316,6 +316,33 @@ test.describe("long lists page", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
   });
 
+  for (const how of ["Escape", "the close button", "the dim layer"] as const) {
+    test(`${how} closes a lease's drawer and returns to /leases keeping ?page=2&size=25, with focus on the row that opened it and Back not reopening it`, async ({
+      daemon,
+      page,
+    }) => {
+      await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
+      await open(page, daemon, "/leases?page=2&size=25");
+      const row = leaseRows(page).locator('a[href^="/leases/lse_0028/"]');
+      await row.click();
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toBeVisible();
+      await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2&size=25$/);
+
+      if (how === "Escape") await page.keyboard.press("Escape");
+      else if (how === "the close button")
+        await drawer.getByRole("button", { name: "Close" }).click();
+      else await page.locator(".drawer-dim").click({ position: { x: 10, y: 10 } });
+
+      await expect(drawer).toHaveCount(0);
+      await expect(page).toHaveURL(/\/leases\?page=2&size=25$/);
+      await expect(row).toBeFocused();
+      await page.goBack();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      expect(new URL(page.url()).pathname).not.toMatch(/^\/leases\/./);
+    });
+  }
+
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
     let count = 25;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
