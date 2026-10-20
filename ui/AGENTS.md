@@ -72,13 +72,13 @@ and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/
 
 - Frame: `AppFrame`, `Sidebar` (collapsible; width kept per browser by `data/preferences.ts`),
   `Page`, `MasterDetail`, `ListPane`, `List`, `ListRow`, `Inspector`, `Drawer`, `DrawerTabs`
-  (a modal panel over the page; Base UI), `Toolbar` (filters left, search right), `DesignProvider`
+  (a modal panel over the page, closed by an `IconButton` from `button.tsx`; Base UI), `Toolbar` (filters left, search right), `DesignProvider`
   (Base UI's `CSPProvider`, so no `<style>` element).
 - Content: `Panel`, `Card`, `Row`, `Grid`, `StatRow`, `StatTile`, `Facts`, `DataTable`, `Pager`,
   `MinuteChart`, `MinuteTable`, `Empty`, `Id`, `Loaded`.
 - Signals: `Status` (square and word), `StatusDot` (square alone, the word as its name),
   `Meter`, `Slots`, `ShareBar`, `SlotLegend`.
-- Controls: `Button`, `ButtonLink`, `IconButton`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
+- Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
 
 ## Rules
 

@@ -153,6 +153,12 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
+async function boxOf(locator: Locator): Promise<{ x: number; width: number }> {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("the element has no box");
+  return box;
+}
+
 test.describe("the leases page", () => {
   test("every lease in simlock list --leases appears in the fleet list", async ({ page }) => {
     const fleet = await startFleet([
@@ -437,17 +443,14 @@ test.describe("the leases page", () => {
       await leaseOverSocket(host, "agent-bar");
       await openLeases(page, host);
 
-      const title = await page.getByRole("heading", { level: 1, name: "Leases" }).boundingBox();
-      const chips = await page.getByRole("group", { name: "Filter leases" }).boundingBox();
-      const search = await page.getByRole("searchbox", { name: "Search leases" }).boundingBox();
-      const table = await page.locator("main table").boundingBox();
+      const title = await boxOf(page.getByRole("heading", { level: 1, name: "Leases" }));
+      const chips = await boxOf(page.getByRole("group", { name: "Filter leases" }));
+      const search = await boxOf(page.getByRole("searchbox", { name: "Search leases" }));
+      const table = await boxOf(page.locator("main table"));
 
-      expect(chips?.x).toBeCloseTo(title?.x ?? -1, 0);
-      expect((search?.x ?? 0) > (chips?.x ?? 0) + (chips?.width ?? 0)).toBe(true);
-      expect((search?.x ?? 0) + (search?.width ?? 0)).toBeCloseTo(
-        (table?.x ?? 0) + (table?.width ?? 0),
-        0,
-      );
+      expect(chips.x).toBeCloseTo(title.x, 0);
+      expect(search.x).toBeGreaterThan(chips.x + chips.width);
+      expect(search.x + search.width).toBeCloseTo(table.x + table.width, 0);
     } finally {
       await host.dispose();
     }
