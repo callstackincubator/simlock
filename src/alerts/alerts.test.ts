@@ -416,6 +416,17 @@ describe("alerts", () => {
     );
   });
 
+  it("a slack destination is tried again on 5xx like a generic one", async () => {
+    const h = harness([slackDestination()]);
+    h.failWith(503);
+    h.emit("worker.connected", connected());
+    await settle();
+    await h.advance(1_000);
+
+    expect(h.poster.requests).toHaveLength(2);
+    expect(h.poster.requests[1]?.body).toBe(h.poster.requests[0]?.body);
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
