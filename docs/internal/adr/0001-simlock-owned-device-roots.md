@@ -2,7 +2,7 @@
 
 - **Status:** Accepted. Root membership as the only proof of ownership, and the
   Android driver's one adb server, are narrowed by [ADR
-  0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) for physical devices. Per-home isolation as a user feature is superseded by [ADR 0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md): one worker per user.
+  0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) for physical devices. Per-home isolation as a user feature is superseded by [ADR 0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md): one worker per user. §1's layout is narrowed by [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) (`state.json` becomes `state.db`).
 - **Date:** 2026-09-02
 - **Issue:** [#73](https://github.com/callstackincubator/simlock/issues/73),
   part of [#70](https://github.com/callstackincubator/simlock/issues/70)
