@@ -1,3 +1,4 @@
+import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
 import {
@@ -18,6 +19,7 @@ const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "1
 interface Pages {
   readonly views: readonly { readonly label: string; readonly path: string }[];
   readonly worker: string;
+  readonly device: string;
   readonly lease: string;
 }
 
@@ -31,19 +33,22 @@ async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly
   const host = await startDaemon("worker", { driverScript: { ios: IOS } });
   const lease = await takeLease(host, "console-views");
   const listed = await host.cli(["worker", "list", "--json"]);
-  const [worker] = (listed.json as { workers: { id: string }[] }).workers;
+  const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
+    .workers;
+  const workerPath = `/fleet/${encodeURIComponent(worker?.id ?? "")}`;
   return {
     host,
     pages: {
+      device: `${workerPath}/${encodeURIComponent(worker?.leases[0]?.deviceId ?? "")}?tab=devices`,
       lease: `/leases/${encodeURIComponent(lease)}/`,
       views: NAV.map((entry) => ({ label: entry.label, path: entry.path })),
-      worker: `/fleet/${encodeURIComponent(worker?.id ?? "")}`,
+      worker: workerPath,
     },
   };
 }
 
 function every(pages: Pages): readonly string[] {
-  return [...pages.views.map((view) => view.path), pages.worker, pages.lease];
+  return [...pages.views.map((view) => view.path), pages.worker, pages.device, pages.lease];
 }
 
 async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
@@ -52,13 +57,18 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 }
 
+// why: an open drawer hides the page behind it from assistive technology.
+function opensDrawer(path: string): boolean {
+  return /^\/leases\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
+}
+
 async function visit(page: Page, host: RunningDaemon, path: string): Promise<void> {
   await page.goto(new URL(path, host.url).toString());
   // why: an open drawer hides the page behind it from assistive technology, so there the heading is found by hidden role too.
   await expect(
     page
       .locator("#main")
-      .getByRole("heading", { includeHidden: /^\/leases\/./.test(path) })
+      .getByRole("heading", { includeHidden: opensDrawer(path) })
       .first(),
   ).toBeVisible();
   await expect(page.locator("#main")).not.toContainText("Loading…");
@@ -96,8 +106,9 @@ test.describe("every view", () => {
     const { host, pages } = await hostWithLease();
     try {
       await openSignedIn(page, host);
-      // why: a drawer traps the keyboard inside itself, so the lease page is left out of this order.
-      for (const path of every(pages).filter((candidate) => candidate !== pages.lease)) {
+      // why: a drawer traps the keyboard inside itself, so the lease and device pages are left out
+      // of this order.
+      for (const path of every(pages).filter((candidate) => !opensDrawer(candidate))) {
         await visit(page, host, path);
         // why: a radio group is one stop, at its checked radio, and nothing inside a closed
         // disclosure is a stop, so those are left out of the order Tab should follow; neither is
@@ -243,7 +254,7 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
-        if (path === pages.lease) await expect(page.getByRole("dialog")).toBeVisible();
+        if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
         const chart = page.locator(".chart svg").first();
         if ((await chart.count()) > 0) {
           await chart.hover();
@@ -261,6 +272,35 @@ test.describe("every view", () => {
       await host.dispose();
     }
   });
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`Fleet, a worker page and a device drawer pass an automated WCAG AA check (${colorScheme})`, async ({
+      page,
+    }) => {
+      const { host, pages } = await hostWithLease();
+      try {
+        await page.emulateMedia({ colorScheme });
+        await openSignedIn(page, host);
+        for (const path of ["/fleet", pages.worker, pages.device]) {
+          await visit(page, host, path);
+          if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
+          const results = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
+          expect(
+            results.violations.map((violation) => ({
+              id: violation.id,
+              targets: violation.nodes.map((node) => node.target.join(" ")),
+            })),
+            path,
+          ).toEqual([]);
+        }
+      } finally {
+        await host.dispose();
+      }
+    });
+  }
 
   test("the overview's tiles show the numbers the daemon gives", async ({ page }) => {
     const { host } = await hostWithLease();
