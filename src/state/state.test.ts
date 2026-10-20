@@ -221,4 +221,39 @@ describe("openStateDatabase refusals", () => {
       expect(message).toBe(lockMessage);
     },
   );
+
+  it("reads the versions inside the write transaction, so two daemons starting at once migrate once", async () => {
+    const directory = await newDirectory();
+    let racing = false;
+    const other = await sqlite.open(join(directory, STATE_DB_NAME), { readOnly: false });
+    const racingOpener = new ProbeSqliteOpener({
+      fault: (call) => {
+        if (call.kind !== "exec" || call.sql !== "BEGIN IMMEDIATE" || racing) return;
+        racing = true;
+        other.exec("BEGIN IMMEDIATE");
+        other.exec(
+          "CREATE TABLE schema_versions (owner TEXT PRIMARY KEY, version INTEGER NOT NULL) STRICT",
+        );
+        other.exec(owners[0]!.migrations.join(";"));
+        other.exec("CREATE TABLE beta_rows (id TEXT NOT NULL) STRICT");
+        other.exec("INSERT INTO schema_versions VALUES ('alpha', 2), ('beta', 1)");
+        other.exec("COMMIT");
+        other.close();
+      },
+    });
+
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new NodeFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners,
+      sqlite: racingOpener,
+      upgradeStep: "",
+    });
+
+    expect(racing).toBe(true);
+    expect(state.database.prepare("SELECT step FROM runs").all()).toEqual([{ step: "alpha-1" }]);
+    state.close();
+  });
 });
