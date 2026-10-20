@@ -233,11 +233,11 @@ function hasWarmRoom(room: Slots, held: Slots, device: VirtualDevice): boolean {
 
 /** Whether `device` is one a waiting request would be granted: it fits and is in the pool mode. */
 function serves(device: VirtualDevice, demand: WaitingDemand): boolean {
-  return (
-    mayBeGranted(device) &&
-    specMode(device.spec) === demand.mode &&
-    fits(demand.requirement, device.spec, demand.classOf)
-  );
+  return mayBeGranted(device) && servesSpec(device.spec, demand);
+}
+
+function servesSpec(spec: VirtualSpec, demand: WaitingDemand): boolean {
+  return specMode(spec) === demand.mode && fits(demand.requirement, spec, demand.classOf);
 }
 
 /**
@@ -290,6 +290,7 @@ function boots(
 ): QueuePass {
   const proposals: WarmProposal[] = [];
   const taken = new Set<string>();
+  const matched = new Set<VirtualDevice | WarmPolicyView["onItsWay"][number]>();
   let started = view.inFlight.length + view.waiting.filter((demand) => demand.inFlight).length;
   const open = (): boolean => started < view.config.maxConcurrentBoots;
   const hold = (platform: "ios" | "android"): void => {
@@ -303,7 +304,13 @@ function boots(
       hold(demand.platform);
       return;
     }
-    if (running.some((candidate) => serves(candidate, demand))) return;
+    const match =
+      running.find((candidate) => !matched.has(candidate) && serves(candidate, demand)) ??
+      view.onItsWay.find((entry) => !matched.has(entry) && servesSpec(entry.spec, demand));
+    if (match !== undefined) {
+      matched.add(match);
+      return;
+    }
     const device = open()
       ? bootable.find(
           (candidate) =>
