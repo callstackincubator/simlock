@@ -491,7 +491,7 @@ describe("warm pool policy", () => {
     const recent = device("recent", "shutdown", { endedAgo: 1_000, spec: spec("iPad Pro") });
     const busy = device("busy", "leased", { spec: spec("iPad Pro") });
     const devices = [serving, recent, busy];
-    const setup = { limit: 3, waiting: [classDemand()] };
+    const setup = { limit: 2, waiting: [classDemand()] };
     const refusing = (ids: readonly string[]): WarmPolicyView => {
       const base = view(devices, setup);
       return {
