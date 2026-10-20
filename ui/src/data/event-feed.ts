@@ -107,6 +107,8 @@ export class EventFeed {
           this.#events = mergeEvents(this.#events, events);
           this.#publish({ data: this.#events });
           this.#loadMissing();
+          // why: a quiet last hour still shows the older history, so the newest page is asked for at once.
+          if (this.#events.length === 0) this.loadOlder();
         },
         (error: unknown) => {
           this.#loading = false;

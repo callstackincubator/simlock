@@ -141,9 +141,17 @@ describe("the events page", () => {
   });
 
   it("says why an empty list is empty", () => {
-    expect(text(ready({ chosen: { kind: "none" }, held: 0, rows: [] }))).toContain(
-      "No events in the last hour.",
-    );
+    expect(text(ready({ chosen: { kind: "none" }, held: 0, rows: [] }))).toContain("Loading…");
+    expect(
+      text(
+        ready({
+          chosen: { kind: "none" },
+          end: { retry: false, text: "No events yet." },
+          held: 0,
+          rows: [],
+        }),
+      ),
+    ).toContain("No events yet.");
     expect(
       text(ready({ chosen: { kind: "none" }, held: 5, rows: [], subject: "device" })),
     ).toContain("No events of this kind.");

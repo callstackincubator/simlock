@@ -105,11 +105,14 @@ export function ActivityContent(props: {
 function EventList({ page }: { readonly page: EventsPage }) {
   const { rows } = page;
   const chosenId = page.chosen.kind === "event" ? page.chosen.detail.id : undefined;
-  if (rows.length === 0) {
-    return (
-      <Empty>{page.held === 0 ? "No events in the last hour." : "No events of this kind."}</Empty>
+  if (page.held === 0) {
+    return page.end === undefined ? (
+      <p className="muted">Loading…</p>
+    ) : (
+      <EndRow end={page.end} onRetry={page.loadOlder} />
     );
   }
+  if (rows.length === 0) return <Empty>No events of this kind.</Empty>;
   return (
     <Feed
       key={`${page.subject}/${page.query}`}

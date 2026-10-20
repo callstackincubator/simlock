@@ -80,8 +80,14 @@ export function historyEnd(
     };
   }
   const oldest = held.at(-1);
-  if (state === "start" && oldest !== undefined) {
-    return { retry: false, text: `Start of the history (${localMinute(oldest.timestamp)})` };
+  if (state === "start") {
+    return {
+      retry: false,
+      text:
+        oldest === undefined
+          ? "No events yet."
+          : `Start of the history (${localMinute(oldest.timestamp)})`,
+    };
   }
   if (state === "gone") return { retry: false, text: "Older events are no longer kept." };
   if (state === "failed") {
