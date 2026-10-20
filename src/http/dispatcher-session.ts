@@ -2,8 +2,9 @@ import type { z } from "zod";
 
 import type { DispatchSession } from "../daemon/dispatcher.js";
 import type { LeaseProgress } from "../core/index.js";
-import type { ComponentProgress, OPERATIONS, OperationName, Role } from "../contract/index.js";
-import type { TokenIdentity, TokenRole } from "./token-store.js";
+import { OPERATIONS } from "../contract/index.js";
+import type { ComponentProgress, OperationName, Role } from "../contract/index.js";
+import type { Identity } from "../auth/index.js";
 
 /**
  * The one method `createHttpApp` needs from `DaemonServer` (ADR §2: "the HTTP app ... calls
@@ -21,27 +22,22 @@ export type HttpDispatch = <Op extends OperationName>(
  * `operator` token is what already grants HTTP's admin-only routes (`/v1/leases`,
  * `/v1/devices`, `/v1/events`...), so it resolves to the contract's `"admin"`; an `agent`
  * token resolves to `"agent"`. */
-function toRole(tokenRole: TokenRole): Role {
-  return tokenRole === "operator" ? "admin" : "agent";
+function toRole(identityRole: Identity["role"]): Role {
+  return identityRole === "operator" ? "admin" : "agent";
 }
 
-/**
- * Builds the `DispatchSession` ADR §2's shared dispatcher needs, from one HTTP request's
- * already-verified bearer-token identity. This is the "bearer-token-to-session adapter" ADR §2
- * assigns to the HTTP app: `principal` is the token's `requesterId` (ADR §4: "For HTTP the
- * principal is the token's requester id"), `role` is `identity.role` translated per `toRole`.
- *
- * `onProgress`/`manageEventSubscription` are per-call, not part of the token identity --
- * callers that need either (the lease-request tracker's `onProgress`, the `/v1/events/stream`
- * SSE route's `manageEventSubscription`) pass their own override via `extra`. Every other route
- * gets an inert default: `onProgress` is simply never invoked by any operation but
- * `lease.request`'s handler, and `manageEventSubscription` is only ever invoked by
- * `events.subscribe`/`events.unsubscribe`'s handlers, neither of which any other route
- * dispatches -- an HTTP request that doesn't wire either override never triggers this fallback
- * in practice; it exists only to satisfy `DispatchSession`'s required fields.
- */
+const VIA_VALUES = OPERATIONS["identity.get"].output.shape.via.options;
+
+function toVia(via: string): DispatchSession["via"] {
+  const known = VIA_VALUES.find((value) => value === via);
+  if (known === undefined) throw new Error(`Unknown identity via: ${via}`);
+  return known;
+}
+
+// why: `onProgress` and the like are per-call, not part of the identity, so the routes that need one pass an override in `extra`; every other route gets inert defaults that no operation it dispatches ever calls.
+
 export function buildHttpSession(
-  identity: TokenIdentity,
+  identity: Identity,
   extra?: {
     readonly onProgress?: (progress: LeaseProgress) => void;
     /** The lease-request route's own override: the stored request's id, the moment the daemon
@@ -73,8 +69,11 @@ export function buildHttpSession(
 ): DispatchSession {
   return {
     manageEventSubscription: extra?.manageEventSubscription ?? (() => undefined),
-    principal: identity.requesterId,
+    principal: identity.principal,
+    name: identity.name,
     role: toRole(identity.role),
+    via: toVia(identity.via),
+    ...(identity.signOutUrl === undefined ? {} : { signOutUrl: identity.signOutUrl }),
     ...(extra?.onProgress === undefined ? {} : { onProgress: extra.onProgress }),
     ...(extra?.onRequestAdmitted === undefined
       ? {}

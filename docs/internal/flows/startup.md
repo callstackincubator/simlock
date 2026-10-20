@@ -9,6 +9,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
+   `createAuth` then builds the token store and the admin secret (hash in memory), once, for both modes.
 5. `config.mode: gateway` → the gateway section. Otherwise go on.
 
 ## Worker: build (before the claim)
@@ -23,8 +24,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
    driver starts its adb server and reattaches running emulators here.
 9. Host facts read in the background; host load sampler built.
 10. `ComponentInstaller`, `createCore`, the optional-module host (`createModuleHost`; it loads each enabled module's worker half, agent-device's supervisor among them), `createLeasing`,
-    `core.connect(leasing.corePorts)`, `CleanupReaper`, `Nuke`, `TokenStore`,
-    `AdminSecretManager` (secret minted, hash in memory), `GatewayUplink` when
+    `core.connect(leasing.corePorts)`, `CleanupReaper`, `Nuke`, `GatewayUplink` when
     `gateway.url` and `gateway.token` are set, `DaemonServer`.
 
 ## Worker: claim and converge (`DaemonServer.start`)
@@ -92,7 +92,7 @@ platform runs the deferred reclaim (step 21.2).
 ## Gateway
 
 1. Instance identity — `instance.json`.
-2. `TokenStore`, `AdminSecretManager`, `FleetLeaseIndex`, routing policy,
+2. `FleetLeaseIndex`, routing policy,
    `GatewayService` (`workers.json`), `FleetLeaseCoordinator`, `DaemonServer`
    with `GatewayDispatcher`. No registry, drivers, reaper or health monitor.
 3. `DaemonServer.start`: claim → host load → `admin.token` → converge starts →

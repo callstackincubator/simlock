@@ -174,7 +174,7 @@ function reviewOf(body) {
     rounds: roundsOf(body, section),
     tokens: tokensOf(section),
     rejected: rejectedIn(section),
-    measured: /^Review checks: (\d+)\. Invocations: (\d+)\. Cost USD: ([\d.]+|unknown)\./m.exec(
+    measured: /^Runs: (\d+)\. Cost USD: ([\d.]+|unknown)\. Agent seconds: (\d+|unknown)\./m.exec(
       section,
     ),
   };
@@ -279,7 +279,7 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
     "",
     "## Measured review work (unknown means unavailable; legacy totals remain above)",
     "",
-    "| PR | Checks including fix-check | Invocations | Cost USD |",
+    "| PR | Agent runs | Cost USD | Agent seconds |",
     "| --- | --: | --: | --: |",
     ...prs
       .filter((pr) => inRows(pr, now))

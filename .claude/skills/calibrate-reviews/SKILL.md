@@ -48,5 +48,5 @@ PR: #M merged | #M open (<why>) | none
 Calibration uses canonical incorrect findings, excluding duplicate,
 intentional and nonblocking outcomes. Preserve unknown legacy outcomes;
 do not infer false positives from raised-minus-fixed. For model promotion,
-use the replay/shadow protocol and per-invocation ledger in
+use the replay/shadow protocol and the run measurement in
 `docs/internal/REVIEW.md`, not this rejection sample alone.

@@ -22,6 +22,7 @@ import {
   type LeaseGrant,
   type LeaseListOutput,
   type LeaseLostPush,
+  type IdentityOutput,
   type LeaseReleaseInput,
   type LeaseReleaseOutput,
   type LeaseRenewInput,
@@ -91,6 +92,12 @@ export class FakeSimlockClient implements SimlockClient {
   getCatalog(input: CatalogGetInput = {}): Promise<CatalogGetOutput> {
     this.calls.push({ input, method: "getCatalog" });
     return this.#dead ? this.#deadConnection() : this.getCatalogImpl(input);
+  }
+
+  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP exposes no identity tool of its own.
+  identity(): Promise<IdentityOutput> {
+    this.calls.push({ input: undefined, method: "identity" });
+    return this.#dead ? this.#deadConnection() : Promise.reject(new Error("not implemented"));
   }
 
   getStatus(): Promise<StatusGetOutput> {

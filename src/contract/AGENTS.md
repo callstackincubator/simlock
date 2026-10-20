@@ -15,7 +15,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `schemas.ts`     | Wire shapes, re-declared by hand from core; `fit*` bounders                   |
 | `roles.ts`       | `Role`, `AuthorizeContext`, `ownsLease`                                       |
 | `errors.ts`      | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`             |
-| `pushes.ts`      | `PUSH_SCHEMAS`: the nine push kinds                                           |
+| `pushes.ts`      | `PUSH_SCHEMAS`: every push kind                                               |
 | `protocol.ts`    | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                        |
 | `worker-view.ts` | `workerViewFields`, view refresh interval and events                          |
 | `os-range.ts`    | OS constraint grammar: parse, `satisfies`, `compareVersions`                  |
@@ -55,9 +55,11 @@ Three identities:
 
 ## Protocol version
 
-- Now `{ min: 46, max: 46 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
-  a compatibility path stays side by side.
+  a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
+  it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
+  helpers its `NOT_SHAPES` lists. A new helper that carries no wire shape goes in that list.
 - `hello` picks the highest overlap. None → `PROTOCOL_VERSION_UNSUPPORTED` with both ranges.
   A protocol-2 daemon is mapped by `mapLegacyProtocolMismatch`.
 - `daemon.stop` is accepted at any version, so the upgrade path exists.

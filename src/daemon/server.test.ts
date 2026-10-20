@@ -25,8 +25,10 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
+  NoopLogger,
   ScriptedProcessRunner,
   type IpcConnection,
   type Logger,
@@ -39,7 +41,12 @@ import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
 import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
-import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
+import {
+  AdminAuthenticationFailedError,
+  type Auth,
+  createAuth,
+  type SessionRoleResolver,
+} from "../auth/index.js";
 import { DaemonServer } from "./server.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
 import { linkPair } from "../link/testing.js";
@@ -47,7 +54,6 @@ import { connectSimlockClient } from "../simlock-client/client.js";
 import { SimlockWire } from "../simlock-client/wire.js";
 import type { RelayTargets } from "./relay.js";
 import * as relaySupport from "./test-relay-support.js";
-import { AdminSecretManager } from "./admin-secret.js";
 import { type PhysicalDeviceWatcher } from "../leasing/index.js";
 import { createTestEngine } from "../leasing/testing.js";
 
@@ -211,8 +217,10 @@ describe("DaemonServer", () => {
     [36, "cannot read the module-unavailable finding in doctor.run"],
     [37, "cannot read config.get's capabilities"],
     [38, "cannot read agent-device's section under config.get's capabilities"],
+    [46, "cannot call identity.get"],
+    [47, "cannot read config.get's http.proxyAuth"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 46, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 48, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -222,7 +230,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 46, max: 46 } },
+          details: { client: { min: version, max: version }, daemon: { min: 48, max: 48 } },
         },
         ok: false,
       });
@@ -898,7 +906,7 @@ describe("DaemonServer", () => {
     expect(first.daemon.socketPath).toBe(socketPath);
   });
 
-  // Review finding S1: `AdminSecretManager`'s own doc (`admin-secret.ts`) asserts "a daemon
+  // why: review finding S1: `AdminSecretManager`'s own doc (`src/auth`) asserts "a daemon
   // that loses the start race never calls `persist()` at all ... so the file an
   // already-running daemon wrote is never touched by the loser" -- untested anywhere before
   // this. Mirrors the "recovers a stale socket file" test above (two harnesses racing for the
@@ -920,11 +928,7 @@ describe("DaemonServer", () => {
     // for `afterEach` to stop, and this test only needs the winner alive on `socketPath` (so
     // the loser's own `start()` below actually loses) plus its filesystem.
     await createHarness({
-      adminSecret: new AdminSecretManager({
-        filesystem: winnerFilesystem,
-        path: "/admin.token",
-        secrets,
-      }),
+      adminSecret: adminAuth(winnerFilesystem, secrets).adminSecret,
       socketPath,
     });
     // The winner (the only one whose `start()` actually reached `host.start()`'s success path)
@@ -933,11 +937,7 @@ describe("DaemonServer", () => {
 
     const loserFilesystem = new MemoryFilesystem();
     const second = await createHarness({
-      adminSecret: new AdminSecretManager({
-        filesystem: loserFilesystem,
-        path: "/admin.token",
-        secrets,
-      }),
+      adminSecret: adminAuth(loserFilesystem, secrets).adminSecret,
       socketPath,
       start: false,
     });
@@ -964,14 +964,10 @@ describe("DaemonServer", () => {
       const socketPath = join(directory, "daemon.sock");
       const filesystem = new MemoryFilesystem();
       const secrets = new CryptoTokenSecrets();
-      const oldSecret = new AdminSecretManager({ filesystem, path: "/admin.token", secrets });
-      const replacementSecret = new AdminSecretManager({
-        filesystem,
-        path: "/admin.token",
-        secrets,
-      });
+      const oldSecret = adminAuth(filesystem, secrets);
+      const replacementSecret = adminAuth(filesystem, secrets);
       const replacement = await createHarness({
-        adminSecret: replacementSecret,
+        adminSecret: replacementSecret.adminSecret,
         socketPath,
         start: false,
       });
@@ -983,7 +979,7 @@ describe("DaemonServer", () => {
       });
       let replacementToken: string | undefined;
       const old = await createHarness({
-        adminSecret: oldSecret,
+        adminSecret: oldSecret.adminSecret,
         host: {
           endpoint: socketPath,
           start: (accept) => host.start(accept),
@@ -992,12 +988,18 @@ describe("DaemonServer", () => {
             // why: endpoint release lets a new process start before the old stop resumes.
             await replacement.daemon.start();
             replacementToken = await filesystem.readFile("/admin.token");
-            expect(replacementSecret.verify(replacementToken.trim())).toBe(true);
+            await expect(
+              replacementSecret.resolveHelloRole({ credential: replacementToken.trim() }),
+            ).resolves.toBe("admin");
           },
         },
         socketPath,
       });
-      expect(oldSecret.verify((await filesystem.readFile("/admin.token")).trim())).toBe(true);
+      await expect(
+        oldSecret.resolveHelloRole({
+          credential: (await filesystem.readFile("/admin.token")).trim(),
+        }),
+      ).resolves.toBe("admin");
 
       if (removalFails) {
         vi.spyOn(filesystem, "rm").mockRejectedValueOnce(new Error("EACCES"));
@@ -3141,6 +3143,40 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await local.close();
   });
 
+  it("identity.get answers the declared principal as principal and name over a socket: agent with no credential, admin with the admin secret, admin with an operator token", async () => {
+    const harness = await createHarness({
+      resolveRole: {
+        resolve: (payload) =>
+          payload.credential === "admin-secret" || payload.credential === "slk_operator"
+            ? "admin"
+            : "agent",
+      },
+    });
+    const cases = [
+      { credential: undefined, principal: "claude-1", role: "agent" },
+      { credential: "admin-secret", principal: "claude-2", role: "admin" },
+      { credential: "slk_operator", principal: "claude-3", role: "admin" },
+    ];
+
+    for (const { credential, principal, role } of cases) {
+      const client = await createClient(harness.socketPath);
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          principal,
+          ...(credential === undefined ? {} : { credential }),
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      await expect(client.request("identity.get", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { name: principal, principal, role, via: "socket" },
+      });
+      await client.close();
+    }
+  });
+
   it("negotiates the protocol range over an uplink exactly as over the socket (ADR 0005 §31)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const pair = linkPair();
@@ -3257,7 +3293,7 @@ async function createHarness(
     readonly beginStop?: () => void;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
-    readonly adminSecret?: AdminSecretManager;
+    readonly adminSecret?: Auth["adminSecret"];
     readonly resolveRole?: SessionRoleResolver;
     readonly downloads?: Partial<Config["downloads"]>;
     readonly processRunner?: ProcessRunner;
@@ -3735,4 +3771,17 @@ function testConfig(
       },
     },
   };
+}
+
+function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): Auth {
+  return createAuth({
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
+    filesystem,
+    secrets,
+    idGenerator: { generate: () => "id" },
+    clock: new FakeClock(1_000),
+    logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
+  });
 }

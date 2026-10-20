@@ -18,11 +18,13 @@ import { openRelay, openUplink, relayInput, settleWithin } from "./test-relay-su
 
 const admin = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "test-operator",
   role: "admin",
 } as const;
 const agent = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "agent-1",
   role: "agent",
 } as const;

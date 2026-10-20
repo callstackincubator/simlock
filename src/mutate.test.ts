@@ -15,26 +15,15 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "mutate.mjs");
 
-const REPORT = JSON.stringify({
-  files: {
-    "src/a.ts": {
-      mutants: [
-        {
-          status: "Killed",
-          mutatorName: "BooleanLiteral",
-          replacement: "true",
-          location: { start: { line: 1 } },
-        },
-        {
-          status: "Survived",
-          mutatorName: "BooleanLiteral",
-          replacement: "false",
-          location: { start: { line: 2 } },
-        },
-      ],
-    },
-  },
+const mutant = (status: string, line: number, replacement: string) => ({
+  status,
+  mutatorName: "BooleanLiteral",
+  replacement,
+  location: { start: { line, column: 18 }, end: { line, column: 22 } },
 });
+const report = (...mutants: ReturnType<typeof mutant>[]) =>
+  JSON.stringify({ files: { "src/a.ts": { mutants } } });
+const REPORT = report(mutant("Killed", 1, "true"), mutant("Survived", 2, "false"));
 
 interface Repo {
   readonly dir: string;
@@ -53,7 +42,7 @@ function repo(): Repo {
   mkdirSync(bin);
   writeFileSync(
     join(bin, "pnpm"),
-    `#!/bin/sh\necho "$@" >> "${log}"\nif [ -n "$CRASH" ]; then echo "$CRASH" >&2; exit 1; fi\nmkdir -p .stryker-tmp/report\necho '${REPORT}' > .stryker-tmp/report/mutation.json\n`,
+    `#!/bin/sh\necho "$@" >> "${log}"\nif [ -n "$CRASH" ]; then echo "$CRASH" >&2; exit 1; fi\nmkdir -p .stryker-tmp/report\ncase "$*" in *--testFiles*) [ -n "$NEAR_REPORT" ] && { echo "$NEAR_REPORT" > .stryker-tmp/report/mutation.json; exit 0; } ;; esac\n[ -n "$WIDE_REPORT" ] && { echo "$WIDE_REPORT" > .stryker-tmp/report/mutation.json; exit 0; }\necho '${REPORT}' > .stryker-tmp/report/mutation.json\n`,
   );
   chmodSync(join(bin, "pnpm"), 0o755);
   const git = (...args: string[]) =>
@@ -76,11 +65,24 @@ function repo(): Repo {
   return { dir, log, bin, git, commit };
 }
 
-function mutate(r: Repo, cwd = r.dir, crash = "", args: string[] = []) {
+function mutate(
+  r: Repo,
+  cwd = r.dir,
+  crash = "",
+  args: string[] = [],
+  nearReport = "",
+  wideReport = "",
+) {
   const run = spawnSync(process.execPath, [SCRIPT, "base", ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${r.bin}:/usr/bin:/bin`, CRASH: crash },
+    env: {
+      ...process.env,
+      PATH: `${r.bin}:/usr/bin:/bin`,
+      CRASH: crash,
+      NEAR_REPORT: nearReport,
+      WIDE_REPORT: wideReport,
+    },
   });
   return { code: run.status, output: run.stdout + run.stderr };
 }
@@ -102,6 +104,65 @@ describe("mutate.mjs", () => {
     expect(output).toContain("2 mutants on 1 changed ranges; 1 alive.");
     expect(output).toContain("src/a.ts:2 Survived BooleanLiteral: false");
     expect(output).toContain("Kill each one, or explain it in the PR body.");
+    expect(code).toBe(1);
+  });
+
+  it("runs first only the test files that import a mutated file, reach it through their own module's barrel, or that the branch changed", () => {
+    const r = repo();
+    r.git("switch", "-q", "base");
+    r.commit({
+      "src/m/x.ts": "export const x = 1;\n",
+      "src/m/index.ts": 'export { x } from "./x.js";\n',
+      "src/m/x.test.ts": 'import { x } from "./index.js";\n',
+      "src/other/y.test.ts": 'import { x } from "../m/index.js";\n',
+      "src/a.test.ts": 'import { a } from "./a.js";\n',
+      "src/lone.test.ts": "export {};\n",
+      "src/lone2.test.ts": "export {};\n",
+    });
+    r.git("switch", "-q", "work");
+    r.git("rebase", "-q", "base");
+    r.commit({
+      "src/m/x.ts": "export const x = 2;\n",
+      "src/lone2.test.ts": "export const t = 1;\n",
+    });
+
+    const { output } = mutate(r, r.dir, "", [], report(mutant("Killed", 2, "false")));
+
+    expect(strykerRuns(r)).toHaveLength(1);
+    expect(strykerRuns(r)[0]?.split(" ")[6]?.split(",").sort()).toEqual([
+      "src/a.test.ts",
+      "src/lone2.test.ts",
+      "src/m/x.test.ts",
+    ]);
+    expect(output).toContain("Near pass: 3 test files");
+  });
+
+  it("gives only the mutants the first run left alive a run with every related test, and reports alive only those both runs left alive", () => {
+    const r = repo();
+    r.commit({ "src/a.test.ts": 'import { b } from "./a.js";\n' });
+    const near = report(
+      mutant("Survived", 1, "true"),
+      mutant("NoCoverage", 2, "false"),
+      mutant("Killed", 3, "true"),
+    );
+    // why: the second run's range can take in a mutant the first run killed; it stays killed.
+    const wide = report(
+      mutant("Killed", 1, "true"),
+      mutant("Survived", 2, "false"),
+      mutant("Survived", 3, "true"),
+    );
+
+    const { code, output } = mutate(r, r.dir, "", [], near, wide);
+
+    const runs = strykerRuns(r);
+    expect(runs).toHaveLength(2);
+    expect(runs[1]).toMatch(
+      /^exec stryker run --mutate src\/a\.ts:1:17-1:22,src\/a\.ts:2:17-2:22 --incremental /,
+    );
+    expect(output).toContain("3 mutants on 1 changed ranges; 1 alive.");
+    expect(output).toContain("src/a.ts:2 Survived BooleanLiteral: false");
+    expect(output).not.toContain("src/a.ts:1 ");
+    expect(output).not.toContain("src/a.ts:3 ");
     expect(code).toBe(1);
   });
 

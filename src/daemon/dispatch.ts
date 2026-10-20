@@ -39,21 +39,6 @@ import {
  */
 export type DispatchProgress = z.infer<typeof leaseProgressSchema>;
 
-/**
- * ADR 0003 §2's "session" argument to `dispatch`. Constructed fresh per call by the transport
- * (`DaemonServer`, one per socket request; the HTTP app, one per HTTP request) from whatever
- * longer-lived state it owns -- this type does not itself track anything across calls.
- *
- * `principal`/`role` are the ADR §4/§5 identity: fixed for the connection's lifetime once
- * `hello` resolves them (see `session.ts`'s `SessionRoleResolver` seam). ADR 0004 removed the
- * two connection-scoped fields that used to sit beside them (`heldLeaseIds`,
- * `heartbeatCapability`): the daemon keeps no per-connection lease state at all any more.
- * `onProgress` and `manageEventSubscription` are the two places a request-scoped or
- * connection-scoped push actually reaches the wire -- `DaemonServer` supplies closures that
- * write socket frames; an HTTP session can leave `onProgress` unset and no-op on
- * `events.subscribe`, since HTTP has no open connection to push through even in principle
- * (ADR §8's "the HTTP notice buffer stays").
- */
 export interface DispatchSession {
   readonly principal: string;
   readonly role: Role;
@@ -75,6 +60,9 @@ export interface DispatchSession {
    * now, admin included).
    */
   readonly isGatewayUplink?: boolean;
+  readonly name?: string;
+  readonly via: "token" | "proxy" | "socket" | "uplink";
+  readonly signOutUrl?: string;
   /** Called for each progress update while this specific `lease.request` call is in flight.
    * Ignored by every other operation. */
   readonly onProgress?: (progress: DispatchProgress) => void;
@@ -144,6 +132,17 @@ export class DispatchError extends Error {
     super(message);
     this.name = "DispatchError";
   }
+}
+
+// why: the one handler both dispatchers use; `name` absent means the principal.
+export function identityGet(_input: unknown, session: DispatchSession) {
+  return {
+    principal: session.principal,
+    name: session.name ?? session.principal,
+    role: session.role,
+    via: session.via,
+    ...(session.signOutUrl === undefined ? {} : { signOutUrl: session.signOutUrl }),
+  };
 }
 
 /**

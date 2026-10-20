@@ -59,6 +59,12 @@ export {
 } from "./logger.js";
 // fallow-ignore-next-line unused-type -- public shape of a parsed log line, for consumers of MemoryLogSink.records.
 export type { LogRecord } from "./logger.js";
+export {
+  FakeKeySetFetcher,
+  KEY_SET_MAX_BYTES,
+  type KeySetFetcher,
+  NodeKeySetFetcher,
+} from "./key-set-fetcher.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
 export { CryptoTokenSecrets, type TokenSecrets } from "./token-secrets.js";
 export { FakeSystemStats, NodeSystemStats, type SystemStats } from "./system-stats.js";

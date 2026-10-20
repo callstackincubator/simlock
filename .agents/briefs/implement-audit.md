@@ -31,24 +31,32 @@ when and assumptions; retain earlier evidence for unaffected claims.
   under `open`. Never tick a box on intent.
 
 **Check every test you added or changed**, including setup or assertions
-edited after the red commit:
+edited after its `test:` commit:
 
 - Its title, assertions and fixture state make the same claim. A title with
   two claims has an assertion for each. Walk testing rule 10's list against
   it.
 - It proves a claim no other test proves, through the module's surface
   (testing rules 6 and 7). One that repeats another test's claim is folded
-  into that test.
-- Break the code it covers once (flip the condition, drop the filter, return
-  early) and run its file: it fails on the assertion its title names.
-  Restore the code. A test that stays green is vacuous: fix it. Every
-  test, no skipping: a probe the audit skips, a reviewer does on a far
-  costlier model. Report `probed <p>/<t>` on the `audit:` line: `t` tests
-  added or changed, `p` probed.
+  into that test. One that imports a module's internal file instead of its
+  `index.ts` has the `why:` reason rule 6 asks for, or moves to the
+  surface, even when `index.ts` exports the same name.
+- Break the code it covers once per claim in its title (flip the
+  condition, drop the filter, delete the call, move the constant either
+  way, return early, or swap a rule for a near one: sort by another key,
+  drop the tie-break, take the first instead of the lowest, drop one side
+  of an `||` or `&&`) and run its file: it fails on the assertion its
+  title names, not by timing out. Apply each break so that one which
+  does not match fails loudly (a Python `str.replace` with an assert that
+  the text was found, not `sed -i`): a break that never applied proves
+  nothing. Restore the code. A test that stays green
+  is vacuous: fix it. Every test, no skipping: a probe the audit skips, a
+  reviewer does on a far costlier model. Report `probed <p>/<t>` on the
+  `audit:` line: `t` tests added or changed, `p` probed.
 - A test comparing two outputs also asserts one of them against a literal.
 
 Run the "Project checks" in `toolchain.md` that the diff triggers. Then the
-tests from mode `green` pass, and you push.
+tests from mode `build` pass, and you push.
 
 **A failing test you did not touch**, locally or in a failed CI run
 (`gh run view <id> --log-failed`):

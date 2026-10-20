@@ -35,6 +35,7 @@ const input = {
           [
             "Spec review: 4 findings, 1 fixed. Code review: 2 findings, 2 fixed.",
             "Rounds: 2. Tokens: 12.5M.",
+            "Runs: 9. Cost USD: 2.3876. Agent seconds: 284.",
             "Mutate: 12 mutants, 1 alive.",
             "",
             "Rejected:",
@@ -237,6 +238,16 @@ describe("delivery-stats.mjs", () => {
       expect.stringContaining("| #13 |"),
     );
     expect(output).toContain("Medians: 6.0 hours, 120 lines, 1 rounds, 12.5M tokens.");
+  });
+
+  it("lists each PR's agent runs, cost and agent seconds from its review-metrics line, unknown without one", () => {
+    const rows = run(["--weeks", "2"])
+      .split("## Measured review work")[1]
+      ?.split("\n")
+      .filter((l) => l.startsWith("| #"));
+
+    expect(rows).toContain("| #10 | 9 | 2.3876 | 284 |");
+    expect(rows).toContain("| #11 | unknown | unknown | unknown |");
   });
 
   it("with --calibration, prints the last four weeks' rejected findings by review, comment ones under claims, and no table", () => {

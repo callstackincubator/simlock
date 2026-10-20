@@ -66,6 +66,8 @@ export type ModuleRelayTarget = (
 export interface ModuleDispatchSession {
   readonly principal: string;
   readonly role: Role;
+  readonly name?: string;
+  readonly via: "token" | "proxy" | "socket" | "uplink";
   readonly manageEventSubscription: (subscribe: boolean) => string | undefined;
 }
 
@@ -76,7 +78,7 @@ export type ModuleDispatch = <Op extends OperationName>(
 ) => Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>>;
 
 export interface ModuleIdentity {
-  readonly requesterId: string;
+  readonly principal: string;
   readonly role: "agent" | "operator" | "worker";
 }
 

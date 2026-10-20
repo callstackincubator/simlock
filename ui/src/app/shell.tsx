@@ -3,7 +3,13 @@ import { useEffect } from "react";
 import { AppFrame, Button, Icon, Sidebar, Status, StatusDot } from "../ds";
 import { NotFoundScreen } from "../screens/not-found";
 import { usePath } from "../state/router";
-import { useAttentionCount, useConnectionStatus, useSignOut, useTokenCheck } from "../state/shell";
+import {
+  useAttentionCount,
+  useConnectionStatus,
+  useSignedIn,
+  useSignOut,
+  useTokenCheck,
+} from "../state/shell";
 import { useSidebar } from "../state/sidebar";
 import { ROUTES, routeFor } from "./routes";
 
@@ -44,38 +50,61 @@ export function Shell() {
   );
 }
 
-// why: the connection's word is a live region so a screen reader hears it change; the data's age
-// beside it ticks every second, so it stays outside the region.
 function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
-  const status = useConnectionStatus();
+  const signedIn = useSignedIn();
   const signOut = useSignOut();
   return (
     <>
-      <div className="connection">
-        {collapsed ? (
-          <>
-            <StatusDot tone={status.tone} label={status.word} />
-            <span role="status" className="visually-hidden">
-              {status.word}
-            </span>
-          </>
-        ) : (
-          <Status tone={status.tone}>
-            <span role="status">{status.word}</span>
-            {status.age === undefined ? null : <span> — data from {status.age} ago</span>}
-          </Status>
-        )}
-      </div>
-      <Button
-        variant="secondary"
-        className="sign-out"
-        onClick={signOut}
-        aria-label="Sign out"
-        title="Sign out"
-      >
-        <Icon name="signOut" />
-        <span className="nav-label">Sign out</span>
-      </Button>
+      <ConnectionStatus collapsed={collapsed} />
+      {signedIn.name === undefined || collapsed ? null : (
+        <p className="signed-in-as">Signed in as {signedIn.name}</p>
+      )}
+      {signedIn.canSignOut ? (
+        <SignOutButton collapsed={collapsed} name={signedIn.name} onClick={signOut} />
+      ) : null}
     </>
+  );
+}
+
+// why: the connection's word is a live region so a screen reader hears it change; the data's age
+// beside it ticks every second, so it stays outside the region.
+function ConnectionStatus({ collapsed }: { readonly collapsed: boolean }) {
+  const status = useConnectionStatus();
+  return (
+    <div className="connection">
+      {collapsed ? (
+        <>
+          <StatusDot tone={status.tone} label={status.word} />
+          <span role="status" className="visually-hidden">
+            {status.word}
+          </span>
+        </>
+      ) : (
+        <Status tone={status.tone}>
+          <span role="status">{status.word}</span>
+          {status.age === undefined ? null : <span> — data from {status.age} ago</span>}
+        </Status>
+      )}
+    </div>
+  );
+}
+
+function SignOutButton(props: {
+  readonly collapsed: boolean;
+  readonly name: string | undefined;
+  readonly onClick: () => void;
+}) {
+  const { collapsed, name, onClick } = props;
+  return (
+    <Button
+      variant="secondary"
+      className="sign-out"
+      onClick={onClick}
+      aria-label="Sign out"
+      title={collapsed && name !== undefined ? `Sign out (${name})` : "Sign out"}
+    >
+      <Icon name="signOut" />
+      <span className="nav-label">Sign out</span>
+    </Button>
   );
 }

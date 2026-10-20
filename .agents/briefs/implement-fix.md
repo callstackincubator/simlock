@@ -12,7 +12,8 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
    - behaviour: make a test fail first, then fix. Extend the test that
-     proves the behaviour next to it; write a new one only when none does
+     proves the behaviour next to it; write a new one only when none does,
+     and list it under `fixes` with the test you could not extend and why
      (testing rule 9);
    - a broken rule (`[architecture N]`, `[safety N]`, ...): change the code
      so it keeps the rule, never the doc that states the rule;

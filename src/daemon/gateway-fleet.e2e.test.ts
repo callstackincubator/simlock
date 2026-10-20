@@ -70,12 +70,18 @@ const gatewayUrl = (): string => `ws://127.0.0.1:${gatewayPort}`;
 const restartGatewayUrl = (): string => `ws://127.0.0.1:${restartGatewayPort}`;
 
 function adminSession(): DispatchSession {
-  return { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" };
+  return {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  };
 }
 
 function agentSession(overrides: Partial<DispatchSession> = {}): DispatchSession {
   return {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "fleet-agent-1",
     role: "agent",
     ...overrides,

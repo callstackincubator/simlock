@@ -15,9 +15,10 @@ rules 1, 2, 3, 9, 14, 15 and 16.
 **Delegating.** Start each stage with the Agent tool, in the background:
 `subagent_type` `implementer`, `reviewer` or `hardware-verifier`; a short
 `description` naming the issue and stage (`#362 implement`); and a prompt
-of `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
+whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
+then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
-report (`map`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
+report (`remaining`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
 `previous` plus the resolution ledger. No prose, and no
 reminders of what the agent's own instructions already say. Never pass a
 model or `isolation`: every stage of a task works in the task's one
@@ -134,7 +135,7 @@ gh issue view <N> --json number,title,labels,assignees,body
 
 Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
 `<kind>/<N>`. A task of a feature, or an issue whose feature has an open
-ADR PR, is stacked (step 3): its red stage gets `base:` and its PR waits
+ADR PR, is stacked (step 3): its build stage gets `base:` and its PR waits
 in the stack instead of the gate. If it already has a PR, read the PR body's `### Status`
 section and the latest `## Handoff` comment, and go on from the next stage
 they name; never build again or restart review at round 1.
@@ -165,8 +166,9 @@ they name; never build again or restart review at round 1.
      test fixes, need the applicable targeted fix-check before the gate.
      A clean base merge alone needs no repeat review; record its new head
      and base and let CI check it. Never silently reset the round cap.
-   - After each check persist the resolution ledger, all invocation metrics
-     (fix-check included), counts and dispositions in `## Review`.
+   - After each check persist the resolution ledger, the findings file
+     (`docs/internal/REVIEW.md`, "Measurement"), counts and dispositions in
+     `## Review`.
    - Out of scope lines may become separate issues only when verified as
      pre-existing and unrelated. New PR regressions block even if found late.
    - Spec needs: decide, then tell (above), before the fix run.
@@ -192,6 +194,7 @@ they name; never build again or restart review at round 1.
 
    Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes.
    Rounds: <n>. Tokens: <t>M.
+   <the first line review-metrics.mjs prints: Runs: … Cost USD: … Agent seconds: …>
 
    Rejected:
 
@@ -202,8 +205,8 @@ they name; never build again or restart review at round 1.
    `<m>` those confirmed and fixed, `<k>` its notes; `skipped` in place of
    the counts for a review the diff's kind left out (for an ADR-only diff:
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
-   legacy full/targeted rounds, 1 or 2; record fix-check invocations separately
-   with the metrics ledger and summary from `review-metrics.mjs`. Add
+   legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
+   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included. Add
    `Assessment: complete` only when coverage is complete and no finding is
    open; otherwise `Assessment: incomplete` and park. `<t>` is
    `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
@@ -280,7 +283,7 @@ Runnable: open, `task:ready`, unassigned, and every issue under its Depends
 on closed or a task of this feature whose PR passed review (open, not a
 draft). Check the Depends on yourself; no workflow promotes tasks.
 
-- A task's red stage gets `base: <branch of the stack's top PR>`; with no
+- A task's build stage gets `base: <branch of the stack's top PR>`; with no
   PR yet, no `base` (it starts from `main`).
 - Its review passed (step 2, item 6): `gh pr ready <M>` and `gh stack link
 <PR below> <M>` (PR numbers, bottom to top; none below yet: nothing to

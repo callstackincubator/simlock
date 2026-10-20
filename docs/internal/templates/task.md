@@ -109,9 +109,10 @@ rule or section, a few quoted words of it, and how the task complies. -->
 <!-- First, one line: the seam the tests drive (the highest existing entry
 point that can see the behaviour; one if possible) and an existing test
 file to model them on. Then one line per test title: a claim the body must
-prove. Every behaviour the body states, including what stays "as today",
-has a line here: one line per behaviour, its cases listed in the line, not
-one line per case. A claim an existing test already proves names that test
+prove. Every behaviour the body states has a line here: one line per
+behaviour, its cases listed in the line, not one line per case. What stays
+"as today" names the existing test that proves it, and gets a line only
+when no test does. A claim an existing test already proves names that test
 to extend instead (testing rule 7). Every Failure modes row has its line,
 or the row says why none is needed. -->
 

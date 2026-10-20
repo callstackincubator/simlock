@@ -134,7 +134,8 @@ put together from them and draws nothing of its own that one of them already dra
 - **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
   wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
   Workers, Leases, Waiting, Attention, Events, Usage), then at the bottom the connection as a status,
-  **Sign out** and the collapse button. A link is an icon and its label in `--text-muted`; the
+  "Signed in as <name>" (hidden when collapsed, where the Sign out tooltip reads "Sign out (<name>)"),
+  **Sign out** (absent for a proxy person with no sign-out address) and the collapse button. A link is an icon and its label in `--text-muted`; the
   current one is `--text` on `--field` with a 2px `--accent` bar on its left and
   `aria-current="page"`. Attention carries its count in a small bordered box, and none at zero.
   Collapsed, the sidebar is 64px wide: the labels go, every icon sits on its centre line, each

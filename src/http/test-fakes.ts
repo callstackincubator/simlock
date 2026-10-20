@@ -21,7 +21,6 @@ import { DispatchError } from "../daemon/dispatch.js";
 import type { DispatchSession } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { type Clock, FakeClock, type IdGenerator } from "../ports/index.js";
-import type { TokenIdentity } from "./token-store.js";
 
 const gibibyte = 1024 * 1024 * 1024;
 
@@ -316,18 +315,5 @@ export class FakeRegistry {
       leases: this.leases,
       virtualDevices: this.devices.filter((device): device is VirtualDevice => !device.physical),
     };
-  }
-}
-
-export class FakeTokenVerifier {
-  readonly #identities = new Map<string, TokenIdentity>();
-
-  register(secret: string, identity: TokenIdentity): void {
-    this.#identities.set(secret, identity);
-  }
-
-  // fallow-ignore-next-line unused-class-member -- reached structurally through HttpGatewayDeps.tokens.
-  async verify(secret: string): Promise<TokenIdentity | undefined> {
-    return this.#identities.get(secret);
   }
 }

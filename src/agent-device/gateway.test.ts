@@ -33,7 +33,7 @@ async function healthThroughGateway(served: readonly WorkerView[]) {
   const module = loaded?.createGateway(ctx);
   const handler = module?.mount?.({ dispatch: () => Promise.reject(new Error("unused")) });
   const answer = await handler?.(new Request("http://gateway.test/v1/agent-device/health"), {
-    requesterId: "tok_one",
+    principal: "tok_one",
     role: "agent",
   });
   return { body: await answer?.text(), relayed };

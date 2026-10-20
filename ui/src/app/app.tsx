@@ -4,7 +4,7 @@ import type { ApiClient, Fetch } from "../data/api";
 import type { Preferences } from "../data/preferences";
 import type { Session } from "../data/session";
 import { NavigationProvider } from "../ds";
-import { SignInScreen } from "../screens/sign-in";
+import { SignInEndedScreen, SignInScreen, SigningInScreen } from "../screens/sign-in";
 import { LiveProvider } from "../state/live";
 import { navigate } from "../state/router";
 import { ConsoleProvider } from "../state/services";
@@ -19,11 +19,15 @@ export function App(props: {
   readonly session: Session;
 }) {
   const { session } = props;
-  const token = useSyncExternalStore(session.subscribe, session.token);
+  const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   return (
     <ConsoleProvider {...props}>
       <NavigationProvider navigate={navigate}>
-        {token === undefined ? (
+        {state.kind === "checking" ? (
+          <SigningInScreen />
+        ) : state.kind === "ended" ? (
+          <SignInEndedScreen />
+        ) : state.kind === "none" ? (
           <SignInScreen />
         ) : (
           <LiveProvider>

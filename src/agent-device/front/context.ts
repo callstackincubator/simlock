@@ -1,5 +1,5 @@
 import type { HttpDispatch } from "../../http/dispatcher-session.js";
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import type { Clock, Logger } from "../../ports/index.js";
 import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
@@ -34,7 +34,7 @@ export interface Exchange {
 export async function exchange(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
   call?: CallClass,
   leaseId?: string,
 ): Promise<Exchange> {
@@ -106,7 +106,7 @@ export type SimlockRelease =
 
 export async function releaseSimlock(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   leaseId: string,
 ): Promise<SimlockRelease> {
   try {
@@ -144,7 +144,7 @@ export function scopeOf(
 export async function releaseAgentDevice(
   context: FrontContext,
   request: Request,
-  identity: TokenIdentity,
+  identity: Identity,
   leaseId: string,
   scope: Record<string, unknown>,
 ) {
@@ -160,7 +160,7 @@ export async function releaseAgentDevice(
 // why: a lease the token holds under another requester than its own id was made by something else (a gateway, for a worker's token of the same name), so this front has no claim to end it.
 export async function heldForAnother(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   leaseId: string,
 ): Promise<boolean> {
   try {
@@ -174,7 +174,7 @@ export async function heldForAnother(
 
 const LIST_TIMEOUT_MS = 5_000;
 
-export async function listLeases(context: FrontContext, identity: TokenIdentity) {
+export async function listLeases(context: FrontContext, identity: Identity) {
   let timer: ReturnType<FrontContext["clock"]["setTimer"]> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = context.clock.setTimer(LIST_TIMEOUT_MS, () =>

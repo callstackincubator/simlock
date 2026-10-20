@@ -16,24 +16,23 @@ The issue body is the spec. Build exactly what it says, plus what
 `always-in-scope.md` lists. Do not claim, review, mark ready or merge.
 
 Arguments: `issue`, `branch`, `pr` once there is one, `mode`, `base` for a
-red stage stacked on another PR's branch; audit/fix inputs also carry
+build stage stacked on another PR's branch; audit/fix inputs also carry
 immutable `base-sha`, `merge-base`, `head`, `previous` and resolution history.
-For some modes `map` or
+For some modes `remaining` or
 `fixes`. Anything else is context. Each mode is a fresh
 agent, so the work runs in short contexts. Steps 1 and 2 are every mode's;
 step 3 is the mode's own brief in `.agents/briefs/`:
 
-| Mode           | Brief                       | Starts from                            | Ends with                              |
-| -------------- | --------------------------- | -------------------------------------- | -------------------------------------- |
-| `red`          | `implement-red.md`          | the spec                               | red commit, draft PR, `map`            |
-| `green`        | `implement-green.md`        | the branch and `map`                   | spec tests green, or `map` of the rest |
-| `audit`        | `implement-audit.md`        | the spec and immutable PR diff         | fixes, PR body done                    |
-| `fix`          | `implement-fix.md`          | the branch and `fixes`                 | each finding fixed                     |
-| `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests | those tests pass on the lane           |
+| Mode           | Brief                       | Starts from                             | Ends with                                    |
+| -------------- | --------------------------- | --------------------------------------- | -------------------------------------------- |
+| `build`        | `implement-build.md`        | the spec, or the branch and `remaining` | a test and its code per Tests line, draft PR |
+| `audit`        | `implement-audit.md`        | the spec and immutable PR diff          | fixes, PR body done                          |
+| `fix`          | `implement-fix.md`          | the branch and `fixes`                  | each finding fixed                           |
+| `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests  | those tests pass on the lane                 |
 
-**Order**, which the caller runs, a fresh agent per mode: `red`; `green`
-with the last `map`, again while a report still lists `failing` and turned
-a test green since the last; then `audit` with the PR's base, merge-base
+**Order**, which the caller runs, a fresh agent per mode: `build`, again
+with the last `remaining` while a report lists `remaining` and built a
+cycle since the last; then `audit` with the PR's base, merge-base
 and head from `review-inputs.sh`. `fix` applies findings, `hardware-fix`
 failing slow-lane tests. An agent given `fixes` does them and skips the
 audit. Every caller stops at `spec needs` under `open`.
@@ -97,7 +96,7 @@ and add one line to the PR body's `## Assumptions`:
 
 Stop only when building would contradict the body, a rule or an accepted
 ADR, or would change behaviour a user sees in a way nobody decided.
-Changing a spec test after its red commit, or an existing test, so it
+Changing a spec test after its `test:` commit, or an existing test, so it
 asserts behaviour the spec did not decide, is never an assumption: it is a
 stop. Push what you have and report `spec needs: <line>` under `open`. Do
 not work around it.
@@ -117,11 +116,9 @@ does not produce.
 ```
 issue: <N>  branch: <kind>/<N>  pr: <M>  mode: <mode>  head: <short sha>
 Assessment: complete | incomplete — <missing scope>
-tests: <green>/<spec tests>  red: <short sha>
-failing:
-  <test file:line>
-map:
-  <test file:line> -> <source paths>
+tests: <green>/<spec tests>  cycles: <built>/<Tests lines>
+remaining:
+  <Tests line, in build order>
 audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>
 fixes:
   <finding path:line> -> found <n> fixed <n>

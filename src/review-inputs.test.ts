@@ -167,6 +167,33 @@ describe("review-inputs.sh over repo-scoped REST", { timeout: 30_000 }, () => {
     expect(() => inputs(BUG, [], other)).toThrow(/ancestor/);
   });
 
+  it("puts in tests-after-red.patch every later change to a file a test: commit wrote, but not a later test: commit that only adds", () => {
+    git(work, "checkout", "-q", "-b", "cycles", "bug/12");
+    const commit = (subject: string, path: string, text: string) => {
+      writeFileSync(join(work, path), text);
+      git(work, "add", "-A");
+      git(work, "commit", "-q", "-m", subject);
+    };
+    commit("test: one", "src/c.test.ts", "assert one exact\n");
+    commit("feat: one", "src/c.ts", "one\n");
+    commit("test: two", "src/c.test.ts", "assert one exact\nassert two\n");
+    commit("feat: two", "src/c.test.ts", "assert one loose\nassert two\n");
+    commit("test: three", "src/c.test.ts", "assert one loose\nassert three\n");
+    git(work, "push", "-q", "-f", "origin", "cycles:refs/pull/7/head");
+
+    const patch = inputs(BUG, []).read("tests-after-red.patch") ?? "";
+
+    git(work, "push", "-q", "-f", "origin", "bug/12:refs/pull/7/head");
+    git(work, "checkout", "-q", "bug/12");
+    expect(patch).toContain("feat: two");
+    expect(patch).toContain("-assert one exact");
+    expect(patch).toContain("+assert one loose");
+    expect(patch).toContain("test: three");
+    expect(patch).toContain("-assert two");
+    expect(patch).not.toContain("test: two");
+    expect(patch).not.toContain("feat: one");
+  });
+
   it("pins the actual stacked base and limits fix.patch to changes since previous", () => {
     git(work, "branch", "stack-base", "bug/12");
     const previous = execFileSync("git", ["rev-parse", "HEAD"], {

@@ -10,9 +10,15 @@ import { createPreferences } from "./data/preferences";
 import { createSession } from "./data/session";
 
 const fetch: Fetch = (input, init) => window.fetch(input, init);
-const session = createSession(() => window.sessionStorage);
+const session = createSession(() => window.sessionStorage, {
+  fetch,
+  now: () => Date.now(),
+  reload: () => window.location.reload(),
+});
 const preferences = createPreferences(() => window.localStorage);
-const api = createApiClient({ fetch, signOut: session.signOut, token: session.token });
+const api = createApiClient({ fetch, onRefused: session.refused, token: session.token });
+
+session.start();
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("The console page has no #root element");

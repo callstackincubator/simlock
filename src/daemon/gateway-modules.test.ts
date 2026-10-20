@@ -15,6 +15,7 @@ import type { DaemonServer } from "./server.js";
 
 const admin = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "test-operator",
   role: "admin",
 } as const;

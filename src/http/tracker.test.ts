@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { tokenIdentity } from "../auth/testing.js";
 import { type VirtualDevice } from "../core/index.js";
 import {
   NoCapacityError,
@@ -21,7 +22,7 @@ function buildTracker() {
   return { clock, dispatcher, tracker };
 }
 
-const identity = { requesterId: "tok_agent", role: "agent" as const };
+const identity = tokenIdentity("tok_agent");
 const body = { device: "iPhone 17 Pro", platform: "ios" as const };
 
 async function createTracked(
@@ -143,11 +144,7 @@ describe("LeaseRequestTracker.submit", () => {
   it("does not replay an Idempotency-Key across different requesters", async () => {
     const { dispatcher, tracker } = buildTracker();
     await createTrackedWithKey(tracker, dispatcher, "key-1");
-    const outcomePromise = tracker.submit(
-      { requesterId: "tok_other", role: "agent" },
-      body,
-      "key-1",
-    );
+    const outcomePromise = tracker.submit(tokenIdentity("tok_other"), body, "key-1");
     const call = await waitForDispatch(dispatcher, "lease.request", 1);
     call.session.onProgress?.({ queuePosition: 1, stage: "queued" });
     const outcome = await outcomePromise;

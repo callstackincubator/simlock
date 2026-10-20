@@ -170,6 +170,13 @@ export default {
       },
     },
     {
+      name: "auth-imports-little",
+      comment: "src/auth imports only ports and contract",
+      severity: "error",
+      from: { path: "^src/auth/", pathNot: linkTestFile },
+      to: { path: "^src/", pathNot: "^src/(auth|ports|contract)/" },
+    },
+    {
       name: "modules-imports-little",
       comment: "src/modules imports only ports, contract and core, plus the bus for its types",
       severity: "error",

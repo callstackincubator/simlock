@@ -49,11 +49,11 @@ without that assessment leave the finding unresolved, never rejected.
 Select independent lenses by work, not size alone. ADR-only: spec. Docs or
 comments: spec and claims. Tests: spec, code/tests and affected claims.
 Other changes: spec and code/both, plus affected claims. No issue: skip spec.
-Add a separate code/tests lens for complex fixtures, mutation evidence or
-high-risk coverage; split behavior and tests responsibilities explicitly.
+Add a separate code/tests lens for complex fixtures or high-risk coverage;
+split behavior and tests responsibilities explicitly.
 A large mechanical diff alone does not warrant two code reviewers. Record
 why a lens was added or skipped. Run selected lenses in parallel, with
-separate worktrees for mutation probes; do not share findings until synthesis.
+separate worktrees for probes; do not share findings until synthesis.
 
 ## Synthesis and convergence
 
@@ -79,7 +79,9 @@ Classify actual fix impact (multiple labels allowed):
 
 Test files are not automatically mechanical. Claims-only corrections need
 a focused claims check; unchanged claims need no repeat review. Use actual
-hunks, not the intended fix label, to choose follow-up.
+hunks, not the intended fix label, to choose follow-up. A lens whose input
+`fix.patch` does not touch does not run: claims needs a changed doc,
+comment, test title or printed string; code a changed code or test line.
 
 There is one full round, one targeted round 2, and one final targeted
 fix-check. Count every invocation, including that fix-check. After the cap,
@@ -96,24 +98,20 @@ no incomplete assessment may be marked ready or merged.
 
 ## Measurement and cheaper-model evaluation
 
-For every invoked role, including coordination, verification and fix work,
-append a record to a per-PR JSON ledger. See
-[the ledger example](templates/review-metrics.json). IDs are unique per
-invocation, and review round is `1`, `2` or `fix-check` (fix work uses the
-round it responds to). Store exact provider/model, reviewed commit, start
-and finish timestamps, input/output/cache-read/cache-write tokens, cost USD
-and fix effort seconds. Unknown values are null, never zero. Use provider
-usage deltas for this invocation; whole-session cumulative tokens are only
-legacy data. Cost comes from provider billing or a documented price/version
-and token categories; never infer cost from model names alone.
+Nobody writes usage by hand. Every agent prompt a delivery writes starts
+with the ledger tag line (`toolchain.md`, "Review measurement"), and
+`node .agents/scripts/review-metrics.mjs --pr <M> --issue <N>` reads each
+tagged run's model, start, finish, tokens and cost from Claude Code's
+transcripts. Unknown values print as unknown, never zero.
 
-Record canonical finding outcomes, severity and escaped defects after
-merge. Link the ledger as a durable PR attachment or committed evaluation
-artifact; paste the output of `node .agents/scripts/review-metrics.mjs
-<ledger.json>` into `## Review`. Preserve the legacy counts and Rounds line
-for older tooling, with `Tokens: n/a.` if no comparable session total exists.
-`delivery-stats.mjs` displays new invocation/check/cost totals separately.
-Do not call raised-minus-fixed a false-positive rate.
+The coordinator keeps one findings file per PR, `{"findings": [...]}`, one
+entry per canonical finding: `id`, `role`, `class` (the `[class]` the lens
+gave, a rule like `testing 2` or at most 8 words), `outcome`, `path`,
+`fix` (the fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate, post one PR comment headed
+`## Review ledger`: the output of `review-metrics.mjs --pr <M> --issue <N>
+--findings <file>`, then the findings file in a `json` code block. The
+weekly `recurring-findings` routine reads these comments. Record escaped
+defects after merge. Do not call raised-minus-fixed a false-positive rate.
 
 Before promoting Sonnet code review, freeze at least 20 representative
 historical PR snapshots: at least 10 known-bug and 10 clean, covering ordinary

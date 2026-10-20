@@ -23,6 +23,7 @@ const WORKER_TENANT = "gw.g1.alice";
 
 const agent: DispatchSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "fleet-agent-1",
   role: "agent",
 };

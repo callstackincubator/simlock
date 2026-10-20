@@ -51,6 +51,12 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)) and the web console served beside it (see [CONSOLE.md](CONSOLE.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
+| `http.proxyAuth` | Sign-in through a proxy in front of Simlock (Cloudflare Access, for one). Not set: proxy sign-in is off. Set the four required keys together, as one JSON object, because each `config set` checks the whole file; one key alone is refused, naming the first missing key (`expected set with the other http.proxyAuth keys`). `signOutUrl` alone counts as an incomplete set. Read in both modes; takes effect on daemon restart. | not set |
+| `http.proxyAuth.header` | Required. The request header carrying the proxy's signed JWT, e.g. `cf-access-jwt-assertion`. 1-64 letters, digits or `-`; matched without regard to case. With `authorization`, only a `Bearer` value that does not start `slk_` is taken as the JWT. | — |
+| `http.proxyAuth.jwksUrl` | Required. Where the proxy publishes its public keys. An `https://` URL, or `http://` on `127.0.0.1`, `::1` or `localhost`. The daemon fetches it (5 s limit, no redirects, at most 64 KiB) and keeps the keys 10 minutes. | — |
+| `http.proxyAuth.issuer` | Required. The `iss` the JWT must carry. 1-128 characters. | — |
+| `http.proxyAuth.audience` | Required. The `aud` the JWT must carry (or list). 1-512 characters. | — |
+| `http.proxyAuth.signOutUrl` | Optional. An `http://` or `https://` URL the console sends a person to for signing out; `GET /v1/identity` returns it. | not set |
 | `exec.timeoutMs`                  | How long a single `device.exec` command (the remote half of `simlock simctl` / `simlock adb` — see [CLI.md](CLI.md#reaching-a-leased-device)) may run before Simlock kills it and fails the call with `EXEC_TIMEOUT`. Output is streamed, never buffered, so there is no size limit to go with it.                                | `10 minutes`                                                     |
 | `gateway.url`                     | **Worker side.** The gateway's base URL (`ws://host:port` or `wss://...`); the worker derives the uplink endpoint (`/v1/uplink`) from it. Set together with `gateway.token`, or not at all.                                  | unset (this worker has no gateway)                              |
 | `gateway.token`                   | **Worker side.** The join token this worker presents, minted on the gateway with `simlock token create --role worker`.                                                                                                        | unset                                                            |
@@ -762,3 +768,14 @@ did — a config file written against an older Simlock keeps its behaviour
 without changes, and needs none. Setting them alongside an explicitly
 selected non-`resource` strategy is the one case Simlock warns about, since
 those settings would have no effect.
+
+## Signing in through a proxy
+
+`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. Set it as one object:
+
+```
+simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://team.cloudflareaccess.com","audience":"4f1c…"}'
+simlock daemon stop && simlock daemon start
+```
+
+Setting one key alone fails the whole-file check: `Invalid config after setting http.proxyAuth.header: Invalid config value for "http.proxyAuth.jwksUrl": expected set with the other http.proxyAuth keys`. See [HTTP-API.md](HTTP-API.md#signing-in-through-a-proxy) for how a request is checked.

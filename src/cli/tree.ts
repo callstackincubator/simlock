@@ -82,6 +82,7 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "set", load: configModule },
     ],
   },
+  { name: "whoami", load: () => import("./commands/whoami.js") },
   {
     name: "token",
     load: tokenModule,

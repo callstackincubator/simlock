@@ -48,7 +48,8 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
 | agent-device | Optional edge: the agent-device daemon beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
 | stream | Optional edge: a leased device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
-| http | HTTP frontend: routes, tokens, SSE | [http](../../src/http/AGENTS.md) |
+| auth | Credential → identity: tokens, admin secret, `hello`, uplink join token, HTTP strategies | [auth](../../src/auth/AGENTS.md) |
+| http | HTTP frontend: routes, SSE | [http](../../src/http/AGENTS.md) |
 | cli | Operator command surface | [cli](../../src/cli/AGENTS.md) |
 | mcp | stdio MCP server for one agent session | [mcp](../../src/mcp/AGENTS.md) |
 | simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/AGENTS.md) · [client](../../src/client/AGENTS.md) · [admin](../../src/admin/AGENTS.md) |
@@ -74,6 +75,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `core-not-drivers` | Core and leasing reach a platform only through the `Driver` interface |
 | `no-fs-or-process` | Core, leasing, agent-device, host-load and stream use ports, never `fs` or `child_process` |
 | `definition-is-light` | A module's definition file imports its own module only for types or by dynamic import |
+| `auth-imports-little` | `src/auth` imports only ports and contract |
 | `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract and core, and the bus for types |
 | `not-modules` | Core, leasing, drivers, gateway and contract import nothing from modules or module-registry |
 | `not-agent-device` | Core, leasing and drivers import nothing from agent-device |

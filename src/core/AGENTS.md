@@ -2,7 +2,7 @@
 
 Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, doctor.
 Entry: `index.ts` → `createCore(options)`, then `core.connect(ports)` once, before any request.
-Uses: bus, ports, contract, history (`usage/` only). Never imports: leasing, drivers, daemon, gateway, agent-device.
+Uses: auth (config strategies), bus, ports, contract, history (`usage/` only). Never imports: leasing, drivers, daemon, gateway, agent-device.
 Imported by: daemon, leasing, cli, http, agent-device, drivers (`Driver`, `ensureOwnedRoot`), gateway (catalog match, `fits`, `createUsageReader`).
 Flows: [startup](../../docs/internal/flows/startup.md), [device selection](../../docs/internal/flows/device-selection.md).
 See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm pool](warm-pool/AGENTS.md), [capacity](capacity/AGENTS.md).
