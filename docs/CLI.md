@@ -1810,7 +1810,7 @@ them:
 has the same name as a built-in one, the built-in profile wins and the model
 is not custom. Simlock's own models are listed first, then the SDK's, then
 the custom ones. If `devices.xml` cannot be read, the built-in models are still
-listed. A custom model is marked `(custom)` in the human view of `simlock
+listed and the daemon logs a warning with the path and the reason. A custom model is marked `(custom)` in the human view of `simlock
 catalog` and listed in `customModels` in `--json`.
 
 ## `simlock component install <ios|android> <version> [--worker <id>... | --all-workers]`
@@ -2490,6 +2490,10 @@ devices is in `simlock events`, not here. It records:
 - **At `log.level: debug`**, every device command (`simctl`, `adb`,
   `sdkmanager`, …): the command, its arguments, its exit code, and how long it
   took. Never its environment, its input, or its output.
+- **Android warnings**: a snapshot boot that fell back to a cold boot
+  (`Android snapshot boot fell back to a cold boot`, with `avdName` and
+  `readyAfterMs`), and a `devices.xml` that could not be read (`Android device
+  profile source could not be read`, with `path` and `reason`).
 - Connection open and close, and errors nobody expected.
 
 The wording and fields of a line can change in any release; don't parse them
