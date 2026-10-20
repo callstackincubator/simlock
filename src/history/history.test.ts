@@ -261,6 +261,19 @@ describe("createEventHistory", () => {
     expect(replayed).toEqual([newer, newest]);
   });
 
+  it("replayPage with beforeId and limit returns the limit events just older than the named one, oldest first, and stops short at the start of the history", async () => {
+    const rigged = await rig();
+    const history = rigged.history();
+    await history.start();
+    const rows = [1, 2, 3, 4, 5].map((n) => relayed(rigged.bus, `evt_row${n}`, NOW + n));
+
+    const middle = await history.replayPage({ beforeId: "evt_row4", limit: 2 });
+    const start = await history.replayPage({ beforeId: "evt_row2", limit: 5 });
+    await history.stop();
+    expect(middle).toEqual({ events: [rows[1], rows[2]], kind: "events" });
+    expect(start).toEqual({ events: [rows[0]], kind: "events" });
+  });
+
   it("a second insert of an event with an id already stored adds no row and runs no projection step", async () => {
     const rigged = await rig();
     const projection = recordingProjection();
