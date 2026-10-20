@@ -548,10 +548,7 @@ export type WorkerTab = "devices" | "warm-pool" | "host" | "events";
 
 // why: the tab lives in the URL as `?tab=`, so a reload or a shared link shows the same tab; a value
 // the page does not offer, such as a warm pool on a starting worker, is the Devices tab.
-export function readWorkerTab(
-  search: string,
-  tabs: readonly { readonly value: WorkerTab }[],
-): WorkerTab {
+function readWorkerTab(search: string, tabs: readonly { readonly value: WorkerTab }[]): WorkerTab {
   const asked = new URLSearchParams(search).get("tab");
   return tabs.find((tab) => tab.value === asked)?.value ?? "devices";
 }

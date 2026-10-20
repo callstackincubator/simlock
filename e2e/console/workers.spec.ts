@@ -285,6 +285,35 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
+// why: taken from the gateway's own view of the worker and the figures the page was answered with,
+// so the page cannot agree with itself.
+function expectedRow(view: WorkerView): {
+  readonly text: readonly string[];
+  readonly slots: string;
+  readonly bars: number;
+} {
+  const name = view.label ?? view.id;
+  if (view.connection === "incompatible") {
+    return { bars: 0, slots: "No devices", text: [name, "incompatible", "", "—", "—", "—", "—"] };
+  }
+  const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
+  const leased = view.leases.length;
+  const system = view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`;
+  return {
+    bars: 3,
+    slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,
+    text: [
+      `${name}${system}`,
+      view.drained ? "drained" : "connected",
+      "",
+      runningOverLimit(view),
+      "12%",
+      "50%",
+      "40%",
+    ],
+  };
+}
+
 test.describe("the workers page", () => {
   test("the Fleet table lists every worker with its name, system, state word, slots group and its label, running of limit, and CPU, memory and disk", async ({
     page,
@@ -313,30 +342,14 @@ test.describe("the workers page", () => {
       await expect(page.getByText(`${listed.length - 1} / ${listed.length} up`)).toBeVisible();
       for (const view of listed) {
         const name = view.label ?? view.id;
+        const want = expectedRow(view);
         const shown = row(page, name);
-        const cells = shown.getByRole("cell");
-        const incompatible = view.connection === "incompatible";
-        const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
-        const leased = incompatible ? 0 : view.leases.length;
-        await expect(cells.nth(0), name).toHaveText(
-          view.host === undefined ? name : `${name}${view.host.os} ${view.host.osVersion}`,
-        );
-        await expect(cells.nth(1), name).toHaveText(
-          incompatible ? "incompatible" : view.drained ? "drained" : "connected",
-        );
-        await expect(cells.nth(2).getByRole("img"), name).toHaveAttribute(
+        await expect(shown.getByRole("cell"), name).toHaveText(want.text);
+        await expect(shown.getByRole("cell").nth(2).getByRole("img"), name).toHaveAttribute(
           "aria-label",
-          incompatible
-            ? "No devices"
-            : leased === 0
-              ? `${limit} free`
-              : `${leased} leased, ${limit - leased} free`,
+          want.slots,
         );
-        await expect(cells.nth(3), name).toHaveText(incompatible ? "—" : runningOverLimit(view));
-        await expect(cells.nth(4), name).toHaveText(incompatible ? "—" : "12%");
-        await expect(cells.nth(5), name).toHaveText(incompatible ? "—" : "50%");
-        await expect(cells.nth(6), name).toHaveText(incompatible ? "—" : "40%");
-        await expect(shown.locator(".load-bar"), name).toHaveCount(incompatible ? 0 : 3);
+        await expect(shown.locator(".load-bar"), name).toHaveCount(want.bars);
       }
     } finally {
       hangUp();
@@ -835,19 +848,18 @@ test.describe("the workers page", () => {
         label: "the host lists the install",
       });
       const facts = (await status(host)).host;
-      const [view] = await workerList(host);
+      const [listed] = await workerList(host);
+      const id = found(listed, "the host's worker").id;
 
       await openConsole(page, host);
-      await row(page, view?.id ?? "")
-        .getByRole("link")
-        .click();
+      await row(page, id).getByRole("link").click();
 
       await openTab(page, "Host");
       const main = page.locator("#main");
       await expect(fact(main, "Operating system")).toHaveText(`${facts.os} ${facts.osVersion}`);
       await expect(fact(main, "CPU architecture")).toHaveText(facts.arch);
       await expect(fact(main, "Tools")).toHaveText("xcode 16.4 (16F6) for iOS");
-      await expect(fact(main, "Worker id")).toHaveText(view?.id ?? "");
+      await expect(fact(main, "Worker id")).toHaveText(id);
       await expect(fact(main, "iOS")).toContainText("Models: iPhone 16, iPad Air");
       await expect(fact(main, "iOS")).toContainText(/Runtimes: 18\.4.*, 26\.0/);
       await expect(fact(main, "agent-device")).toContainText(/available|off|unavailable/);
@@ -871,10 +883,8 @@ test.describe("the workers page", () => {
         await page.reload();
         await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
       }
-      await page.goto(
-        new URL(`/fleet/${encodeURIComponent(view?.id ?? "")}?tab=host`, host.url).href,
-      );
-      await expect(fact(main, "Worker id")).toHaveText(view?.id ?? "");
+      await page.goto(new URL(`/fleet/${encodeURIComponent(id)}?tab=host`, host.url).href);
+      await expect(fact(main, "Worker id")).toHaveText(id);
     } finally {
       await host.dispose();
     }
