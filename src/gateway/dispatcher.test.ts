@@ -1014,6 +1014,28 @@ describe("GatewayDispatcher", () => {
       clock.advance(60_000);
       expect(poster.requests).toHaveLength(1);
     });
+
+    it("alerts.test answers UNKNOWN_ALERT_DESTINATION for a name not configured and on a gateway with no destinations", async () => {
+      const unknown = {
+        code: "UNKNOWN_ALERT_DESTINATION",
+        message:
+          'No alert destination named "nope". Check gateway.alerts.destinations in the gateway\'s config.',
+        details: { destination: "nope" },
+      };
+      const configured = harness({ alertDestinations: [generic] });
+      await expect(
+        configured.dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+      ).resolves.toEqual({ destination: "ops", status: 200 });
+
+      await expect(
+        configured.dispatcher.dispatch("alerts.test", { destination: "nope" }, session()),
+      ).rejects.toMatchObject(unknown);
+      await expect(
+        harness().dispatcher.dispatch("alerts.test", { destination: "nope" }, session()),
+      ).rejects.toMatchObject(unknown);
+
+      expect(configured.poster.requests).toHaveLength(1);
+    });
   });
 
   describe("worker.install-component (ADR 0010 §7)", () => {
