@@ -79,11 +79,23 @@ describe("TokenStore", () => {
 
     expect(record.label).toBeUndefined();
     expect("label" in record).toBe(false);
-    await expect(store.list()).resolves.toEqual([record]);
+    const [listed] = await store.list();
+    expect(listed).toEqual(record);
+    expect("label" in (listed ?? {})).toBe(false);
+  });
+
+  it("refuses a role outside the token roles at insert", async () => {
+    const { database } = await tokenStore();
+
+    expect(() =>
+      database
+        .prepare("INSERT INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, NULL, 0)")
+        .run("tok_bad", "hash", "admin"),
+    ).toThrow(/CHECK/);
   });
 
   it("lists previously created tokens in creation order", async () => {
-    const { store } = await tokenStore();
+    const { store } = await tokenStore({ ids: ["c", "b", "a"] });
     await store.create("agent", "one");
     await store.create("operator", "two");
     await store.create("worker", "three");
