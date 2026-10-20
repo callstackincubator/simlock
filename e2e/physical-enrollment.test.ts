@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { PROTOCOL_VERSION_RANGE } from "../src/contract/index.js";
@@ -8,6 +5,7 @@ import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
 import type { FakeDriverRefusalReason, ScriptedPhysicalDevice } from "./fake-driver/types.js";
 import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import { readEnrolledApps } from "./helpers/state-db.js";
 
 const UDID = "00008110-001A2B3C4D5E";
 const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
@@ -666,11 +664,6 @@ describe("android enrolment", () => {
     expect(result.stdout).toBe(
       "Enrolled Pixel 9 (Android 15) as R58M123ABC, 1 user app recorded.\n",
     );
-    const state = JSON.parse(await readFile(join(env.home, "state.json"), "utf8")) as {
-      physicalDevices: { driverDeviceId: string; enrolledApps: string[] }[];
-    };
-    expect(state.physicalDevices.map((record) => record.enrolledApps)).toEqual([
-      ["com.example.mail"],
-    ]);
+    expect(readEnrolledApps(env)).toEqual([["com.example.mail"]]);
   });
 });

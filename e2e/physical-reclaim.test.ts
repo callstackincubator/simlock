@@ -1,6 +1,3 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -23,6 +20,7 @@ import {
   type PhysicalSeed,
   type SeededLease,
 } from "./helpers/physical-state.js";
+import { patchPhysicalRecords } from "./helpers/physical-presence.js";
 
 const ENROLLED = ["com.example.mail", "com.example.maps"] as const;
 const AGENT_APPS = ["com.agent.one", "com.agent.two"] as const;
@@ -82,22 +80,10 @@ async function startWith(
     mode: "auto",
   });
   await seedPhysicalState(env, [seed], options.leases ?? []);
-  if (options.patchState !== undefined) await patchPhysicalRecord(env, options.patchState);
+  if (options.patchState !== undefined) await patchPhysicalRecords(env, options.patchState);
   const started = await env.startDaemon();
   expect(started.code, started.stderr).toBe(0);
   return env;
-}
-
-async function patchPhysicalRecord(
-  env: TestEnv,
-  patch: (device: Record<string, unknown>) => Record<string, unknown>,
-): Promise<void> {
-  const path = join(env.home, "state.json");
-  const state = JSON.parse(await readFile(path, "utf8")) as {
-    physicalDevices: Record<string, unknown>[];
-  };
-  state.physicalDevices = state.physicalDevices.map(patch);
-  await writeFile(path, JSON.stringify(state, null, 2), "utf8");
 }
 
 async function setScript(
@@ -307,7 +293,7 @@ describe("a physical reclaim that fails quarantines the device", () => {
 });
 
 describe("a physical device that was mid-reclaim or quarantined when the daemon stopped", () => {
-  it("a physical device left reclaiming in state.json that is not present stays reclaiming after a daemon start; doctor --fix past its estimate quarantines it, and it is retried after retryBackoffMs once present", async () => {
+  it("a physical device left reclaiming in state.db that is not present stays reclaiming after a daemon start; doctor --fix past its estimate quarantines it, and it is retried after retryBackoffMs once present", async () => {
     const env = await startWith(RECLAIMING, {
       config: { warmPool: { quarantine: { retryBackoffMs: 1_500 } } },
       script: { installed: [...ENROLLED, ...AGENT_APPS], present: false },
@@ -330,7 +316,7 @@ describe("a physical device that was mid-reclaim or quarantined when the daemon 
     ]);
   });
 
-  it("a daemon restarted with a quarantined physical device in state.json retries it after its quarantineNextRetryAt", async () => {
+  it("a daemon restarted with a quarantined physical device in state.db retries it after its quarantineNextRetryAt", async () => {
     const nextRetryAt = Date.now() + 2_500;
     const env = await startWith(
       { ...READY, state: "quarantined" },

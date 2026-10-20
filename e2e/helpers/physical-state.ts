@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import type { TestEnv } from "./env.js";
+import { openSeedDatabase } from "./state-db.js";
 import { waitFor } from "./wait.js";
 
 /** The one iPhone every physical-device flow enrols: an iPhone 15 Pro on iOS 18.4, class phone. */
@@ -59,11 +57,6 @@ export const HELD_LEASE = (deadlineInMs: number): SeededLease => ({
   id: "lse_pheld",
 });
 
-/**
- * Writes `state.json` into the env's home with these physical records in their own list, the
- * way an enrolment would leave it. Call it before the daemon starts (`withDaemon({ mode:
- * "auto" })`).
- */
 export async function seedPhysicalState(
   env: Pick<TestEnv, "home">,
   physical: readonly PhysicalSeed[],
@@ -71,52 +64,73 @@ export async function seedPhysicalState(
   simulators: readonly ShutdownSimulatorSeed[] = [],
 ): Promise<void> {
   const now = Date.now();
-  const state = {
-    components: [],
-    devices: simulators.map((simulator) => ({
-      createdAt: now - 2 * DAY_MS,
-      driverData: {},
-      driverDeviceId: simulator.driverDeviceId,
-      id: simulator.id,
-      mode: "full",
-      shutdownAt: now - DAY_MS,
-      spec: { model: PHYSICAL_MODEL, osVersion: PHYSICAL_OS, platform: "ios" },
-      state: "shutdown",
-    })),
-    leaseRequests: [],
-    leases: leases.map((lease) => ({
-      deviceId: lease.deviceId,
-      grantedAt: now - 60_000,
-      id: lease.id,
-      idChosenByRequester: false,
-      lastRenewedAt: now - 60_000,
-      ownerId: PHYSICAL_AGENT,
-      requesterId: PHYSICAL_AGENT,
-      ttlDeadline: now + lease.deadlineInMs,
-      ttlMs: 600_000,
-    })),
-    physicalDevices: physical.map((seed) => ({
-      address: seed.driverDeviceId,
-      createdAt: now - 2 * DAY_MS,
-      driverData: {},
-      driverDeviceId: seed.driverDeviceId,
-      enrolledApps: seed.enrolledApps ?? [],
-      id: seed.id,
-      lastLeaseEndedAt:
-        seed.lastLeaseEndedAt ?? now - (seed.state === "reclaiming" ? DAY_MS : 3_600_000),
-      physical: true,
-      readyAt: now - 2 * DAY_MS,
-      spec: {
-        class: "phone",
-        model: PHYSICAL_MODEL,
-        osVersion: PHYSICAL_OS,
-        physical: true,
-        platform: "ios",
-      },
-      state: seed.state,
-    })),
-  };
-  await writeFile(join(env.home, "state.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  const state = await openSeedDatabase(env);
+  try {
+    state.transaction(() => {
+      const { database } = state;
+      for (const simulator of simulators) {
+        database
+          .prepare(
+            `INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version,
+               mode, created_at, shutdown_at) VALUES (?, 'ios', 0, ?, 'shutdown', ?, ?, 'full', ?, ?)`,
+          )
+          .run(
+            simulator.id,
+            simulator.driverDeviceId,
+            PHYSICAL_MODEL,
+            PHYSICAL_OS,
+            now - 2 * DAY_MS,
+            now - DAY_MS,
+          );
+        database
+          .prepare("INSERT INTO e2e_fake_device_data (device_id, fake_device_id) VALUES (?, ?)")
+          .run(simulator.id, simulator.driverDeviceId);
+      }
+      for (const seed of physical) {
+        database
+          .prepare(
+            `INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version,
+               class, created_at, last_lease_ended_at, ready_at, address)
+             VALUES (?, 'ios', 1, ?, ?, ?, ?, 'phone', ?, ?, ?, ?)`,
+          )
+          .run(
+            seed.id,
+            seed.driverDeviceId,
+            seed.state,
+            PHYSICAL_MODEL,
+            PHYSICAL_OS,
+            now - 2 * DAY_MS,
+            seed.lastLeaseEndedAt ?? now - (seed.state === "reclaiming" ? DAY_MS : 3_600_000),
+            now - 2 * DAY_MS,
+            seed.driverDeviceId,
+          );
+        (seed.enrolledApps ?? []).forEach((app, position) => {
+          database
+            .prepare("INSERT INTO device_enrolled_apps (device_id, position, app) VALUES (?, ?, ?)")
+            .run(seed.id, position, app);
+        });
+      }
+      for (const lease of leases) {
+        database
+          .prepare(
+            `INSERT INTO leases (id, device_id, requester_id, owner_id, granted_at, ttl_ms,
+               ttl_deadline, last_renewed_at, id_chosen_by_requester) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          )
+          .run(
+            lease.id,
+            lease.deviceId,
+            PHYSICAL_AGENT,
+            PHYSICAL_AGENT,
+            now - 60_000,
+            600_000,
+            now + lease.deadlineInMs,
+            now - 60_000,
+          );
+      }
+    });
+  } finally {
+    state.close();
+  }
 }
 
 /** The fake driver's operations on calls whose arguments name any of these driver device IDs. */

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
@@ -108,7 +109,15 @@ describe("daemon folders (ADR 0034)", () => {
       const workerInstance = await readFile(join(env.home, "instance.json"), "utf8");
       const gatewayInstance = await readFile(join(gatewayFolder(env), "instance.json"), "utf8");
       expect(gatewayInstance).not.toBe(workerInstance);
-      expect(existsSync(join(gatewayFolder(env), "state.json"))).toBe(false);
+      const gatewayState = new DatabaseSync(join(gatewayFolder(env), "state.db"));
+      try {
+        const devicesTables = gatewayState
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'devices'")
+          .all();
+        expect(devicesTables).toEqual([]);
+      } finally {
+        gatewayState.close();
+      }
     } finally {
       await stopGateway(env);
     }

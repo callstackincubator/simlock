@@ -166,7 +166,7 @@ describe("a daemon restart alone never ends a physical lease", () => {
     expect(readsBefore.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("a daemon restarted with an absent and a quarantined physical device in state.json keeps both states while they are not present", async () => {
+  it("a daemon restarted with an absent and a quarantined physical device in state.db keeps both states while they are not present", async () => {
     const env = await startPresence(
       [
         {
@@ -196,7 +196,7 @@ describe("a daemon restart alone never ends a physical lease", () => {
     }
   });
 
-  it("a physical device left reclaiming in state.json stays reclaiming while not present, and is reclaimed to ready once present", async () => {
+  it("a physical device left reclaiming in state.db stays reclaiming while not present, and is reclaimed to ready once present", async () => {
     const env = await startPresence(
       [{ script: { installed: INSTALLED, present: false }, seed: RECLAIMING }],
       { config: SLOW_RETRY },
