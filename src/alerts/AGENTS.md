@@ -3,7 +3,7 @@
 Does: a gateway sends chosen fleet events to webhook destinations (ADR 0035).
 Entry: `index.ts` (`createAlerts`). Built only by `../daemon/main.ts`, in the gateway branch, when
 `gateway.alerts.destinations` is not empty; a worker never builds it.
-Uses: bus (subscribe, types), ports (`Clock`, `Logger`, `WebhookPoster`), core (config types and
+Uses: bus (subscribe, types), ports (`Clock`, `IdGenerator`, `Logger`, `WebhookPoster`), core (config types and
 `ALERT_EVENTS`). Never imports anything else; `.dependency-cruiser.mjs` checks both directions.
 Imported by: `../daemon/main.ts` only.
 
