@@ -1,5 +1,8 @@
 import { base64url, exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 
+import { NodeSqliteOpener, NoopLogger, MemoryFilesystem } from "../ports/index.js";
+import type { SqliteOpener, SqliteSchemaOwner } from "../ports/index.js";
+import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import { type Auth, type AuthOptions, createAuthFrom } from "./index.js";
 import type { Identity } from "./identity.js";
 import { AuthError, type AuthConfig, type AuthStrategyDefinition } from "./strategy.js";
@@ -107,4 +110,23 @@ export function proxyRequest(jwt: string, header: string = proxyAuthConfig.heade
 
 export function authConfigWith(proxyAuth: Record<string, unknown> = proxyAuthConfig): AuthConfig {
   return { enabled: true, host: "127.0.0.1", port: 4700, proxyAuth } as AuthConfig;
+}
+
+// why: the real adapter on SQLite's in-memory database, whatever path the state module asks for.
+const memorySqlite: SqliteOpener = {
+  open: (_path, options) => new NodeSqliteOpener().open(":memory:", options),
+};
+
+export function openMemoryStateDatabase(
+  owners: readonly SqliteSchemaOwner[],
+): Promise<StateDatabase> {
+  return openStateDatabase({
+    dataDirectory: "/memory",
+    filesystem: new MemoryFilesystem(),
+    logger: new NoopLogger(),
+    oldFiles: [],
+    owners,
+    sqlite: memorySqlite,
+    upgradeStep: "",
+  });
 }

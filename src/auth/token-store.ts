@@ -1,16 +1,26 @@
 import { dirname } from "node:path";
 
-import type { Clock, Filesystem, IdGenerator, TokenSecrets } from "../ports/index.js";
+import type {
+  Clock,
+  Filesystem,
+  IdGenerator,
+  SqliteDatabase,
+  SqliteSchemaOwner,
+  TokenSecrets,
+} from "../ports/index.js";
 import type { TokenRecord, TokenRole } from "./tokens.js";
 
 const TOKEN_ROLES: readonly TokenRole[] = ["agent", "operator", "worker"];
 
+export const tokensOwner: SqliteSchemaOwner = { migrations: [], name: "tokens", version: 1 };
+
 export interface TokenStoreOptions {
-  readonly filesystem: Filesystem;
+  readonly database?: SqliteDatabase;
+  readonly filesystem?: Filesystem;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly secrets: TokenSecrets;
-  readonly path: string;
+  readonly path?: string;
 }
 
 export class TokenStoreError extends Error {
@@ -21,11 +31,11 @@ export class TokenStoreError extends Error {
 }
 
 export class TokenStore {
-  readonly #filesystem: Filesystem;
+  readonly #filesystem: Filesystem | undefined;
   readonly #clock: Clock;
   readonly #idGenerator: IdGenerator;
   readonly #secrets: TokenSecrets;
-  readonly #path: string;
+  readonly #path: string | undefined;
   #mutation: Promise<void> = Promise.resolve();
 
   constructor(options: TokenStoreOptions) {
@@ -87,6 +97,7 @@ export class TokenStore {
   }
 
   async #readAll(): Promise<TokenRecord[]> {
+    if (this.#filesystem === undefined || this.#path === undefined) return [];
     if (!(await this.#filesystem.exists(this.#path))) return [];
 
     const contents = await this.#filesystem.readFile(this.#path);
@@ -107,6 +118,7 @@ export class TokenStore {
   }
 
   async #writeAll(records: readonly TokenRecord[]): Promise<void> {
+    if (this.#filesystem === undefined || this.#path === undefined) return;
     await this.#filesystem.mkdirp(dirname(this.#path));
     await this.#filesystem.writeFileAtomic(this.#path, `${JSON.stringify(records, null, 2)}\n`, {
       mode: 0o600,
