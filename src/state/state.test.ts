@@ -81,7 +81,6 @@ describe("openStateDatabase", () => {
 
 describe("openStateDatabase refusals", () => {
   const SEE = 'See "Breaking: state moves to state.db" in docs/CLI.md.';
-  const SQLITE_FILE_HEADER = 100;
 
   async function seeded(directory: string): Promise<string> {
     const path = join(directory, STATE_DB_NAME);
@@ -136,7 +135,7 @@ describe("openStateDatabase refusals", () => {
     const damaged = await newDirectory();
     const damagedPath = await seeded(damaged);
     const bytes = await readFile(damagedPath);
-    bytes.fill(0xff, 4096 + SQLITE_FILE_HEADER, 4096 + SQLITE_FILE_HEADER + 2048);
+    bytes.fill(0xff, 4096 * 3, 4096 * 8);
     await writeFile(damagedPath, bytes);
     expect(await refusal(damaged)).toMatch(
       new RegExp(

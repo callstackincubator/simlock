@@ -1,11 +1,14 @@
 import { join } from "node:path";
 
-import type {
-  Filesystem,
-  Logger,
-  SqliteDatabase,
-  SqliteOpener,
-  SqliteSchemaOwner,
+import {
+  type Filesystem,
+  isLockError,
+  type Logger,
+  passesQuickCheck,
+  type SqliteDatabase,
+  type SqliteOpener,
+  type SqliteSchemaOwner,
+  SqliteUnavailableError,
 } from "../ports/index.js";
 
 export const STATE_DB_NAME = "state.db";
@@ -28,20 +31,85 @@ export interface StateDatabase {
   close(): void;
 }
 
+class StateRefusal extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "StateRefusal";
+  }
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function damaged(path: string, detail: string, cause: unknown): StateRefusal {
+  return new StateRefusal(
+    `${path} is damaged (${detail}). Move it away to start with empty state; every device and lease it held is forgotten.`,
+    { cause },
+  );
+}
+
+function refusalFor(error: unknown, path: string): StateRefusal {
+  if (error instanceof StateRefusal) return error;
+  if (isLockError(error)) {
+    return new StateRefusal(
+      `${path} is locked by another process. Stop the other Simlock daemon using it, then start again.`,
+      { cause: error },
+    );
+  }
+  return damaged(path, `open: ${describe(error)}`, error);
+}
+
 export async function openStateDatabase(options: OpenStateDatabaseOptions): Promise<StateDatabase> {
-  await options.filesystem.mkdirp(options.dataDirectory);
-  const database = await options.sqlite.open(join(options.dataDirectory, STATE_DB_NAME), {
-    readOnly: false,
-  });
-  configure(database);
-  migrate(database, options.owners, options.logger);
+  const { dataDirectory, filesystem, owners } = options;
+  for (const name of options.oldFiles) {
+    const oldFile = join(dataDirectory, name);
+    if (await filesystem.exists(oldFile)) {
+      throw new StateRefusal(
+        `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${options.upgradeStep.replaceAll("<path>", oldFile)} See "Breaking: state moves to state.db" in docs/CLI.md.`,
+      );
+    }
+  }
+  await filesystem.mkdirp(dataDirectory);
+  const path = join(dataDirectory, STATE_DB_NAME);
+  let database: SqliteDatabase | undefined;
+  try {
+    database = await options.sqlite.open(path, { readOnly: false });
+    configure(database);
+    check(database, path);
+    migrate(database, owners, path, options.logger);
+  } catch (error: unknown) {
+    try {
+      database?.close();
+    } catch {
+      // why: the open already failed; the refusal is what the caller must see
+    }
+    if (error instanceof SqliteUnavailableError) {
+      throw new StateRefusal("node:sqlite is not available; Simlock needs Node 22.13 or later.", {
+        cause: error,
+      });
+    }
+    throw refusalFor(error, path);
+  }
   return stateDatabase(database);
 }
 
-export function configure(database: SqliteDatabase): void {
+function configure(database: SqliteDatabase): void {
   database.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
   database.exec("PRAGMA journal_mode=WAL");
   database.exec("PRAGMA synchronous=NORMAL");
+}
+
+function check(database: SqliteDatabase, path: string): void {
+  let first: unknown;
+  try {
+    if (passesQuickCheck(database)) return;
+    first = Object.values(database.prepare("PRAGMA quick_check").all()[0] ?? {})[0];
+  } catch (error: unknown) {
+    if (isLockError(error)) throw error;
+    throw damaged(path, `quick_check: ${describe(error)}`, error);
+  }
+  throw damaged(path, `quick_check: ${String(first)}`, undefined);
 }
 
 export function stateDatabase(database: SqliteDatabase): StateDatabase {
@@ -73,9 +141,10 @@ function inTransaction<T>(database: SqliteDatabase, work: () => T): T {
   }
 }
 
-export function migrate(
+function migrate(
   database: SqliteDatabase,
   owners: readonly SqliteSchemaOwner[],
+  path: string,
   logger: Logger,
 ): void {
   inTransaction(database, () => {
@@ -87,8 +156,21 @@ export function migrate(
         .prepare("SELECT version FROM schema_versions WHERE owner = ?")
         .get(owner.name);
       const stored = row === undefined ? 0 : Number(row.version);
+      if (stored > owner.version) {
+        throw new StateRefusal(
+          `${owner.name} in ${path} is at version ${String(stored)}; this Simlock knows up to ${String(owner.version)}. Upgrade Simlock, or move state.db away.`,
+        );
+      }
       for (let from = stored; from < owner.version; from += 1) {
-        database.exec(owner.migrations[from] ?? "");
+        try {
+          database.exec(owner.migrations[from] ?? "");
+        } catch (error: unknown) {
+          if (isLockError(error)) throw error;
+          throw new StateRefusal(
+            `${owner.name} in ${path} could not move from version ${String(from)} to ${String(from + 1)}: ${describe(error)}. Upgrade Simlock, or move state.db away.`,
+            { cause: error },
+          );
+        }
         logger.debug("Moved a state.db schema owner up one version", {
           from,
           owner: owner.name,
