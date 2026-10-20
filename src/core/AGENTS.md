@@ -137,8 +137,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 - Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out.
 - A physical device is never destroyed and never counted against capacity.
 - Unreadable is not gone: startup skips a platform it could not list; doctor reports no drift there.
-- Warm pool and startup never install. Instance id is never regenerated.
-- Core imports no leasing or driver (dependency-cruiser `core-not-leasing`, `core-not-drivers`).
+- Warm pool and startup never install. Instance id is never regenerated. Core imports no leasing or driver (dependency-cruiser `core-not-leasing`, `core-not-drivers`).
 
 ## Known gaps
 
