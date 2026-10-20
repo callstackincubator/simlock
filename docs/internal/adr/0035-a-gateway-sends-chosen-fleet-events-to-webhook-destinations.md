@@ -199,11 +199,16 @@ the existing event contract, so it changes only additively (events rule
 The receiver checks the signature over the bytes it received, and can
 drop a repeat by `X-Simlock-Delivery`.
 
+The `secret` is required and is the HMAC key.
+
 **`slack`.** The body is `{"text": "<message>"}`, Slack's incoming-webhook
 body. Slack is the promised receiver; other services that take the same body
 may work. Each of the eleven
 events has one written message, held in a table typed over the event list,
 so a missing message fails the type check.
+
+The `secret` is refused: the webhook URL is the credential, and the body is
+not signed.
 
 **Formats are an extension point** (architecture rules 19-21): a
 definition per format in `src/alerts/formats/<name>/`, one registry typed
