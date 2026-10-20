@@ -1,7 +1,12 @@
 import { type ReactNode, useId } from "react";
 
 import { Drawer, DrawerTabs, Facts, Id, Link, Loaded, Meter, Status } from "../../ds";
-import { type LeaseInspection, useLeaseInspection } from "../../state/leases";
+import {
+  type EventRow,
+  type LeaseInspection,
+  useLeaseEvents,
+  useLeaseInspection,
+} from "../../state/leases";
 import { ScreenPanel } from "./screen-panel";
 
 // why: the drawer opens at once, named by the lease's id until the details arrive, and says so when
@@ -46,6 +51,7 @@ export function LeaseDrawer(props: {
                     label: "Screen",
                     value: "screen",
                   },
+                  { content: <LeaseEvents id={inspection.id} />, label: "Events", value: "events" },
                 ]}
               />
             )
@@ -53,6 +59,28 @@ export function LeaseDrawer(props: {
         </Loaded>
       )}
     </Drawer>
+  );
+}
+
+function LeaseEvents({ id }: { readonly id: string }) {
+  const view = useLeaseEvents(id);
+  return <Loaded view={view}>{(rows) => <LeaseEventList rows={rows} />}</Loaded>;
+}
+
+export function LeaseEventList({ rows }: { readonly rows: readonly EventRow[] }) {
+  if (rows.length === 0) return <p className="muted">No events for this lease in the last hour.</p>;
+  return (
+    <ul className="lease-events" aria-label="Events for this lease">
+      {rows.map((row) => (
+        <li key={row.id}>
+          <time dateTime={row.iso} className="mono muted">
+            {row.time}
+          </time>
+          <span className="mono">{row.name}</span>
+          <span className="muted">{row.summary}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

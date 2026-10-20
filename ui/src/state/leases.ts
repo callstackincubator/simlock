@@ -3,7 +3,9 @@ import { useState } from "react";
 import { ApiError } from "../data/api";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
+import { type EventRow, eventRows } from "../model/event-list";
 import {
+  eventsOfLease,
   filterLeaseRows,
   type LeaseDetails,
   type LeaseFilter,
@@ -17,11 +19,13 @@ import {
 import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
+import { useRecentEvents } from "./events";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { usePath, useSearch } from "./router";
 
+export { type EventRow } from "../model/event-list";
 export {
   LEASE_FILTERS,
   type LeaseFilter,
@@ -101,4 +105,11 @@ export function useLeaseInspection(id: string): LoadView<LeaseInspection | undef
       workers,
     }),
   );
+}
+
+// why: the events the console holds, an hour of them, that name this lease, newest first.
+export function useLeaseEvents(id: string): LoadView<readonly EventRow[]> {
+  const feed = useRecentEvents();
+  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(feed), (held) => eventRows(eventsOfLease(held, id), workers, "all"));
 }

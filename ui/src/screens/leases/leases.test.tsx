@@ -9,7 +9,7 @@ import { ConsoleProvider } from "../../state/services";
 import type { LeaseInspection, LeaseRowView } from "../../state/leases";
 import type { Screen } from "../../state/screen";
 import type { Paging } from "../../ds";
-import { LeaseDetail, LeaseTitle } from "./drawer";
+import { LeaseDetail, LeaseEventList, LeaseTitle } from "./drawer";
 import { LeaseTable } from "./index";
 import { ScreenView } from "./screen-panel";
 
@@ -241,5 +241,28 @@ describe("the screen panel while a picture is asked for", () => {
     expect(html).toContain('role="alert"');
     expect(html).toContain("Unknown lease: lse_1");
     expect(html).not.toContain("<canvas");
+  });
+});
+
+describe("a lease's Events tab", () => {
+  it("says there are no events for the lease in the last hour, or lists them", () => {
+    expect(text(renderToStaticMarkup(<LeaseEventList rows={[]} />))).toBe(
+      "No events for this lease in the last hour.",
+    );
+    const listed = renderToStaticMarkup(
+      <LeaseEventList
+        rows={[
+          {
+            id: "e1",
+            iso: "2026-10-02T12:00:00.000Z",
+            name: "lease.granted",
+            summary: "dev_1",
+            time: "12:00:00",
+            to: "/events/e1",
+          },
+        ]}
+      />,
+    );
+    expect(text(listed)).toBe("12:00:00 lease.granted dev_1");
   });
 });
