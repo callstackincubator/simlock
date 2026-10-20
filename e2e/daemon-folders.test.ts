@@ -185,6 +185,24 @@ describe("daemon folders (ADR 0034)", () => {
     );
   });
 
+  it("on a machine with only a present gateway, plain daemon start and plain status reach the gateway and start no worker", async () => {
+    const env = await withDaemon({ mode: "auto" });
+
+    try {
+      await makeGatewayPresent(env);
+
+      const started = await env.cli(["daemon", "start"]);
+      const status = await env.cli(["status", "--json"]);
+
+      expect(started.code, started.stderr).toBe(0);
+      expect(status.code, status.stderr).toBe(0);
+      expect(daemonMode(status)).toBe("gateway");
+      expect(existsSync(join(env.home, "instance.json"))).toBe(false);
+    } finally {
+      await stopGateway(env);
+    }
+  });
+
   describe("MCP", () => {
     it("simlock --gateway mcp lists the gateway's catalog, plain simlock mcp lists the worker's", async () => {
       const env = await withDaemon();
