@@ -4,13 +4,15 @@
 - **Date:** 2026-10-20
 - **Issue:** [#771](https://github.com/callstackincubator/simlock/issues/771)
 - **Supersedes:** nothing. Narrows [ADR
-  0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) §5:
-  step 2's keep rule (a released device is booted back only inside
-  `idle.shutdownAfterMs`) is replaced by a learned kind (§1 below); step
-  3's "never while a request is queued on its platform" is replaced by §6,
-  which serves the queue first; "a target never shuts a device down" stays
-  for a configured target and is narrowed by §3 for a learned kind. Narrows
-  ADR 0017 §8: `maxConcurrentBoots` defaults from the CPU count (§7).
+  0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md):
+  §2's and §8's `maxConcurrentBoots` "default 1" becomes a default from the
+  CPU count (§7); §4's "while a request is waiting for capacity on a
+  platform, the pool makes no boot or provision for a target on that
+  platform" is replaced by §6, which serves the queue first and lets targets
+  fill behind waiters the pass served; §5 step 2's keep rule (a released
+  device is booted back only inside `idle.shutdownAfterMs`) is replaced by a
+  learned kind (§1); §5's "a target never shuts a device down" stays for a
+  configured target and is narrowed by §3 for a learned kind.
   Builds on [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md)
   §2: the pool is one more owner of its own tables in `state.db` (§5).
 - **Depends on:** ADR 0017 (the pool, its budget, `resolve`, the wait for a
@@ -35,8 +37,9 @@ The queue is served one request at a time. The pool boots a shut-down
 device for the queue head only, and never creates one; a burst of five
 agents asking for one kind pays five boots one after the other.
 
-Nothing learns. The event history keeps a request's model and platform,
-not its OS or mode, and nothing reads it for the pool. Two reliability
+Nothing learns. The event history keeps every event's envelope for seven
+days and its usage projection keeps a request's model and platform, and
+nothing reads either for the pool. Two reliability
 holes sit beside this: a keep boot the RAM budget refuses is declined
 silently every pass, and a target short while any waiter sits on its
 platform is never reported short.
@@ -72,13 +75,16 @@ A learned kind is kept ready as a target of its own, origin `learned`,
 beside the configured ones. It is filled, reported and spared from the idle
 shutdown the way a configured target is (ADR 0017 §5).
 
-### 2. The count is the kind's peak over the last 24 hours, at least one
+### 2. The count is the kind's peak over the last 24 hours, at least one, and held devices count toward it
 
 A learned kind's count is the most leases of that kind held at the same
 moment during the last 24 hours, counted from now; a lease held across the
-window's start counts. Never below one. A grant takes a ready device, and
-the next pass boots or creates the next one, so the kind is replenished
-while the budget allows.
+window's start counts. Never below one. The kind **has** its idle ready
+devices plus its leased and reclaiming ones, so during a burst of three
+nothing more is made for a peak of three, and when the three are released
+they come back ready for the next burst. A fourth agent mid-burst pays a
+boot and raises the peak. A configured target keeps today's rule: its count
+is ready devices only (ADR 0017 §5).
 
 ### 3. Newest kinds fill first, inside today's budget, and a newer learned kind may displace an older one
 
@@ -94,7 +100,8 @@ target and serves no waiting request: the device is shut down (initiator
 kind boots or creates into the slot. A configured target's devices are never
 displaced, and a configured target never displaces (as today). A kind both
 configured and learned is one entry, origin `configured`, count the larger
-of the two.
+of the two: the entry needs the larger of what the configured count lacks
+in ready devices and what the learned count lacks in devices had.
 
 ```mermaid
 stateDiagram-v2
@@ -144,36 +151,45 @@ whose lease the registry no longer holds is closed at that moment.
 
 ### 6. The pool serves the whole queue, not only its head
 
-For each waiting virtual request, oldest first, that is not in flight and
-that no idle ready device, no device on its way (ADR 0017 §6) and no earlier
-waiter's device serves, the pass boots a shut-down device that serves it,
-or, for a request behind the head, creates one of the request's resolved
-spec. Both run under an ownerless `boot` claim, so the request is granted the
-device the moment it is ready, as it is for a target's device today. The
-head's creation stays leasing's own: its planner provisions under the lock,
-and a second creation for it would race that one.
+For each waiting virtual request, oldest first, that is not in flight, the
+pass matches one device: an idle ready device that serves it, else a device
+on its way (ADR 0017 §6) that serves it, each device matched to at most one
+waiter, in queue order. A waiter left without one gets a shut-down device
+that serves it booted, or, for a request behind the head, a device of its
+resolved spec created. Both run beside the pass under an ownerless `boot`
+claim, so the request is granted the device the moment it is ready, as it
+is for a target's device today. The head's creation stays leasing's own:
+its planner provisions under the lock, and a second creation for it would
+race that one. A request being queued (`lease.queued`) triggers a pass.
 
 Queue work comes before every kind, configured or learned, and like them is
 bounded by the boot cap, the running slots, the device limit and the RAM
 budget. A request the pool cannot start a device for plans itself when it
-reaches the head, as today. A keep boot the RAM budget refuses is not
-proposed, instead of being declined silently in the act.
+reaches the head, as today. A target no longer waits behind a waiter the
+pass gave a device; it waits only behind one the pass could not serve, and
+is not short for it. A keep boot the RAM budget refuses is not proposed,
+instead of being declined silently in the act.
 
 ### 7. The boot cap defaults from the CPU
 
 `warmPool.maxConcurrentBoots` defaults to `max(1, floor(cpuCount / 4))`,
 read from the same `SystemStats` the capacity defaults read. An operator's
 value still wins. The cap bounds queue boots, configured targets and learned
-kinds together.
+kinds together, and a waiting request whose own boot or creation is in
+flight counts one toward it, so five requests queued at once start the cap's
+worth of boots in all, the head's own included.
 
 ### 8. What the operator sees
 
 Each entry of `status.get`'s `warmPool.targets` gains `origin`,
-`"configured"` or `"learned"`; a learned kind is listed like a target, with
-its count, ready, booting and short. The protocol version rises by one.
+`"configured"` or `"learned"`, and names its image tag when the kind has
+one; a learned kind is listed like a target, with its count, ready, booting
+and short. The list's bound grows from 256 to 320, the configured limit plus
+32 learned kinds per platform. The protocol version rises by one.
 `simlock status` prints the origin; the console's warm pool table shows it.
-`warm-pool.target-missed` fires for configured targets only, and its
-payload gains `origin: "configured"`. `doctor`'s `warm-pool-target-unreachable`
+`warm-pool.target-missed` fires for configured targets only, judged and
+reported by the configured count even when a learned kind of the same spec
+raised the entry's count, and its payload gains `origin: "configured"`. `doctor`'s `warm-pool-target-unreachable`
 reads configured entries only. No new config key: `warmPool.enabled` is the
 one switch, and `warmPool.targets` the one override.
 
@@ -197,13 +213,16 @@ one switch, and `warmPool.targets` the one override.
   invisible to the planner between `claimProvision` and `registerDevice`. A
   head granted in that window may create its own device; the extra device
   is idle, never leased, and the idle rules shut it down and delete it.
-- ADR 0017's status line gains "§5 and §8 narrowed by 0038".
+- ADR 0017's status line gains "§2, §4, §5 and §8 narrowed by 0038".
+- A catalog read for learned kinds runs beside the pass, bounded, so a hung
+  `avdmanager` or `simctl` never stalls queue work or configured targets.
 
 ## Alternatives considered
 
-- **Learn from `history.db`.** Rejected: it keeps a request's model and
-  platform only, for seven days, and is a read-only consumer; the state
-  belongs with the owner that acts on it.
+- **Learn from `history.db`.** Rejected: its projection keeps a request's
+  model and platform only, the envelopes it could be derived from are kept
+  seven days and set aside on damage, and the history is a read-only
+  consumer; the state belongs with the owner that acts on it.
 - **Forget a kind after a fixed time, such as 24 hours.** Rejected by the
   maintainer: a kind stays until a newer one needs its slot.
 - **Pre-boot one default device per platform at first start.** Rejected: a
