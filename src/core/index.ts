@@ -1,9 +1,7 @@
 export {
   ALERT_EVENTS,
   ALERT_FORMATS,
-  ALERT_FORMAT_SECRET,
   type AlertDestination,
-  type AlertEventName,
   type AlertFormatName,
   type Config,
   type ConfigOverrides,

@@ -188,6 +188,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     return { daemon, filesystem, directory };
   }
 
+  // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to the daemon.
   async function startWorker(options: {
     readonly label: string;
     readonly model: string;

@@ -81,7 +81,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `not-modules` | Core, leasing, drivers, gateway and contract import nothing from modules or module-registry |
 | `not-agent-device` | Core, leasing and drivers import nothing from agent-device |
 | `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
-| `alerts-imports-bus-ports-core-only`, `not-alerts` | alerts imports the bus, ports and core only; only `main.ts` imports it |
+| `alerts-imports-bus-ports-core-only`, `not-alerts` | alerts imports the bus, ports and core only; only `src/daemon/main.ts` imports it |
 | `not-stream`, `stream-not-edges` | Nothing required imports stream; stream imports no frontend, gateway or driver |
 | `gateway-not-edges`, `gateway-only-dispatch` | Gateway imports no driver or frontend, and from daemon only `src/daemon/dispatch.ts` |
 | `only-main-knows-gateway` | In daemon, only `src/daemon/main.ts` imports the gateway |

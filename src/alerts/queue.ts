@@ -30,12 +30,14 @@ function errorCode(error: unknown): string {
 
 export class DestinationQueue {
   readonly #options: QueueOptions;
+  readonly destination: AlertDestination;
   readonly #waiting: EventEnvelope[] = [];
   #current: InFlight | undefined;
   #stopped = false;
 
   constructor(options: QueueOptions) {
     this.#options = options;
+    this.destination = options.destination;
   }
 
   enqueue(envelope: EventEnvelope): void {

@@ -17,18 +17,16 @@ export function createAlerts(options: {
   version: string;
 }): Alerts {
   const { destinations, eventBus, poster, clock, logger, version } = options;
-  const queues = destinations.map((destination) => ({
-    destination,
-    queue: new DestinationQueue({ destination, poster, clock, logger, version }),
-  }));
+  const queues = destinations.map(
+    (destination) => new DestinationQueue({ destination, poster, clock, logger, version }),
+  );
 
   const unsubscribes = ALERT_EVENTS.filter((name) =>
     destinations.some((destination) => destination.events.includes(name)),
   ).map((name) =>
     eventBus.subscribe(name, (envelope) => {
-      for (const { destination, queue } of queues) {
-        if (!destination.events.includes(name)) continue;
-        queue.enqueue(envelope);
+      for (const queue of queues) {
+        if (queue.destination.events.includes(name)) queue.enqueue(envelope);
       }
     }),
   );
@@ -37,9 +35,9 @@ export function createAlerts(options: {
     stop() {
       for (const unsubscribe of unsubscribes) unsubscribe();
       const discarded: Record<string, number> = {};
-      for (const { destination, queue } of queues) {
+      for (const queue of queues) {
         const count = queue.stop();
-        if (count > 0) discarded[destination.name] = count;
+        if (count > 0) discarded[queue.destination.name] = count;
       }
       if (Object.keys(discarded).length > 0) logger.info("Alerts discarded at stop", { discarded });
     },

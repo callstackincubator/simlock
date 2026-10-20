@@ -37,10 +37,9 @@ Both modes: config (`config.json`) → `Logger` → host info → `EventBus` →
   HTTP starts only when `http.enabled`.
 - **Gateway** — instance id → `TokenStore`, `AdminSecretManager` → `FleetLeaseIndex`
   (requester prefix `gw:<instanceId>:`) → `GatewayService` (uplink listener, `workers.json`)
-  → `FleetLeaseCoordinator` → `createAlerts` when `gateway.alerts.destinations` is not
-  empty (before `start()`, so no worker joins first; stopped first in `stopAuxiliary`, before the
-  uplinks close) → `DaemonServer` with `GatewayDispatcher`. HTTP always
-  starts; the uplink upgrades on the same listener.
+  → `FleetLeaseCoordinator` → `createAlerts` when `gateway.alerts.destinations` is not empty
+  (before `start()`; stopped first in `stopAuxiliary`) → `DaemonServer` with `GatewayDispatcher`.
+  HTTP always starts; the uplink upgrades on the same listener.
 
 An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 

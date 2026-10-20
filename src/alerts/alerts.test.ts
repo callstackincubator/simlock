@@ -95,38 +95,33 @@ afterEach(() => {
 });
 
 describe("alerts", () => {
+  const gatewayOwn = (h: Harness) => h.emit("worker.connected", connected());
+  const relayed = (h: Harness) =>
+    h.eventBus.republish({
+      id: "evt_remote",
+      timestamp: 42,
+      event: "device.quarantine-abandoned",
+      payload: { deviceId: "dev_1", attempts: 3, workerId: "wrk_9" } as never,
+      module: "quarantine",
+    });
+
   it.each([
-    ["a gateway-own worker.connected", "own"],
-    ["a republished device.quarantine-abandoned", "relayed"],
+    ["a gateway-own worker.connected", gatewayOwn, "wrk_1"],
+    ["a republished device.quarantine-abandoned", relayed, "wrk_9"],
   ])(
     "posts a listed event to a generic destination as the envelope with Content-Type, User-Agent, X-Simlock-Event, X-Simlock-Delivery and a signature that verifies with the secret, and logs Alert delivered at debug (%s)",
-    async (_name, kind) => {
+    async (_name, emitEnvelope, workerId) => {
       const h = harness([
         destination({ events: ["worker.connected", "device.quarantine-abandoned"] }),
       ]);
-      const envelope =
-        kind === "own"
-          ? h.emit("worker.connected", connected())
-          : h.eventBus.republish({
-              id: "evt_remote",
-              timestamp: 42,
-              event: "device.quarantine-abandoned",
-              payload: { deviceId: "dev_1", attempts: 3, workerId: "wrk_9" } as never,
-              module: "quarantine",
-            });
+      const envelope = emitEnvelope(h);
       await settle();
 
       expect(h.poster.requests).toHaveLength(1);
       const [request] = h.poster.requests;
       expect(request?.url).toBe(destination().url);
       expect(request?.body).toBe(JSON.stringify(envelope));
-      expect(JSON.parse(request?.body ?? "")).toMatchObject({
-        id: envelope.id,
-        event: envelope.event,
-        payload: envelope.payload,
-      });
-      if (kind === "relayed")
-        expect(JSON.parse(request?.body ?? "").payload.workerId).toBe("wrk_9");
+      expect(JSON.parse(request?.body ?? "").payload.workerId).toBe(workerId);
       expect(request?.headers).toEqual({
         "Content-Type": "application/json",
         "User-Agent": "simlock/9.9.9",

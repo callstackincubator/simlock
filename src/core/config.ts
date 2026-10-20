@@ -116,7 +116,7 @@ export const ALERT_FORMATS = ["generic"] as const;
 export type AlertFormatName = (typeof ALERT_FORMATS)[number];
 
 /** why: checked at config load, which cannot import the alerts module. */
-export const ALERT_FORMAT_SECRET: Record<AlertFormatName, "required" | "refused"> = {
+const ALERT_FORMAT_SECRET: Record<AlertFormatName, "required" | "refused"> = {
   generic: "required",
 };
 
@@ -147,53 +147,61 @@ function isAlertUrl(value: unknown): value is string {
   return url.protocol === "http:" && ALERT_LOCAL_HOSTS.includes(url.hostname);
 }
 
+const ALERT_KEYS = ["name", "format", "url", "events", "secret"];
+
+function checkAlertName(name: unknown, path: string, names: Set<string>): string {
+  if (typeof name !== "string" || !ALERT_NAME_PATTERN.test(name)) {
+    throw invalidValue(
+      `${path}.name`,
+      "a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters",
+    );
+  }
+  if (names.has(name)) throw invalidValue(`${path}.name`, "a name no other destination uses");
+  return name;
+}
+
+function checkAlertEvents(events: unknown, path: string): AlertEventName[] {
+  if (
+    !Array.isArray(events) ||
+    events.length === 0 ||
+    new Set(events).size !== events.length ||
+    !events.every((event) => (ALERT_EVENTS as readonly unknown[]).includes(event))
+  ) {
+    throw invalidValue(
+      `${path}.events`,
+      `a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`,
+    );
+  }
+  return events as AlertEventName[];
+}
+
 function alertDestinationValidator(
   names: Set<string>,
 ): (value: unknown, path: string, warn: Warn) => AlertDestination {
   return (value, path, warn) => {
     const entry = requireObject(value, path);
     for (const key of Object.keys(entry)) {
-      if (!["name", "format", "url", "events", "secret"].includes(key)) {
-        warn(`Unknown config key: "${path}.${key}"`);
-      }
+      if (!ALERT_KEYS.includes(key)) warn(`Unknown config key: "${path}.${key}"`);
     }
-    const { name, format, url, events, secret } = entry;
-    if (typeof name !== "string" || !ALERT_NAME_PATTERN.test(name)) {
-      throw invalidValue(
-        `${path}.name`,
-        "a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters",
-      );
-    }
-    if (names.has(name)) throw invalidValue(`${path}.name`, "a name no other destination uses");
-    if (typeof format !== "string" || !(ALERT_FORMATS as readonly string[]).includes(format)) {
-      throw invalidValue(
-        `${path}.format`,
-        `one of ${ALERT_FORMATS.map((each) => `"${each}"`).join(", ")}`,
-      );
-    }
-    if (!isAlertUrl(url)) throw invalidValue(`${path}.url`, ALERT_URL_EXPECTED);
+    // why: the fields are checked in this order, so a destination with several bad ones reports the first.
+    const name = checkAlertName(entry.name, path, names);
+    const format = stringUnion(ALERT_FORMATS)(entry.format, `${path}.format`);
+    if (!isAlertUrl(entry.url)) throw invalidValue(`${path}.url`, ALERT_URL_EXPECTED);
+    const events = checkAlertEvents(entry.events, path);
+    const { secret } = entry;
     if (
-      !Array.isArray(events) ||
-      events.length === 0 ||
-      new Set(events).size !== events.length ||
-      !events.every((event) => (ALERT_EVENTS as readonly unknown[]).includes(event))
+      ALERT_FORMAT_SECRET[format] === "required" &&
+      (typeof secret !== "string" || secret.length === 0)
     ) {
-      throw invalidValue(
-        `${path}.events`,
-        `a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`,
-      );
-    }
-    const secretRule = ALERT_FORMAT_SECRET[format as AlertFormatName];
-    if (secretRule === "required" && (typeof secret !== "string" || secret.length === 0)) {
       throw invalidValue(`${path}.secret`, `a non-empty secret for a ${format} destination`);
     }
     names.add(name);
     return {
       name,
-      format: format as AlertFormatName,
-      url,
-      events: events as AlertEventName[],
-      ...(secret === undefined ? {} : { secret: secret as string }),
+      format,
+      url: entry.url,
+      events,
+      ...(typeof secret === "string" ? { secret } : {}),
     };
   };
 }
