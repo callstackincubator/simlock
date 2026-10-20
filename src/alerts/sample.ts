@@ -1,10 +1,20 @@
 import type { AlertDestination } from "../core/index.js";
 import type { Clock, IdGenerator, WebhookPoster } from "../ports/index.js";
+import { errorCode } from "./error-code.js";
 import { ALERT_FORMAT_REGISTRY } from "./formats/index.js";
 
-export type AlertTestResult = { readonly ok: true; readonly status: number };
+const TEST_TIMEOUT_MS = 10_000;
 
-export async function sendTest(options: {
+export type AlertTestResult =
+  | { readonly ok: true; readonly status: number }
+  | {
+      readonly ok: false;
+      readonly reason: "status" | "unreachable" | "timeout";
+      readonly status?: number;
+      readonly error?: string;
+    };
+
+export function sendTest(options: {
   destination: AlertDestination;
   poster: WebhookPoster;
   clock: Clock;
@@ -26,11 +36,35 @@ export async function sendTest(options: {
     version,
     workerLabel,
   });
-  const { status } = await poster.post({
-    url: destination.url,
-    headers: request.headers,
-    body: request.body,
-    signal: new AbortController().signal,
+  const controller = new AbortController();
+  return new Promise((resolve) => {
+    const timer = clock.setTimer(TEST_TIMEOUT_MS, () => {
+      controller.abort();
+      resolve({ ok: false, reason: "timeout" });
+    });
+    const settle = (result: AlertTestResult): void => {
+      clock.cancel(timer);
+      resolve(result);
+    };
+    let pending: Promise<{ status: number }>;
+    try {
+      pending = poster.post({
+        url: destination.url,
+        headers: request.headers,
+        body: request.body,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    pending.then(
+      ({ status }) =>
+        settle(
+          status >= 200 && status < 300
+            ? { ok: true, status }
+            : { ok: false, reason: "status", status },
+        ),
+      (error: unknown) => settle({ ok: false, reason: "unreachable", error: errorCode(error) }),
+    );
   });
-  return { ok: true, status };
 }

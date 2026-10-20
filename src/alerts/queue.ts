@@ -1,6 +1,7 @@
 import type { EventEnvelope } from "../bus/index.js";
 import type { AlertDestination } from "../core/index.js";
 import type { Clock, Logger, TimerHandle, WebhookPoster } from "../ports/index.js";
+import { errorCode } from "./error-code.js";
 import { ALERT_FORMAT_REGISTRY } from "./formats/index.js";
 
 const TRY_TIMEOUT_MS = 10_000;
@@ -22,11 +23,6 @@ interface QueueOptions {
   readonly logger: Logger;
   readonly version: string;
   workerLabel(workerId: string): string;
-}
-
-function errorCode(error: unknown): string {
-  const cause = (error as { cause?: { code?: unknown } } | null)?.cause;
-  return typeof cause?.code === "string" ? cause.code : "network-error";
 }
 
 export class DestinationQueue {

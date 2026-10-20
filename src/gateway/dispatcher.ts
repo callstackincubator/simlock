@@ -81,6 +81,16 @@ type DeepReadonly<Value> = Value extends (infer Item)[]
  */
 export type GatewayConfig = DeepReadonly<z.infer<(typeof OPERATIONS)["config.get"]["output"]>>;
 
+/** why: ADR 0035 §1; what `alerts.test` needs of a send, declared here because `src/gateway` may not import `src/alerts`. */
+export type AlertTestOutcome =
+  | { readonly ok: true; readonly status: number }
+  | {
+      readonly ok: false;
+      readonly reason: "status" | "unreachable" | "timeout";
+      readonly status?: number;
+      readonly error?: string;
+    };
+
 export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
@@ -91,9 +101,7 @@ export interface GatewayDispatcherOptions {
    * why: ADR 0035 §1; declared here, not imported from `src/alerts`, which this module may not
    * import. Posts one sample to the named alert destination and says what came of it.
    */
-  readonly testDestination?: (
-    destination: string,
-  ) => Promise<{ readonly ok: true; readonly status: number }>;
+  readonly testDestination?: (destination: string) => Promise<AlertTestOutcome>;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
   readonly directory: WorkerDirectory;
@@ -337,7 +345,26 @@ export class GatewayDispatcher {
     const result = await (
       this.options.testDestination as NonNullable<GatewayDispatcherOptions["testDestination"]>
     )(input.destination);
-    return { destination: input.destination, status: result.status };
+    if (result.ok) return { destination: input.destination, status: result.status };
+    const { destination } = input;
+    if (result.reason === "status") {
+      throw new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} answered HTTP ${result.status}`,
+        {
+          destination,
+          status: result.status,
+        },
+      );
+    }
+    const error = result.reason === "timeout" ? "timeout" : (result.error ?? "network-error");
+    throw new DispatchError(
+      "ALERT_SEND_FAILED",
+      result.reason === "timeout"
+        ? `${destination} did not answer within 10 s`
+        : `${destination} could not be reached: ${error}`,
+      { destination, error },
+    );
   };
 
   #workerRemove: Handler<"worker.remove"> = async (input) => ({

@@ -130,6 +130,17 @@ export interface ErrorDetailsMap {
    */
   WORKER_UNREACHABLE: { readonly workerId: string };
 
+  /**
+   * why: `alerts.test`: the receiver did not take the sample. `status` is a non-2xx answer; `error` is
+   * `timeout`, a network code such as `ECONNREFUSED`, or `network-error`. Never the error's own
+   * message, which can hold the destination's URL.
+   */
+  ALERT_SEND_FAILED: {
+    readonly destination: string;
+    readonly status?: number;
+    readonly error?: string;
+  };
+
   /** ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
    * version of the contract can produce -- purely a client-side wrapping target. */
@@ -182,6 +193,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   WORKER_CONNECTED: true,
   UNKNOWN_WORKER: true,
   WORKER_UNREACHABLE: true,
+  ALERT_SEND_FAILED: true,
   UNKNOWN_DAEMON_ERROR: true,
 };
 
@@ -392,6 +404,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "transport",
     cliExitCode: 1,
     httpStatus: 503,
+  },
+  // why: 502, the gateway worked and the receiver it called did not take the sample.
+  ALERT_SEND_FAILED: {
+    code: "ALERT_SEND_FAILED",
+    kind: "transport",
+    cliExitCode: 1,
+    httpStatus: 502,
   },
   UNKNOWN_DAEMON_ERROR: {
     code: "UNKNOWN_DAEMON_ERROR",

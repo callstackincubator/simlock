@@ -997,6 +997,7 @@ describe("GatewayDispatcher", () => {
         (value) => (outcome = value),
         (error: unknown) => (outcome = error),
       );
+      await vi.waitFor(() => expect(poster.requests).toHaveLength(1));
       clock.advance(9_999);
       await new Promise((resolve) => setImmediate(resolve));
       expect(outcome).toBe("pending");
