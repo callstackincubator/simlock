@@ -17,8 +17,6 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 | `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`             |
 | `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                    |
 | `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery              |
-| `admin-secret.ts`       | `AdminSecretManager`: per-start secret, `admin.token`                  |
-| `session.ts`            | `createCredentialRoleResolver`: credential → role                      |
 | `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                     |
 | `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                        |
 | `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink              |
@@ -96,7 +94,7 @@ Health: `starting` → `running`, or `failed`.
 
 ## Identity and roles
 
-Credential resolution (`createCredentialRoleResolver`), at `hello`:
+Credential resolution (`resolveHelloRole` in `src/auth`), at `hello`:
 
 1. No credential → `agent`.
 2. An `operator` token in `tokens.json` → `admin`.
