@@ -253,6 +253,12 @@ export default {
       { path: "^ui/src/(app|data|model)/" },
     ),
     direction(
+      "ui-base-ui-in-ds-only",
+      "only the console's design system imports Base UI; everything else uses its wrapped parts",
+      "^ui/src/(app|screens|state|data|model)/",
+      { path: "(^|node_modules/)@base-ui/react(/|$)" },
+    ),
+    direction(
       "cli-router-imports-no-component-values",
       "the CLI's router answers --help and a usage error before any component loads: these files reach another component only for types, by dynamic import, or statically for agent-identity alone, so the fast paths load no component code",
       "^src/cli/(main|index|tree|errors|types|usage-error|environment|stdio|log-file|args|connect)\\.ts$",
