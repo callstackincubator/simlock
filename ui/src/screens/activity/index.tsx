@@ -1,6 +1,7 @@
 import "./activity.css";
 
 import {
+  Button,
   ButtonLink,
   ChoiceChips,
   Drawer,
@@ -24,6 +25,7 @@ import {
   type EventRow,
   type EventsChart,
   type EventsPage,
+  type HistoryEnd,
   SUBJECT_CHOICES,
   setQuery,
   setSubject,
@@ -119,11 +121,28 @@ function EventList({ page }: { readonly page: EventsPage }) {
       newText={(count) => (count === 1 ? "1 new event" : `${count} new events`)}
       startAt={page.chosenIndex}
       onNearEnd={page.loadOlder}
+      footer={
+        page.end === undefined ? undefined : <EndRow end={page.end} onRetry={page.loadOlder} />
+      }
       renderRow={(index) => {
         const row = rows[index];
         return row === undefined ? null : <Row row={row} selected={row.id === chosenId} />;
       }}
     />
+  );
+}
+
+function EndRow(props: { readonly end: HistoryEnd; readonly onRetry: () => void }) {
+  const { end, onRetry } = props;
+  return (
+    <p className="feed-end muted">
+      {end.text}
+      {end.retry ? (
+        <Button type="button" onClick={onRetry}>
+          Try again
+        </Button>
+      ) : null}
+    </p>
   );
 }
 

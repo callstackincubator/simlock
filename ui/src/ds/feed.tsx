@@ -27,10 +27,13 @@ export function Feed(props: {
   readonly newText: (count: number) => string;
   readonly startAt?: number;
   readonly onNearEnd?: () => void;
+  // why: below the scrolling box, outside the list, so it never counts as a row.
+  readonly footer?: ReactNode;
   readonly renderRow: (index: number) => ReactNode;
 }) {
   const {
     count,
+    footer,
     keyAt,
     label,
     listLabel,
@@ -86,6 +89,7 @@ export function Feed(props: {
           ))}
         </ul>
       </div>
+      {footer}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { ApiPath } from "./api";
+import { ApiError, type ApiPath } from "./api";
 import {
   type Clock,
   isRefusal,
@@ -8,9 +8,12 @@ import {
 } from "./live/connection";
 import {
   type ConsoleEvent,
+  type HistoryState,
+  MAX_EVENTS,
   mergeEvents,
   OLDER_PAGE as PAGE,
   readEvent,
+  readOlder,
   readReplay,
   RECENT,
   sinceFor,
@@ -30,6 +33,7 @@ export class EventFeed {
   #gapFrom: number | undefined;
   #loading = false;
   #loadingOlder = false;
+  #history: HistoryState = "more";
   // why: counts the stream's opens, so a load knows whether one happened while it was out.
   #opens = 0;
   #retryTimer: unknown;
@@ -117,9 +121,13 @@ export class EventFeed {
       );
   }
 
-  // why: one page at a time; a second signal before the answer is dropped.
+  readonly history = (): HistoryState => this.#history;
+
+  // why: one page at a time, none once the history has ended, and none at the cap: a second signal
+  // before the answer is dropped.
   readonly loadOlder = (): void => {
-    if (!this.#active || this.#loadingOlder) return;
+    if (!this.#active || this.#loadingOlder || this.#events.length >= MAX_EVENTS) return;
+    if (this.#history !== "more" && this.#history !== "failed") return;
     const oldest = this.#events.at(-1);
     const query =
       oldest === undefined
@@ -127,19 +135,27 @@ export class EventFeed {
         : `before=${encodeURIComponent(oldest.id)}&limit=${PAGE}`;
     this.#loadingOlder = true;
     this.#get(`/v1/events?${query}`)
-      .then(readReplay)
+      .then(readOlder)
       .then(
-        (events) => {
+        (page) => {
           this.#loadingOlder = false;
           if (!this.#active) return;
-          this.#events = mergeEvents(this.#events, events);
-          this.#publish({ ...this.#state, data: this.#events });
+          const current = this.#events;
+          this.#events = mergeEvents(current, page.events);
+          this.#setHistory(page.full && this.#events !== current ? "more" : "start");
         },
-        () => {
+        (error: unknown) => {
           this.#loadingOlder = false;
+          if (!this.#active) return;
+          this.#setHistory(error instanceof ApiError && error.status === 422 ? "gone" : "failed");
         },
       );
   };
+
+  #setHistory(history: HistoryState): void {
+    this.#history = history;
+    this.#publish({ ...this.#state, data: this.#events });
+  }
 
   #retryLater(): void {
     const delay = RETRY_BACKOFF_MS[this.#retryAttempt] ?? RETRY_INTERVAL_MS;

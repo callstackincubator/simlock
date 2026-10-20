@@ -39,3 +39,15 @@
   background: var(--bg);
   transform: translateX(-50%);
 }
+
+/* The last row: why the list stops, below the scrolling box and outside the list. */
+.feed-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+}

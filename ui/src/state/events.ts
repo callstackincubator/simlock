@@ -17,7 +17,7 @@ import {
   type SubjectFilter,
   writeSubject,
 } from "../model/event-list";
-import type { ConsoleEvent } from "../model/events";
+import { type ConsoleEvent, type HistoryEnd, type HistoryState, historyEnd } from "../model/events";
 import { readQuery, writeQuery } from "../model/paging";
 import type { LeaseList, LeaseRecord } from "../model/leases";
 import { itemIdFrom } from "../model/paths";
@@ -28,7 +28,7 @@ import { loadView, mapView } from "./resource";
 import { setSearch, usePath, useSearch } from "./router";
 import { useApi } from "./services";
 
-export type { Chosen, EventDetail, EventRow, EventsChart, SubjectFilter };
+export type { Chosen, EventDetail, EventRow, EventsChart, HistoryEnd, SubjectFilter };
 export { SUBJECT_CHOICES };
 
 // why: each screen that reads events holds its own feed, filled from the last hour and then the
@@ -36,13 +36,18 @@ export { SUBJECT_CHOICES };
 export function useEventFeed(): {
   readonly feed: EventFeed;
   readonly state: ResourceState<readonly ConsoleEvent[]>;
+  readonly history: HistoryState;
 } {
   const api = useApi();
   const [feed] = useState(() => new EventFeed((path) => api.getJson(path), browserClock));
   useLiveEvents(feed.streamEvent);
   useStreamOpened(feed.streamOpened);
   useEffect(() => feed.start(), [feed]);
-  return { feed, state: useSyncExternalStore(feed.subscribe, feed.snapshot) };
+  return {
+    feed,
+    history: useSyncExternalStore(feed.subscribe, feed.history),
+    state: useSyncExternalStore(feed.subscribe, feed.snapshot),
+  };
 }
 
 export function useRecentEvents(): ResourceState<readonly ConsoleEvent[]> {
@@ -65,12 +70,14 @@ export interface EventsPage {
   // why: the row the chosen event sits at, so the box opens with it in view.
   readonly chosenIndex: number;
   readonly loadOlder: () => void;
+  // why: the last row says why the list stops; none while more may still load.
+  readonly end: HistoryEnd | undefined;
   // why: the id in the URL stands before the list has loaded, so the drawer can open at once.
   readonly urlId: string | undefined;
 }
 
 export function useEvents(): LoadView<EventsPage> {
-  const { feed: source, state: feed } = useEventFeed();
+  const { feed: source, history, state: feed } = useEventFeed();
   const events = feed.data;
   // why: the places an event links to are read for the links only; a route that is slow, refused
   // or not served here costs the feed nothing, only the link.
@@ -95,6 +102,7 @@ export function useEvents(): LoadView<EventsPage> {
     return {
       chart,
       chosen,
+      end: historyEnd(history, held),
       held: held.length,
       loadOlder: source.loadOlder,
       chosenIndex: Math.max(

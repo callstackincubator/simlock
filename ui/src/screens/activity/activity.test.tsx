@@ -47,6 +47,7 @@ function page(over: Partial<EventsPage> = {}): EventsPage {
     },
     chosen: { detail: DETAIL, kind: "event" },
     chosenIndex: 0,
+    end: undefined,
     held: 1,
     loadOlder: () => {},
     query: "",
