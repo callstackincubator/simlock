@@ -95,9 +95,32 @@ export class LearnedKinds {
       .run(at, leaseId);
   }
 
-  forget(_spec: VirtualSpec): void {}
+  forget(spec: VirtualSpec): void {
+    this.#state.transaction(() => {
+      const database = this.#state.database;
+      const where = "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ?";
+      const key = [
+        spec.platform,
+        spec.model,
+        spec.osVersion,
+        spec.mode ?? "full",
+        spec.imageTag ?? "",
+      ];
+      database
+        .prepare(
+          `DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE ${where})`,
+        )
+        .run(...key);
+      database.prepare(`DELETE FROM warm_kinds WHERE ${where}`).run(...key);
+    });
+  }
 
-  clear(): void {}
+  clear(): void {
+    this.#state.transaction(() => {
+      this.#state.database.exec("DELETE FROM warm_kind_leases");
+      this.#state.database.exec("DELETE FROM warm_kinds");
+    });
+  }
 
   kinds(now: number): LearnedKind[] {
     const database: SqliteDatabase = this.#state.database;
