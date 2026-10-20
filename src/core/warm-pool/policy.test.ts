@@ -441,24 +441,16 @@ describe("warm pool policy", () => {
     ]);
   });
 
-  it("does not boot a shut-down device released longer ago than idle.shutdownAfterMs without a waiting request", () => {
-    const stale = device("stale", "shutdown", { endedAgo: shutdownAfterMs });
-    const fresh = device("fresh", "shutdown", { endedAgo: shutdownAfterMs - 1 });
-    const neverLeased = device("never", "shutdown");
+  it("proposes no recently-released boot: a shut-down device released a moment ago whose kind is not learned is left down", () => {
+    const fresh = device("fresh", "shutdown", { endedAgo: 1_000 });
+    const later = device("later", "shutdown", { endedAgo: minute });
 
-    const proposals = evaluate(view([stale, fresh, neverLeased]));
-
-    expect(proposals).toEqual([{ action: "boot", deviceId: "fresh", reason: "recently-released" }]);
-  });
-
-  it("with room for one boot and two recently released shut-down devices, proposes the more recently released one", () => {
-    const earlier = device("earlier", "shutdown", { endedAgo: 4 * minute });
-    const later = device("later", "shutdown", { endedAgo: 1 * minute });
-    const busy = device("busy", "leased");
-
-    const proposals = evaluate(view([earlier, later, busy], { limit: 2 }));
-
-    expect(proposals).toEqual([{ action: "boot", deviceId: "later", reason: "recently-released" }]);
+    expect(evaluate(view([fresh, later], { limit: 5 }))).toEqual([]);
+    expect(
+      evaluate(
+        view([fresh, later], { learned: [{ count: 1, lastLeasedAt: now, spec: fresh.spec }] }),
+      ),
+    ).toEqual([{ action: "boot", deviceId: "fresh", reason: "target", target: fresh.spec }]);
   });
 
   it("boots a device for a waiting request before one that was merely released recently", () => {
