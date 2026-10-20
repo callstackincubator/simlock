@@ -107,6 +107,24 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   };
 }
 
+// why: the filter lives in the address beside the page, so opening a worker and coming back shows
+// the same list the page number was counted in; an unknown value is All.
+export function readFilter(search: string): WorkerFilter {
+  const asked = new URLSearchParams(search).get("filter");
+  return WORKER_FILTERS.find((entry) => entry.value === asked)?.value ?? "all";
+}
+
+// why: a new filter starts at the first page, since the page the operator was on may not exist in
+// it; the other keys of the query stay.
+export function writeFilter(search: string, filter: WorkerFilter): string {
+  const params = new URLSearchParams(search);
+  params.delete("page");
+  if (filter === "all") params.delete("filter");
+  else params.set("filter", filter);
+  const written = params.toString();
+  return written === "" ? "" : `?${written}`;
+}
+
 function matches(worker: WorkerView, filter: WorkerFilter): boolean {
   if (filter === "issues") return hasIssue(worker);
   if (filter === "busy") return (useOf(worker)?.percent ?? 0) >= BUSY_PERCENT;

@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
 import type { LeaseDetails, LeaseList, TokenList } from "../model/leases";
@@ -7,9 +5,11 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
+  readFilter,
   searchWorkers,
   upMeta,
   type WorkerFilter,
+  writeFilter,
   type DeviceRow,
   type WorkerPage,
   type WorkerRow,
@@ -72,7 +72,7 @@ export function useFleetAddress(): FleetAddress {
 export function useFleet(): LoadView<FleetPage> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   const search = useSearch();
-  const [filter, setFilter] = useState<WorkerFilter>("all");
+  const filter = readFilter(search);
   const ready = workers.kind === "ready";
   const query = readQuery(search);
   const shown = searchWorkers(filterWorkers(ready ? workers.data.workers : [], filter), query);
@@ -90,7 +90,7 @@ export function useFleet(): LoadView<FleetPage> {
     // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
     // letter of the search.
     search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
-    setFilter,
+    setFilter: (next) => setSearch(writeFilter(window.location.search, next), { replace: true }),
   }));
 }
 

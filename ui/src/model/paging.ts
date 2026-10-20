@@ -67,7 +67,7 @@ export function rangeOf(at: PageAt, total: number): string {
 export function listSearch(search: string): string {
   const query = new URLSearchParams(search);
   const kept = new URLSearchParams();
-  for (const key of ["page", "size", "q"]) {
+  for (const key of ["page", "size", "q", "filter"]) {
     const value = query.get(key);
     if (value !== null) kept.set(key, value);
   }

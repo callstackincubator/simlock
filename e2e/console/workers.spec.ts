@@ -477,6 +477,7 @@ test.describe("the workers page", () => {
       await expect(row(page, "worker-a")).toBeVisible();
 
       await page.getByLabel("Issues").check();
+      await expect(page).toHaveURL(/\/fleet\?filter=issues$/);
       await expect(row(page, "worker-b")).toBeVisible();
       await expect(row(page, "worker-c")).toBeVisible();
       await expect(row(page, "worker-a")).toHaveCount(0);

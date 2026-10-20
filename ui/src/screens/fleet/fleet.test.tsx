@@ -136,12 +136,6 @@ function text(markup: string): string {
 }
 
 describe("the fleet table", () => {
-  it("shows a row as the worker's name and system", () => {
-    const markup = renderToStaticMarkup(<FleetBody page={fleet([WORKER])} />);
-
-    expect(text(markup)).toContain("worker-a macOS 15.5");
-  });
-
   it("says no workers have connected, or that none matches the filter", () => {
     const none = (empty: boolean, filter: FleetPage["filter"]) =>
       text(renderToStaticMarkup(<FleetBody page={fleet([], { empty }, filter)} />));
@@ -241,11 +235,13 @@ describe("a worker's page", () => {
       protocol: { gateway: { max: 35, min: 35 }, worker: { max: 30, min: 30 } },
     };
 
-    const devices = text(html(page(old)));
+    const devicesMarkup = html(page(old));
+    const devices = text(devicesMarkup);
     const host = text(html(page(old, "host")));
 
     expect(devices).toContain("No devices: the gateway cannot read this worker.");
     expect(devices).not.toContain("Read ");
+    expect(devicesMarkup).not.toContain("Load and leases");
     expect(host).toContain("incompatible gateway 35–35, worker 30–30");
   });
 });

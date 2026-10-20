@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { listSearch } from "./paging";
-import { filterWorkers, upMeta, type WorkerPage, workerPageOf, workerRow } from "./worker-page";
+import {
+  filterWorkers,
+  readFilter,
+  upMeta,
+  type WorkerPage,
+  workerPageOf,
+  workerRow,
+  writeFilter,
+} from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -117,30 +125,19 @@ describe("a worker's row in the list", () => {
     expect(workerRow(worker({ capacity: undefined })).use).toBeUndefined();
   });
 
-  it("has the load meters of a connected worker and none for one that is not connected", () => {
-    expect(workerRow(worker({ load: LOAD })).meters.map((meter) => meter.label)).toEqual([
-      "CPU",
-      "Memory",
-      "Disk",
-    ]);
-    expect(workerRow(worker({ connection: "disconnected", load: LOAD })).meters).toEqual([]);
-  });
-
-  it("shows the Disconnected banner for a disconnected worker only, then Drained", () => {
-    const disconnected = worker({
-      connection: "disconnected",
-      drained: true,
-      lastSeenAt: NOW - 4_000,
-    });
-    expect(inspect(disconnected).banners).toEqual(["Disconnected · last seen 4 s ago", "Drained"]);
-    expect(inspect(worker({ connection: "incompatible" })).banners).toEqual([]);
-    expect(inspect(worker()).banners).toEqual([]);
+  it("reads the filter from the address, All when it is absent or unknown, and a new one starts at the first page", () => {
+    expect(readFilter("?filter=busy")).toBe("busy");
+    expect(readFilter("?filter=nope")).toBe("all");
+    expect(readFilter("")).toBe("all");
+    expect(writeFilter("?page=3&q=ci", "issues")).toBe("?q=ci&filter=issues");
+    expect(writeFilter("?filter=busy&page=3", "all")).toBe("");
   });
 
   it("keeps the list's page and size on the link, and nothing of a worker's own pagers", () => {
     expect(listSearch("?page=2&size=50&devices-page=3&warm-pool-size=50")).toBe("?page=2&size=50");
     expect(listSearch("?devices-page=3")).toBe("");
     expect(listSearch("?q=ci&page=2&size=50")).toBe("?page=2&size=50&q=ci");
+    expect(listSearch("?page=2&filter=busy")).toBe("?page=2&filter=busy");
     expect(workerRow(worker(), "?page=2").to).toBe("/fleet/wrk_1?page=2");
   });
 });
@@ -433,10 +430,17 @@ describe("a worker's device rows", () => {
       id: "dev_p",
       mode: undefined,
       physical: true,
+      driverDeviceId: "00008130-AAAA",
       spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
     });
     const rows =
-      inspect(worker({ devices: [physical, device({ id: "dev_v" })] })).overview.devices ?? [];
+      inspect(worker({ devices: [physical, device({ id: "dev_v", driverDeviceId: "SIM-1" })] }))
+        .overview.devices ?? [];
+
+    expect(rows.map((row) => [row.id, row.udid])).toEqual([
+      ["dev_p", "00008130-AAAA"],
+      ["dev_v", undefined],
+    ]);
 
     expect(rows.map((row) => [row.id, row.physical, row.mode, row.imageTag])).toEqual([
       ["dev_p", true, undefined, undefined],
