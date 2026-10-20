@@ -1619,6 +1619,21 @@ describe("warm pool policy", () => {
           ["learned", 1, 0],
         ]);
       });
+
+      it("keeps a learned kind's never-leased device out of never-leased-idle while the kind wants it, and proposes one beyond its count after idle.shutdownAfterMs", () => {
+        const old = now - shutdownAfterMs - 1;
+        const wanted = ofKind("wanted", "ready", { createdAt: 1, readyAt: old });
+        const extra = ofKind("extra", "ready", { createdAt: 2, readyAt: old });
+        const young = ofKind("young", "ready", { createdAt: 3, readyAt: now - 1_000 });
+        const learned = [learnedOf(kind, 1, now)];
+
+        expect(evaluate(view([wanted], { learned }))).toEqual([]);
+        expect(evaluate(view([wanted, extra], { learned }))).toEqual([
+          { action: "shutdown", deviceId: "extra", reason: "never-leased-idle" },
+        ]);
+        expect(evaluate(view([wanted, young], { learned }))).toEqual([]);
+        expect(evaluate(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual([]);
+      });
     });
   });
 });
