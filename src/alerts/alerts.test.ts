@@ -23,6 +23,11 @@ function destination(overrides: Partial<AlertDestination> = {}): AlertDestinatio
   };
 }
 
+function slackDestination(overrides: Partial<AlertDestination> = {}): AlertDestination {
+  const { secret: _secret, ...rest } = destination({ format: "slack", ...overrides });
+  return rest;
+}
+
 function settle(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -137,8 +142,7 @@ describe("alerts", () => {
   );
 
   it('a slack destination posts {"text": message} with only the Content-Type and User-Agent headers', async () => {
-    const { secret: _secret, ...rest } = destination({ format: "slack" });
-    const h = harness([rest]);
+    const h = harness([slackDestination()]);
     h.emit("worker.connected", connected("wrk_1"));
     await settle();
 
@@ -150,6 +154,83 @@ describe("alerts", () => {
     expect(JSON.parse(h.poster.requests[0]?.body ?? "")).toEqual({
       text: "🟢 Worker wrk_1 connected.",
     });
+  });
+
+  it("each of the eleven events posts its message word for word", async () => {
+    const rows: [EventName, Record<string, unknown>, string][] = [
+      [
+        "worker.connected",
+        { workerId: "wrk_1", version: "1.2.3" },
+        "🟢 Worker wrk_1 connected (simlock 1.2.3).",
+      ],
+      ["worker.connected", { workerId: "wrk_1" }, "🟢 Worker wrk_1 connected."],
+      [
+        "worker.disconnected",
+        { workerId: "wrk_1", leaseCount: 0 },
+        "🔴 Worker wrk_1 disconnected.",
+      ],
+      [
+        "worker.disconnected",
+        { workerId: "wrk_1", leaseCount: 1 },
+        "🔴 Worker wrk_1 disconnected while holding 1 lease.",
+      ],
+      [
+        "worker.disconnected",
+        { workerId: "wrk_1", leaseCount: 3 },
+        "🔴 Worker wrk_1 disconnected while holding 3 leases.",
+      ],
+      [
+        "worker.rejected",
+        { reason: "forbidden", workerId: "wrk_x" },
+        "⛔ A worker was refused (forbidden): wrk_x.",
+      ],
+      [
+        "worker.drain-started",
+        { workerId: "wrk_1" },
+        "⏸ Worker wrk_1 is drained: it takes no new leases.",
+      ],
+      ["worker.drain-ended", { workerId: "wrk_1" }, "▶️ Worker wrk_1 takes new leases again."],
+      [
+        "device.quarantine-abandoned",
+        { workerId: "wrk_1", deviceId: "dev_1", attempts: 3 },
+        "⚠️ Device dev_1 on wrk_1 was retired after 3 failed clean-ups.",
+      ],
+      [
+        "device.quarantine-stranded",
+        { workerId: "wrk_1", deviceId: "dev_1", attempts: 4, error: "disk full" },
+        "🛑 Device dev_1 on wrk_1 could not be cleaned up or deleted after 4 tries: disk full. It needs a person.",
+      ],
+      [
+        "device.recovery-failed",
+        { workerId: "wrk_1", deviceId: "dev_1", leaseId: "lse_1", reason: "boot-timeout" },
+        "⚠️ Device dev_1 on wrk_1 crashed during lease lse_1 and could not be brought back: boot-timeout.",
+      ],
+      [
+        "device.stalled-transition-detected",
+        { workerId: "wrk_1", deviceId: "dev_1", state: "booting", ageMs: 840_000 },
+        "⏳ Device dev_1 on wrk_1 has been booting for 14 min.",
+      ],
+      [
+        "disk.pressure-detected",
+        { workerId: "wrk_1", freeBytes: 8_804_682_956, threshold: 10_737_418_240 },
+        "💾 Worker wrk_1 is low on disk: 8.2 GiB free (threshold 10 GiB).",
+      ],
+      [
+        "component.install-failed",
+        { workerId: "wrk_1", platform: "ios", componentId: "runtime-18", error: "no space" },
+        "❌ Installing ios runtime-18 on wrk_1 failed: no space.",
+      ],
+    ];
+    const events = [...new Set(rows.map(([event]) => event))] as AlertDestination["events"];
+    const h = harness([slackDestination({ events })]);
+    for (const [event, payload] of rows) {
+      h.emit(event, payload as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      rows.map(([, , text]) => text),
+    );
   });
 
   it("posts nothing for an event the destination did not list", async () => {
