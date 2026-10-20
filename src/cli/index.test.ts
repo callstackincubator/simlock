@@ -1,13 +1,15 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { createServer, type Socket } from "node:net";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testComponentWiring } from "../core/testing.js";
 
-import { EventBus, EventHistory } from "../bus/index.js";
+import { EventBus } from "../bus/index.js";
+import { ringEventHistory, seedHistory } from "../history/testing.js";
 import { CleanupReaper, type Config, Registry } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import {
@@ -15,21 +17,30 @@ import {
   FakeClock,
   FakeDaemonLauncher,
   FakeParentWatch,
+  IpcError,
   MemoryFilesystem,
   MemoryIpcTransport,
+  FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
   type Filesystem,
   type IdGenerator,
+  type IpcConnection,
+  type IpcConnector,
 } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
-import { TokenStore } from "../http/token-store.js";
+import { type Auth, createAuth } from "../auth/index.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
-import { AdminSecretManager } from "../daemon/admin-secret.js";
-import { createCredentialRoleResolver } from "../daemon/session.js";
-import { fromWireError, SimlockError, type AnySimlockError } from "../contract/index.js";
+import {
+  PROTOCOL_VERSION_RANGE,
+  fromWireError,
+  SimlockError,
+  waitingRequestSchema,
+  type AnySimlockError,
+  type UsageOutput,
+} from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -1438,6 +1449,336 @@ describe("CLI: auto-launch's failed start (#672)", () => {
   });
 });
 
+describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)", () => {
+  it.each([
+    { closeAfter: "hello", rejectedCredential: false },
+    { closeAfter: "request", rejectedCredential: false },
+    { closeAfter: "hello", rejectedCredential: true },
+    { closeAfter: "request", rejectedCredential: true },
+  ] as const)(
+    "reports a daemon it launched that answers hello then dies during that start as a failed start, not a lost connection (after $closeAfter, credential rejected: $rejectedCredential)",
+    async ({ closeAfter, rejectedCredential }) => {
+      // why: this stages the daemon that loses its HTTP port race exactly as the socket shows it
+      // to the CLI: absent before the launch, then listening, answering `hello`, and closing on
+      // its own `http-start-failed` stop before the command's first real request is answered.
+      const dyingDaemon = new HelloThenDeathIpc(closeAfter, rejectedCredential);
+      const clock = new FakeClock(0);
+      const launcher = new FakeDaemonLauncher(() => {
+        dyingDaemon.startListening();
+      });
+      const output = outputCapture({
+        filesystem: new MemoryFilesystem(),
+        clock,
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: dyingDaemon,
+        launcher,
+        dataDirectory: "/simlock",
+      });
+      let settled = false;
+      const exitCode = runCli(
+        ["daemon", "start", "--json", "--token", "probe"],
+        output.environmentWith(),
+      ).then((code) => {
+        settled = true;
+        return code;
+      });
+      // why: the tick bound is generous because #671 made every module a command loads lazy, so
+      // one `daemon start` now passes through several more import turns than when this repro was
+      // first staged; the clock is fake and the loop stops the moment the command settles, so the
+      // extra headroom pins nothing -- it only keeps a hung command failing on this named
+      // assertion instead of on a test timeout.
+      for (let tick = 0; tick < 100 && !settled; tick += 1) {
+        clock.advance(50);
+        await settle();
+        await settle();
+      }
+      expect(
+        settled,
+        `simlock daemon start still had not settled at ${String(clock.now())}ms`,
+      ).toBe(true);
+
+      // why: the staging itself, proven from the fake's side -- the socket was absent until this
+      // command launched the daemon and answered `hello` before it closed the connection. Without
+      // these the assertion below could be
+      // reached by a connection that never saw a daemon at all.
+      expect(launcher.launches).toBe(1);
+      expect(dyingDaemon.helloReplies).toBe(1);
+      expect(dyingDaemon.deaths).toBe(1);
+      expect(dyingDaemon.rejectedCredentials).toBe(rejectedCredential ? 1 : 0);
+
+      expect(await exitCode).toBe(1);
+      expect(output.stdout).toBe("");
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toMatchObject({
+        error: {
+          code: "DAEMON_STARTUP_FAILED",
+          message: expect.stringContaining("daemon"),
+        },
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "keeps a pre-existing daemon's hello-then-close as DAEMON_CONNECTION_LOST (credential rejected: %s)",
+    async (rejectedCredential) => {
+      const dyingDaemon = new HelloThenDeathIpc("hello", rejectedCredential);
+      dyingDaemon.startListening();
+      const launcher = new FakeDaemonLauncher();
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(),
+        ipc: dyingDaemon,
+        launcher,
+      });
+
+      expect(
+        await runCli(["daemon", "start", "--json", "--token", "probe"], output.environmentWith()),
+      ).toBe(1);
+      expect(launcher.launches).toBe(0);
+      expect(dyingDaemon.helloReplies).toBe(1);
+      expect(dyingDaemon.deaths).toBe(1);
+      expect(output.stdout).toBe("");
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toEqual({
+        error: { code: "DAEMON_CONNECTION_LOST", message: "Daemon connection closed" },
+      });
+    },
+  );
+
+  it("preserves DAEMON_STOPPING from the startup status probe and closes its client", async () => {
+    const daemon = new HelloThenDeathIpc("stopping");
+    const launcher = new FakeDaemonLauncher(() => daemon.startListening());
+    const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, launcher });
+    expect(await runCli(["daemon", "start", "--token", "probe"], output.environmentWith())).toBe(1);
+    expect(launcher.launches).toBe(1);
+    expect(daemon.helloReplies).toBe(1);
+    expect(daemon.clientCloses).toBe(1);
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "DAEMON_STOPPING" } });
+  });
+
+  it("bounds the startup status probe by the original launch deadline and closes its client", async () => {
+    const daemon = new HelloThenDeathIpc("silent");
+    const clock = new FakeClock(0);
+    const launcher = new FakeDaemonLauncher(() => {
+      clock.setTimer(19_000, () => daemon.startListening());
+    });
+    const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, clock, launcher });
+    let settled = false;
+    const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+      (code) => {
+        settled = true;
+        return code;
+      },
+    );
+    for (let tick = 0; tick < 500 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+    }
+    expect(settled, "silent startup probe must settle within the launch budget").toBe(true);
+    expect(
+      clock.now(),
+      "probe must use the budget left after the socket appeared",
+    ).toBeLessThanOrEqual(20_050);
+    expect(clock.now(), "probe must wait out the launch deadline").toBeGreaterThanOrEqual(20_000);
+    expect(await run).toBe(1);
+    expect(launcher.launches).toBe(1);
+    expect(daemon.helloReplies).toBe(1);
+    expect(daemon.clientCloses).toBe(1);
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: expect.stringContaining("Timed out starting"),
+      },
+    });
+  });
+
+  it("fails a start with DAEMON_STARTUP_FAILED when the daemon stops reading after hello, without waiting for its side of the close", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-wedged-"));
+    temporaryDirectories.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    const sockets: Socket[] = [];
+    let hellos = 0;
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      let buffered = "";
+      socket.on("data", (chunk) => {
+        buffered += chunk.toString();
+        for (const line of buffered.split("\n").slice(0, -1)) {
+          const frame = JSON.parse(line) as { id: number; type: string };
+          if (frame.type !== "hello") continue;
+          hellos += 1;
+          socket.write(
+            `${JSON.stringify({
+              id: frame.id,
+              ok: true,
+              payload: {
+                protocolVersion: PROTOCOL_VERSION_RANGE.max,
+                daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+                version: "0.0.0-test",
+                role: "admin",
+                principal: "test-requester",
+              },
+            })}\n`,
+          );
+          // why: a daemon wedged after `hello` neither answers nor ends its side of the socket.
+          socket.pause();
+        }
+        buffered = buffered.slice(buffered.lastIndexOf("\n") + 1);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      const real = new NodeIpcTransport();
+      let launched = false;
+      const clock = new FakeClock(0);
+      const launcher = new FakeDaemonLauncher(() => {
+        launched = true;
+      });
+      const ipc: IpcConnector = {
+        connect: async () => {
+          if (!launched) throw new IpcError("endpoint-not-found", "not yet", undefined);
+          return real.connect(socketPath);
+        },
+      };
+      const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
+      let settled = false;
+      const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+        (code) => {
+          settled = true;
+          return code;
+        },
+      );
+      for (let tick = 0; tick < 200 && hellos === 0; tick += 1) {
+        clock.advance(50);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(hellos).toBe(1);
+      clock.advance(20_000);
+      await expect.poll(() => settled, { timeout: 2_000 }).toBe(true);
+      expect(await run).toBe(1);
+      expect(JSON.parse(output.stderr)).toMatchObject({
+        error: { code: "DAEMON_STARTUP_FAILED" },
+      });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    { operation: "pending lease", health: "running" },
+    { operation: "pending lease", health: "starting" },
+    { operation: "held lease", health: "running" },
+    { operation: "in-flight request", health: "running" },
+  ] as const)(
+    "keeps an auto-launched daemon's death after its startup status probe as DAEMON_CONNECTION_LOST during $operation (status: $health)",
+    async ({ operation, health }) => {
+      const ipc = new MemoryIpcTransport();
+      const clock = new FakeClock(0);
+      const requests: string[] = [];
+      const replies: string[] = [];
+      const connections: IpcConnection[] = [];
+      const launcher = new FakeDaemonLauncher(async () => {
+        await ipc.listen("/simlock/daemon.sock", (connection) => {
+          connections.push(connection);
+          connection.onData((contents) => {
+            const frame = JSON.parse(contents) as { id: number; type: string };
+            requests.push(frame.type);
+            const payload =
+              frame.type === "hello"
+                ? {
+                    protocolVersion: PROTOCOL_VERSION_RANGE.max,
+                    daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+                    version: "0.0.0-test",
+                    role: "admin",
+                    principal: "test-requester",
+                  }
+                : frame.type === "lease.request" && operation !== "pending lease"
+                  ? detachedGrant
+                  : frame.type === "status.get"
+                    ? { ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, health } }
+                    : undefined;
+            if (payload === undefined) return;
+            replies.push(frame.type);
+            void connection.write(`${JSON.stringify({ id: frame.id, ok: true, payload })}\n`);
+          });
+        });
+      });
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(),
+        ipc,
+        clock,
+        launcher,
+      });
+      let settled = false;
+      const runPromise = runCli(
+        operation !== "in-flight request"
+          ? ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--token", "probe"]
+          : ["simctl", "list", "--token", "probe"],
+        output.environmentWith(),
+      ).then((code) => {
+        settled = true;
+        return code;
+      });
+      const ready = (): boolean =>
+        operation === "held lease"
+          ? output.stdout !== ""
+          : requests.includes(
+              operation === "pending lease" ? "lease.request" : "driver.passthrough",
+            );
+      for (let tick = 0; tick < 100 && !ready() && !settled; tick += 1) {
+        clock.advance(50);
+        await settle();
+        await settle();
+      }
+      expect(ready()).toBe(true);
+      expect(settled).toBe(false);
+      expect(launcher.launches).toBe(1);
+      expect(connections).toHaveLength(1);
+      expect(requests).toContain(
+        operation === "in-flight request" ? "driver.passthrough" : "lease.request",
+      );
+      if (operation === "pending lease") expect(replies).not.toContain("lease.request");
+      await connections[0]!.close();
+      expect(await runPromise).toBe(1);
+      expect(JSON.parse(output.stderr)).toMatchObject({
+        error: { code: "DAEMON_CONNECTION_LOST" },
+      });
+      expect(replies).toContain("status.get");
+      if (operation === "held lease") {
+        expect(JSON.parse(output.stdout)).toMatchObject({ lease: detachedGrant.lease });
+        expect(JSON.parse(output.stderr).error.message).toContain(detachedGrant.lease.id);
+        expect(requests).toContain("lease.request");
+      } else {
+        expect(output.stdout).toBe("");
+      }
+    },
+  );
+
+  it("preserves the daemon's refusal of the first auto-launched request", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipc = new MemoryIpcTransport();
+    const launcher = new FakeDaemonLauncher(async () => {
+      await startInMemoryDaemon({
+        filesystem,
+        ipcTransport: ipc,
+        socketPath: "/simlock/daemon.sock",
+        adminTokenPath: "/simlock/admin.token",
+      });
+    });
+    const output = outputCapture({
+      ...realCliEnvironmentPorts(),
+      filesystem,
+      ipc,
+      launcher,
+    });
+
+    expect(
+      await runCli(["lease", "--platform", "android", "--detach"], output.environmentWith()),
+    ).toBe(12);
+    expect(launcher.launches).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "NO_DRIVER" } });
+  });
+});
+
 describe("CLI: daemon status (ADR 0003 §11)", () => {
   it("reports stopped when the socket cannot be reached at all", async () => {
     const output = outputCapture();
@@ -2230,6 +2571,50 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   });
 });
 
+describe("CLI: config set and the retired eventLog.rotateBytes", () => {
+  const configSet = async (file: Record<string, unknown>) => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let written: Record<string, unknown> | undefined;
+    const environment = output.environmentWith({
+      readConfigFile: async () => structuredClone(file),
+      writeConfigFile: async (contents) => {
+        written = contents;
+      },
+    });
+    const exitCode = await runCli(["config", "set", "log.level", "debug"], environment);
+    return { configPath: environment.configPath, exitCode, output, written };
+  };
+
+  it("simlock config set on a file holding eventLog.rotateBytes writes it without that key and prints the Removed line once; on a file without it, no such line", async () => {
+    const holding = await configSet({
+      eventLog: { retention: 86_400_000, rotateBytes: 1_048_576 },
+      log: { level: "info" },
+    });
+    const without = await configSet({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "info" },
+    });
+
+    expect(holding.exitCode).toBe(0);
+    expect(holding.written).toEqual({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "debug" },
+    });
+    expect(holding.output.stderr).toBe(
+      `Removed eventLog.rotateBytes from ${holding.configPath}: it is no longer used.\n`,
+    );
+    expect(holding.output.stdout).toBe(
+      `Updated log.level in ${holding.configPath}; takes effect on daemon restart.\n`,
+    );
+    expect(without.exitCode).toBe(0);
+    expect(without.written).toEqual({
+      eventLog: { retention: 86_400_000 },
+      log: { level: "debug" },
+    });
+    expect(without.output.stderr).toBe("");
+  });
+});
+
 describe("CLI: config set and the file mode of config.json (#252)", () => {
   it("writes the config.json holding gateway.token owner-only, whether it creates the file or replaces an owner-only one", async () => {
     // why: Two homes, one per way `config set` comes to write the join token. `MemoryFilesystem`
@@ -2964,6 +3349,7 @@ describe("CLI: component install on a gateway's workers (ADR 0010 §7)", () => {
     const output = outputCapture();
     await runCli(["--help"], output.environmentWith({}));
     expect(output.stdout).toContain("component install <ios|android> <version>");
+    expect(output.stdout).toContain("events, stats,");
   });
 });
 
@@ -3485,6 +3871,95 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     });
 
     await expect(runCli(["token", "create", "--role", "root"], environment)).resolves.toBe(2);
+  });
+});
+
+describe("CLI: alerts test (ADR 0035 §1)", () => {
+  const USAGE = "Usage: simlock alerts test <destination> [--json]\n";
+  const errorLine = (stderr: string): unknown => JSON.parse(stderr.trim().split("\n").at(-1) ?? "");
+
+  async function runAlerts(argv: string[], overrides: Partial<SimlockAdminClient> = {}) {
+    const output = outputCapture();
+    const inputs: unknown[] = [];
+    let connected = false;
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({
+            testAlertDestination: (input) => {
+              inputs.push(input);
+              return Promise.resolve({ destination: input.destination, status: 204 });
+            },
+            ...overrides,
+          });
+        },
+      }),
+    );
+    return { code, connected, inputs, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock alerts test prints the sent line, --json prints the output, a missing name prints the Expected line, simlock alerts and --help print the usage, and an unknown subcommand is a usage error", async () => {
+    const sent = await runAlerts(["alerts", "test", "ops-slack"]);
+    expect([sent.code, sent.stdout, sent.inputs]).toEqual([
+      0,
+      "Sent a test message to ops-slack: HTTP 204\n",
+      [{ destination: "ops-slack" }],
+    ]);
+
+    const json = await runAlerts(["alerts", "test", "ops-slack", "--json"]);
+    expect([json.code, json.stdout]).toEqual([0, '{"destination":"ops-slack","status":204}\n']);
+
+    for (const argv of [["alerts"], ["alerts", "--help"], ["alerts", "test", "--help"]]) {
+      const usage = await runAlerts(argv);
+      expect([usage.code, usage.stdout, usage.stderr, usage.connected]).toEqual([
+        0,
+        USAGE,
+        "",
+        false,
+      ]);
+    }
+
+    for (const [argv, message] of [
+      [["alerts", "test"], "Expected destination (run `simlock --help` for usage)"],
+      [["alerts", "foo"], "Unknown alerts command: foo (run `simlock --help` for usage)"],
+    ] as const) {
+      const refused = await runAlerts([...argv]);
+      expect(refused.code).toBe(2);
+      expect(refused.connected).toBe(false);
+      expect(JSON.parse(refused.stderr)).toEqual({ error: { code: "USAGE", message } });
+    }
+  });
+
+  it("simlock alerts test exits 1 on ALERT_SEND_FAILED and 12 on UNKNOWN_ALERT_DESTINATION with the error line", async () => {
+    const failed = await runAlerts(["alerts", "test", "ops-slack"], {
+      testAlertDestination: () =>
+        Promise.reject(
+          new SimlockError("ALERT_SEND_FAILED", "transport", "ops-slack answered HTTP 404", {
+            destination: "ops-slack",
+            status: 404,
+          }),
+        ),
+    });
+    expect([failed.code, failed.stdout, errorLine(failed.stderr)]).toEqual([
+      1,
+      "",
+      { error: { code: "ALERT_SEND_FAILED", message: "ops-slack answered HTTP 404" } },
+    ]);
+
+    const unknown = await runAlerts(["alerts", "test", "nope"], {
+      testAlertDestination: () =>
+        Promise.reject(
+          new SimlockError("UNKNOWN_ALERT_DESTINATION", "domain", "No alert destination named", {
+            destination: "nope",
+          }),
+        ),
+    });
+    expect([unknown.code, errorLine(unknown.stderr)]).toEqual([
+      12,
+      { error: { code: "UNKNOWN_ALERT_DESTINATION", message: "No alert destination named" } },
+    ]);
   });
 });
 
@@ -4039,6 +4514,58 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(await start(EMPTY_STATUS)).toBe("Daemon running\n");
   });
 
+  describe("the history lines of simlock status", () => {
+    const NOT_WRITTEN = "History: the event history is not being written; see daemon.log.";
+    const SET_ASIDE_AT = Date.UTC(2026, 9, 16, 9, 12, 30);
+    const pad = (value: number): string => String(value).padStart(2, "0");
+    const local = new Date(SET_ASIDE_AT);
+    const setAside = `History: the event history was damaged and set aside at ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}; a fresh one was started.`;
+
+    const statusLines = async (history: StatusGetOutput["history"]): Promise<string[]> => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({
+                  ...EMPTY_STATUS,
+                  ...(history === undefined ? {} : { history }),
+                } as StatusGetOutput),
+            }),
+        }),
+      );
+      return output.stdout.trimEnd().split("\n");
+    };
+
+    it("prints the not-written line when writing is false, the set-aside line with the local time when setAsideAt is set, both when both hold, and neither otherwise", async () => {
+      const healthy = await statusLines({ opened: true, writing: true });
+      const notWritten = await statusLines({ opened: false, writing: false });
+      const aside = await statusLines({ opened: true, setAsideAt: SET_ASIDE_AT, writing: true });
+      const both = await statusLines({ opened: true, setAsideAt: SET_ASIDE_AT, writing: false });
+
+      expect(healthy.filter((line) => line.startsWith("History:"))).toEqual([]);
+      expect(notWritten.filter((line) => line.startsWith("History:"))).toEqual([NOT_WRITTEN]);
+      expect(aside.filter((line) => line.startsWith("History:"))).toEqual([setAside]);
+      expect(both.filter((line) => line.startsWith("History:")).sort()).toEqual(
+        [NOT_WRITTEN, setAside].sort(),
+      );
+    });
+
+    it("prints the rebuilt line with the local time when rebuiltAt is set and the could-not-rebuild line when rebuildFailed is set, and neither otherwise", async () => {
+      const rebuiltLine = `History: figures were rebuilt from the event history at ${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}.`;
+      const failedLine = "History: figures could not be rebuilt; see daemon.log.";
+      const plain = await statusLines({ opened: true, writing: true });
+      const rebuilt = await statusLines({ opened: true, rebuiltAt: SET_ASIDE_AT, writing: true });
+      const failed = await statusLines({ opened: true, rebuildFailed: true, writing: true });
+
+      expect(plain.filter((line) => line.startsWith("History:"))).toEqual([]);
+      expect(rebuilt.filter((line) => line.startsWith("History:"))).toEqual([rebuiltLine]);
+      expect(failed.filter((line) => line.startsWith("History:"))).toEqual([failedLine]);
+    });
+  });
+
   it("prints an install line while one runs and none after", async () => {
     const install = {
       component: "26.4",
@@ -4274,6 +4801,62 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(lines).toContain("Device dev_p1: ready, physical phone");
     expect(lines).toContain("Device dev_p2 on wrk_1: quarantined, physical tablet (purge retry 1)");
     expect(lines).toContain("Device dev_v1: ready, mode full, serves default mode: yes");
+  });
+
+  it("status ends a quarantined device's marker with ; and the cause for each kind, and prints today's marker when there is no cause", async () => {
+    const quarantined = (
+      id: string,
+      quarantineCause?: Record<string, unknown>,
+    ): Record<string, unknown> => ({
+      id,
+      mode: "full",
+      physical: false,
+      quarantineAttempts: 1,
+      quarantineNextRetryAt: 1_760_619_150_000,
+      servesDefaultMode: true,
+      spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+      state: "quarantined",
+      ...(quarantineCause === undefined ? {} : { quarantineCause }),
+    });
+    const status = {
+      ...EMPTY_STATUS,
+      devices: [
+        quarantined("dev_purge", {
+          kind: "purge-failed",
+          message: "DriverCrashError: simctl erase exited 164, then stalled",
+        }),
+        quarantined("dev_shutdown", {
+          kind: "shutdown-failed",
+          message: "Error: shutdown exploded",
+        }),
+        quarantined("dev_delete", { kind: "delete-failed", message: "Error: delete exploded" }),
+        quarantined("dev_prov", { kind: "stalled", stalledState: "provisioning" }),
+        quarantined("dev_recl", { kind: "stalled", stalledState: "reclaiming" }),
+        quarantined("dev_none"),
+      ],
+    } as unknown as StatusGetOutput;
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    const head =
+      "quarantined, mode full, serves default mode: yes (purge retry 1, next retry at 1760619150000";
+    expect(lines).toContain(
+      `Device dev_purge: ${head}; purge failed: DriverCrashError: simctl erase exited 164, then stalled)`,
+    );
+    expect(lines).toContain(
+      `Device dev_shutdown: ${head}; shutdown failed: Error: shutdown exploded)`,
+    );
+    expect(lines).toContain(`Device dev_delete: ${head}; delete failed: Error: delete exploded)`);
+    expect(lines).toContain(`Device dev_prov: ${head}; stalled while provisioning)`);
+    expect(lines).toContain(`Device dev_recl: ${head}; stalled while reclaiming)`);
+    expect(lines).toContain(`Device dev_none: ${head})`);
   });
 
   it("status prints absent (<reason>) as the state of an absent device", async () => {
@@ -5414,33 +5997,81 @@ describe("CLI: events history", () => {
   }
 
   function printed(stdout: string): unknown[] {
+    if (stdout.trim() === "") return [];
     return stdout
       .trimEnd()
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
   }
 
-  it("events --since with nothing listening prints the file's events and launches no daemon", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/simlock");
-    await filesystem.writeFileAtomic(
-      "/simlock/events.jsonl",
-      [envelope(1, 500), envelope(2, hour + 500)].map((entry) => JSON.stringify(entry)).join("\n"),
-    );
+  async function historyDirectory(
+    prepare: (directory: string) => Promise<void>,
+  ): Promise<CliEnvironmentPorts> {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-cli-history-"));
+    temporaryDirectories.push(directory);
+    await prepare(directory);
+    return {
+      ...realCliEnvironmentPorts(new NodeFilesystem()),
+      clock: new FakeClock(2 * hour),
+      dataDirectory: directory,
+    };
+  }
+
+  const stopped = (seq: number, timestamp: number) => ({
+    event: "daemon.stopping",
+    id: `evt_${seq}`,
+    module: "daemon",
+    payload: { reason: `r${seq}` },
+    seq,
+    timestamp,
+  });
+
+  it("events --since with nothing listening reads history.db and launches no daemon", async () => {
+    const ports = await historyDirectory((directory) => seedHistory(directory, [500, hour + 500]));
     const launcher = new FakeDaemonLauncher(() => {
       throw new Error("a daemon was launched");
     });
-    const output = outputCapture({
-      ...realCliEnvironmentPorts(filesystem),
-      clock: new FakeClock(2 * hour),
-      launcher,
-    });
+    const output = outputCapture({ ...ports, launcher });
 
     const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
 
     expect(launcher.launches).toBe(0);
     expect(exitCode).toBe(0);
-    expect(printed(output.stdout)).toEqual([envelope(2, hour + 500)]);
+    expect(printed(output.stdout)).toEqual([stopped(2, hour + 500)]);
+  });
+
+  it("events --since with nothing listening and no history.db prints nothing, exit 0, even beside an old events.jsonl", async () => {
+    const bare = outputCapture(await historyDirectory(async () => {}));
+    const withOldFile = outputCapture(
+      await historyDirectory((directory) =>
+        writeFile(join(directory, "events.jsonl"), `${JSON.stringify(envelope(1, hour + 500))}\n`),
+      ),
+    );
+
+    const codes = [
+      await runCli(["events", "--since", "1h"], bare.environmentWith()),
+      await runCli(["events", "--since", "1h"], withOldFile.environmentWith()),
+    ];
+
+    expect(codes).toEqual([0, 0]);
+    expect([bare.stdout, withOldFile.stdout]).toEqual(["", ""]);
+  });
+
+  it("events --since with nothing listening and an unreadable history.db prints one JSON error and exits 1", async () => {
+    const output = outputCapture(
+      await historyDirectory((directory) =>
+        writeFile(join(directory, "history.db"), "this is not a sqlite database ".repeat(20)),
+      ),
+    );
+
+    const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
+
+    expect(exitCode).toBe(1);
+    expect(output.stdout).toBe("");
+    expect(output.stderr.trimEnd().split("\n")).toHaveLength(1);
+    const printedError = JSON.parse(output.stderr) as { error: { code: string; message: string } };
+    expect(printedError.error.code).toBe("INTERNAL");
+    expect(printedError.error.message).toMatch(/not a database/);
   });
 
   it("events --since reports a daemon that refuses the handshake rather than reading the file", async () => {
@@ -5456,7 +6087,7 @@ describe("CLI: events history", () => {
             daemonVersion: "0.9.0",
           });
         },
-        readEventFile: async () => {
+        readEventHistory: async () => {
           fileRead = true;
           return [];
         },
@@ -5483,7 +6114,7 @@ describe("CLI: events history", () => {
               return [envelope(7, hour + 1)];
             },
           }),
-        readEventFile: async () => {
+        readEventHistory: async () => {
           fileRead = true;
           return [];
         },
@@ -6086,6 +6717,13 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
     getStatus: () => Promise.resolve(EMPTY_STATUS),
+    identity: () =>
+      Promise.resolve({
+        name: "test-requester",
+        principal: "test-requester",
+        role: "admin",
+        via: "socket",
+      }),
     listComponents: () => Promise.resolve({ components: [] }),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
@@ -6107,6 +6745,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
     replayEvents: () => Promise.resolve([]),
+    usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
     createToken: (input) =>
       Promise.resolve({
@@ -6120,6 +6759,8 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     undrainWorker: (input) =>
       Promise.resolve({ drained: false as const, workerId: input.workerId }),
     removeWorker: (input) => Promise.resolve({ removed: true, workerId: input.workerId }),
+    testAlertDestination: (input) =>
+      Promise.resolve({ destination: input.destination, status: 200 }),
     installComponent: (input) =>
       Promise.resolve({
         component: input.version,
@@ -6177,7 +6818,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           writeConfigFile: async () => {},
           validateConfig: async () => {},
           readLogFile: async () => "",
-          readEventFile: async () => [],
+          readEventHistory: async () => [],
           signals: new EventEmitter() as unknown as CliEnvironment["signals"],
           parentWatch: new FakeParentWatch(),
           stderr: stderrOut,
@@ -6203,6 +6844,138 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
     },
   };
   return capture;
+}
+
+class HelloThenDeathIpc implements IpcConnector {
+  helloReplies = 0;
+  deaths = 0;
+  #listening = false;
+
+  rejectedCredentials = 0;
+  clientCloses = 0;
+
+  constructor(
+    readonly closeAfter: "hello" | "request" | "silent" | "stopping" = "hello",
+    readonly rejectCredential = false,
+  ) {}
+
+  startListening(): void {
+    this.#listening = true;
+  }
+
+  async connect(): Promise<IpcConnection> {
+    if (!this.#listening) {
+      throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
+    }
+    return new HelloThenDeathConnection(this);
+  }
+}
+
+class HelloThenDeathConnection implements IpcConnection {
+  readonly #dataListeners = new Set<(chunk: string) => void>();
+  readonly #closeListeners = new Set<() => void>();
+  #closed = false;
+
+  constructor(private readonly daemon: HelloThenDeathIpc) {}
+
+  get closed(): boolean {
+    return this.#closed;
+  }
+
+  onData(listener: (chunk: string) => void): () => void {
+    this.#dataListeners.add(listener);
+    return () => this.#dataListeners.delete(listener);
+  }
+
+  onClose(listener: () => void): () => void {
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
+  }
+
+  onError(): () => void {
+    return () => {};
+  }
+
+  async write(contents: string): Promise<void> {
+    if (this.#closed) return;
+    let answeredHello = false;
+    for (const line of contents.split("\n")) {
+      answeredHello = this.#receiveFrame(line) || answeredHello;
+      if (this.#closed) return;
+    }
+    if (
+      this.daemon.closeAfter === "hello" ||
+      (!answeredHello && this.daemon.closeAfter === "request")
+    )
+      this.#shutDown(true);
+  }
+
+  #receiveFrame(line: string): boolean {
+    if (line.trim() === "") return false;
+    const frame = JSON.parse(line) as {
+      id?: unknown;
+      type?: unknown;
+      payload?: { credential?: string };
+    };
+    if (frame.type === "status.get" && this.daemon.closeAfter === "stopping") {
+      const reply = {
+        id: frame.id,
+        ok: false,
+        error: {
+          code: "DAEMON_STOPPING",
+          message: "Daemon is stopping",
+          details: {},
+        },
+      };
+      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+    }
+    if (frame.type !== "hello" || typeof frame.id !== "number") return false;
+    this.#answerHello(frame.id, frame.payload?.credential);
+    return true;
+  }
+
+  #answerHello(id: number, credential: string | undefined): void {
+    if (this.daemon.rejectCredential && credential !== undefined) {
+      this.daemon.rejectedCredentials += 1;
+      const reply = {
+        id: id,
+        ok: false,
+        error: {
+          code: "ADMIN_AUTHENTICATION_FAILED",
+          message: "Rejected credential",
+          details: {},
+        },
+      };
+      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+      this.#shutDown(false);
+      return;
+    }
+    this.daemon.helloReplies += 1;
+    const reply = {
+      id: id,
+      ok: true,
+      payload: {
+        protocolVersion: PROTOCOL_VERSION_RANGE.max,
+        daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+        version: "0.0.0-test",
+        role: "admin",
+        principal: "test-requester",
+      },
+    };
+    for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+  }
+
+  async close(): Promise<void> {
+    this.daemon.clientCloses += 1;
+    this.#shutDown(false);
+  }
+
+  #shutDown(killedByDaemon: boolean): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    if (killedByDaemon) this.daemon.deaths += 1;
+    for (const listener of this.#closeListeners) listener();
+  }
 }
 
 function sequence(): IdGenerator {
@@ -6253,11 +7026,14 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     filesystem,
     registry,
   });
-  const tokens = new TokenStore({
+  const auth = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: "/",
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
     secrets: new CryptoTokenSecrets(),
   });
   const daemon = new DaemonServer({
@@ -6271,12 +7047,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: ringEventHistory(eventBus),
     host: new DaemonEndpointHost({
       connector: new NodeIpcTransport(),
       endpoint: socketPath,
@@ -6289,7 +7060,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     reaper,
     registry,
     resolveRole: { resolve: () => "admin" },
-    tokens,
+    tokens: auth.tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
@@ -6319,7 +7090,7 @@ function realCliEnvironmentPorts(
 /**
  * why: A real `DaemonServer` wired against in-memory ports (`MemoryFilesystem` + `MemoryIpcTransport`
  * shared with the CLI environment under test), with the genuine credential handshake
- * (`AdminSecretManager` + `createCredentialRoleResolver`) instead of `startTestDaemon`'s
+ * (`createAuth`) instead of `startTestDaemon`'s
  * `resolveRole: { resolve: () => "admin" }` shortcut -- B1 and B2 both hinge on that handshake
  * actually running.
  */
@@ -6328,7 +7099,7 @@ async function startInMemoryDaemon(options: {
   readonly ipcTransport: MemoryIpcTransport;
   readonly socketPath: string;
   readonly adminTokenPath: string;
-}): Promise<{ daemon: DaemonServer; adminSecret: AdminSecretManager }> {
+}): Promise<{ daemon: DaemonServer; adminSecret: Auth["adminSecret"] }> {
   const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -6368,24 +7139,18 @@ async function startInMemoryDaemon(options: {
     filesystem,
     registry,
   });
-  const tokens = new TokenStore({
+  const auth = createAuth({
     clock,
+    config: { enabled: false, host: "127.0.0.1", port: 4700 },
+    dataDirectory: dirname(adminTokenPath),
     filesystem,
     idGenerator: sequence(),
-    path: "/tokens.json",
+    logger: new NoopLogger(),
+    keySetFetcher: new FakeKeySetFetcher(),
     secrets: new CryptoTokenSecrets(),
-  });
-  const adminSecret = new AdminSecretManager({
-    filesystem,
-    secrets: new CryptoTokenSecrets(),
-    path: adminTokenPath,
-  });
-  const resolveRole = createCredentialRoleResolver({
-    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
-    verifyAdminSecret: (secret) => adminSecret.verify(secret),
   });
   const daemon = new DaemonServer({
-    adminSecret,
+    adminSecret: auth.adminSecret,
     capacity: engine,
     warmPool: engine,
     deviceModes: engine,
@@ -6396,12 +7161,7 @@ async function startInMemoryDaemon(options: {
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    eventHistory: new EventHistory({
-      bus: eventBus,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      path: "/events.jsonl",
-    }),
+    eventHistory: ringEventHistory(eventBus),
     host: new DaemonEndpointHost({
       connector: ipcTransport,
       endpoint: socketPath,
@@ -6413,13 +7173,13 @@ async function startInMemoryDaemon(options: {
     queue: engine,
     reaper,
     registry,
-    resolveRole,
-    tokens,
+    resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
+    tokens: auth.tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
   await daemon.start();
-  return { daemon, adminSecret };
+  return { daemon, adminSecret: auth.adminSecret };
 }
 
 function testConfig(): Config {
@@ -6433,6 +7193,7 @@ function testConfig(): Config {
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     eventBuffer: { capacity: 100 },
@@ -6475,10 +7236,10 @@ function testConfig(): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -6542,6 +7303,218 @@ describe("simlock list --requests", () => {
         "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
         "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
     );
+  });
+
+  describe("the reason a queued request waits", () => {
+    const queued = (
+      reason: string | undefined,
+      platform: "ios" | "android" = "ios",
+    ): Record<string, unknown> => ({
+      createdAt: 0,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent",
+      spec: { model: "Device", platform },
+      stage: "queued",
+      ...(reason === undefined ? {} : { reason }),
+    });
+
+    async function printed(entry: Record<string, unknown>): Promise<string> {
+      const output = outputCapture();
+      const client = fakeClient({ list: async () => [entry] as never });
+      await runCli(
+        ["list", "--requests"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      );
+      return output.stdout.trimEnd();
+    }
+
+    it.each([
+      ["behind-earlier-request", "ios", "behind an earlier request"],
+      ["device-limit", "ios", "full: device limit"],
+      ["ram-budget", "ios", "full: RAM budget"],
+      ["global-running-limit", "ios", "full: running limit"],
+      ["platform-running-limit", "ios", "full: running limit for iOS"],
+      ["platform-running-limit", "android", "full: running limit for Android"],
+      ["waiting-for-device", "ios", "a matching device is starting"],
+      ["no-free-physical", "ios", "every matching device is leased or absent"],
+    ] as const)(
+      "ends the line of a queued request with %s on %s as ' — %s'",
+      async (reason, platform, text) => {
+        expect(await printed(queued(reason, platform))).toBe(
+          `Request req_1: agent, ${platform} Device, queued at 1, waiting 0s — ${text}`,
+        );
+      },
+    );
+
+    it("ends the line of a queued request with no reason as it ended before", async () => {
+      expect(await printed(queued(undefined))).toBe(
+        "Request req_1: agent, ios Device, queued at 1, waiting 0s",
+      );
+    });
+
+    it("has a text for every reason the contract's enum lists", async () => {
+      const field = (waitingRequestSchema.shape as Record<string, unknown>)["reason"];
+      expect(field).toBeDefined();
+      const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
+
+      expect(listed).toHaveLength(7);
+      for (const reason of listed) {
+        const line = await printed(queued(reason));
+        expect(line).toMatch(/ — [a-z]/);
+        expect(line).not.toContain(reason);
+      }
+    });
+  });
+
+  describe("the reason each worker cannot take a request on a gateway", () => {
+    const gatewayEntry = (
+      workers: readonly Record<string, unknown>[],
+      platform: "ios" | "android" = "ios",
+    ): Record<string, unknown> => ({
+      createdAt: 0,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "ci",
+      spec: { model: "Device", platform },
+      stage: "queued",
+      workers,
+    });
+
+    async function printedGateway(
+      entries: readonly Record<string, unknown>[],
+      known: readonly { id: string; label?: string }[] = [],
+    ): Promise<{ stdout: string; listed: number }> {
+      const output = outputCapture();
+      let listed = 0;
+      const client = fakeClient({
+        list: async () => entries as never,
+        listWorkers: () => {
+          listed += 1;
+          return Promise.resolve({
+            workers: known.map((worker) => ({
+              catalog: [],
+              connection: "connected" as const,
+              devices: [],
+              drained: false,
+              lastSeenAt: 1,
+              leases: [],
+              ...worker,
+            })),
+          } as never);
+        },
+      });
+      await runCli(
+        ["list", "--requests"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      );
+      return { listed, stdout: output.stdout };
+    }
+
+    it("prints one indented line per worker under the request, named by its label, else its id", async () => {
+      const { stdout } = await printedGateway(
+        [
+          gatewayEntry([
+            { reason: "drained", workerId: "wrk_a" },
+            { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_b" },
+            { reason: "runtime-missing", workerId: "wrk_c" },
+            { reason: "busy", workerId: "wrk_d" },
+          ]),
+        ],
+        [{ id: "wrk_a", label: "mac-mini-1" }, { id: "wrk_b" }, { id: "wrk_c", label: "lab" }],
+      );
+
+      expect(stdout).toBe(
+        "Request req_1: ci, ios Device, queued at 1, waiting 0s\n" +
+          "  mac-mini-1: drained\n" +
+          "  wrk_b: full: running limit for iOS\n" +
+          "  lab: oS not installed\n" +
+          "  wrk_d: busy with its own queue\n",
+      );
+    });
+
+    it.each([
+      ["disconnected", "ios", undefined, "not connected"],
+      ["incompatible", "ios", undefined, "protocol mismatch"],
+      ["not-ready", "ios", undefined, "not ready yet"],
+      ["unhealthy", "ios", undefined, "not running"],
+      ["drained", "ios", undefined, "drained"],
+      ["busy", "ios", undefined, "busy with its own queue"],
+      ["no-driver", "ios", undefined, "no iOS support"],
+      ["no-driver", "android", undefined, "no Android support"],
+      ["unknown-model", "ios", undefined, "model not offered"],
+      ["runtime-missing", "ios", undefined, "oS not installed"],
+      ["capability-missing", "ios", undefined, "missing capability"],
+      ["full", "ios", undefined, "full"],
+      ["full", "ios", "device-limit", "full: device limit"],
+      ["full", "ios", "ram-budget", "full: RAM budget"],
+      ["full", "ios", "global-running-limit", "full: running limit"],
+      ["full", "ios", "platform-running-limit", "full: running limit for iOS"],
+      ["full", "android", "platform-running-limit", "full: running limit for Android"],
+      ["no-free-physical", "ios", undefined, "every matching device is leased or absent"],
+      ["not-chosen", "ios", undefined, "not chosen this time"],
+    ] as const)(
+      "prints %s on %s with capacity reason %s as '  wrk_a: %s'",
+      async (reason, platform, capacityReason, text) => {
+        const { stdout } = await printedGateway([
+          gatewayEntry(
+            [
+              {
+                ...(capacityReason === undefined ? {} : { capacityReason }),
+                reason,
+                workerId: "wrk_a",
+              },
+            ],
+            platform,
+          ),
+        ]);
+
+        expect(stdout.split("\n")[1]).toBe(`  wrk_a: ${text}`);
+      },
+    );
+
+    it("asks worker.list once for names, and not at all when no entry has workers", async () => {
+      const gateway = await printedGateway([
+        gatewayEntry([{ reason: "drained", workerId: "wrk_a" }]),
+        { ...gatewayEntry([{ reason: "busy", workerId: "wrk_a" }]), id: "req_2" },
+      ]);
+      const plain = await printedGateway([{ ...gatewayEntry([]), workers: undefined }]);
+
+      expect(gateway.listed).toBe(1);
+      expect(plain.listed).toBe(0);
+    });
+
+    it("prints a worker's own entry with its reason after ' — ' and no indented lines", async () => {
+      const { stdout } = await printedGateway([
+        {
+          ...gatewayEntry([]),
+          reason: "ram-budget",
+          workers: undefined,
+          workerId: "wrk_1",
+        },
+      ]);
+
+      expect(stdout).toBe(
+        "Request req_1: ci on wrk_1, ios Device, queued at 1, waiting 0s — full: RAM budget\n",
+      );
+    });
+
+    it("has a text for every gateway reason the contract's enum lists", async () => {
+      const field = (waitingRequestSchema.shape as Record<string, unknown>)["workers"];
+      expect(field).toBeDefined();
+      const element = (
+        field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
+      ).unwrap().element;
+      const listed = element.shape.reason.options;
+
+      expect(listed).toHaveLength(13);
+      for (const reason of listed) {
+        const { stdout } = await printedGateway([gatewayEntry([{ reason, workerId: "wrk_a" }])]);
+        const line = stdout.split("\n")[1] ?? "";
+        expect(line).toMatch(/^ {2}wrk_a: [a-zA-Z]/);
+        expect(line).not.toContain("-");
+      }
+    });
   });
 
   it.each([["--devices"], ["--leases"], ["--rules"]])(
@@ -6897,5 +7870,321 @@ describe("CLI: a worker's capabilities", () => {
     await runCli(["status"], environment);
 
     expect(output.stdout).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+  });
+});
+
+function usageAnswer(
+  window: { readonly from: number; readonly to: number },
+  overrides: Partial<UsageOutput> = {},
+): UsageOutput {
+  const samples = { count: 0, max: null, p50: null, p95: null };
+  const figures = {
+    boot: samples,
+    bySource: { booted: 0, provisioned: 0, warm: 0 },
+    declined: 0,
+    failures: { byEvent: {} },
+    granted: 0,
+    held: samples,
+    incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+    provisioning: samples,
+    queue: { meanDepth: null, peakDepth: null },
+    rejected: { byReason: {}, total: 0 },
+    requests: 0,
+    turnaround: samples,
+    utilisation: { slots: { max: null, mean: null, peak: null } },
+    wait: samples,
+  };
+  return {
+    bucketMs: 60_000,
+    coversFrom: window.from,
+    partial: false,
+    platforms: { android: figures, ios: figures },
+    requesters: [],
+    series: [],
+    totals: figures,
+    window,
+    workers: [],
+    ...overrides,
+  };
+}
+
+describe("CLI: stats", () => {
+  const NOW = Date.parse("2026-10-05T12:00:00.000Z");
+  const HOUR = 3_600_000;
+
+  function statsRun(argv: readonly string[], usage: SimlockAdminClient["usage"]) {
+    const output = outputCapture();
+    const asked: { from: number; to: number; includeLedger?: boolean | undefined }[] = [];
+    const run = runCli(
+      ["stats", ...argv],
+      output.environmentWith({
+        adminTokenFromEnv: "admin-token",
+        clock: new FakeClock(NOW),
+        connectAdmin: async (resolveCredential) => {
+          await resolveCredential();
+          return fakeClient({
+            usage: async (window) => {
+              asked.push(window);
+              return usage(window);
+            },
+          });
+        },
+      }),
+    );
+    return { asked, output, run };
+  }
+
+  it("simlock stats words each refusal as the Inputs table says, exits 2, and asks nothing of the daemon", async () => {
+    for (const argv of [["--since", "1h"], ["--from", "2026-10-05T10:00:00Z"], ["--json"]]) {
+      const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
+      await expect(run, argv.join(" ")).resolves.toBe(0);
+      expect(output.stderr, argv.join(" ")).not.toContain("USAGE");
+    }
+    for (const [argv, message] of [
+      [
+        ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],
+        "stats takes --since or --from, not both",
+      ],
+      [["--to", "2026-10-04T10:00:00Z"], "--to needs --from"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-03T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [
+        ["--from", "2026-10-05T13:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [["--since", "soon"], "Invalid duration: soon"],
+      [["--from", "2026-10-15"], "Invalid time: 2026-10-15 (use ISO 8601 with Z or an offset)"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "10/15/2026"],
+        "Invalid time: 10/15/2026 (use ISO 8601 with Z or an offset)",
+      ],
+    ] as const) {
+      const { asked, output, run } = statsRun(argv, async (window) => usageAnswer(window));
+
+      await expect(run, argv.join(" ")).resolves.toBe(2);
+      expect(output.stderr, argv.join(" ")).toContain('"code":"USAGE"');
+      expect(output.stderr, argv.join(" ")).toContain(`"message":"${message}"`);
+      expect(asked, argv.join(" ")).toEqual([]);
+      expect(output.stdout).toBe("");
+    }
+  });
+
+  it("simlock stats --json prints the operation's output unchanged", async () => {
+    const answer = usageAnswer(
+      { from: NOW - HOUR, to: NOW },
+      {
+        partial: true,
+        requesters: [
+          { granted: 1, heldTotalMs: 5, id: "tok_a", label: "ci", rejected: 0, requests: 1 },
+        ],
+      },
+    );
+    const { output, run } = statsRun(["--since", "1h", "--json"], async () => answer);
+
+    await expect(run).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual(answer);
+    expect(output.stdout.endsWith("\n")).toBe(true);
+  });
+
+  it("asks for the last 24 hours by default, and for --since up to now", async () => {
+    const byDefault = statsRun([], async (window) => usageAnswer(window));
+    const since = statsRun(["--since", "90m"], async (window) => usageAnswer(window));
+
+    await byDefault.run;
+    await since.run;
+
+    expect(byDefault.asked).toEqual([{ from: NOW - 24 * HOUR, to: NOW }]);
+    expect(since.asked).toEqual([{ from: NOW - 90 * 60_000, to: NOW }]);
+  });
+
+  it("asks for the ISO window --from and --to name, and for --from up to now", async () => {
+    const both = statsRun(
+      ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T12:00:00Z"],
+      async (window) => usageAnswer(window),
+    );
+    const open = statsRun(["--from", "2026-10-05T10:00:00Z"], async (window) =>
+      usageAnswer(window),
+    );
+
+    await both.run;
+    await open.run;
+
+    expect(both.asked).toEqual([
+      { from: Date.parse("2026-10-04T10:00:00Z"), to: Date.parse("2026-10-04T12:00:00Z") },
+    ]);
+    expect(open.asked).toEqual([{ from: Date.parse("2026-10-05T10:00:00Z"), to: NOW }]);
+  });
+
+  it("prints the figures as a table, with the partial note above them", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async (window) =>
+      usageAnswer(window, { coversFrom: NOW - 60_000, partial: true }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    const lines = output.stdout.split("\n");
+    expect(lines[0]).toBe("Usage from 2026-09-05T12:00:00.000Z to 2026-10-05T12:00:00.000Z");
+    expect(lines[1]).toContain("Figures cover from 2026-10-05T11:59:00.000Z");
+    expect(lines).toContain("Totals");
+  });
+
+  it("prints the HISTORY_NOT_KEPT message and exits with its code when the window ends before the history", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async () => {
+      throw fromWireError(
+        "HISTORY_NOT_KEPT",
+        "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
+        { oldestTs: NOW - 60_000 },
+      );
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+    expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
+  });
+
+  const LEDGER_HEADER =
+    "requestId,requester,label,platform,model,workerId,source,requestedAt,grantedAt,rejectedAt,endedAt,waitMs,heldMs,turnaroundMs,outcome,probe,reason,endReason";
+  const TRUNCATION_NOTICE =
+    "The ledger holds the newest 100000 requests of the window; ask for a shorter window for the rest.";
+
+  it("simlock stats --csv prints the header row and one row per ledger entry with times as ISO 8601, durations as whole milliseconds (400, not 400.0), probe as true or false, and asks usage.get with includeLedger: true", async () => {
+    const requests = [
+      {
+        endReason: "explicit",
+        endedAt: Date.parse("2026-10-05T11:09:30.000Z"),
+        grantedAt: Date.parse("2026-10-05T11:01:02.400Z"),
+        heldMs: 507_600.4,
+        label: "ci-runner",
+        model: "iPhone 16",
+        outcome: "granted" as const,
+        platform: "ios",
+        probe: false,
+        requestId: "req_8f2",
+        requestedAt: Date.parse("2026-10-05T11:01:02.000Z"),
+        requester: "tok_ci",
+        source: "warm",
+        turnaroundMs: 508_000,
+        waitMs: 400,
+      },
+      {
+        outcome: "open" as const,
+        platform: "android",
+        probe: true,
+        requestId: "req_9",
+        requestedAt: Date.parse("2026-10-05T11:02:00.000Z"),
+        requester: "gw:gw-1:tok_a",
+      },
+    ];
+    const { asked, output, run } = statsRun(["--since", "1h", "--csv"], async (window) =>
+      usageAnswer(window, { requests }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    expect(asked[0]?.includeLedger).toBe(true);
+    expect(output.stdout.split("\r\n")).toEqual([
+      LEDGER_HEADER,
+      "req_8f2,tok_ci,ci-runner,ios,iPhone 16,,warm,2026-10-05T11:01:02.000Z,2026-10-05T11:01:02.400Z,,2026-10-05T11:09:30.000Z,400,507600,508000,granted,false,,explicit",
+      "req_9,gw:gw-1:tok_a,,android,,,,2026-10-05T11:02:00.000Z,,,,,,,open,true,,",
+      "",
+    ]);
+  });
+
+  it("simlock stats --csv writes the truncation notice on stderr and exits 0 when ledgerTruncated, and writes no notice otherwise", async () => {
+    const truncated = statsRun(["--csv"], async (window) =>
+      usageAnswer(window, { ledgerTruncated: true, requests: [] }),
+    );
+    const whole = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
+
+    await expect(truncated.run).resolves.toBe(0);
+    await expect(whole.run).resolves.toBe(0);
+
+    expect(truncated.output.stderr).toBe(`${JSON.stringify({ notice: TRUNCATION_NOTICE })}\n`);
+    expect(truncated.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
+    expect(whole.output.stderr).toBe("");
+    expect(whole.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
+  });
+
+  it("simlock stats --csv on an error (HISTORY_NOT_KEPT) writes the error line on stderr, nothing on stdout, and exits 12", async () => {
+    const { output, run } = statsRun(["--since", "30d", "--csv"], async () => {
+      throw fromWireError("HISTORY_NOT_KEPT", "The history does not reach back.", {
+        oldestTs: NOW - 60_000,
+      });
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+  });
+
+  it("simlock stats refuses --csv with --json as a usage error, exit 2", async () => {
+    const accepted = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
+    const both = statsRun(["--csv", "--json"], async (window) => usageAnswer(window));
+
+    await expect(accepted.run).resolves.toBe(0);
+    await expect(both.run).resolves.toBe(2);
+
+    expect(both.output.stderr).toContain('"code":"USAGE"');
+    expect(both.output.stderr).toContain('"message":"stats takes --csv or --json, not both"');
+    expect(both.asked).toEqual([]);
+    expect(both.output.stdout).toBe("");
+  });
+
+  it("closes the connection after the answer, and after a failure", async () => {
+    let closed = 0;
+    const output = outputCapture();
+    const connect = (usage: SimlockAdminClient["usage"]) => async () =>
+      fakeClient({
+        close: async () => {
+          closed += 1;
+        },
+        usage,
+      });
+
+    await runCli(
+      ["stats"],
+      output.environmentWith({ connectAdmin: connect(async (window) => usageAnswer(window)) }),
+    );
+    await runCli(
+      ["stats"],
+      output.environmentWith({
+        connectAdmin: connect(async () => {
+          throw new Error("boom");
+        }),
+      }),
+    );
+
+    expect(closed).toBe(2);
+  });
+
+  it("prints its usage on --help without connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+
+    const exitCode = await runCli(
+      ["stats", "--help"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(output.stdout).toBe(
+      "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]\n",
+    );
   });
 });

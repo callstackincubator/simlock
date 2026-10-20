@@ -105,8 +105,8 @@ export default {
     ),
     direction(
       "no-fs-or-process",
-      "core, leasing, agent-device, host-load and stream reach the filesystem and processes only through injected ports",
-      "^src/(core|leasing|agent-device|host-load|stream)/",
+      "core, leasing, agent-device, host-load, stream and alerts reach the filesystem and processes only through injected ports",
+      "^src/(core|leasing|agent-device|host-load|stream|alerts)/",
       { dependencyTypes: ["core"], path: fsOrProcess },
     ),
     direction(
@@ -140,6 +140,18 @@ export default {
       { path: "^src/host-load/" },
     ),
     direction(
+      "alerts-imports-bus-ports-core-only",
+      "alerts reads the bus, sends through the WebhookPoster port and takes config types from core, and imports no other component",
+      "^src/alerts/",
+      { path: "^src/", pathNot: "^src/(alerts|bus|ports|core)/" },
+    ),
+    direction(
+      "not-alerts",
+      "only the composition root, main.ts, imports the alerts module",
+      "^src/(?!alerts/|daemon/main\\.ts$)",
+      { path: "^src/alerts/" },
+    ),
+    direction(
       "gateway-not-edges",
       "the gateway imports no driver, HTTP, CLI or MCP module",
       "^src/gateway/",
@@ -168,6 +180,13 @@ export default {
         path: "^src/$1/",
         pathNot: "^src/$1/definition\\.ts$",
       },
+    },
+    {
+      name: "auth-imports-little",
+      comment: "src/auth imports only ports and contract",
+      severity: "error",
+      from: { path: "^src/auth/", pathNot: linkTestFile },
+      to: { path: "^src/", pathNot: "^src/(auth|ports|contract)/" },
     },
     {
       name: "modules-imports-little",

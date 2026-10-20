@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeDriver } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
+import { readHistoryEvents } from "../history/testing.js";
 import type { DaemonServer } from "../daemon/server.js";
 import type { WebSocketUplinkListenerFactory } from "../ports/uplink-websocket.js";
 import type { GatewayRelay } from "../gateway/index.js";
@@ -56,12 +57,18 @@ const endedMessage = "lease ended by simlock; run disconnect, then open";
 
 const adminSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "admin",
   role: "admin",
 } as const;
 
 function sessionFor(principal: string) {
-  return { manageEventSubscription: () => undefined, principal, role: "agent" } as const;
+  return {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal,
+    role: "agent",
+  } as const;
 }
 
 interface Envelope {
@@ -1252,10 +1259,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     expect(renewedBefore).toBeGreaterThan(0);
     expect(tap.operations.length).toBe(afterStop);
-    const lines = (await readFile(join(rig.directory, "events.jsonl"), "utf8"))
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as { event?: string; payload?: Record<string, unknown> });
+    const lines = (await readHistoryEvents(rig.directory)) as Array<{
+      event?: string;
+      payload?: Record<string, unknown>;
+    }>;
     expect(
       lines.filter(
         (entry) =>
@@ -1883,20 +1890,32 @@ describe(
       expect(beat.result).toMatchObject({ ok: true });
     });
 
-    it("the uplink dropping mid-command answers the command with `workerUnreachable()`", async () => {
+    it("a command answered WORKER_UNREACHABLE after an uplink drop stops renewing its lease after reconnect without releasing it", async () => {
       const rig = await setUp();
       const member = first(rig);
-      await granted(rig, 1);
+      await granted(rig, 1, { ttlMs: 30_000 });
       await listedByGateway(rig, 1);
+      member.fake.keepCommandsAfterAbort();
       const running = await runningCommand(rig, member, 1);
+      const before = await deadlineOf(member, 1);
+      expect(before).toBeTypeOf("number");
+      const tap = tapDispatch(rig.gateway);
 
-      await dropUplink(rig, member);
+      try {
+        await dropUplink(rig, member);
 
-      await vi.waitFor(() => expect(running.done()).toBe(true), { timeout: 5_000 });
-      member.fake.releaseCommand();
-      const answer = await running.promise;
-      expect(answer.status).toBe(503);
-      expectUnreachable(await envelopeOf(answer));
+        await vi.waitFor(() => expect(running.done()).toBe(true), { timeout: 5_000 });
+        const answer = await running.promise;
+        expect(answer.status).toBe(503);
+        expectUnreachable(await envelopeOf(answer));
+        await untilConnected(rig, member);
+        await advance(rig, 20_000, 1_000);
+
+        expect(tap.operations).not.toContain("lease.release");
+        expect(await deadlineOf(member, 1)).toBe(before);
+      } finally {
+        member.fake.releaseCommand();
+      }
     });
 
     it("right after the worker reconnects and before its view is refreshed, a command answers `workerUnreachable()`; once it is refreshed, within the TTL, the next command reaches it, and the next heartbeat renews the lease", async () => {
@@ -1955,16 +1974,18 @@ describe(
       expectUnreachable(await envelopeOf(await heartbeat(rig, 1)));
     });
 
-    it("a running command's renewal tick while the worker is disconnected fails, and the entry and its timer stay; after the reconnect the next tick renews", async () => {
+    it("an unreachable command's final renewal fails while disconnected; after reconnect only a new heartbeat renews the retained lease", async () => {
       // why: a worker clock of its own, so moving the gateway's clock does not make the worker redial.
       const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
       const member = first(rig);
       await granted(rig, 1, { ttlMs: 30_000 });
       await listedByGateway(rig, 1);
-      await runningCommand(rig, member, 1);
+      const running = await runningCommand(rig, member, 1);
       const tap = tapDispatch(rig.gateway);
       const before = await deadlineOf(member, 1);
+      rig.clock.advance(1_000);
       await dropUplink(rig, member);
+      expectUnreachable(await envelopeOf(await running.promise));
 
       rig.clock.advance(10_000);
       await sleep(50);
@@ -1975,8 +1996,10 @@ describe(
       await untilConnected(rig, member);
       await advance(rig, 10_000, 5_000);
       await sleep(50);
-      expect(await deadlineOf(member, 1)).toBeGreaterThan(before ?? 0);
+      expect(before).toBe(31_000);
+      expect(await deadlineOf(member, 1)).toBe(before);
       expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
+      expect(await deadlineOf(member, 1)).toBe(member.clock.now() + 30_000);
       member.fake.releaseCommand();
     });
 

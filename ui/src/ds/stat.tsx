@@ -18,10 +18,15 @@ export function StatTile(props: StatTileProps) {
   const { children, label, to, unit, value } = props;
   const body = (
     <>
-      <span className="stat-label">{label}</span>
+      <span className="stat-label">{label}</span>{" "}
       <span className="stat-line">
         <span className="stat-value">{value}</span>
-        {unit === undefined ? null : <span className="stat-unit">{unit}</span>}
+        {unit === undefined ? null : (
+          <>
+            {" "}
+            <span className="stat-unit">{unit}</span>
+          </>
+        )}
       </span>
       {children}
     </>

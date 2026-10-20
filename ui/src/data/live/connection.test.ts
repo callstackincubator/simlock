@@ -140,6 +140,73 @@ describe("LiveConnection", () => {
     expect(connection.state().phase).toBe("disconnected");
   });
 
+  it("a loss in a proxy session asks whether the session is still the proxy's before the backoff", async () => {
+    for (const answer of ["reconnect", "backoff", "stop"] as const) {
+      const asked: number[] = [];
+      const { connection, daemon } = connect(() => {
+        asked.push(Date.now());
+        return Promise.resolve(answer);
+      });
+      connection.watch("/v1/workers", () => {});
+      await settle();
+      const lostAt = Date.now();
+      daemon.openStream()?.end();
+      await settle();
+      expect(asked).toEqual([lostAt]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const reopened = daemon.streams.length - 1;
+      if (answer === "reconnect") {
+        expect(reopened).toBe(1);
+        expect(daemon.healthChecks).toEqual([]);
+        expect(connection.state().phase).toBe("connected");
+      } else if (answer === "backoff") {
+        expect(daemon.healthChecks).toEqual([lostAt + 1_000]);
+        expect(reopened).toBe(1);
+      } else {
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(daemon.healthChecks).toEqual([]);
+        expect(reopened).toBe(0);
+        expect(connection.state().phase).toBe("disconnected");
+      }
+      connection.dispose();
+    }
+  });
+
+  it("an answer to reconnect that arrives after the tab was hidden or the connection disposed opens nothing", async () => {
+    for (const end of ["hidden", "disposed"] as const) {
+      let answer: (value: "reconnect") => void = () => {};
+      const { connection, daemon, visibility } = connect(
+        () => new Promise((resolve) => (answer = resolve)),
+      );
+      connection.watch("/v1/workers", () => {});
+      await settle();
+      daemon.openStream()?.end();
+      await settle();
+      if (end === "hidden") visibility.set(true);
+      else connection.dispose();
+      const streams = daemon.streams.length;
+
+      answer("reconnect");
+      await settle();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(daemon.streams).toHaveLength(streams);
+      connection.dispose();
+    }
+  });
+
+  it("a stream silent for 40 seconds in a proxy session reconnects at once when the proxy still knows the person", async () => {
+    const { daemon } = connect(() => Promise.resolve("reconnect"));
+    await settle();
+
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    expect(daemon.streams).toHaveLength(2);
+    expect(daemon.healthChecks).toEqual([]);
+  });
+
   it("while disconnected, /v1/healthz is called after 1, 2, 4 and 8 seconds, then every 10", async () => {
     const { connection, daemon } = connect();
     connection.watch("/v1/workers", () => {});

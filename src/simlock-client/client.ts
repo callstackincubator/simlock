@@ -28,6 +28,8 @@ import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { IpcConnection, IpcConnector } from "../ports/index.js";
 import { SimlockWire, WireCallError, type CallHooks, type LeaseScopedPush } from "./wire.js";
 import type {
+  AlertsTestInput,
+  AlertsTestOutput,
   CatalogGetInput,
   CatalogGetOutput,
   CleanupRunInput,
@@ -54,7 +56,10 @@ import type {
   ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
+  UsageGetInput,
+  UsageGetOutput,
   InstallComponentOnWorkersOptions,
+  IdentityOutput,
   InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
@@ -118,9 +123,12 @@ export type {
   ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
+  UsageGetInput,
+  UsageGetOutput,
   EventsSubscribeOutput,
   EventsUnsubscribeOutput,
   InstallComponentOnWorkersOptions,
+  IdentityOutput,
   InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
@@ -156,6 +164,8 @@ export type {
   WorkerRemoveOutput,
   WorkerUndrainOutput,
   WorkerView,
+  AlertsTestInput,
+  AlertsTestOutput,
 } from "./types.js";
 export {
   isSimlockError,
@@ -191,6 +201,7 @@ export interface SimlockClient {
 
   getCatalog(input?: CatalogGetInput): Promise<CatalogGetOutput>;
   getStatus(): Promise<StatusGetOutput>;
+  identity(): Promise<IdentityOutput>;
   /**
    * ADR 0010 §8: every installed iOS simulator runtime and Android system image on the daemon's
    * machine, with its size, whether Simlock installed it, and how many devices use it.
@@ -246,6 +257,7 @@ export interface SimlockAdminClient extends SimlockClient {
    * does not gate this operation by role at all -- see the caveat in the PR report). */
   stopDaemon(): Promise<DaemonStopOutput>;
   replayEvents(input?: EventsReplayInput): Promise<EventsReplayOutput>;
+  usage(window: UsageGetInput): Promise<UsageGetOutput>;
   subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>>;
   createToken(input: TokenCreateInput): Promise<TokenCreateOutput>;
   listTokens(): Promise<TokenListOutput>;
@@ -257,6 +269,13 @@ export interface SimlockAdminClient extends SimlockClient {
   drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput>;
+
+  /**
+   * why: ADR 0035 §1: asks a gateway to post one sample message to the named alert destination, once.
+   * Rejects with `ALERT_SEND_FAILED` when the receiver does not take it, `UNKNOWN_ALERT_DESTINATION`
+   * for a name the gateway has not configured, and on a worker with `UNSUPPORTED_IN_WORKER_MODE`.
+   */
+  testAlertDestination(input: AlertsTestInput): Promise<AlertsTestOutput>;
 
   /**
    * ADR 0010 §6: installs one iOS simulator runtime or Android system image, with no lease.
@@ -394,6 +413,7 @@ function buildDegradedClient(
 
     getCatalog: () => rejected(),
     getStatus: () => rejected(),
+    identity: () => rejected(),
     listComponents: () => rejected(),
     requestLease: () => rejected(),
     cancelLease: () => rejected(),
@@ -438,6 +458,7 @@ function buildDegradedClient(
         },
       ),
     replayEvents: () => rejected(),
+    usage: () => rejected(),
     subscribeEvents: () => rejected(),
     createToken: () => rejected(),
     listTokens: () => rejected(),
@@ -446,6 +467,7 @@ function buildDegradedClient(
     drainWorker: () => rejected(),
     undrainWorker: () => rejected(),
     removeWorker: () => rejected(),
+    testAlertDestination: () => rejected(),
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
     removeComponent: () => rejected(),
@@ -508,6 +530,10 @@ class SimlockClientImpl {
 
   getStatus(): Promise<StatusGetOutput> {
     return this.#call("status.get", {});
+  }
+
+  identity(): Promise<IdentityOutput> {
+    return this.#call("identity.get", {});
   }
 
   listComponents(input: ComponentListInput = {}): Promise<ComponentListOutput> {
@@ -639,6 +665,10 @@ class SimlockClientImpl {
     return this.#call("events.replay", input);
   }
 
+  usage(window: UsageGetInput): Promise<UsageGetOutput> {
+    return this.#call("usage.get", window);
+  }
+
   async subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>> {
     const unsubscribePush = this.#wire.onEvent((payload) => listener(payload as EventPush));
     const result = await this.#call("events.subscribe", {});
@@ -673,6 +703,10 @@ class SimlockClientImpl {
 
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput> {
     return this.#call("worker.undrain", input);
+  }
+
+  testAlertDestination(input: AlertsTestInput): Promise<AlertsTestOutput> {
+    return this.#call("alerts.test", input);
   }
 
   async installComponent(

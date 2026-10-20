@@ -1,0 +1,24 @@
+server:
+  bindAddress: 127.0.0.1:4180
+upstreamConfig:
+  upstreams:
+    - id: simlock
+      path: /
+      uri: http://127.0.0.1:4700/
+injectRequestHeaders:
+  - name: X-Id-Token
+    preserveRequestValue: false
+    values:
+      - claimSource:
+          claim: id_token
+providers:
+  - id: dex
+    provider: oidc
+    clientID: simlock-real-proxy
+    clientSecret: simlock-real-proxy-secret
+    scope: openid email profile
+    oidcConfig:
+      issuerURL: http://127.0.0.1:5556/dex
+      emailClaim: email
+      audienceClaims: [aud]
+      userIDClaim: email

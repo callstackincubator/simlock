@@ -45,12 +45,19 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `capabilities.stream.bitrateKbps`              | **Worker side.** Target bitrate in kilobits per second, handed to the encoder as an average rather than a ceiling; a frame that needs more takes it. A whole number from `100` to `40000`; the iOS encoder takes nothing lower. | `1500` |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
 | `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1. Among the workers that can serve the request, in order: a worker whose health is not `running`, or that has requests of its own waiting, is left out; a worker holding a ready device that fits goes first (the device's mode must fit the request, a request with no mode fits a device that serves the worker's default mode, and its runtime must be the one requested or, with none requested, the one the worker would pick: the newest runtime the model pairs with); otherwise a worker with no free running slot for the platform or overall is left out (a running device that is not leased counts as free: the worker shuts it down to make room), a worker under its RAM budget for the platform is preferred over one at it (a worker at its budget is still asked when it is the only one left), and the one with the most free running capacity for the platform wins. A worker that is left out is busy, not unable: the request waits for it. Ties go to the lowest worker id. | `warm-then-free`                                                 |
+| `gateway.alerts.destinations`     | **Gateway side.** A list of at most 16 webhook destinations the gateway sends chosen fleet events to; see [Alerts](#alerts). A bad entry stops the daemon from starting, on a gateway and on a worker alike; a worker sends nothing whatever it lists. `simlock config` shows the URLs and secrets; the daemon log, the `daemon.started` event and the event history show `[redacted]`. | `[]` (no alerts) |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
 | `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up. A backstop for a worker that never answers at all — deliberately longer than the worker's own `exec.timeoutMs`, which is authoritative because that side owns the process and can kill it, so an ordinary timeout surfaces as the worker's `EXEC_TIMEOUT` rather than racing this one. | `11 minutes`                                                     |
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** How long the gateway waits on a forwarded `lease.request` before giving up on that worker for this request, answering `WORKER_UNREACHABLE`. Bounds the one uplink call that otherwise had no timeout of its own, so a wedged worker cannot park a request where neither a deadline nor `lease.cancel` could ever reach it again. Generous against a cold device provision-plus-boot; well below `gateway.execTimeoutMs`, since granting a lease should never take as long as a command run against the device afterward. | `5 minutes`                                                      |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)) and the web console served beside it (see [CONSOLE.md](CONSOLE.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
+| `http.proxyAuth` | Sign-in through a proxy in front of Simlock (Cloudflare Access, for one). Not set: proxy sign-in is off. Set the four required keys together, as one JSON object, because each `config set` checks the whole file; one key alone is refused, naming the first missing key (`expected set with the other http.proxyAuth keys`). `signOutUrl` alone counts as an incomplete set. Read in both modes; takes effect on daemon restart. | not set |
+| `http.proxyAuth.header` | Required. The request header carrying the proxy's signed JWT, e.g. `cf-access-jwt-assertion`. 1-64 letters, digits or `-`; matched without regard to case. With `authorization`, only a `Bearer` value that does not start `slk_` is taken as the JWT. | — |
+| `http.proxyAuth.jwksUrl` | Required. Where the proxy publishes its public keys. An `https://` URL, or `http://` on `127.0.0.1`, `::1` or `localhost`. The daemon fetches it (5 s limit, no redirects, at most 64 KiB) and keeps the keys 10 minutes. | — |
+| `http.proxyAuth.issuer` | Required. The `iss` the JWT must carry. 1-128 characters. | — |
+| `http.proxyAuth.audience` | Required. The `aud` the JWT must carry (or list). 1-512 characters. | — |
+| `http.proxyAuth.signOutUrl` | Optional. An `http://` or `https://` URL the console sends a person to for signing out; `GET /v1/identity` returns it. | not set |
 | `exec.timeoutMs`                  | How long a single `device.exec` command (the remote half of `simlock simctl` / `simlock adb` — see [CLI.md](CLI.md#reaching-a-leased-device)) may run before Simlock kills it and fails the call with `EXEC_TIMEOUT`. Output is streamed, never buffered, so there is no size limit to go with it.                                | `10 minutes`                                                     |
 | `gateway.url`                     | **Worker side.** The gateway's base URL (`ws://host:port` or `wss://...`); the worker derives the uplink endpoint (`/v1/uplink`) from it. Set together with `gateway.token`, or not at all.                                  | unset (this worker has no gateway)                              |
 | `gateway.token`                   | **Worker side.** The join token this worker presents, minted on the gateway with `simlock token create --role worker`.                                                                                                        | unset                                                            |
@@ -63,9 +70,9 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `downloads.timeoutMs`             | How long one request for a missing runtime / system image may take, counted from the moment it arrives. Waiting behind another download on the same platform counts too, and the clock never restarts; a request that runs out fails with `DOWNLOAD_TIMEOUT`. A running download is stopped when the oldest request sharing it runs out, and every request sharing it fails then. On a busy machine, raise it. | `20 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of recent business events kept in memory, which `simlock events` without `--since` replays.                                                                                                                                          | `1000`                                                           |
-| `eventLog.rotateBytes` | Size of one generation of the event file, `~/.simlock/events.jsonl`, before it rotates. Every business event is written there and survives a daemon restart. A rotation renames the file to `events.jsonl.1` and shifts older generations up by one (`.2`, `.3`, …). | `5 MiB` |
-| `eventLog.retention` | How long the event history is kept, in milliseconds. Retention is judged per generation by its newest line: a generation is deleted once its newest line is older than this, so a generation that mixes old and new lines stays until its newest line ages out. The sweep runs after every rotation and once when the daemon starts. The current file is never deleted. | `604800000` (7 days) |
-| `eventLog.maxBytes` | Total size of the event file and all its generations, the backstop for when events arrive faster than `eventLog.retention` ages them out. When the generations exceed it, the oldest are deleted first, whatever their age. Must be at least twice `eventLog.rotateBytes`; a smaller value is refused when the config loads. | `256 MiB` |
+| `eventLog.retention` | How long the event history is kept, in milliseconds, counted back from the moment of the prune and compared with each event's own time. Every business event is written to `~/.simlock/history.db` and survives a daemon restart. Older events are deleted once the daemon holds its socket and every hour after; the freed space goes back to the disk. | `604800000` (7 days) |
+| `eventLog.maxBytes` | Cap on the stored size of the events in `history.db` (the size of each event as written, not the file), the backstop for when events arrive faster than `eventLog.retention` ages them out. When they exceed it, the oldest events are deleted first, whatever their age. At least `16 MiB`; a smaller value is refused when the config loads. | `256 MiB` |
+| `metrics.retention` | How long the usage figures in `history.db` are kept, in milliseconds, counted back from the moment of the prune: one row per lease request (by when it was requested), per-minute levels (by the minute) and one row per device boot, provision, recovery or quarantine event and per declined lease request (by when it happened). They outlive the events behind them. It may not be shorter than `eventLog.retention`, and must be a positive whole number of milliseconds; either is refused when the config loads. | the larger of `7776000000` (90 days) and `eventLog.retention` |
 | `log.level`                       | Lowest level written to `daemon.log`: `debug`, `info`, `warn`, or `error`. `debug` adds a line for every request that only reads (such as `simlock status`) and for every device command Simlock runs (`simctl`, `adb`, …) with its arguments and exit code. | `info`                                                           |
 | `log.rotateBytes`                 | Size at which `daemon.log` is rotated to `daemon.log.1`. One rotated file is kept.                                                                                                                                          | `5 MiB`                                                          |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery. Physical devices are watched whatever it says.                                                                                                                                                                | `true`                                                           |
@@ -122,7 +129,7 @@ not apply in `mode: "gateway"`, where both keys are worker-side and are
 warned about and ignored like every other worker key — a gateway is not
 misconfigured by leftovers from the config it was flipped out of.
 `gateway.label` is a non-empty string, `gateway.routing` one of the
-registered routing policies, and `exec.timeoutMs`, `gateway.execTimeoutMs`,
+registered routing policies, `gateway.alerts.destinations` the list described under [Alerts](#alerts), and `exec.timeoutMs`, `gateway.execTimeoutMs`,
 `gateway.leaseRequestTimeoutMs`, and `gateway.disconnectedRetentionMs`
 positive numbers.
 **`mode: "gateway"` with `http.enabled: false` is rejected at load**, naming the key: a
@@ -167,7 +174,7 @@ local agents whether or not its gateway is reachable, and `http.enabled` stays
 off by default.
 
 **A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
-`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `gateway.*` and
+`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*`, `gateway.*` and
 `capabilities.*` (`enabled`, and `leaseTtlCapMs` for agent-device). Every other key —
 capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
 configures devices, which a gateway does not have; each one present in a
@@ -233,9 +240,10 @@ does not apply to it. It reads:
 |---|---|
 | `mode` | to be a gateway at all |
 | `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
+| `gateway.alerts.destinations` | where to send fleet events |
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
-| `log.*`, `eventBuffer.*`, `eventLog.*` | logging and the event history, as anywhere |
+| `log.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*` | logging, the event history and the usage figures kept beside it, as anywhere |
 
 **A worker's `downloads.policy` does not apply to requests through a
 gateway.** The gateway sends a request only to a worker whose catalog already
@@ -305,6 +313,111 @@ because only one of them owns anything:
   configure. Two *workers* on one machine would additionally need distinct
   `drivers.android.adbServerPort` values (see below), but a gateway plus a
   worker is one driver set, so there is nothing to split.
+
+## Alerts
+
+A gateway can send chosen fleet events to a webhook, so n8n, Zapier or your own
+receiver hears about them without anyone watching the console. Set
+`gateway.alerts.destinations` to a list of destinations:
+
+```json
+{
+  "mode": "gateway",
+  "gateway": {
+    "alerts": {
+      "destinations": [
+        {
+          "name": "audit",
+          "format": "generic",
+          "url": "https://n8n.example.com/hook",
+          "secret": "a-long-random-string",
+          "events": ["worker.connected", "worker.disconnected"]
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field    | Rule |
+|---|---|
+| `name`   | Lowercase letters, digits and dashes, starting with a letter, at most 32 characters; no two destinations share one. |
+| `format` | `generic` (the signed JSON envelope) or `slack` (a written message for Slack). |
+| `url`    | `https://`, or `http://` to `localhost`, `127.0.0.1` or `[::1]`; no user name or password in it. |
+| `events` | A non-empty list, each event once, from: `worker.connected`, `worker.disconnected`, `worker.rejected`, `worker.drain-started`, `worker.drain-ended`, `device.quarantine-abandoned`, `device.quarantine-stranded`, `device.recovery-failed`, `device.stalled-transition-detected`, `disk.pressure-detected`, `component.install-failed`. |
+| `secret` | A `generic` destination needs a non-empty string the gateway signs each message with. A `slack` destination takes none; a `secret` key on it is refused. |
+
+An event a worker reports reaches the destination too, with `workerId` in its
+payload. A key not listed above is warned about and ignored, and
+`simlock config set` refuses it.
+
+**What a `generic` receiver gets.** One `POST` per event, with the event as the body: the
+same JSON `simlock events --json` prints (`id`, `seq`, `timestamp`, `event`,
+`payload`, `module`). Headers:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `User-Agent` | `simlock/<version>` |
+| `X-Simlock-Event` | the event name |
+| `X-Simlock-Delivery` | the event `id`; the same on every try, so a receiver can drop a repeat |
+| `X-Simlock-Signature` | `sha256=` and the hex HMAC-SHA256 of the raw body, keyed with the destination's `secret` |
+
+To check a message, compute the HMAC-SHA256 of the bytes you received with the
+secret and compare it to the header value in constant time. Use the raw body,
+not a re-serialised copy.
+
+**Slack.** A `slack` destination gets `{"text": "<message>"}` for each event it
+lists, written for a person, through the same queue, tries and limits as
+`generic`, with only the `Content-Type` and `User-Agent` headers (no `X-Simlock-Event`, `X-Simlock-Delivery` or `X-Simlock-Signature`, and no body but the `text`). Slack is the
+only service promised; other services that take Slack's incoming-webhook body
+may work. `<worker>` is the worker's label as the gateway knows it when the
+message is sent, or its id when it has no label. Every variable part is cut to
+300 characters (`…` added) and has `&`, `<` and `>` written as `&amp;`, `&lt;`
+and `&gt;`, so a label like `<!channel>` never pings a channel. A field a worker
+left out prints as `undefined`, and a size or age that is not a number prints as
+`?`.
+
+| Event | Message |
+|---|---|
+| `worker.connected` | `🟢 Worker <worker> connected (simlock <version>).`, or `🟢 Worker <worker> connected.` without a version |
+| `worker.disconnected` | `🔴 Worker <worker> disconnected.`, or `… disconnected while holding 1 lease.`, or `… while holding <n> leases.` |
+| `worker.rejected` | `⛔ A worker was refused (<reason>): <claimed>.` and, when `count` is above 1, ` <count> more refusals like it came before this one.` `<claimed>` is the label the connection claimed, else its worker id, else `an unknown worker`. |
+| `worker.drain-started` | `⏸ Worker <worker> is drained: it takes no new leases.` |
+| `worker.drain-ended` | `▶️ Worker <worker> takes new leases again.` |
+| `device.quarantine-abandoned` | `⚠️ Device <deviceId> on <worker> was retired after <attempts> failed clean-ups.` |
+| `device.quarantine-stranded` | `🛑 Device <deviceId> on <worker> could not be cleaned up or deleted after <attempts> tries: <error>. It needs a person.` |
+| `device.recovery-failed` | `⚠️ Device <deviceId> on <worker> crashed during lease <leaseId> and could not be brought back: <reason>.` |
+| `device.stalled-transition-detected` | `⏳ Device <deviceId> on <worker> has been <state> for <age>.` |
+| `disk.pressure-detected` | `💾 Worker <worker> is low on disk: <freeBytes> free (threshold <threshold>).` |
+| `component.install-failed` | `❌ Installing <platform> <componentId> on <worker> failed: <error>.` |
+
+`<age>` reads `45 s`, `14 min` or `1 h 5 min` (`2 h` when no minutes are left),
+rounded down. `<freeBytes>` and `<threshold>` are in GiB (1024³ bytes), or MiB
+under 1 GiB, with one decimal rounded half up and `.0` dropped: `8.2 GiB`,
+`10 GiB`, `512 MiB`.
+
+**Testing a destination.** `simlock alerts test <name>` sends one sample message
+to a destination now, so you can check its URL and secret before an event needs
+them; see [`simlock alerts test`](CLI.md#simlock-alerts-test-destination---json).
+A `generic` receiver gets the usual envelope with `seq` `0`, `module` `alerts`,
+`event` `alerts.test-sent` (also in `X-Simlock-Event`) and `payload`
+`{"destination": "<name>"}`, signed like any other message. That event comes only
+from this command: it is never a fleet event, is not in the event history, and
+cannot be listed in `events`. A `slack` destination gets `{"text": "🔔 Test message
+from the simlock gateway to destination <name>."}`. The sample is not queued,
+tried again or counted with the destination's waiting messages.
+
+**Delivery.** Each destination sends one message at a time, in the order the
+gateway saw the events, and a slow destination never delays another. A try
+ends after 10 seconds. A network error, a timeout, `429` or a `5xx` is tried
+again 1 second after the failed try, then 5 seconds after the second: three tries
+in all, then a warning in `daemon.log` ("Alert send gave up"). Any other status
+that is not `2xx`, a redirect included, gives up at once; a redirect is never
+followed. Up to 100 messages wait per destination; past that the oldest waiting
+one is dropped with a warning. Nothing is written to disk, so a gateway restart
+loses the waiting messages, and stopping the gateway abandons what is still
+being sent. The log names a destination and never its URL or secret.
 
 ## Downloads
 
@@ -762,3 +875,14 @@ did — a config file written against an older Simlock keeps its behaviour
 without changes, and needs none. Setting them alongside an explicitly
 selected non-`resource` strategy is the one case Simlock warns about, since
 those settings would have no effect.
+
+## Signing in through a proxy
+
+`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. Set it as one object:
+
+```
+simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://team.cloudflareaccess.com","audience":"4f1c…"}'
+simlock daemon stop && simlock daemon start
+```
+
+Setting one key alone fails the whole-file check: `Invalid config after setting http.proxyAuth.header: Invalid config value for "http.proxyAuth.jwksUrl": expected set with the other http.proxyAuth keys`. See [HTTP-API.md](HTTP-API.md#signing-in-through-a-proxy) for how a request is checked.

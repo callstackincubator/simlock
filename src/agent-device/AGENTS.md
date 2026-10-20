@@ -2,7 +2,7 @@
 
 Does: runs one agent-device daemon per worker and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
 Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds `AgentDeviceSupervisor`). The module host loads both.
-Uses: ports, http (session, errors, token identity), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
+Uses: ports, auth (`Identity`), http (session, errors), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
 Imported by: the module registry (`index.ts` only); `daemon/main.ts` imports nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
 Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.
 
@@ -108,8 +108,10 @@ under leasing's signal (`lease.endWaitMs`).
    chars with a hash. A lease not the token's → 403. No lease: only `GET /health`.
 4. Worker: `agentDeviceRelayTarget` → `InProcessHostLink` → host, requester = tenant.
    No front rules run on the worker.
-5. Worker unreachable → "try again" reply; a command so answered keeps its renewals
-   to the run cap. A dropped lease is still routed for the gateway's `lease.maxTtlMs`;
+5. Worker unreachable → "try again" reply; a command so answered ends its renewal
+   reference without releasing the lease or ending worker work. Other live commands
+   keep their references; the last reference ends with one final renewal attempt.
+   A dropped lease is still routed for the gateway's `lease.maxTtlMs`;
    for 60 s after gateway start an unknown lease is unreachable.
 
 ## State and timers

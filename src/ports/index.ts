@@ -57,9 +57,14 @@ export {
   NodeFileLogSink,
   NoopLogger,
 } from "./logger.js";
-export type { LogSink } from "./logger.js";
 // fallow-ignore-next-line unused-type -- public shape of a parsed log line, for consumers of MemoryLogSink.records.
 export type { LogRecord } from "./logger.js";
+export {
+  FakeKeySetFetcher,
+  KEY_SET_MAX_BYTES,
+  type KeySetFetcher,
+  NodeKeySetFetcher,
+} from "./key-set-fetcher.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
 export { CryptoTokenSecrets, type TokenSecrets } from "./token-secrets.js";
 export { FakeSystemStats, NodeSystemStats, type SystemStats } from "./system-stats.js";
@@ -114,3 +119,10 @@ export {
   type MemoryCounters,
   productionHostLoadProbe,
 } from "./host-load.js";
+export {
+  filterSqliteExperimentalWarning,
+  NodeSqliteOpener,
+  SqliteUnavailableError,
+} from "./sqlite.js";
+export type { SqliteDatabase, SqliteOpener, SqliteStatement } from "./sqlite.js";
+export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";

@@ -5,6 +5,7 @@ const PATHS = {
   waiting: "M2 4h12M2 8h9M2 12h6",
   attention: "M8 2l6.5 11.5h-13zM8 6.5v3M8 11.5v.01",
   events: "M1.5 8h3l2-5 3 10 2-5h3",
+  usage: "M2 14V2M2 14h12M5 11V8M8 11V5M11 11V7",
   collapse: "M2 2.5h12v11H2zM6 2.5v11M11.5 6L9.5 8l2 2",
   expand: "M2 2.5h12v11H2zM6 2.5v11M9.5 6l2 2-2 2",
   menu: "M2 4h12M2 8h12M2 12h12",

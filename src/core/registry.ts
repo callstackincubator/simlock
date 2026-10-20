@@ -1,4 +1,5 @@
 import type { EventBus, EventMap } from "../bus/index.js";
+import { quarantineCauseSchema } from "../contract/index.js";
 import type { Clock, Filesystem, IdGenerator } from "../ports/index.js";
 import {
   DEFAULT_LEASE_MAX_REQUEST_RECORDS,
@@ -11,6 +12,7 @@ import {
   type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
+  type QuarantineCause,
   type DeviceState,
   type DeviceTransitionUpdate,
   IllegalTransition,
@@ -134,7 +136,10 @@ export interface CreateLeaseInput {
 }
 
 export type RegistryDeviceEvent =
-  | { readonly event: "device.ready"; readonly payload: EventMap["device.ready"] }
+  | {
+      readonly event: "device.ready";
+      readonly payload: Omit<EventMap["device.ready"], "platform">;
+    }
   | { readonly event: "device.reclaimed"; readonly payload: EventMap["device.reclaimed"] }
   | { readonly event: "device.shutdown"; readonly payload: EventMap["device.shutdown"] }
   | {
@@ -309,7 +314,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       this.#emitDeviceEvent(event, updated);
     }
 
-    return cloneDevice(updated);
+    return this.#committed(deviceId);
   }
 
   async completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord> {
@@ -332,7 +337,11 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * reached from ReclaimCoordinator for the lease-end paths -- emits `device.quarantined`
    * (and, for a lease-end failure, `device.purge-failed`) after this commits.
    */
-  async enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord> {
+  async enterQuarantine(
+    deviceId: string,
+    nextRetryAt: number,
+    cause: QuarantineCause,
+  ): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (
       device.state !== "reclaiming" &&
@@ -348,6 +357,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       quarantineAttempts: 0,
       quarantineNextRetryAt: nextRetryAt,
       quarantinedAt: this.options.clock.now(),
+      quarantineCause: cause,
     };
     const devices = [...this.#devices];
     devices[index] = updated;
@@ -404,7 +414,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);
-    return cloneDevice(updated as DeviceRecord);
+    return this.#committed(deviceId);
   }
 
   /**
@@ -447,7 +457,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       { deviceId, initiator, physical: device.physical },
       "registry",
     );
-    return cloneDevice(updated as DeviceRecord);
+    return this.#committed(deviceId);
   }
 
   async markForeignStateDetected(deviceId: string, at: number): Promise<DeviceRecord> {
@@ -530,13 +540,13 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (device.state === "deleted") {
       return cloneDevice(device);
     }
-    const deleted = await this.#commitMissing(device, this.#leases);
+    await this.#commitMissing(device, this.#leases);
     this.options.eventBus.emit(
       "device.deleted",
       { deviceId, initiator, physical: device.physical },
       "registry",
     );
-    return cloneDevice(deleted);
+    return this.#committed(deviceId);
   }
 
   /**
@@ -702,7 +712,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
     this.#emitEnrolled(updated, true);
-    return cloneDevice(updated) as PhysicalDevice;
+    return this.#committed(deviceId) as PhysicalDevice;
   }
 
   async unenrollPhysical(deviceId: string): Promise<PhysicalDevice> {
@@ -731,7 +741,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       { deviceId, initiator: "operator", physical: true },
       "registry",
     );
-    return cloneDevice(updated) as PhysicalDevice;
+    return this.#committed(deviceId) as PhysicalDevice;
   }
 
   #emitEnrolled(device: PhysicalDevice, reenrolled: boolean): void {
@@ -928,6 +938,11 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return settled.map(cloneLeaseRequest);
   }
 
+  /** why: the exits return the committed record, which has dropped any cause. */
+  #committed(deviceId: string): DeviceRecord {
+    return cloneDevice(this.#requireDeviceRecord(deviceId).device);
+  }
+
   #requireDeviceRecord(deviceId: string): {
     readonly device: DeviceRecord;
     readonly index: number;
@@ -947,14 +962,15 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     components: readonly ComponentRecord[] = this.#components,
   ): Promise<void> {
     await this.options.filesystem.mkdirp(parentDirectory(this.options.statePath));
+    const committed = devices.map(withoutCauseUnlessQuarantined);
     await this.options.filesystem.writeFileAtomic(
       this.options.statePath,
       JSON.stringify({
         ...this.#unknownState,
-        devices: devices
+        devices: committed
           .filter(isVirtual)
           .map((device) => ({ ...this.#unknownDeviceFields.get(device.id), ...stored(device) })),
-        physicalDevices: devices.filter(isPhysical).map((device) => ({
+        physicalDevices: committed.filter(isPhysical).map((device) => ({
           ...this.#unknownDeviceFields.get(device.id),
           ...device,
         })),
@@ -970,7 +986,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       }),
       { mode: 0o600 },
     );
-    this.#devices = devices;
+    this.#devices = committed;
     this.#leases = leases;
     this.#leaseRequests = leaseRequests;
     this.#components = components;
@@ -1057,7 +1073,11 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   #emitDeviceEvent(event: RegistryDeviceEvent, device: DeviceRecord): void {
     switch (event.event) {
       case "device.ready":
-        this.options.eventBus.emit(event.event, event.payload, "registry");
+        this.options.eventBus.emit(
+          event.event,
+          { ...event.payload, platform: device.spec.platform },
+          "registry",
+        );
         return;
       case "device.reclaimed":
         this.options.eventBus.emit(event.event, event.payload, "registry");
@@ -1099,6 +1119,7 @@ const deviceRecordKeys = [
   "quarantinedAt",
   "quarantineAttempts",
   "quarantineNextRetryAt",
+  "quarantineCause",
   "address",
   "mode",
   "leaseIdentity",
@@ -1161,6 +1182,13 @@ function stored(device: VirtualDevice): Record<string, unknown> {
   const { physical: _physical, spec, ...record } = device;
   const { physical: _specPhysical, ...storedSpec } = spec;
   return { ...record, spec: storedSpec };
+}
+
+/** why: the one place a cause goes when its device leaves quarantine, however it left. */
+function withoutCauseUnlessQuarantined(device: DeviceRecord): DeviceRecord {
+  if (device.state === "quarantined" || device.quarantineCause === undefined) return device;
+  const { quarantineCause: _cause, ...rest } = device;
+  return rest as DeviceRecord;
 }
 
 function cloneLease(lease: LeaseRecord): LeaseRecord {
@@ -1297,9 +1325,14 @@ function parseDevice(value: unknown, physical: boolean): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
   const shared = parseSharedDeviceFields(value);
-  return physical
+  const record = physical
     ? parsePhysicalDevice(value, spec, state, shared)
     : parseVirtualDevice(value, spec, state, shared);
+  // why: a cause is for a quarantined record alone; on any other it is dropped unchecked.
+  if (record.state !== "quarantined" || value.quarantineCause === undefined) return record;
+  const cause = quarantineCauseSchema.safeParse(value.quarantineCause);
+  if (!cause.success) throw new RegistryLoadError("Invalid device record in registry state");
+  return { ...record, quarantineCause: cause.data };
 }
 
 /** What a record in `devices` and one in `physicalDevices` both carry, checked once. */

@@ -1,0 +1,20 @@
+issuer: http://127.0.0.1:5556/dex
+storage:
+  type: memory
+web:
+  http: 127.0.0.1:5556
+oauth2:
+  skipApprovalScreen: true
+enablePasswordDB: true
+staticPasswords:
+  - email: alice@example.test
+    # bcrypt of "password"
+    hash: "$2a$10$xvIVuQofZ.DgTVTFVLAHM.joSogLzTXWhyLKLHpPD2YFb4nSpHPDO"
+    username: Alice
+    userID: alice-user-id
+staticClients:
+  - id: simlock-real-proxy
+    name: Simlock real-proxy lane
+    secret: simlock-real-proxy-secret
+    redirectURIs:
+      - http://127.0.0.1:4180/oauth2/callback

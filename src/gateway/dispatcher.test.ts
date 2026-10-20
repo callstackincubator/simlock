@@ -1,16 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
+import { createHmac } from "node:crypto";
+import { createServer } from "node:net";
+
+import { createAlerts } from "../alerts/index.js";
+import { EventBus, type EventEnvelope } from "../bus/index.js";
+import type { AlertDestination } from "../core/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
+import {
+  fixedEventHistory,
+  granted,
+  HOUR,
+  removeUsageRigs,
+  requested,
+  ringEventHistory,
+  T0,
+  usageRig,
+} from "../history/testing.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
 import {
   FakeClock,
+  FetchWebhookPoster,
   JsonLinesLogger,
-  MemoryFilesystem,
   MemoryLogSink,
-  NoopLogger,
+  type WebhookPoster,
 } from "../ports/index.js";
-import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
+import { FakeWebhookPoster } from "../ports/testing.js";
+import type { TokenOperations } from "../auth/index.js";
+import { GatewayDispatcher } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
@@ -28,6 +47,8 @@ import {
 } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
+type SentRequest = Parameters<WebhookPoster["post"]>[0];
+
 const gatewayConfig = {
   capabilities: {},
   capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
@@ -40,6 +61,7 @@ const gatewayConfig = {
     execTimeoutMs: 11 * 60_000,
     leaseRequestTimeoutMs: 5 * 60_000,
     routing: "warm-then-free" as const,
+    alerts: { destinations: [] },
   },
   health: {
     enabled: false,
@@ -82,20 +104,36 @@ const gatewayConfig = {
   },
 };
 
-class FakeTokens implements GatewayTokenStore {
+class FakeTokens implements TokenOperations {
+  constructor(private readonly records: readonly { id: string; label?: string }[] = []) {}
+
   readonly created: string[] = [];
   readonly revoked: string[] = [];
 
   async create(role: "agent" | "operator" | "worker", label?: string) {
     this.created.push(role);
     return {
-      record: { createdAt: 1, id: "tok_1", role, ...(label === undefined ? {} : { label }) },
+      record: {
+        createdAt: 1,
+        hash: "unused",
+        id: "tok_1",
+        role,
+        ...(label === undefined ? {} : { label }),
+      },
       secret: "slk_secret",
     };
   }
 
   async list() {
-    return [{ createdAt: 1, id: "tok_1", role: "worker" as const }];
+    return [
+      { createdAt: 1, hash: "unused", id: "tok_1", role: "worker" as const },
+      ...this.records.map((record) => ({
+        createdAt: 1,
+        hash: "unused",
+        role: "agent" as const,
+        ...record,
+      })),
+    ];
   }
 
   async revoke(id: string) {
@@ -131,12 +169,19 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(
   options: {
-    readonly eventHistory?: Pick<EventHistory, "replay">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly historyPath?: string;
+    readonly tokenRecords?: readonly { id: string; label?: string }[];
+    readonly withoutTokens?: boolean;
     /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
     /** The gateway's own health; `running` by default. */
     readonly health?: "starting" | "running" | "failed";
     readonly load?: ConstructorParameters<typeof GatewayDispatcher>[0]["load"];
+    /** why: real alerts over a fake poster, wired as `testDestination`; none leaves the option out. */
+    readonly alertDestinations?: readonly AlertDestination[];
+    /** why: replaces the fake poster behind `alertDestinations`, for a case that needs a real connection. */
+    readonly webhookPoster?: WebhookPoster;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -149,7 +194,7 @@ function harness(
     leaseMaxTtlMs: gatewayConfig.lease.maxTtlMs,
     retentionMs: 24 * 60 * 60_000,
   });
-  const tokens = new FakeTokens();
+  const tokens = new FakeTokens(options.tokenRecords);
   /** C-2: every id `closeUplinksForToken` was actually called with, in call order. */
   const closedUplinkTokens: string[] = [];
   const directory = new FakeDirectory();
@@ -175,6 +220,20 @@ function harness(
     routing: createRoutingPolicy("warm-then-free"),
     views: workers,
   });
+  const poster = new FakeWebhookPoster();
+  const alerts =
+    options.alertDestinations === undefined
+      ? undefined
+      : createAlerts({
+          clock,
+          destinations: options.alertDestinations,
+          eventBus,
+          idGenerator: { generate: () => "sample-id" },
+          logger: new JsonLinesLogger({ clock, module: "alerts", sink: logSink }),
+          poster: options.webhookPoster ?? poster,
+          version: "9.9.9",
+          workerLabel: () => undefined,
+        });
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
     clock,
@@ -184,14 +243,8 @@ function harness(
     config: options.http === undefined ? gatewayConfig : { ...gatewayConfig, http: options.http },
     coordinator,
     directory,
-    eventHistory:
-      options.eventHistory ??
-      new EventHistory({
-        bus: eventBus,
-        filesystem: new MemoryFilesystem(),
-        logger: new NoopLogger(),
-        path: "/events.jsonl",
-      }),
+    eventHistory: options.eventHistory ?? ringEventHistory(eventBus),
+    ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: () => options.health ?? "running",
     host: GATEWAY_HOST,
     ...(options.load === undefined ? {} : { load: options.load }),
@@ -199,10 +252,13 @@ function harness(
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
     logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
-    tokens,
+    ...(alerts === undefined ? {} : { testDestination: (name) => alerts.test(name) }),
+    ...(options.withoutTokens === true ? {} : { tokens }),
     workers,
   });
   return {
+    alerts,
+    poster,
     clock,
     logSink,
     closedUplinkTokens,
@@ -221,6 +277,7 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
     manageEventSubscription: () => "sub_1",
     principal: "operator-1",
     role: "admin",
+    via: "socket",
     ...overrides,
   };
 }
@@ -231,6 +288,30 @@ const EVERY_OPERATION = (Object.keys(OPERATIONS) as OperationName[]).filter(
 );
 
 describe("GatewayDispatcher", () => {
+  it("answers identity.get from its own caller's session, the same shape", async () => {
+    const { dispatcher } = harness();
+
+    await expect(
+      dispatcher.dispatch(
+        "identity.get",
+        {},
+        session({ principal: "operator-1", role: "admin", via: "socket" }),
+      ),
+    ).resolves.toEqual({
+      name: "operator-1",
+      principal: "operator-1",
+      role: "admin",
+      via: "socket",
+    });
+    await expect(
+      dispatcher.dispatch(
+        "identity.get",
+        {},
+        session({ name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" }),
+      ),
+    ).resolves.toEqual({ name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" });
+  });
+
   it("The gateway dispatcher logs the same line for the same operation", async () => {
     const { clock, dispatcher, logSink, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
@@ -322,7 +403,7 @@ describe("GatewayDispatcher", () => {
     expect(status.workers?.find((worker) => worker.id === "wrk_2")).not.toHaveProperty("warmPool");
   });
 
-  it("status.get on a gateway whose health is starting returns daemon and host and no other field", async () => {
+  it("status.get on a gateway whose health is starting returns daemon, history and host and no other field", async () => {
     const { dispatcher, workers } = harness({ health: "starting" });
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
     workers.refresh("wrk_1", {
@@ -335,7 +416,7 @@ describe("GatewayDispatcher", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
     expect(status.daemon).toEqual({
       consoleUrl: "http://127.0.0.1:4700/",
       health: "starting",
@@ -431,6 +512,37 @@ describe("GatewayDispatcher", () => {
     expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect(status.workers?.[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect(list.workers[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+  });
+
+  it("a gateway's status.get gives an agent session a worker's quarantined device with kind and no message, in devices and in workers[].devices, and an admin session the message", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", undefined, "0.3.0");
+    const quarantineCause = { kind: "purge-failed", message: "Error: erase failed" };
+    workers.refresh("wrk_1", {
+      capacity: statusFixture().capacity,
+      devices: [
+        Object.assign(deviceFixture("dev_q"), { quarantineCause, state: "quarantined" as const }),
+      ],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+
+    const forAdmin = await dispatcher.dispatch("status.get", {}, session());
+    const forAgent = await dispatcher.dispatch("status.get", {}, session({ role: "agent" }));
+
+    expect(forAdmin.devices?.[0]).toMatchObject({ quarantineCause });
+    expect(forAdmin.workers?.[0]?.devices?.[0]).toMatchObject({ quarantineCause });
+    expect(forAgent.devices?.[0]).toMatchObject({
+      id: "dev_q",
+      quarantineCause: { kind: "purge-failed" },
+      state: "quarantined",
+    });
+    expect(forAgent.devices?.[0]).not.toHaveProperty("quarantineCause.message");
+    expect(forAgent.workers?.[0]?.devices?.[0]).toMatchObject({
+      quarantineCause: { kind: "purge-failed" },
+    });
+    expect(forAgent.workers?.[0]?.devices?.[0]).not.toHaveProperty("quarantineCause.message");
   });
 
   it("answers catalog.get as the union of the fleet's catalogs", async () => {
@@ -682,7 +794,14 @@ describe("GatewayDispatcher", () => {
     const { dispatcher, eventBus } = harness();
     eventBus.emit(
       "lease.granted",
-      { deviceId: "dev_1", leaseId: "l1", requester: "a", requestId: "req_1", source: "warm" },
+      {
+        deviceId: "dev_1",
+        leaseId: "l1",
+        platform: "ios",
+        requester: "a",
+        requestId: "req_1",
+        source: "warm",
+      },
       "worker",
     );
 
@@ -713,6 +832,7 @@ describe("GatewayDispatcher", () => {
           asked.push(input);
           return fromHistory;
         },
+        status: () => ({ opened: true, writing: true }),
       },
     });
 
@@ -721,6 +841,32 @@ describe("GatewayDispatcher", () => {
     );
     expect(asked).toEqual([{ sinceTs: 10 }]);
   });
+
+  it.each([
+    {
+      health: "running" as const,
+      history: { opened: true, setAsideAt: 1_760_605_920_000, writing: false },
+    },
+    { health: "starting" as const, history: { opened: false, writing: false } },
+    { health: "running" as const, history: { opened: true, writing: true } },
+    {
+      health: "running" as const,
+      history: { opened: true, rebuiltAt: 1_760_605_920_000, writing: true },
+    },
+    {
+      health: "running" as const,
+      history: { opened: true, rebuildFailed: true as const, writing: true },
+    },
+  ])(
+    "status.get carries the gateway's own history opened, writing, setAsideAt, rebuiltAt and rebuildFailed, in the starting answer too ($health, $history)",
+    async ({ health, history }) => {
+      const { dispatcher } = harness({ eventHistory: fixedEventHistory(history), health });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect((status as { history?: unknown }).history).toStrictEqual(history);
+    },
+  );
 
   it("mints and revokes its own tokens, worker join tokens included", async () => {
     const { dispatcher, tokens } = harness();
@@ -760,6 +906,228 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ revoked: false });
 
     expect(closedUplinkTokens).toEqual([]);
+  });
+
+  describe("alerts.test", () => {
+    const generic: AlertDestination = {
+      name: "ops",
+      format: "generic",
+      url: "https://hooks.example.com/ops-token",
+      events: ["worker.connected"],
+      secret: "s3cr3t",
+    };
+    const slack: AlertDestination = {
+      name: "chat",
+      format: "slack",
+      url: "https://hooks.slack.example.com/chat-token",
+      events: ["worker.connected"],
+    };
+
+    it("alerts.test posts one sample to the named destination and answers its status", async () => {
+      const { dispatcher, poster } = harness({ alertDestinations: [generic, slack] });
+
+      await expect(
+        dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+      ).resolves.toEqual({ destination: "ops", status: 200 });
+      await expect(
+        dispatcher.dispatch("alerts.test", { destination: "chat" }, session()),
+      ).resolves.toEqual({ destination: "chat", status: 200 });
+
+      expect(poster.requests).toHaveLength(2);
+      const [first, second] = poster.requests as [SentRequest, SentRequest];
+      expect(first.url).toBe("https://hooks.example.com/ops-token");
+      expect(JSON.parse(first.body)).toEqual({
+        id: "evt_sample-id",
+        seq: 0,
+        timestamp: 1_000,
+        event: "alerts.test-sent",
+        payload: { destination: "ops" },
+        module: "alerts",
+      });
+      expect(first.headers).toEqual({
+        "Content-Type": "application/json",
+        "User-Agent": "simlock/9.9.9",
+        "X-Simlock-Event": "alerts.test-sent",
+        "X-Simlock-Delivery": "evt_sample-id",
+        "X-Simlock-Signature": `sha256=${createHmac("sha256", "s3cr3t")
+          .update(first.body)
+          .digest("hex")}`,
+      });
+      expect(second.url).toBe("https://hooks.slack.example.com/chat-token");
+      expect(JSON.parse(second.body)).toEqual({
+        text: "🔔 Test message from the simlock gateway to destination chat.",
+      });
+      expect(second.headers).toEqual({
+        "Content-Type": "application/json",
+        "User-Agent": "simlock/9.9.9",
+      });
+
+      const other = harness({ alertDestinations: [generic] });
+      other.poster.respond = () => Promise.resolve({ status: 204 });
+      await expect(
+        other.dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+      ).resolves.toEqual({ destination: "ops", status: 204 });
+    });
+
+    it("alerts.test fails with ALERT_SEND_FAILED on a non-2xx status, a rejection and no answer within 10 s, and tries once", async () => {
+      const refused = Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ECONNREFUSED" },
+      });
+      const cases = [
+        [() => Promise.resolve({ status: 404 }), "ops answered HTTP 404", { status: 404 }],
+        [() => Promise.resolve({ status: 199 }), "ops answered HTTP 199", { status: 199 }],
+        [() => Promise.resolve({ status: 301 }), "ops answered HTTP 301", { status: 301 }],
+        [() => Promise.resolve({ status: 503 }), "ops answered HTTP 503", { status: 503 }],
+        [
+          () => Promise.reject(refused),
+          "ops could not be reached: ECONNREFUSED",
+          { error: "ECONNREFUSED" },
+        ],
+        [
+          () => Promise.reject(new TypeError("fetch failed")),
+          "ops could not be reached: network-error",
+          { error: "network-error" },
+        ],
+      ] as const;
+      for (const [respond, message, details] of cases) {
+        const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
+        poster.respond = respond;
+
+        await expect(
+          dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+        ).rejects.toMatchObject({
+          code: "ALERT_SEND_FAILED",
+          message,
+          details: { destination: "ops", ...details },
+        });
+        clock.advance(60_000);
+        expect(poster.requests).toHaveLength(1);
+      }
+
+      const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
+      poster.respond = () => new Promise(() => {});
+      let outcome: unknown = "pending";
+      void dispatcher.dispatch("alerts.test", { destination: "ops" }, session()).then(
+        (value) => (outcome = value),
+        (error: unknown) => (outcome = error),
+      );
+      await vi.waitFor(() => expect(poster.requests).toHaveLength(1));
+      clock.advance(9_999);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(outcome).toBe("pending");
+      expect(poster.requests[0]?.signal.aborted).toBe(false);
+
+      clock.advance(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(outcome).toMatchObject({
+        code: "ALERT_SEND_FAILED",
+        message: "ops did not answer within 10 s",
+        details: { destination: "ops", error: "timeout" },
+      });
+      expect(poster.requests[0]?.signal.aborted).toBe(true);
+      clock.advance(60_000);
+      expect(poster.requests).toHaveLength(1);
+    });
+
+    it("alerts.test answers UNKNOWN_ALERT_DESTINATION for a name not configured and on a gateway with no destinations", async () => {
+      const unknown = {
+        code: "UNKNOWN_ALERT_DESTINATION",
+        message:
+          'No alert destination named "nope". Check gateway.alerts.destinations in the gateway\'s config.',
+        details: { destination: "nope" },
+      };
+      const configured = harness({ alertDestinations: [generic] });
+      await expect(
+        configured.dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+      ).resolves.toEqual({ destination: "ops", status: 200 });
+
+      await expect(
+        configured.dispatcher.dispatch("alerts.test", { destination: "nope" }, session()),
+      ).rejects.toMatchObject(unknown);
+      await expect(
+        harness().dispatcher.dispatch("alerts.test", { destination: "nope" }, session()),
+      ).rejects.toMatchObject(unknown);
+      await expect(
+        configured.dispatcher.dispatch("alerts.test", { destination: "o" }, session()),
+      ).rejects.toMatchObject({ code: "UNKNOWN_ALERT_DESTINATION", details: { destination: "o" } });
+
+      expect(configured.poster.requests).toHaveLength(1);
+    });
+
+    it("a refused connection answers could not be reached with the network code, and neither the answer nor the failed call's operation log line holds the URL", async () => {
+      const closedPort = await new Promise<number>((resolve) => {
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => {
+          const { port } = server.address() as { port: number };
+          server.close(() => resolve(port));
+        });
+      });
+      const url = `http://127.0.0.1:${closedPort}/hook-token-xyz`;
+      const { dispatcher, logSink } = harness({
+        alertDestinations: [{ ...generic, url }],
+        webhookPoster: new FetchWebhookPoster(),
+      });
+
+      const failure = await dispatcher
+        .dispatch("alerts.test", { destination: "ops" }, session())
+        .then(
+          () => undefined,
+          (error: unknown) => error as { code: string; message: string; details: unknown },
+        );
+
+      expect(failure).toMatchObject({
+        code: "ALERT_SEND_FAILED",
+        message: "ops could not be reached: ECONNREFUSED",
+        details: { destination: "ops", error: "ECONNREFUSED" },
+      });
+      expect(
+        logSink.records
+          .filter((record) => record.message === "operation")
+          .map((record) => record.fields),
+      ).toMatchObject([
+        {
+          operation: "alerts.test",
+          code: "ALERT_SEND_FAILED",
+          message: "ops could not be reached: ECONNREFUSED",
+        },
+      ]);
+      for (const text of [JSON.stringify(failure), JSON.stringify(logSink.records)]) {
+        expect(text).not.toContain("hook-token-xyz");
+        expect(text).not.toContain(String(closedPort));
+      }
+    });
+
+    it("alerts.test answers BAD_REQUEST for a destination of no characters or more than 32, and looks up one of 32", async () => {
+      const { dispatcher, poster } = harness({ alertDestinations: [generic] });
+      const longest = "n".repeat(32);
+
+      for (const destination of ["", "n".repeat(33)]) {
+        await expect(
+          dispatcher.dispatch("alerts.test", { destination }, session()),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      }
+      await expect(
+        dispatcher.dispatch("alerts.test", { destination: longest }, session()),
+      ).rejects.toMatchObject({ code: "UNKNOWN_ALERT_DESTINATION" });
+      expect(poster.requests).toEqual([]);
+    });
+
+    it("stop during a test answers DAEMON_STOPPING", async () => {
+      const { alerts, dispatcher, poster } = harness({ alertDestinations: [generic] });
+      poster.respond = () => new Promise(() => {});
+      let outcome: unknown = "pending";
+      void dispatcher.dispatch("alerts.test", { destination: "ops" }, session()).then(
+        (value) => (outcome = value),
+        (error: unknown) => (outcome = error),
+      );
+      await vi.waitFor(() => expect(poster.requests).toHaveLength(1));
+      expect(outcome).toBe("pending");
+
+      alerts?.stop();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(outcome).toMatchObject({ code: "DAEMON_STOPPING" });
+    });
   });
 
   describe("worker.install-component (ADR 0010 §7)", () => {
@@ -1413,7 +1781,13 @@ describe("GatewayDispatcher: waiting requests", () => {
   const SPEC = { model: "iPhone 17", platform: "ios" as const };
 
   /** A request a worker lists in its own `status.get`'s `waiting`. */
-  function onWorker(id: string, requesterId: string, queuePosition?: number) {
+  function onWorker(
+    id: string,
+    requesterId: string,
+    queuePosition?: number,
+    reason?: "platform-running-limit",
+    workers?: { reason: "drained"; workerId: string }[],
+  ) {
     return {
       createdAt: 500,
       id,
@@ -1422,6 +1796,8 @@ describe("GatewayDispatcher: waiting requests", () => {
       ...(queuePosition === undefined
         ? { stage: "starting" as const }
         : { queuePosition, stage: "queued" as const }),
+      ...(reason === undefined ? {} : { reason }),
+      ...(workers === undefined ? {} : { workers }),
     };
   }
 
@@ -1433,7 +1809,7 @@ describe("GatewayDispatcher: waiting requests", () => {
   const listRequests = (dispatcher: GatewayDispatcher) =>
     dispatcher.dispatch("list.get", { kind: "requests" }, session());
 
-  it("list.get requests on a gateway returns the fleet queue and each worker's waiting requests with their workerId", async () => {
+  it("list.get requests and status.get waiting on a gateway return the fleet queue with each worker's reason in workers, and each worker's waiting requests with their workerId and reason, a workers field a worker sends on its own entry dropped", async () => {
     const { coordinator, dispatcher, workers } = harness();
     // Two workers that can serve the request and have no free slot, whose own queues hold their
     // local agents' requests.
@@ -1447,7 +1823,17 @@ describe("GatewayDispatcher: waiting requests", () => {
         capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } },
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
-        waiting: [onWorker(requestId, `local-${workerId}`, 1)],
+        health: "running",
+        queueDepth: 0,
+        waiting: [
+          onWorker(
+            requestId,
+            `local-${workerId}`,
+            1,
+            workerId === "wrk_1" ? "platform-running-limit" : undefined,
+            workerId === "wrk_2" ? [{ reason: "drained", workerId: "wrk_x" }] : undefined,
+          ),
+        ],
       });
     }
     // Both are busy, so the fleet request waits in the gateway's own queue.
@@ -1469,8 +1855,12 @@ describe("GatewayDispatcher: waiting requests", () => {
         requesterId: "fleet-agent",
         spec: SPEC,
         stage: "queued",
+        workers: [
+          { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_1" },
+          { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_2" },
+        ],
       },
-      { ...onWorker("req_w1", "local-wrk_1", 1), workerId: "wrk_1" },
+      { ...onWorker("req_w1", "local-wrk_1", 1, "platform-running-limit"), workerId: "wrk_1" },
       { ...onWorker("req_w2", "local-wrk_2", 1), workerId: "wrk_2" },
     ]);
     expect(JSON.stringify(listed)).not.toContain("key-1");
@@ -1573,5 +1963,137 @@ describe("GatewayDispatcher: the fleet queue's physical line", () => {
       queuePosition: 1,
     });
     expect(changed).toContainEqual(expect.objectContaining({ depth: 1, physical: true }));
+  });
+});
+
+describe("GatewayDispatcher: usage.get", () => {
+  afterEach(removeUsageRigs);
+
+  const window = { from: T0, to: T0 + HOUR };
+
+  async function fleetHistory() {
+    const rig = await usageRig({ fleet: true });
+    const gate = { open: true };
+    const eventHistory = {
+      replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
+    };
+    return { eventHistory, gate, rig };
+  }
+
+  it("the gateway handler answers HISTORY_UNAVAILABLE with the message naming daemon.log while history.status().opened is false, after answering figures while it was true", async () => {
+    const { eventHistory, gate, rig } = await fleetHistory();
+    rig.emit("lease.requested", requested("G1"));
+    const { dispatcher } = harness({ eventHistory, historyPath: rig.historyPath });
+
+    await expect(dispatcher.dispatch("usage.get", window, session())).resolves.toMatchObject({
+      totals: { requests: 1 },
+    });
+    gate.open = false;
+    const posted = vi.spyOn(Worker.prototype, "postMessage");
+
+    await expect(dispatcher.dispatch("usage.get", window, session())).rejects.toMatchObject({
+      code: "HISTORY_UNAVAILABLE",
+      message: "The history could not be opened, so no figures can be read; see daemon.log.",
+    });
+    expect(posted).not.toHaveBeenCalled();
+    posted.mockRestore();
+  });
+
+  it("the gateway handler strips its own gw: prefix before the label lookup and leaves another prefix alone, and labels nothing when it has no token store", async () => {
+    const { eventHistory, rig } = await fleetHistory();
+    for (const [index, requester] of [
+      `${GATEWAY_REQUESTER_PREFIX}tok_a`,
+      "gw:other-instance:tok_a",
+      "tok_a",
+    ].entries()) {
+      rig.emit("lease.requested", requested(`R${index}`, { requester }));
+    }
+    const labelled = harness({
+      eventHistory,
+      historyPath: rig.historyPath,
+      tokenRecords: [{ id: "tok_a", label: "ci-bot" }],
+    });
+    const unlabelled = harness({
+      eventHistory,
+      historyPath: rig.historyPath,
+      withoutTokens: true,
+    });
+
+    const answer = await labelled.dispatcher.dispatch("usage.get", window, session());
+    const bare = await unlabelled.dispatcher.dispatch("usage.get", window, session());
+
+    expect(
+      Object.fromEntries(answer.requesters.map((requester) => [requester.id, requester.label])),
+    ).toEqual({
+      "gw:instance-1:tok_a": "ci-bot",
+      "gw:other-instance:tok_a": undefined,
+      tok_a: "ci-bot",
+    });
+    expect(bare.requesters).toHaveLength(3);
+    expect(bare.requesters.every((requester) => !("label" in requester))).toBe(true);
+  });
+
+  it("the gateway handler with includeLedger lists the fleet's request rows as entries, labelled after stripping its own gw: prefix", async () => {
+    const { eventHistory, rig } = await fleetHistory();
+    for (const [index, requester] of [
+      `${GATEWAY_REQUESTER_PREFIX}tok_a`,
+      "gw:other-instance:tok_a",
+      "tok_a",
+    ].entries()) {
+      rig.emit("lease.requested", requested(`R${index}`, { requester }));
+    }
+    const { dispatcher } = harness({
+      eventHistory,
+      historyPath: rig.historyPath,
+      tokenRecords: [{ id: "tok_a", label: "ci-bot" }],
+    });
+
+    const answer = await dispatcher.dispatch(
+      "usage.get",
+      { ...window, includeLedger: true },
+      session(),
+    );
+    const plain = await dispatcher.dispatch("usage.get", window, session());
+
+    expect(
+      Object.fromEntries((answer.requests ?? []).map((entry) => [entry.requestId, entry.label])),
+    ).toEqual({ R0: "ci-bot", R1: undefined, R2: "ci-bot" });
+    expect(plain).not.toHaveProperty("requests");
+  });
+
+  it("the gateway handler lists every registry worker with its label and a worker id the rows name that the registry lacks, and counts a fleet request with no worker in totals and its platform only", async () => {
+    const { eventHistory, rig } = await fleetHistory();
+    rig.emit("lease.requested", requested("G1"));
+    rig.emit("lease.requested", requested("G2"));
+    rig.emit("lease.requested", requested("G3"));
+    rig.relay("wrk_1", "lease.granted", granted("WL1", "G1"), T0 + 1_000);
+    rig.relay("wrk_9", "lease.granted", granted("WL9", "G3"), T0 + 1_000);
+    rig.at(T0 + 2_000);
+    rig.emit("request.granted", {
+      leaseId: "GL1",
+      requestId: "G1",
+      worker: "wrk_1",
+      workerLeaseId: "WL1",
+    });
+    rig.emit("request.granted", {
+      leaseId: "GL3",
+      requestId: "G3",
+      worker: "wrk_9",
+      workerLeaseId: "WL9",
+    });
+    const { dispatcher, workers } = harness({ eventHistory, historyPath: rig.historyPath });
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.connected("wrk_2", undefined, "0.3.0");
+
+    const answer = await dispatcher.dispatch("usage.get", window, session());
+
+    expect(answer.workers.map((entry) => [entry.id, entry.label, entry.requests])).toEqual([
+      ["wrk_1", "mac-mini-1", 1],
+      ["wrk_2", undefined, 0],
+      ["wrk_9", undefined, 1],
+    ]);
+    expect(answer.totals.requests).toBe(3);
+    expect(answer.platforms.ios.requests).toBe(3);
   });
 });

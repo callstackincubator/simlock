@@ -284,6 +284,49 @@ describe("the attention page", () => {
     ]);
   });
 
+  it("ends a quarantined device's facts with Cause for each kind", () => {
+    const cases = [
+      [
+        { kind: "purge-failed", message: "Error: erase failed" },
+        "Purge failed: Error: erase failed",
+      ],
+      [
+        { kind: "shutdown-failed", message: "Error: no shutdown" },
+        "Shutdown failed: Error: no shutdown",
+      ],
+      [{ kind: "delete-failed", message: "Error: no delete" }, "Delete failed: Error: no delete"],
+      [{ kind: "purge-failed" }, "Purge failed"],
+      [{ kind: "stalled", stalledState: "provisioning" }, "Stalled while provisioning"],
+      [{ kind: "stalled", stalledState: "reclaiming" }, "Stalled while reclaiming"],
+    ] as const;
+
+    for (const [quarantineCause, text] of cases) {
+      const w = worker({
+        devices: [Object.assign(device("dev_q", { state: "quarantined" }), { quarantineCause })],
+      });
+
+      expect(factsOf(w, "wrk_1/dev_q/quarantined"), text).toEqual([
+        { label: "Device", value: "dev_q" },
+        { label: "State", value: "quarantined" },
+        { label: "Cause", value: text },
+      ]);
+    }
+  });
+
+  it("gives a stalled device that is not quarantined no Cause, even when its record still carries one", () => {
+    const w = worker({
+      devices: [
+        Object.assign(device("dev_stuck", { stalled: true, state: "reclaiming" }), {
+          quarantineCause: { kind: "purge-failed", message: "Error: erase failed" },
+        }),
+      ],
+    });
+
+    const labels = factsOf(w, "wrk_1/dev_stuck/stalled").map((fact) => fact.label);
+
+    expect(labels).not.toContain("Cause");
+  });
+
   it("gives a stalled device on a disconnected worker no time in its state", () => {
     // why: a gateway keeps a disconnected worker's devices as last reported, with an age it can no
     // longer count from.

@@ -59,3 +59,11 @@ grounds for rejecting a change even if the prose reads well.
    flow doc under `docs/internal/flows/`, linked from each module's manual.
    A manual and a flow doc hold no rationale (the ADR does) and no history
    (git does); a known gap lives in its module's manual.
+
+8. **Point at a value's source; never copy it.** A doc, manual or comment
+   that needs a number, default, limit or version that code defines names
+   the constant and its file (`PROTOCOL_VERSION_RANGE` in
+   `src/contract/protocol.ts`), not its value, and never counts the items a
+   list beside it or another file holds ("these commands", not "seven
+   commands"). An end-user doc that must show a value shows it, and the PR
+   that changes the value updates it.

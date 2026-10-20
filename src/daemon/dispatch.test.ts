@@ -27,6 +27,7 @@ function harness(handlers: DispatchPipeline["handlers"], level: LogLevel = "debu
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
   return {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent-7",
     role: "agent",
     ...overrides,

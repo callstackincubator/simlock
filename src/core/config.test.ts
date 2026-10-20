@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { z } from "zod";
+
+import type { AuthStrategyDefinition } from "../auth/index.js";
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { configSchema } from "../contract/schemas.js";
 import {
+  ALERT_EVENTS,
+  ALERT_FORMATS,
   type Config,
   effectiveAllowDownload,
   loadConfig,
@@ -110,7 +115,6 @@ describe("loadConfig", () => {
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
       eventLog: {
-        rotateBytes: 5 * 1024 * 1024,
         retention: 7 * 24 * 60 * 60 * 1000,
         maxBytes: 256 * 1024 * 1024,
       },
@@ -186,19 +190,22 @@ describe("loadConfig", () => {
     ).rejects.toThrow("log.rotateBytes");
   });
 
-  it("defaults eventLog.rotateBytes to 5 MiB and rejects zero and negative values", async () => {
+  it("loads a config with eventLog.rotateBytes with the unknown-key warning, and drops the key", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ eventLog: { rotateBytes: 1_048_576 } }),
+    );
+    const warn = vi.fn();
 
-    const defaults = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(defaults.eventLog.rotateBytes).toBe(5 * 1024 * 1024);
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
 
-    for (const rotateBytes of [0, -1]) {
-      await filesystem.writeFileAtomic(configPath, JSON.stringify({ eventLog: { rotateBytes } }));
-      await expect(
-        loadConfig({ configPath, filesystem, systemStats: createStats() }),
-      ).rejects.toThrow("eventLog.rotateBytes");
-    }
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
+    expect(config.eventLog).toEqual({
+      maxBytes: 256 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+    });
   });
 
   it("reports eventLog.retention and eventLog.maxBytes at their defaults", async () => {
@@ -208,7 +215,6 @@ describe("loadConfig", () => {
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
     expect(config.eventLog).toEqual({
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     });
@@ -232,25 +238,78 @@ describe("loadConfig", () => {
     }
   });
 
-  it("rejects a config with eventLog.maxBytes below twice eventLog.rotateBytes, naming the key", async () => {
+  it("accepts eventLog.maxBytes of 16 MiB and rejects one byte less, naming the key", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
+    const sixteenMiB = 16 * 1024 * 1024;
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 1_999 } }),
+      JSON.stringify({ eventLog: { maxBytes: sixteenMiB } }),
     );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('"eventLog.maxBytes": expected at least twice eventLog.rotateBytes');
+    const accepted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 2_000 } }),
+      JSON.stringify({ eventLog: { maxBytes: sixteenMiB - 1 } }),
     );
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/"eventLog\.maxBytes".*at least 16 MiB/);
+
+    expect(accepted.eventLog.maxBytes).toBe(sixteenMiB);
+  });
+
+  it("metrics.retention defaults to the larger of 90 days and eventLog.retention, and is accepted as written", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const DAY = 24 * 60 * 60 * 1000;
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const defaulted = await loadWith({});
+    const longer = await loadWith({ eventLog: { retention: 100 * DAY } });
+    const shorter = await loadWith({ eventLog: { retention: 30 * DAY } });
+    const written = await loadWith({ metrics: { retention: 120 * DAY } });
+    const empty = await loadWith({ eventLog: { retention: 100 * DAY }, metrics: {} });
+    const mistyped = await loadWith({ metrics: { retenton: 5 } });
+
+    expect(empty.metrics).toEqual({ retention: 100 * DAY });
+    expect(mistyped.metrics).toEqual({ retention: 90 * DAY });
+    expect(defaulted.metrics).toEqual({ retention: 90 * DAY });
+    expect(longer.metrics).toEqual({ retention: 100 * DAY });
+    expect(shorter.metrics).toEqual({ retention: 90 * DAY });
+    expect(written.metrics).toEqual({ retention: 120 * DAY });
+  });
+
+  it("rejects a metrics.retention shorter than eventLog.retention, or not a positive integer, naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const DAY = 24 * 60 * 60 * 1000;
+    const loadWith = async (contents: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    const equal = await loadWith({
+      eventLog: { retention: 7 * DAY },
+      metrics: { retention: 7 * DAY },
+    });
+    await expect(
+      loadWith({ eventLog: { retention: 7 * DAY }, metrics: { retention: 7 * DAY - 1 } }),
+    ).rejects.toThrow("metrics.retention");
+    for (const value of [0, -1, 1.5]) {
+      await expect(loadWith({ metrics: { retention: value } })).rejects.toThrow(
+        "metrics.retention",
+      );
+    }
+
+    await expect(
+      loadWith({ eventLog: { retention: 1 }, metrics: { retention: 1.5 } }),
+    ).rejects.toThrow("metrics.retention");
+
+    expect(equal.metrics).toEqual({ retention: 7 * DAY });
   });
 
   it("applies a file-level warm-pool quarantine override", async () => {
@@ -1664,6 +1723,7 @@ describe("loadConfig modes (ADR 0005)", () => {
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free",
+      alerts: { destinations: [] },
     });
   });
 
@@ -1726,12 +1786,23 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("raises no unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+  it("reads metrics.retention in a gateway config without a warning", async () => {
     const warn = vi.fn();
-    const config = await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
 
+    const config = await load(
+      { mode: "gateway", metrics: { retention: 120 * 24 * 3_600_000 } },
+      { warn },
+    );
+
+    expect(config.metrics).toEqual({ retention: 120 * 24 * 3_600_000 });
     expect(warn).not.toHaveBeenCalled();
-    expect(config.eventLog.rotateBytes).toBe(1024);
+  });
+
+  it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+    const warn = vi.fn();
+    await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
+
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
   });
 
   it("warns about android.emulator on a gateway without refusing the config", async () => {
@@ -1856,6 +1927,169 @@ describe("effectiveAllowDownload", () => {
   });
 });
 
+describe("gateway.alerts.destinations", () => {
+  const validDestination = {
+    name: "audit",
+    format: "generic",
+    url: "https://n8n.example.com/x",
+    events: ["worker.connected"],
+    secret: "s3cr3t",
+  };
+  const nameExpected =
+    "expected a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters";
+  const urlExpected =
+    "expected an https:// URL, or an http:// URL to localhost, 127.0.0.1 or [::1], with no user name or password";
+  const formatExpected = 'expected one of "generic", "slack"';
+  const eventsExpected = `expected a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`;
+
+  async function load(
+    gateway: Record<string, unknown>,
+    mode: "gateway" | "worker" = "gateway",
+    warn: (message: string) => void = () => {},
+  ): Promise<Config> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode, gateway }));
+    return loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+  }
+
+  function loadDestinations(destinations: unknown, mode: "gateway" | "worker" = "gateway") {
+    return load({ alerts: { destinations } }, mode);
+  }
+
+  it("loadConfig accepts a valid generic destination and defaults gateway.alerts.destinations to an empty list", async () => {
+    expect((await load({})).gateway.alerts.destinations).toEqual([]);
+    for (const url of [
+      "https://n8n.example.com/x",
+      "http://localhost:5678/x",
+      "http://127.0.0.1/x",
+      "http://[::1]:80/x",
+    ]) {
+      const config = await loadDestinations([{ ...validDestination, url }]);
+      expect(config.gateway.alerts.destinations).toEqual([{ ...validDestination, url }]);
+    }
+    const names = await loadDestinations([
+      { ...validDestination, name: "ops-1" },
+      validDestination,
+    ]);
+    expect(names.gateway.alerts.destinations.map((each) => each.name)).toEqual(["ops-1", "audit"]);
+  });
+
+  const bad = (field: string, value: unknown) => ({ ...validDestination, [field]: value });
+  const without = (field: string) => {
+    const { [field as "name"]: _omitted, ...rest } = validDestination;
+    return rest;
+  };
+
+  it.each([
+    ["name", bad("name", "Audit"), nameExpected],
+    ["name", bad("name", "1ops"), nameExpected],
+    ["name", bad("name", "a_b"), nameExpected],
+    ["name", bad("name", ""), nameExpected],
+    ["name", bad("name", "a".repeat(33)), nameExpected],
+    ["name", without("name"), nameExpected],
+    ["format", bad("format", "teams"), formatExpected],
+    ["format", bad("format", "json"), formatExpected],
+    ["format", without("format"), formatExpected],
+    ["url", bad("url", "http://n8n.internal/x"), urlExpected],
+    ["url", bad("url", "ftp://example.com"), urlExpected],
+    ["url", bad("url", "n8n.example.com/x"), urlExpected],
+    ["url", bad("url", "https://user:pw@host/x"), urlExpected],
+    ["url", bad("url", "https://user@host/x"), urlExpected],
+    ["url", bad("url", "https://:pw@host/x"), urlExpected],
+    ["url", bad("url", ""), urlExpected],
+    ["url", without("url"), urlExpected],
+    ["events", bad("events", []), eventsExpected],
+    ["events", bad("events", ["lease.granted"]), eventsExpected],
+    ["events", bad("events", ["worker.connected", "worker.connected"]), eventsExpected],
+    ["events", without("events"), eventsExpected],
+    ["secret", bad("secret", ""), "expected a non-empty secret for a generic destination"],
+    ["secret", without("secret"), "expected a non-empty secret for a generic destination"],
+  ])("loadConfig refuses a bad %s with its message", async (field, destination, expected) => {
+    await expect(loadDestinations([validDestination])).resolves.toBeDefined();
+    await expect(loadDestinations([destination])).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].${field}": ${expected}`,
+    );
+  });
+
+  it("loadConfig accepts a slack destination, refuses a secret on it, and lists both formats in the format message", async () => {
+    const { secret: _secret, ...slack } = { ...validDestination, format: "slack" };
+    const config = await loadDestinations([slack]);
+    expect(config.gateway.alerts.destinations).toEqual([slack]);
+
+    for (const secret of ["s", "", null]) {
+      await expect(loadDestinations([{ ...slack, secret }])).rejects.toThrow(
+        'Invalid config value for "gateway.alerts.destinations[0].secret": expected no secret: a slack destination is not signed',
+      );
+    }
+    await expect(
+      loadDestinations([{ ...slack, url: "https://user:pw@hooks.slack.com/x" }]),
+    ).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].url": ${urlExpected}`,
+    );
+    await expect(loadDestinations([bad("format", "teams")])).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].format": ${formatExpected}`,
+    );
+  });
+
+  it("loadConfig refuses a repeated name, a bad list and a bad entry, on a gateway and on a worker", async () => {
+    await expect(loadDestinations([validDestination, validDestination])).rejects.toThrow(
+      'Invalid config value for "gateway.alerts.destinations[1].name": expected a name no other destination uses',
+    );
+    const sixteen = Array.from({ length: 16 }, (_, index) => ({
+      ...validDestination,
+      name: `d${index}`,
+    }));
+    await expect(loadDestinations(sixteen)).resolves.toBeDefined();
+    for (const list of [[...sixteen, validDestination], {}, "x"]) {
+      await expect(loadDestinations(list)).rejects.toThrow(
+        'Invalid config value for "gateway.alerts.destinations": expected a list of at most 16 destinations',
+      );
+    }
+    for (const entry of ["x", null, []]) {
+      await expect(loadDestinations([entry])).rejects.toThrow(
+        'Invalid config value for "gateway.alerts.destinations[0]": expected an object',
+      );
+    }
+    await expect(loadDestinations([bad("url", "ftp://x")], "worker")).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].url": ${urlExpected}`,
+    );
+  });
+
+  it("loadConfig reports name before url when two fields are bad, and the first bad destination", async () => {
+    await expect(
+      loadDestinations([
+        { ...validDestination, url: "ftp://x", name: "Bad" },
+        { ...validDestination, name: "Worse" },
+      ]),
+    ).rejects.toThrow(`"gateway.alerts.destinations[0].name": ${nameExpected}`);
+  });
+
+  it("loadConfig warns about an unknown key inside a destination and still loads", async () => {
+    const warnings: string[] = [];
+    const config = await load(
+      { alerts: { destinations: [{ ...validDestination, headers: {} }] } },
+      "gateway",
+      (message) => warnings.push(message),
+    );
+    expect(warnings).toEqual(['Unknown config key: "gateway.alerts.destinations[0].headers"']);
+    expect(config.gateway.alerts.destinations).toEqual([validDestination]);
+  });
+
+  it("config.get's format enum lists exactly core's ALERT_FORMATS", () => {
+    const destination = configSchema.shape.gateway.shape.alerts.shape.destinations.element;
+    expect(destination.shape.format.options).toEqual([...ALERT_FORMATS]);
+  });
+
+  it("config.get's schema keeps every field of a loaded destination, a slack one without a secret", async () => {
+    const { secret: _secret, ...slack } = { ...validDestination, name: "chat", format: "slack" };
+    const config = await loadDestinations([validDestination, slack]);
+    expect(config.gateway.alerts.destinations[1]).toEqual(slack);
+    const parsed = configSchema.parse(config);
+    expect(parsed.gateway.alerts).toEqual(config.gateway.alerts);
+  });
+});
+
 describe("redactConfig", () => {
   async function load(contents: unknown): Promise<Config> {
     const filesystem = new MemoryFilesystem();
@@ -1876,6 +2110,50 @@ describe("redactConfig", () => {
     expect(redacted).toEqual({ ...before, gateway: { ...before.gateway, token: REDACTED_VALUE } });
     expect(config).toEqual(before);
     expect(config.gateway.token).toBe("secret-join-token");
+  });
+
+  it("masks every destination's url and secret, keeps name, format and events, and leaves its input untouched (a slack destination gets no secret key)", async () => {
+    const destinations = [
+      {
+        name: "audit",
+        format: "generic",
+        url: "https://n8n.example.com/hook-token",
+        events: ["worker.connected"],
+        secret: "s3cr3t",
+      },
+      {
+        name: "ops",
+        format: "generic",
+        url: "http://localhost:5678/x",
+        events: ["worker.disconnected"],
+        secret: "other",
+      },
+      {
+        name: "chat",
+        format: "slack",
+        url: "https://hooks.slack.com/services/T0/B0/token",
+        events: ["worker.connected"],
+      },
+    ];
+    for (const token of ["join-token", undefined]) {
+      const config = await load({
+        mode: "gateway",
+        gateway: { token, alerts: { destinations } },
+      });
+      const before = structuredClone(config);
+
+      const redacted = redactConfig(config);
+
+      expect(redacted.gateway.alerts.destinations).toEqual(
+        destinations.map((destination) => ({
+          ...destination,
+          url: REDACTED_VALUE,
+          ...("secret" in destination ? { secret: REDACTED_VALUE } : {}),
+        })),
+      );
+      expect(redacted.gateway.token).toBe(token === undefined ? undefined : REDACTED_VALUE);
+      expect(config).toEqual(before);
+    }
   });
 
   it("adds no gateway.token to a config that has none, so unset still reads as unset", async () => {
@@ -1936,6 +2214,146 @@ describe("configSchema agrees with the config the daemon actually loads", () => 
     const parsed = configSchema.parse(config) as unknown as Config;
     expect(dottedValue(parsed, "gateway.leaseRequestTimeoutMs")).toBe(
       config.gateway.leaseRequestTimeoutMs,
+    );
+  });
+});
+
+describe("loadConfig over the auth strategies' config keys", () => {
+  const fake: AuthStrategyDefinition = {
+    name: "fake",
+    config: {
+      key: "fake",
+      schema: z.object({ limit: z.number().int().positive() }),
+      defaults: { limit: 5 },
+    },
+    enabled: () => true,
+    create: () => ({ authenticate: async () => ({ kind: "not-mine", sawCredential: false }) }),
+  };
+
+  async function load(http: unknown) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http }));
+    return loadConfig({
+      authStrategies: [fake],
+      configPath,
+      filesystem,
+      systemStats: createStats(),
+    });
+  }
+
+  it("fills a registered strategy's defaults and validates the key it owns", async () => {
+    expect(dottedValue(await load({}), "http.fake.limit")).toBe(5);
+    expect(dottedValue(await load({ fake: { limit: 9 } }), "http.fake.limit")).toBe(9);
+    await expect(load({ fake: { limit: "many" } })).rejects.toThrow("http.fake");
+  });
+});
+
+describe("loadConfig over http.proxyAuth", () => {
+  const complete = {
+    header: "cf-access-jwt-assertion",
+    jwksUrl: "https://team.cloudflareaccess.com/cdn-cgi/access/certs",
+    issuer: "https://team.cloudflareaccess.com",
+    audience: "4f1c0e",
+  };
+
+  async function load(proxyAuth: unknown) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify(proxyAuth === undefined ? {} : { http: { proxyAuth } }),
+    );
+    return loadConfig({ configPath, filesystem, systemStats: createStats() });
+  }
+
+  function proxyAuthOf(config: Config): unknown {
+    return dottedValue(config, "http.proxyAuth");
+  }
+
+  it("starts with proxy sign-in off when http.proxyAuth is not set, and on with the four keys", async () => {
+    expect(proxyAuthOf(await load(undefined))).toBeUndefined();
+    expect(proxyAuthOf(await load(complete))).toEqual(complete);
+    expect(proxyAuthOf(await load({ ...complete, signOutUrl: "http://localhost:1/out" }))).toEqual({
+      ...complete,
+      signOutUrl: "http://localhost:1/out",
+    });
+  });
+
+  it.each(["http://127.0.0.1:9000/keys", "http://localhost:9000/keys", "http://[::1]:9000/keys"])(
+    "accepts the key URL %s over http on the local host",
+    async (jwksUrl) => {
+      expect(proxyAuthOf(await load({ ...complete, jwksUrl }))).toEqual({ ...complete, jwksUrl });
+    },
+  );
+
+  it("refuses a key URL that is neither https nor http on 127.0.0.1, ::1 or localhost, naming the key", async () => {
+    await expect(load(complete)).resolves.toBeDefined();
+
+    for (const jwksUrl of ["http://keys.team.dev/certs", "not a url"]) {
+      await expect(load({ ...complete, jwksUrl }), jwksUrl).rejects.toThrow(
+        'Invalid config value for "http.proxyAuth.jwksUrl": expected an https:// URL, or http:// on 127.0.0.1, ::1 or localhost',
+      );
+    }
+  });
+
+  it("refuses an incomplete set, naming the first missing key", async () => {
+    await expect(load(complete)).resolves.toBeDefined();
+
+    for (const missing of ["header", "jwksUrl", "issuer", "audience"] as const) {
+      const rest = Object.fromEntries(Object.entries(complete).filter(([key]) => key !== missing));
+      await expect(load(rest), missing).rejects.toThrow(
+        `Invalid config value for "http.proxyAuth.${missing}": expected set with the other http.proxyAuth keys`,
+      );
+    }
+    await expect(load({ header: complete.header })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.jwksUrl": expected set with the other http.proxyAuth keys',
+    );
+    await expect(load({ signOutUrl: "https://team.dev/out" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected set with the other http.proxyAuth keys',
+    );
+  });
+
+  it("accepts a header written in any case, and refuses one that is not an HTTP header name", async () => {
+    expect(
+      proxyAuthOf(await load({ ...complete, header: "Cf-Access-Jwt-Assertion" })),
+    ).toMatchObject({ header: "Cf-Access-Jwt-Assertion" });
+
+    await expect(load({ ...complete, header: "x bad" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected an HTTP header name',
+    );
+  });
+
+  it("bounds the header name to 64 characters, the audience to 512, and refuses an empty issuer or audience", async () => {
+    await expect(load({ ...complete, header: "h".repeat(64) })).resolves.toBeDefined();
+    await expect(load({ ...complete, header: "h".repeat(65) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.header": expected an HTTP header name',
+    );
+    await expect(load({ ...complete, audience: "a".repeat(512) })).resolves.toBeDefined();
+    await expect(load({ ...complete, audience: "a".repeat(513) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.audience": expected at most 512 characters',
+    );
+    await expect(load({ ...complete, issuer: "" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.issuer": expected a non-empty string',
+    );
+    await expect(load({ ...complete, audience: "" })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.audience": expected a non-empty string',
+    );
+  });
+
+  it("refuses a sign-out URL that is not an http or https URL", async () => {
+    for (const signOutUrl of ["not a url", "ftp://team.dev/out"]) {
+      await expect(load({ ...complete, signOutUrl }), signOutUrl).rejects.toThrow(
+        'Invalid config value for "http.proxyAuth.signOutUrl": expected an http:// or https:// URL',
+      );
+    }
+  });
+
+  it("accepts an issuer of 128 characters and refuses one of 129", async () => {
+    await expect(load({ ...complete, issuer: "i".repeat(128) })).resolves.toBeDefined();
+
+    await expect(load({ ...complete, issuer: "i".repeat(129) })).rejects.toThrow(
+      'Invalid config value for "http.proxyAuth.issuer": expected at most 128 characters',
     );
   });
 });

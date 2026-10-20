@@ -1,6 +1,6 @@
 ---
 name: bug-triager
-description: Triages one bug:triage issue: reproduces it as a failing test, finds the root cause, and posts a report proposing the simplest fix. Spawned through the triage-bug skill.
+description: Triages one bug:triage issue — reproduces it as a failing test, finds the root cause, and posts a report proposing the simplest fix. Spawned through the triage-bug skill.
 model: opus
 effort: high
 background: true

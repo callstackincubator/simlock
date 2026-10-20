@@ -5,16 +5,21 @@ what a Simlock host, or a gateway and its workers, is doing. The daemon serves
 it itself. There is nothing to install and nothing is fetched from the
 internet.
 
-The console is for people who operate Simlock. It needs an operator token.
+The console is for people who operate Simlock. It needs an operator token, or
+a sign-in proxy in front of Simlock that signs you in
+(see [Behind a sign-in proxy](#behind-a-sign-in-proxy)).
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
 ## Finding your way
 
 A sidebar on the left leads to every page: **Overview**, **Workers**,
-**Leases**, **Waiting**, **Attention** and **Events**. **Attention** shows how
+**Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how
 many items need you, on every page. At the bottom of the sidebar are the
-connection (see [Live updates](#live-updates)), **Sign out**, and the button
-that collapses the sidebar to its icons and widens it again. The console
+connection (see [Live updates](#live-updates)), who you are signed in as
+(**Signed in as** and the name, hidden while the sidebar is collapsed),
+**Sign out** (absent when a sign-in proxy signed you in and has no sign-out
+page set), and the button that collapses the sidebar to its icons and widens
+it again. The console
 remembers your choice in this browser, and changing pages never changes it.
 A window narrower than 1280 pixels starts with the sidebar collapsed until you
 choose. On a phone the sidebar is a bar along the top with a menu button.
@@ -36,8 +41,8 @@ Every list of workers, leases, requests or attention items shows 25 at a time.
 Under it, the pager says which ones you see, such as `26–50 of 1,240`, and
 has **Previous**, **Next**, the page number, and **Per page**: 25, 50 or 100.
 When everything fits on one page, there is no pager. Tables on a page, such
-as a worker's devices, page the same way. (The **Minute by minute** table
-under a chart always lists its 60 minutes.)
+as a worker's devices, page the same way. (The table under a
+chart, such as **Minute by minute**, always lists every point of the chart.)
 
 The page you are on is in the address, such as `/leases?page=3&size=50`, so a
 reload or a link you share opens the same page. A page with two tables, such
@@ -119,16 +124,85 @@ If the console does not accept the token, it says why:
 | The daemon cannot be reached. | Nothing answers at this address. |
 | The daemon answered with an error (HTTP *n*). | Anything else; the daemon's log says more. |
 
+## Behind a sign-in proxy
+
+When a sign-in proxy stands in front of Simlock, the console opens with no
+token form. It asks the daemon who you are (`GET /v1/identity`), and if the
+proxy signed you in, it opens at once and the sidebar reads **Signed in as**
+and your name. Until the answer comes the page says **Signing in…**.
+
+What you configure is in `http.proxyAuth` (see CONFIGURATION.md): the header
+that carries the proxy's JWT, where the proxy publishes its keys, the issuer
+and the audience. Set `signOutUrl` to the proxy's sign-out page. The proxy
+must let `/v1/uplink` and `/v1/healthz` through without signing in.
+
+Cloudflare Access:
+
+```json
+{
+  "http": {
+    "proxyAuth": {
+      "header": "cf-access-jwt-assertion",
+      "jwksUrl": "https://TEAM.cloudflareaccess.com/cdn-cgi/access/certs",
+      "issuer": "https://TEAM.cloudflareaccess.com",
+      "audience": "APPLICATION-AUD-TAG",
+      "signOutUrl": "https://TEAM.cloudflareaccess.com/cdn-cgi/access/logout"
+    }
+  }
+}
+```
+
+oauth2-proxy, with its alpha config injecting the session's ID token into a
+header of your choosing (`claimSource: { claim: id_token }`), so that an
+operator token pasted into the console still reaches Simlock in
+`Authorization`:
+
+```json
+{
+  "http": {
+    "proxyAuth": {
+      "header": "x-id-token",
+      "jwksUrl": "https://ISSUER/.well-known/jwks.json",
+      "issuer": "https://ISSUER",
+      "audience": "OAUTH2-PROXY-CLIENT-ID",
+      "signOutUrl": "https://CONSOLE-HOST/oauth2/sign_out"
+    }
+  }
+}
+```
+
+If the daemon refuses the proxy's identity, the token form says why: "Your
+sign-in proxy's identity was refused: *reason*. You can still sign in with an
+operator token." The reasons are that it has expired, is not valid yet (check
+this machine's clock), comes from a different sign-in service or was made for
+a different application than the daemon expects, has a signature that does
+not check out, is signed in a way the daemon does not accept, is not a valid
+sign-in token, or that the daemon cannot reach the sign-in service's keys.
+
+Pasting an operator token behind the proxy works as without it, and the
+sidebar then reads the token's label.
+
 ## Staying signed in
 
-The console keeps the token in this browser tab only.
+The console keeps a token in this browser tab only. A person signed in
+through a proxy is not kept by the console at all: every page load asks the
+daemon again.
 
 - **Reload** the page and you stay signed in.
 - **Open a new tab** and it asks for a token again.
 - **Close the tab** and you are signed out.
-- **Sign out** forgets the token at once.
+- **Sign out** forgets the token at once. Behind a sign-in proxy, a token's
+  Sign out brings back the proxy's sign-in; a person the proxy signed in goes
+  to the proxy's sign-out page (`signOutUrl`), and with none set there is no
+  Sign out button.
+- If the proxy's own session ends, the page reloads so the proxy can show its
+  login page. If that happens again within a minute, the console says **Your
+  sign-in has ended.** with a **Sign in again** button instead of reloading.
+- If the proxy's identity is refused while you are signed in through it, the
+  console shows the token form with the reason.
 - If the token is **revoked**, the console signs you out the next time it asks
-  the daemon for anything, and at the latest when you reload.
+  the daemon for anything, and at the latest when you reload. Behind a
+  sign-in proxy it then signs you in as the proxy's person, if there is one.
 
 Some browsers copy a tab's storage into a duplicated or reopened tab, so such a
 tab may still be signed in.
@@ -137,18 +211,33 @@ tab may still be signed in.
 
 The console opens on **Overview**: the whole fleet on one page.
 
+- **Range**: **1 hour**, **6 hours**, **24 hours** or **7 days**. It decides
+  the tiles after Workers and the three charts, and it is in the address as
+  `?range=`, such as `/?range=7d`, so a reload or a link you share shows the
+  same range. Any other value is read as 1 hour. The daemon works the
+  figures out from what it has recorded, so a reload, or a daemon stop and
+  start, shows the same numbers, also for events the Events page no longer
+  holds. When the daemon's records start later than the range does, the line
+  `Figures cover from <day> <HH:MM>.` says from when they cover.
 - **Tiles**: how full the fleet is (leases held, as a share of every running
   slot on connected workers), the leases held, the requests waiting and the
-  longest wait, the workers connected of all, and the leases granted in the
-  last hour. A tile that has a page of its own opens it. While a
-  worker's devices and leases are not known, the first two show a dash.
-- **Leases held, last hour**: a chart of how many leases were held at the end
-  of each minute. It starts from the leases held now and counts back through
-  the lease events of the last hour, the same events the Events page shows, so
-  it can only go back as far as those. A lease that ends with no event, such
-  as one on a worker removed from a gateway, is not counted back. The line
-  under it says now, the highest and the lowest, and **Minute by minute**
-  lists each minute's number. It says "Not reported." in the same case.
+  longest wait, and the workers connected of all. A tile that has a page of
+  its own opens it. While a worker's devices and leases are not known, the
+  first two show a dash. After them, for the range: **Granted**, the requests made
+  in the range that were granted by its end (not the leases granted in it),
+  and **Wait p95**, how long the slowest 1 in 20 of the requests that ended
+  their wait in the range had waited, in milliseconds below a second and
+  `—` when no request ended its wait. **Granted** opens **Usage** on the same
+  range.
+- **Charts**: **Leases held**, **Requests in the queue** and **Device slots
+  in use** for the range. A point is the highest value in its bucket: a
+  minute for 1 hour, 5 minutes for 6 hours, 15 minutes for 24 hours and an
+  hour for 7 days. A bucket with no record is a gap, not zero. The line under
+  a chart says now, the highest and the lowest, and the table under it
+  (**Minute by minute**, **Every 5 minutes**, **Every 15 minutes** or **Hour
+  by hour**) lists each bucket's number, `—` where there is none.
+  If the daemon refuses the figures, the tile after Workers and the chart
+  panel show its message and the rest of the page stays.
 - **Capacity**: per platform, the devices running of the limit, and a bar
   split into leased, ready and booting. A dash stands in for the figures in
   the same case.
@@ -276,7 +365,9 @@ not wake is refused with a message that says so.
 
 ### Who holds a lease
 
-A lease taken over the HTTP API belongs to the token that took it. The list
+A lease taken over the HTTP API belongs to the token that took it, or, for a
+person signed in through the proxy, to that person: it is held as
+`proxy:<iss>#<sub>` and shown with their name. The list
 shows that token's label, `ci-runner-3`, and the lease's page the token id
 beside it: `ci-runner-3 tok_9f2c`. Give each agent's token a label when you create it, so you can tell
 them apart:
@@ -296,7 +387,8 @@ directly shows its holder's id as that worker reports it.
 ## Waiting
 
 **Waiting** lists every request waiting for a device, as `simlock list
---requests` does. Each row is its place in its queue, the agent that asked,
+--requests` does. Above the list, **Wait p95** shows how long requests waited
+in the last hour, as on the Overview; the page has no range picker. Each row is its place in its queue, the agent that asked,
 how long it has waited, the device it asked for, and its stage: `queued`
 while it waits its turn, `starting` while the daemon is working on it
 (placing it as it arrives, or finding, creating, booting or downloading a
@@ -311,6 +403,8 @@ Select a request to see it on the right:
 | Stage | `queued` or `starting` |
 | Device | The platform and the model it asked for, or the class for a request that named a class, or only the platform for one that named neither; and the runtime, mode and image tag when it named them |
 | Queue | The worker whose own queue it waits in, or the gateway's queue |
+| Why | Why the daemon's latest attempt to place a `queued` request stopped, for example "Full: running limit for iOS" or "Behind an earlier request". Absent while `starting`, and for a gateway's own requests, which list one row per worker instead |
+| One row per worker | On a gateway, for a `queued` request in its own queue: the worker's name (its label, else its id) and why that worker cannot take the request now, for example "Drained", "Full: running limit for iOS" or "Not chosen this time" |
 
 On a gateway the list has the gateway's own queue and, for each connected
 worker, the requests its own agents sent to it directly. A request the
@@ -334,7 +428,7 @@ reconnects or is removed. The console only shows these; it does not fix them.
 | `incompatible` | The worker and the gateway have no protocol version in common. Its page says which versions each speaks. |
 | `drained` | The worker gets no new leases (`simlock worker drain`). |
 | `over RAM budget` | The devices on the worker use more RAM than its budget allows, as `simlock status` reports with `(over limit)`. |
-| `quarantined` | A device Simlock could not clean up. It retries the cleanup in the background and leases the device to no one meanwhile. |
+| `quarantined` | A device Simlock could not clean up; its `Cause` says what failed. It retries the cleanup in the background and leases the device to no one meanwhile. |
 | `stalled` | A device stuck `provisioning` or `reclaiming` for longer than it should take, with nothing working on it. `simlock doctor` reports the same devices. |
 
 The first three come from a gateway only: a single host has no gateway to lose
@@ -343,7 +437,9 @@ too.
 
 Select an item to see the facts that matter for it, such as when a
 disconnected worker was last seen or how much RAM a worker uses of its budget,
-and the events of the last hour about that worker or device. **Open worker**
+and the events of the last hour about that worker or device. A quarantined
+device shows its `Cause`: `Purge failed`, `Shutdown failed` or `Delete failed` with the
+tool's error message, or `Stalled while provisioning` or `Stalled while reclaiming`. **Open worker**
 opens the worker's page.
 
 Each item shows within about a second of the daemon reporting it. A stalled
@@ -388,6 +484,34 @@ already shows is never shown twice, also after the daemon restarts.
 The console shows what the daemon sends. The daemon keeps secrets, such as a
 worker's join token, out of its events.
 
+## Usage
+
+**Usage** shows the full figures for a range: the same numbers
+`simlock stats --json` and `GET /v1/stats` give for it. Choose **1 hour**,
+**6 hours**, **24 hours** or **7 days**; the choice is in the address as
+`?range=`, such as `/usage?range=7d`, and any other value is read as 1 hour.
+When the daemon's records start later than the range does, the line
+`Figures cover from <day> <HH:MM>.` says from when they cover.
+
+Tiles show **Requests**, **Granted**, **Rejected**, **Wait p95** and **Held
+p50**. Under them:
+
+- **Grants by source**: how many grants were served warm, booted or
+  provisioned.
+- **Durations**: count, p50, p95 and max of the wait, the time a lease was
+  held, the turnaround, provisioning and boot; `—` where there is none.
+- **Rejections by reason**: one row per reason, as the daemon spells it,
+  largest count first.
+- **Use over the range**: device slots (peak, mean and the limit), the RAM
+  in use when the host reports it, and the queue (peak and mean).
+- **Device incidents**: quarantined, recovered from quarantine, recovered
+  after a crash and lost.
+- **Per platform**, **Per worker** and **Per requester**: requests, granted,
+  rejected and the wait p95; a requester shows the time it held devices in
+  total instead of the wait p95. A requester with a token label shows the
+  label and its id; one without shows its id. On a single host the worker table has one row, the
+  host. The worker and requester tables page in the address.
+
 ## Live updates
 
 Every page keeps itself current. A change on the daemon, such as a lease
@@ -412,7 +536,9 @@ it):
 | Daemon is starting | The daemon is back, and is still starting up. |
 
 While reconnecting, the console keeps the last data on screen and tries the
-daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. When the
+daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. Behind a
+sign-in proxy it first checks that your proxy session is still valid, and
+reconnects at once if it is. When the
 daemon answers, the console refreshes the page and it goes back to
 Connected. You do not need to reload.
 

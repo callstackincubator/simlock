@@ -1,4 +1,4 @@
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { listLeases, type FrontContext } from "./context.js";
 import type { HeldView } from "./front-map.js";
 
@@ -12,9 +12,9 @@ export class LeaseCheckFailed extends Error {
 
 export async function tokenDevices(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
 ): Promise<readonly TokenDevice[]> {
-  const held = context.map.liveOf(identity.requesterId);
+  const held = context.map.liveOf(identity.principal);
   if (held.length === 0) return held;
   let listed: Awaited<ReturnType<typeof listLeases>>;
   try {
@@ -25,5 +25,5 @@ export async function tokenDevices(
   for (const entry of held) {
     if (!listed.some((lease) => lease.id === entry.leaseId)) context.map.markEnded(entry.leaseId);
   }
-  return context.map.liveOf(identity.requesterId);
+  return context.map.liveOf(identity.principal);
 }

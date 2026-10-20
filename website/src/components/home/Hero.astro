@@ -1,0 +1,439 @@
+---
+import CopyCommand from '../site/CopyCommand.astro';
+import Dither from '../site/Dither.astro';
+import Window from '../site/Window.astro';
+import { docs, home, site } from '../../site/content';
+import { gatewayUrl, lanes, stageLabel } from './story';
+
+const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device":"${l.device}"}`;
+---
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-top va-top">
+    <div class="hero-copy">
+      <h1 class="h1" id="hero-title">{site.headline[0]} <em>{site.headline[1]}</em></h1>
+      <p class="lede">{site.lede}</p>
+      <div class="actions">
+        <a class="btn" href={docs.start}>Get started <span aria-hidden="true">→</span></a>
+        <CopyCommand command={site.install} />
+      </div>
+    </div>
+    <Window title="zsh" class="va-side">
+      <div class="term">
+        {home.setup.map((l) => ('cmd' in l ? <div class="ln"><span class="p">$</span> {l.cmd}</div> : <div class="ln dim"># {l.comment}</div>))}
+      </div>
+    </Window>
+  </div>
+
+  <div class="viz va-viz" data-va-hero role="img" aria-label={stageLabel}>
+    <Dither scene="fleet" focus={0.5} />
+    <div class="va-stage">
+      {
+        lanes.map((l, i) => (
+          <Window title={`${l.where} · ${l.agent}`} class={`va-agent va-agent--${i}`}>
+            <div class="term va-term" data-lane={i}>
+              <div class="ln" data-type><span class="p">$ </span><span data-t>POST /v1/lease-requests</span></div>
+              <div class="ln out" data-step>{body(l)}</div>
+              <div class="ln out" data-step>state    <span class="va-state" data-state>granted</span></div>
+              <div class="ln out" data-step>lease    <span class="tool">{l.lease}</span></div>
+              <div class="ln ok" data-step>✓ worker {l.worker.label}</div>
+            </div>
+          </Window>
+        ))
+      }
+
+      {
+        lanes.map((_, i) => (
+          <span class={`va-duct va-duct--up va-col-${i}`} data-up={i} aria-hidden="true">
+            <span class="pkt" />
+            <span class="pkt pkt--back" />
+          </span>
+        ))
+      }
+
+      <Window title={`gateway · ${gatewayUrl}`} class="va-gw">
+        <div class="va-table">
+          <div class="pane-row pane-head va-row">
+            <span>Agent</span><span class="va-c-dev">Device</span><span>Worker</span><span>Why</span><span class="va-c-state">State</span>
+          </div>
+          {
+            lanes.map((l, i) => (
+              <div class="pane-row va-row is-on" data-row data-gw={i}>
+                <span class="mut">{l.agent}</span>
+                <span class="va-c-dev mut">{l.device}</span>
+                <span>{l.worker.label}</span>
+                <span class="mut">{l.why}</span>
+                <span class="va-c-state va-live" data-gw-state>granted</span>
+              </div>
+            ))
+          }
+          <div class="pane-row va-foot">
+            <span>{lanes.length} workers connected · dialled out over wss · no inbound port</span>
+          </div>
+        </div>
+      </Window>
+
+      {
+        lanes.map((_, i) => (
+          <span class={`va-duct va-duct--down va-col-${i}`} data-down={i} aria-hidden="true">
+            <span class="pkt" />
+            <span class="pkt pkt--back" />
+          </span>
+        ))
+      }
+
+      {
+        lanes.map((l, i) => (
+          <div class={`va-worker va-col-${i}`} data-worker={i}>
+            <div class="va-whead">
+              <span class="va-wname">{l.worker.label}</span>
+              <span class="va-whost">{l.worker.host} · {l.worker.platforms}</span>
+            </div>
+            <div class="va-phone" data-phone data-state="leased">
+              <div class="va-phone-in">
+                <div class="va-screen">
+                  <span class="va-boot" />
+                  <span class="va-prov"><i /></span>
+                  <span class="va-app">
+                    <b />
+                    <span class="va-tiles"><span /><span /><span /><span /></span>
+                    <i /><i /><i /><i /><i /><i />
+                  </span>
+                </div>
+                <span class="va-home" />
+              </div>
+            </div>
+            <div class="va-wfoot">
+              <span class="va-dev">{l.device}</span>
+              <span class="va-wstate" data-wstate>
+                <span class="va-live">leased</span> {l.agent}
+              </span>
+            </div>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<script>
+  import { whenNear } from '../site/lazy';
+
+  const root = document.querySelector<HTMLElement>('[data-va-hero]');
+  if (root) whenNear(root, () => void import('./hero').then((m) => m.default(root)));
+</script>
+
+<style>
+  .va-top {
+    grid-template-columns: minmax(0, 1fr) 28.5rem;
+    align-items: center;
+    padding-block: clamp(2rem, 4.5vw, 3.75rem);
+  }
+  .va-top .h1 {
+    max-width: 16ch;
+  }
+  :global(.va-side) .term {
+    font-size: 0.6875rem;
+    overflow-wrap: normal;
+  }
+
+  .va-stage {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: clamp(0.75rem, 2vw, 1.5rem);
+    padding: clamp(2rem, 5vw, 3.5rem) var(--pad);
+  }
+  .va-stage :global(.va-agent) {
+    grid-row: 1;
+  }
+  .va-stage :global(.va-agent--0) {
+    grid-column: 1;
+  }
+  .va-stage :global(.va-agent--1) {
+    grid-column: 2;
+  }
+  .va-stage :global(.va-agent--2) {
+    grid-column: 3;
+  }
+  .va-term {
+    padding: 0.75rem 0.875rem;
+    font-size: 0.6875rem;
+  }
+  .va-col-0 {
+    grid-column: 1;
+  }
+  .va-col-1 {
+    grid-column: 2;
+  }
+  .va-col-2 {
+    grid-column: 3;
+  }
+
+  .va-duct {
+    --track: rgb(255 255 255 / 0.5);
+    position: relative;
+    justify-self: center;
+    width: 2px;
+    height: clamp(2rem, 4vw, 3rem);
+    background: repeating-linear-gradient(180deg, var(--track) 0 4px, transparent 4px 8px);
+  }
+  .va-duct:global(.is-live) {
+    --track: var(--accent);
+  }
+  .va-duct--up {
+    grid-row: 2;
+  }
+  .va-duct--down {
+    grid-row: 4;
+  }
+  .va-duct :global(.pkt) {
+    top: 0;
+    left: 50%;
+  }
+
+  .va-stage :global(.va-gw) {
+    grid-row: 3;
+    grid-column: 1 / -1;
+  }
+  .va-table {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+  }
+  .va-row {
+    --cols: 0.8fr 1fr 1fr 1.2fr 0.9fr;
+  }
+  .va-table .pane-row:last-child {
+    border-bottom: 0;
+  }
+  .va-foot {
+    --cols: 1fr;
+    color: var(--faint);
+    font-size: 0.625rem;
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+  }
+  .mut {
+    color: var(--muted);
+  }
+  :global(.va-live) {
+    color: var(--accent);
+  }
+  :global(.va-idle) {
+    color: var(--faint);
+  }
+
+  .va-worker {
+    grid-row: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.875rem;
+    min-width: 0;
+    padding: 0.875rem;
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+  }
+  .va-whead,
+  .va-wfoot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.125rem 0.75rem;
+    width: 100%;
+  }
+  .va-wname {
+    color: var(--text);
+  }
+  .va-whost,
+  .va-dev {
+    color: var(--faint);
+  }
+  .va-wstate {
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* why: square steps, not border-radius, so the frame matches the fleet scene's phones. */
+  .va-phone,
+  .va-phone-in {
+    clip-path: polygon(
+      0 8px, 4px 8px, 4px 4px, 8px 4px, 8px 0,
+      calc(100% - 8px) 0, calc(100% - 8px) 4px, calc(100% - 4px) 4px, calc(100% - 4px) 8px, 100% 8px,
+      100% calc(100% - 8px), calc(100% - 4px) calc(100% - 8px), calc(100% - 4px) calc(100% - 4px),
+      calc(100% - 8px) calc(100% - 4px), calc(100% - 8px) 100%,
+      8px 100%, 8px calc(100% - 4px), 4px calc(100% - 4px), 4px calc(100% - 8px), 0 calc(100% - 8px)
+    );
+  }
+  .va-phone {
+    position: relative;
+    width: clamp(4.75rem, 8vw, 6.5rem);
+    aspect-ratio: 1 / 2;
+    padding: 1px;
+    background: #313131;
+  }
+  .va-phone-in {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 12px 6px 0;
+    background: #050505;
+  }
+  .va-screen {
+    position: relative;
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid #1f1f1f;
+    overflow: hidden;
+  }
+  .va-home {
+    display: flex;
+    flex: 0 0 18px;
+    align-items: center;
+    justify-content: center;
+  }
+  .va-home::before {
+    content: '';
+    width: 34%;
+    height: 3px;
+    background: #313131;
+  }
+  .va-boot,
+  .va-prov,
+  .va-app {
+    position: absolute;
+    inset: 0;
+    display: none;
+  }
+  .va-boot {
+    background: var(--accent);
+  }
+  .va-prov {
+    align-items: center;
+    padding: 0 18%;
+  }
+  .va-prov i {
+    display: block;
+    width: 100%;
+    height: 4px;
+    background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 8px);
+    animation: va-fill 1.4s steps(8) infinite;
+  }
+  @keyframes va-fill {
+    from {
+      clip-path: inset(0 100% 0 0);
+    }
+    to {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+  .va-app {
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 9px;
+  }
+  .va-app b {
+    display: block;
+    flex: 0 0 14px;
+    background: var(--accent);
+  }
+  .va-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .va-tiles span {
+    aspect-ratio: 1;
+    background: rgb(var(--accent-rgb) / 0.3);
+  }
+  .va-tiles span:first-child {
+    background: rgb(var(--accent-rgb) / 0.7);
+  }
+  .va-app i {
+    display: block;
+    height: 4px;
+    background: rgb(var(--accent-rgb) / 0.45);
+  }
+  .va-app i:nth-of-type(2n) {
+    width: 70%;
+    background: rgb(255 255 255 / 0.3);
+  }
+  .va-app i:nth-of-type(3) {
+    width: 85%;
+  }
+  .va-phone[data-state='provisioning'] .va-prov {
+    display: flex;
+  }
+  .va-phone[data-state='booting'] .va-boot {
+    display: block;
+  }
+  .va-phone[data-state='leased'] .va-app {
+    display: flex;
+  }
+
+  @media (max-width: 64rem) {
+    .va-top {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    :global(.va-side) {
+      display: none;
+    }
+    .va-stage :global(.va-agent) {
+      grid-column: 1 / -1;
+    }
+    .va-stage :global(.va-agent--1) {
+      grid-row: 2;
+    }
+    .va-stage :global(.va-agent--2) {
+      grid-row: 3;
+    }
+    .va-stage :global(.va-agent--0),
+    .va-stage :global(.va-agent--1) {
+      margin-bottom: 0.75rem;
+    }
+    .va-duct--up {
+      grid-row: 4;
+    }
+    .va-stage :global(.va-gw) {
+      grid-row: 5;
+    }
+    .va-duct--down {
+      grid-row: 6;
+    }
+    .va-worker {
+      grid-row: 7;
+    }
+  }
+  @media (max-width: 48rem) {
+    .va-table {
+      font-size: 0.625rem;
+    }
+    .va-row {
+      --cols: 7ch 12ch minmax(0, 1fr);
+      gap: 0.625rem;
+      padding-inline: 0.75rem;
+    }
+    .va-foot {
+      white-space: normal;
+      padding-inline: 0.75rem;
+    }
+    .va-c-dev,
+    .va-c-state {
+      display: none;
+    }
+    .va-worker {
+      padding: 0.625rem 0.5rem;
+      gap: 0.625rem;
+      font-size: 0.625rem;
+    }
+    .va-whead,
+    .va-wfoot {
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+  }
+</style>

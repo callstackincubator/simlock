@@ -16,6 +16,24 @@ test.describe("sign-in", () => {
     await expect(page.getByLabel("Operator token")).toHaveCount(0);
   });
 
+  test("an operator token's label is shown in the sidebar as who is signed in", async ({
+    daemon,
+    page,
+  }) => {
+    const minted = await daemon.cli([
+      "token",
+      "create",
+      "--role",
+      "operator",
+      "--label",
+      "ci-runner",
+    ]);
+    await page.goto("/");
+    await signIn(page, (minted.json as { secret: string }).secret);
+
+    await expect(page.getByText("Signed in as ci-runner")).toBeVisible();
+  });
+
   test("the navigation marks the current page, and the tab's title names it", async ({
     daemon,
     page,
@@ -41,6 +59,7 @@ test.describe("sign-in", () => {
 
   test("signing in with an empty field asks the daemon nothing", async ({ page }) => {
     await page.goto("/");
+    await expect(page.getByLabel("Operator token")).toBeVisible();
     const asked: string[] = [];
     page.on("request", (request) => {
       if (new URL(request.url()).pathname.startsWith("/v1/")) asked.push(request.url());
@@ -171,9 +190,10 @@ test.describe("sign-in", () => {
     expect(requested.length).toBeGreaterThan(0);
     expect(requested.filter((url) => new URL(url).origin !== origin)).toEqual([]);
     expect(requested.some((url) => url.endsWith(".woff2"))).toBe(true);
-    // A request the page's Content-Security-Policy refused never reaches the network, but the
-    // browser reports it as an error; an agent token's 403 is the one error the flow expects.
-    expect(errors.filter((text) => !text.includes("403"))).toEqual([]);
+    // why: a request the page's Content-Security-Policy refused never reaches the network, but the
+    // browser reports it as an error; an agent token's 403 and the load-time 401 from
+    // `/v1/identity` are the errors the flow expects.
+    expect(errors.filter((text) => !text.includes("403") && !text.includes("401"))).toEqual([]);
   });
 });
 

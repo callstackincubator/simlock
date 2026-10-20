@@ -331,6 +331,7 @@ export class LeaseHealthMonitor {
         deviceId: device.id,
         duration: this.options.clock.now() - startedAt,
         leaseId: lease.id,
+        platform: device.spec.platform,
       },
       "lease-health-monitor",
     );
@@ -345,7 +346,14 @@ export class LeaseHealthMonitor {
   ): Promise<void> {
     this.options.eventBus.emit(
       "device.recovery-failed",
-      { attempts, deviceId: device.id, error: error ?? "", leaseId: lease.id, reason },
+      {
+        attempts,
+        deviceId: device.id,
+        error: error ?? "",
+        leaseId: lease.id,
+        platform: device.spec.platform,
+        reason,
+      },
       "lease-health-monitor",
     );
 

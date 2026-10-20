@@ -1,6 +1,6 @@
 ---
 name: garden-comments
-description: Weekly routine — run the comment lint (architecture rule 17) over the comments in the code files main changed since the last run, up to 300 blocks a run, prefix with `why:` the ones that say why and delete the rest, and land one comments-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "garden comments".
+description: Weekly routine — lint the comments in code main changed, keep the ones that say why with a `why:` prefix, delete the rest, and land one comments-only PR. Use when a routine or the user says "garden comments".
 model: sonnet
 effort: low
 ---
@@ -55,19 +55,9 @@ were deleted or prefixed, and `*Written by an agent.*`.
 
 ## 4. Review and merge
 
-`reviewer` with the PR number, round 1: its kind must be `comments-only`.
-Any other kind means a code line changed: undo it and push again. Fix each
-Fix line yourself, comments only, then the check its Rerun names, as rule
-14 says. `Rerun: none` with findings open: leave the PR in draft and report
-them.
-
-Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
-with `Spec review: skipped. Code review: skipped.` (edit the body with
-`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`; `gh pr edit`
-is GraphQL, which a cloud session refuses). Then `gh pr ready <M>`
-(in a cloud session it fails with a 403 naming the proxy's ready-for-review
-route: call that route) and `.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR
-open and report.
+As `toolchain.md` "Routines" says, comments only. The review's kind must be
+`comments-only`: any other kind means a code line changed, so undo it and
+push again.
 
 ## Report
 

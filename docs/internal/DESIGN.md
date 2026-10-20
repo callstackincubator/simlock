@@ -1,8 +1,8 @@
 # Design guide
 
-How Simlock looks. The web console follows it today, and the landing page will
-follow it when it is built. The tokens live in `ui/src/ds/foundation.css`; change
-this guide and that file together.
+How the web console looks. The tokens live in `ui/src/ds/foundation.css`;
+change this guide and that file together. The website and every other brand
+visual follow [BRAND.md](BRAND.md) instead.
 
 The style is Callstack's console style, the one Apex uses: an off-white page,
 square cards a shade darker, mono labels in capitals, and one accent colour.
@@ -32,7 +32,7 @@ Simlock's accent is orange where Apex's is green.
   | `--text-md` | 16px | body text, page subtitles, card and panel titles |
   | `--text-lg` | 20px | a list's title, an inspector title that is an id |
   | `--text-xl` | 28px | a page's and an inspector's title, a tile's number |
-  | `--text-2xl` | 32px | the landing page's headings only |
+  | `--text-2xl` | 32px | a lease's countdown |
 
 - Weights: 400 for text, 500 for labels and big numbers, 600 for titles, 700
   for the wordmark.
@@ -133,8 +133,9 @@ put together from them and draws nothing of its own that one of them already dra
 
 - **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
   wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
-  Workers, Leases, Waiting, Attention, Events), then at the bottom the connection as a status,
-  **Sign out** and the collapse button. A link is an icon and its label in `--text-muted`; the
+  Workers, Leases, Waiting, Attention, Events, Usage), then at the bottom the connection as a status,
+  "Signed in as <name>" (hidden when collapsed, where the Sign out tooltip reads "Sign out (<name>)"),
+  **Sign out** (absent for a proxy person with no sign-out address) and the collapse button. A link is an icon and its label in `--text-muted`; the
   current one is `--text` on `--field` with a 2px `--accent` bar on its left and
   `aria-current="page"`. Attention carries its count in a small bordered box, and none at zero.
   Collapsed, the sidebar is 64px wide: the labels go, every icon sits on its centre line, each
@@ -175,7 +176,7 @@ put together from them and draws nothing of its own that one of them already dra
   between them. Numbers, durations included, are mono and right-aligned.
   Every table of a page's items is the one table component
   (`ui/src/ds/table.tsx`), so every such table pages the same way. A chart's
-  "Minute by minute" table is not one: it always has its 60 rows.
+  table is not one: it has one row per bucket, always.
 - **Pager.** Under a table, edge to edge in its panel, with a 1px `--border`
   line above it like a row's: the rows shown of how many in mono (`26–50 of
   1,240`), **Per page** as a select, then **Previous**, the page number in
@@ -208,7 +209,7 @@ put together from them and draws nothing of its own that one of them already dra
   `--accent`, an area with a faint fill of it (8%), horizontal grid lines in
   `--border`, axis labels in Geist Mono `--text-muted`. Every colour comes from
   the stylesheet by class. Nothing moves: animation is off. Every chart has a
-  title saying what it counts, its numbers as a line of text under it, and every minute as a table behind a "Minute by minute" disclosure, so
+  title saying what it counts, its numbers as a line of text under it, and every bucket as a table behind a disclosure named by the bucket width ("Minute by minute", "Every 5 minutes", "Hour by hour"), so
   nothing is visible only in the picture. A chart can be focused, and the
   arrow keys step through it. Its focus ring goes round the whole chart, for
   keyboard focus only: a click on a chart draws none.

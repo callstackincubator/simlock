@@ -62,6 +62,32 @@ describe("workerViewFields", () => {
     expect(() => workerViewFields(reads([{ ...device, physical: undefined }]))).toThrow();
   });
 
+  it("a worker view keeps a device's quarantineCause", () => {
+    const quarantineCause = { kind: "purge-failed", message: "Error: purge exploded" };
+    const device = {
+      id: "dev_q",
+      mode: "full",
+      physical: false,
+      quarantineCause,
+      servesDefaultMode: true,
+      spec: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+      state: "quarantined",
+    };
+    const reads = {
+      devices: [device],
+      receivedAt: 0,
+      status: {
+        capacity: CAPACITY,
+        daemon: { health: "running", mode: "worker" },
+        host: HOST,
+        leases: [],
+        queueDepth: 0,
+      },
+    } as unknown as Parameters<typeof workerViewFields>[0];
+
+    expect(workerViewFields(reads).devices).toEqual([device]);
+  });
+
   it("the status device entry and the worker view accept state absent and each absentReason, and refuse another reason", () => {
     const absent = {
       class: "phone",

@@ -135,6 +135,34 @@ function loadLines(status: StatusGetOutput): string[] {
     : [formatLoadLine(status.load, Math.ceil(status.load.ageMs / 1000))];
 }
 
+function historyLines(history: StatusGetOutput["history"]): string[] {
+  if (history === undefined) return [];
+  const lines: string[] = [];
+  if (!history.writing) {
+    lines.push("History: the event history is not being written; see daemon.log.");
+  }
+  if (history.setAsideAt !== undefined) {
+    lines.push(
+      `History: the event history was damaged and set aside at ${formatLocalMinute(history.setAsideAt)}; a fresh one was started.`,
+    );
+  }
+  if (history.rebuiltAt !== undefined) {
+    lines.push(
+      `History: figures were rebuilt from the event history at ${formatLocalMinute(history.rebuiltAt)}.`,
+    );
+  }
+  if (history.rebuildFailed === true) {
+    lines.push("History: figures could not be rebuilt; see daemon.log.");
+  }
+  return lines;
+}
+
+function formatLocalMinute(epochMs: number): string {
+  const at = new Date(epochMs);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
 export function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
   return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
 }
@@ -199,6 +227,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
     ...consoleLines(daemon),
     `Host: ${formatHost(host)}`,
     ...loadLines(status),
+    ...historyLines(status.history),
     globalLine,
     ...capacityLines,
     ...ramLines,
@@ -242,5 +271,16 @@ function quarantineMarker(device: NonNullable<StatusGetOutput["devices"]>[number
     device.quarantineNextRetryAt === undefined
       ? ""
       : `, next retry at ${device.quarantineNextRetryAt}`;
-  return `purge retry ${attempts}${nextRetryAt}`;
+  const cause = device.quarantineCause;
+  return `purge retry ${attempts}${nextRetryAt}${cause === undefined ? "" : `; ${quarantineCauseText(cause)}`}`;
+}
+
+function quarantineCauseText(cause: {
+  readonly kind: "purge-failed" | "shutdown-failed" | "delete-failed" | "stalled";
+  readonly stalledState?: string | undefined;
+  readonly message?: string | undefined;
+}): string {
+  if (cause.kind === "stalled") return `stalled while ${cause.stalledState ?? ""}`;
+  const text = cause.kind.replace("-", " ");
+  return cause.message === undefined ? text : `${text}: ${cause.message}`;
 }

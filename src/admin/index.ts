@@ -12,6 +12,8 @@ import {
 } from "../simlock-client/client.js";
 
 export type {
+  AlertsTestInput,
+  AlertsTestOutput,
   AnySimlockError,
   CatalogGetInput,
   CatalogGetOutput,
@@ -70,6 +72,8 @@ export type {
   TokenListOutput,
   TokenRevokeInput,
   TokenRevokeOutput,
+  UsageGetInput,
+  UsageGetOutput,
   WorkerComponentProgress,
   WorkerDrainInput,
   WorkerDrainOutput,

@@ -52,6 +52,7 @@ const leaseModule = () => import("./commands/lease.js");
 const tokenModule = () => import("./commands/token.js");
 const workerModule = () => import("./commands/worker.js");
 const componentModule = () => import("./commands/component.js");
+const alertsModule = () => import("./commands/alerts.js");
 
 export const COMMANDS: readonly CommandNode[] = [
   { name: "lease", load: leaseModule, children: [{ name: "renew", load: leaseModule }] },
@@ -63,6 +64,7 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "doctor", load: () => import("./commands/doctor.js") },
   { name: "nuke", load: () => import("./commands/nuke.js") },
   { name: "events", load: () => import("./commands/events.js") },
+  { name: "stats", load: () => import("./commands/stats.js") },
   {
     name: "daemon",
     load: daemonModule,
@@ -81,6 +83,7 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "set", load: configModule },
     ],
   },
+  { name: "whoami", load: () => import("./commands/whoami.js") },
   {
     name: "token",
     load: tokenModule,
@@ -100,6 +103,7 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "remove", load: workerModule },
     ],
   },
+  { name: "alerts", load: alertsModule, children: [{ name: "test", load: alertsModule }] },
   {
     name: "component",
     load: componentModule,

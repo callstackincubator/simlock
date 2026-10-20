@@ -43,6 +43,25 @@ describe("createApiClient", () => {
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
+  it("tells a 401 or 403 that is not Simlock's from a Simlock 401", async () => {
+    const refused = async (status: number, body: unknown) => {
+      const onRefused = vi.fn();
+      const api = createApiClient({
+        fetch: answering(status, body).fetch,
+        onRefused,
+        token: () => undefined,
+      });
+      await api.getJson("/v1/workers").catch(() => undefined);
+      return onRefused.mock.calls.map(([failure]) => failure);
+    };
+    const simlock = { error: { code: "UNAUTHENTICATED", message: "refused" } };
+
+    expect(await refused(401, {})).toEqual(["not-simlock"]);
+    expect(await refused(403, {})).toEqual(["not-simlock"]);
+    expect(await refused(401, simlock)).toEqual(["unauthorized"]);
+    expect(await refused(403, simlock)).toEqual([]);
+  });
+
   it("the fetch helper gives up after 10 seconds", async () => {
     vi.useFakeTimers();
     const api = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });
@@ -93,7 +112,7 @@ describe("createApiClient", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.input).toBe("/v1/workers");
     expect(calls[0]?.init.headers).toEqual({ Authorization: "Bearer slk_op" });
-    expect(calls[0]?.init.credentials).toBe("omit");
+    expect(calls[0]?.init.credentials).toBe("same-origin");
     // why: never answered from the browser's cache: what the daemon holds now is the answer.
     expect(calls[0]?.init.cache).toBe("no-store");
     await expect(api.getJson("//elsewhere.example/v1/workers" as ApiPath)).rejects.toThrow(

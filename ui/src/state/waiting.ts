@@ -1,5 +1,6 @@
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
+import type { FigureTile } from "../model/figures";
 import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import {
@@ -10,6 +11,7 @@ import {
   waitingTable,
 } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
+import { useFigures } from "./figures";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
@@ -23,11 +25,13 @@ export interface WaitingPage extends WaitingChoice {
   readonly count: number;
   readonly paging: Paging;
   readonly named: boolean;
+  readonly wait: LoadView<FigureTile>;
 }
 
 export function useWaiting(): LoadView<WaitingPage> {
   const requests = loadView(useLiveResource<WaitingList>("/v1/lease-requests"));
   const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const figures = useFigures("1h");
   const now = useNow();
   const id = itemIdFrom("/waiting", usePath());
   const keep = listSearch(useSearch());
@@ -47,6 +51,14 @@ export function useWaiting(): LoadView<WaitingPage> {
       named: id !== undefined,
       paging,
       rows,
+      wait:
+        figures.kind === "ready"
+          ? {
+              data: figures.data.wait,
+              kind: "ready",
+              ...(figures.refusal === undefined ? {} : { refusal: figures.refusal }),
+            }
+          : figures,
     };
   });
 }

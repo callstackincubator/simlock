@@ -10,6 +10,7 @@ import {
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
 } from "../../ports/index.js";
+import { tokenIdentity } from "../../auth/testing.js";
 import { FakeAgentDeviceHealth } from "../testing.js";
 import { agentDeviceLeaseMaxTtlMs } from "../shared/daemon-environment.js";
 import { AgentDeviceSupervisor } from "./agent-device-supervisor.js";
@@ -146,7 +147,7 @@ describe("the agent-device host's authenticate", () => {
   it("returns the tagged identity's principal as the tenant, and null for a request the front did not tag", () => {
     const host = new AgentDeviceHost(upstream, ["ios"]);
     const tagged = new Request("http://worker/v1/agent-device/rpc");
-    host.tag(tagged, { requesterId: "tok_agent", role: "agent" });
+    host.tag(tagged, tokenIdentity("tok_agent"));
 
     expect(host.authenticate(tagged)).toEqual({ tenantId: "tok_agent" });
     expect(host.authenticate(new Request("http://worker/v1/agent-device/rpc"))).toBeNull();

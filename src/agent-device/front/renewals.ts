@@ -50,7 +50,7 @@ export class Renewals {
     if (
       this.#disposed ||
       entry === undefined ||
-      entry.identity.requesterId !== identityId ||
+      entry.identity.principal !== identityId ||
       entry.endedAt !== undefined
     ) {
       return () => undefined;

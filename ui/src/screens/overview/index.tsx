@@ -1,6 +1,7 @@
 import "./overview.css";
 
 import {
+  ChoiceChips,
   Empty,
   Link,
   Loaded,
@@ -9,6 +10,7 @@ import {
   MinuteTable,
   Page,
   Panel,
+  Refusal,
   Row,
   ShareBar,
   SlotLegend,
@@ -18,6 +20,8 @@ import {
   Status,
   StatusDot,
 } from "../../ds";
+import type { FigureChart, FiguresState } from "../../state/figures";
+import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import {
   type Gauge,
   type Overview,
@@ -29,39 +33,69 @@ import {
 } from "../../state/overview";
 
 export function OverviewScreen() {
-  const view = useOverview();
+  const [range, setRange] = useRange();
+  const view = useOverview(range);
   return (
     <Page title="Overview">
-      <Loaded view={view}>{(overview) => <OverviewBody overview={overview} />}</Loaded>
+      <Loaded view={view}>
+        {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
+      </Loaded>
     </Page>
   );
 }
 
-export function OverviewBody({ overview }: { readonly overview: Overview }) {
+function FigureNote({ figures }: { readonly figures: FiguresState }) {
+  if (figures.kind === "loading") return <p className="muted loaded-note">Loading…</p>;
+  if (figures.kind === "refused") return <Refusal message={figures.message} />;
+  return null;
+}
+
+function FigureChartPanel({ chart }: { readonly chart: FigureChart }) {
+  return (
+    <Panel title={chart.title}>
+      <MinuteChart kind="area" title={chart.title} unit={chart.unit} minutes={chart.points} />
+      <p className="chart-summary">{chart.summary}</p>
+      <MinuteTable minutes={chart.points} heading={chart.heading} bucketMs={chart.bucketMs} />
+    </Panel>
+  );
+}
+
+export function OverviewBody(props: {
+  readonly overview: Overview;
+  readonly range?: ConsoleRange;
+  readonly onRange?: (range: ConsoleRange) => void;
+}) {
+  const { overview, range = "1h", onRange = () => undefined } = props;
+  const { figures } = overview;
+  const ready = figures.kind === "ready" ? figures : undefined;
+  const [leases, ...others] = ready?.data.charts ?? [];
   return (
     <>
+      <div className="overview-range">
+        <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
+        {ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
+      </div>
+      {ready?.refusal === undefined ? null : <Refusal message={ready.refusal} />}
       <StatRow label="Fleet at a glance">
         {overview.tiles.map((tile) => (
           <StatTile key={tile.label} {...tile} />
         ))}
+        {ready === undefined ? (
+          <li className="stat">
+            <div className="stat-body">
+              <FigureNote figures={figures} />
+            </div>
+          </li>
+        ) : null}
       </StatRow>
       <Row>
-        <Panel title="Leases held, last hour">
-          {overview.minutes.length === 0 ? (
-            <p className="muted">Not reported.</p>
-          ) : (
-            <>
-              <MinuteChart
-                kind="area"
-                title="Leases held, last hour"
-                unit="leases held"
-                minutes={overview.minutes}
-              />
-              <p className="chart-summary">{overview.chartSummary}</p>
-              <MinuteTable minutes={overview.minutes} heading="Leases held" />
-            </>
-          )}
-        </Panel>
+        {leases === undefined ? (
+          <Panel title="Figures">
+            <FigureNote figures={figures} />
+          </Panel>
+        ) : (
+          <FigureChartPanel chart={leases} />
+        )}
         <Panel title="Capacity">
           <div className="capacity">
             {overview.platforms.map((platform) => (
@@ -71,6 +105,13 @@ export function OverviewBody({ overview }: { readonly overview: Overview }) {
           </div>
         </Panel>
       </Row>
+      {others.length === 0 ? null : (
+        <Row even>
+          {others.map((chart) => (
+            <FigureChartPanel key={chart.key} chart={chart} />
+          ))}
+        </Row>
+      )}
       <Row>
         <Panel
           title="Workers"

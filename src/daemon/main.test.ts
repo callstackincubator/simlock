@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
@@ -20,7 +20,8 @@ import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/te
 import { FakeDriver } from "../core/testing.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventEnvelope } from "../bus/index.js";
+import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
@@ -120,6 +121,7 @@ describe("interrupted writes", () => {
       {
         manageEventSubscription: () => undefined,
         principal: "operator",
+        via: "socket",
         role: "admin",
       },
     );
@@ -171,6 +173,26 @@ describe("interrupted root assembly", () => {
   });
 });
 
+async function historyEventsWhen(
+  directory: string,
+  done: (events: readonly EventEnvelope[]) => boolean,
+): Promise<EventEnvelope[]> {
+  let events: EventEnvelope[] = [];
+  await vi.waitFor(
+    async () => {
+      events = await readHistoryEvents(directory);
+      expect(done(events)).toBe(true);
+    },
+    { timeout: 4_000 },
+  );
+  return events;
+}
+
+const hasEvent =
+  (name: string) =>
+  (events: readonly EventEnvelope[]): boolean =>
+    events.some((event) => event.event === name);
+
 describe("the version a daemon reports", () => {
   it("is the version in package.json when the caller names none", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
@@ -205,25 +227,30 @@ describe("the version a daemon reports", () => {
   });
 });
 
-describe("the event file sink", () => {
-  it("judges retention by the injected clock, so a generation younger than the retention on that clock survives the start-up sweep", async () => {
+describe("the event history", () => {
+  it("judges retention by the injected clock, so an event younger than the retention on that clock survives the start-up prune", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
     // The fake clock reads 1_000; a real clock would put the 7-day cutoff far past 500.
-    await writeFile(join(directory, "events.jsonl.1"), `{"timestamp":500}\n`);
-    const clock = new FakeClock(1_000);
-    const daemon = await startDaemon({
-      clock,
-      dataDirectory: directory,
-      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-      filesystem: new MemoryFilesystem(),
-      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
-      version: "1.2.3",
-    });
-    runningDaemons.push(daemon);
+    await seedHistory(directory, [500]);
 
-    expect(await readFile(join(directory, "events.jsonl.1"), "utf8")).toBe(`{"timestamp":500}\n`);
+    await start({ dataDirectory: directory });
+
+    const events = await historyEventsWhen(directory, hasEvent("daemon.started"));
+    expect(events.map((event) => event.id)).toContain("evt_1");
+  });
+
+  it("prunes at start by the configured eventLog.retention, so an event older than it on the injected clock is gone", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    // why: the fake clock reads 1_000; with a retention of 100 the cutoff is 900, past 500 and before 950.
+    await seedHistory(directory, [500, 950]);
+
+    await start({ configOverrides: { eventLog: { retention: 100 } }, dataDirectory: directory });
+
+    const events = await historyEventsWhen(directory, hasEvent("daemon.started"));
+    expect(events.map((event) => event.id)).not.toContain("evt_1");
+    expect(events.map((event) => event.id)).toContain("evt_2");
   });
 });
 
@@ -267,7 +294,7 @@ async function agentStatus(daemon: DaemonServer) {
   return (await daemon.dispatch(
     "status.get",
     {},
-    { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+    { manageEventSubscription: () => undefined, via: "socket", principal: "agent", role: "agent" },
   )) as { readonly host: { readonly tools: readonly unknown[] } };
 }
 
@@ -317,19 +344,22 @@ describe("startDaemon", () => {
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
   });
 
-  it("keeps gateway.token out of the daemon log, the events.replay answer, and events.jsonl, while config.get still returns it", async () => {
+  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
       configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
     });
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
 
     const replayed = await daemon.dispatch("events.replay", {}, admin);
-    const eventFile = await readFile(join(directory, "events.jsonl"), "utf8");
+    const eventFile = JSON.stringify(
+      await historyEventsWhen(directory, hasEvent("daemon.started")),
+    );
     const config = (await daemon.dispatch("config.get", {}, admin)) as {
       readonly gateway: { readonly token?: string };
     };
@@ -342,8 +372,8 @@ describe("startDaemon", () => {
     expect({
       daemonLog: JSON.stringify(sink.records).includes(secret),
       eventsReplay: JSON.stringify(replayed).includes(secret),
-      eventsJsonl: eventFile.includes(secret),
-    }).toEqual({ daemonLog: false, eventsReplay: false, eventsJsonl: false });
+      historyDb: eventFile.includes(secret),
+    }).toEqual({ daemonLog: false, eventsReplay: false, historyDb: false });
     expect(config.gateway.token).toBe(secret);
   });
 
@@ -356,7 +386,12 @@ describe("startDaemon", () => {
     const replayed = (await daemon.dispatch(
       "events.replay",
       {},
-      { manageEventSubscription: () => undefined, principal: "operator", role: "admin" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
     )) as readonly { readonly event: string; readonly payload: unknown }[];
 
     const started = replayed.find((envelope) => envelope.event === "daemon.started");
@@ -393,6 +428,7 @@ describe("startDaemon", () => {
     });
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -426,6 +462,7 @@ describe("startDaemon", () => {
     } as const;
     const session = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "agent",
       role: "agent",
     } as const;
@@ -531,7 +568,12 @@ describe("startDaemon", () => {
           osVersion: "26.5",
           platform: "ios",
         },
-        { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "agent",
+          role: "agent",
+        },
       )
       .catch((error: unknown) => error);
     await expect.poll(() => events).toEqual(["install-started"]);
@@ -611,7 +653,12 @@ describe("startDaemon", () => {
     const listed = await daemon.dispatch(
       "component.list",
       {},
-      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
     );
 
     expect(listed).toEqual({ components: [] });
@@ -637,11 +684,13 @@ describe("startDaemon", () => {
 describe("startDaemon wires core and leasing together", () => {
   const agent = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent",
     role: "agent",
   } as const;
   const admin = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "operator",
     role: "admin",
   } as const;
@@ -745,10 +794,7 @@ describe("startDaemon wires core and leasing together", () => {
   it("announces the capacity figures and then the queue depth once startup is done", async () => {
     const { directory } = await start();
 
-    const events = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { readonly event: string; readonly module: string });
+    const events = await historyEventsWhen(directory, hasEvent("queue.changed"));
     const names = events.map((event) => event.event);
 
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(-1);
@@ -759,10 +805,9 @@ describe("startDaemon wires core and leasing together", () => {
   it("runs doctor's startup pass on the startup read before core's device steps announce the capacity figures", async () => {
     const { directory } = await start();
 
-    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+    const names = (await historyEventsWhen(directory, hasEvent("capacity.changed"))).map(
+      (event) => event.event,
+    );
 
     expect(names.indexOf("doctor.reconciled")).toBeGreaterThan(-1);
     expect(names.indexOf("doctor.reconciled")).toBeLessThan(names.indexOf("capacity.changed"));
@@ -799,10 +844,9 @@ describe("startDaemon wires core and leasing together", () => {
     });
     runningDaemons.push(daemon);
 
-    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+    const names = (await historyEventsWhen(directory, hasEvent("capacity.changed"))).map(
+      (event) => event.event,
+    );
     expect(names.indexOf("lease.rejected")).toBeGreaterThan(-1);
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
   });
@@ -1013,6 +1057,69 @@ describe("startDaemon wires core and leasing together", () => {
     await settleRealTime();
 
     expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+  });
+
+  describe("a device quarantined by a failed purge", () => {
+    type CauseView = {
+      readonly id: string;
+      readonly quarantineCause?: { readonly kind: string; readonly message?: string };
+      readonly state: string;
+    };
+
+    async function quarantinedAfterFailedPurge() {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+      driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+      const { daemon } = await start({ clock, drivers: [driver] });
+      const grant = (await daemon.dispatch("lease.request", ios, agent)) as Grant;
+      await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+      await settleRealTime();
+      return daemon;
+    }
+
+    const devicesOf = async (
+      daemon: Awaited<ReturnType<typeof quarantinedAfterFailedPurge>>,
+      session: typeof agent | typeof admin,
+    ) =>
+      (
+        (await daemon.dispatch("status.get", {}, session)) as {
+          readonly devices: readonly CauseView[];
+        }
+      ).devices;
+
+    it("shows quarantineCause purge-failed with the driver's error in status.get and list.get", async () => {
+      const daemon = await quarantinedAfterFailedPurge();
+
+      const status = await devicesOf(daemon, admin);
+      const listed = (await daemon.dispatch(
+        "list.get",
+        { kind: "devices" },
+        admin,
+      )) as readonly CauseView[];
+
+      for (const devices of [status, listed]) {
+        expect(devices).toHaveLength(1);
+        expect(devices[0]).toMatchObject({ state: "quarantined" });
+        expect(devices[0]?.quarantineCause).toEqual({
+          kind: "purge-failed",
+          message: "DriverCrashError: purge exploded",
+        });
+      }
+    });
+
+    it("shows its message to an admin session and only its kind to an agent session", async () => {
+      const daemon = await quarantinedAfterFailedPurge();
+
+      const forAdmin = await devicesOf(daemon, admin);
+      const forAgent = await devicesOf(daemon, agent);
+
+      expect(forAdmin[0]?.quarantineCause).toEqual({
+        kind: "purge-failed",
+        message: "DriverCrashError: purge exploded",
+      });
+      expect(forAgent[0]).toMatchObject({ state: "quarantined" });
+      expect(forAgent[0]?.quarantineCause).toEqual({ kind: "purge-failed" });
+    });
   });
 
   it("probes a leased device again as time passes once startup is done", async () => {
@@ -1538,6 +1645,68 @@ async function pollUntilListening(port: number, secret: string): Promise<unknown
   throw new Error("HTTP gateway never started listening");
 }
 
+describe("startDaemon HTTP status for a quarantined device", () => {
+  it("gives an operator token the cause's message and an agent token its kind alone", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-cause-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const secrets = new CryptoTokenSecrets();
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "tokens.json"),
+      JSON.stringify([
+        { id: "tok_agent", hash: secrets.hash("slk_cause_agent"), role: "agent", createdAt: 0 },
+        { id: "tok_op", hash: secrets.hash("slk_cause_operator"), role: "operator", createdAt: 0 },
+      ]),
+    );
+    const port = await freeLoopbackPort();
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      dataDirectory: directory,
+      drivers: [driver],
+      filesystem,
+      hostLoadProbe: null,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    const session = {
+      manageEventSubscription: () => undefined,
+      principal: "agent-1",
+      role: "agent",
+      via: "socket",
+    } as const;
+    const grant = (await daemon.dispatch(
+      "lease.request",
+      { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId: "agent-1" },
+      session,
+    )) as { readonly lease: { readonly id: string } };
+    await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, session);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const causeFor = async (secret: string) => {
+      const status = (await pollUntilListening(port, secret)) as {
+        readonly devices?: readonly {
+          readonly quarantineCause?: unknown;
+          readonly state: string;
+        }[];
+      };
+      expect(status.devices?.[0]?.state).toBe("quarantined");
+      return status.devices?.[0]?.quarantineCause;
+    };
+
+    expect(await causeFor("slk_cause_operator")).toEqual({
+      kind: "purge-failed",
+      message: "DriverCrashError: purge exploded",
+    });
+    expect(await causeFor("slk_cause_agent")).toEqual({ kind: "purge-failed" });
+  });
+});
+
 describe("discoverDrivers", () => {
   it("logs a skip when the Android SDK cannot be found, without throwing", async () => {
     const sink = new MemoryLogSink();
@@ -2036,7 +2205,7 @@ describe("processRunnerFor", () => {
   });
 });
 
-describe("startDaemon event file", () => {
+describe("startDaemon event history", () => {
   const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
 
   afterEach(() => {
@@ -2047,19 +2216,52 @@ describe("startDaemon event file", () => {
     }
   });
 
-  it("starts a daemon whose event file cannot be opened, and logs one error line", async () => {
+  it("starts a daemon whose history path is a directory, sets it aside and writes a fresh file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
     temporaryDirectories.push(directory);
-    await mkdir(join(directory, "events.jsonl"));
+    await mkdir(join(directory, "history.db"));
 
-    const { daemon, sink } = await start({ dataDirectory: directory });
+    const { daemon } = await start({ dataDirectory: directory });
 
+    const events = await historyEventsWhen(directory, hasEvent("daemon.started"));
+    const names = await readdir(directory);
+    const status = (await daemon.dispatch(
+      "status.get",
+      {},
+      {
+        manageEventSubscription: () => undefined,
+        principal: "operator",
+        role: "admin",
+        via: "socket",
+      },
+    )) as { readonly history?: unknown };
     expect(daemon.health).toBe("running");
+    expect(names).toContain("history.db.damaged-1000");
+    expect((await stat(join(directory, "history.db.damaged-1000"))).isDirectory()).toBe(true);
+    expect((await stat(join(directory, "history.db"))).isFile()).toBe(true);
+    expect(events.length).toBeGreaterThan(0);
+    expect(status.history).toEqual({ opened: true, setAsideAt: 1_000, writing: true });
+  });
+
+  it("a daemon that loses the socket claim leaves a damaged history.db byte-identical and in place", async () => {
+    const winner = await mkdtemp(join(tmpdir(), "simlock-main-claim-"));
+    const loser = await mkdtemp(join(tmpdir(), "simlock-main-claim-"));
+    temporaryDirectories.push(winner, loser);
+    const junk = "this is not a sqlite database ".repeat(20);
+    await writeFile(join(loser, "history.db"), junk);
+    const socketPath = join(winner, "daemon.sock");
+    await start({ dataDirectory: winner, socketPath });
+
+    const outcome = await start({ dataDirectory: loser, socketPath }).then(
+      () => "resolved" as const,
+      () => "rejected" as const,
+    );
+
+    expect(outcome).toBe("rejected");
     expect(
-      sink.records.filter(
-        (record) => record.level === "error" && record.module === "daemon.events",
-      ),
-    ).toHaveLength(1);
+      await readdir(loser).then((names) => names.filter((name) => name.startsWith("history"))),
+    ).toEqual(["history.db"]);
+    expect(await readFile(join(loser, "history.db"), "utf8")).toBe(junk);
   });
 
   it("mints event ids from the idGenerator the daemon was given", async () => {
@@ -2078,10 +2280,11 @@ describe("startDaemon event file", () => {
       idGenerator: { generate: () => "from-the-given-generator" },
     });
 
-    const ids = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trimEnd()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { id: string }).id);
+    const ids = (
+      await historyEventsWhen(directory, (events) =>
+        events.some((event) => event.id === "evt_from-the-given-generator"),
+      )
+    ).map((event) => event.id);
     expect(ids).toContain("evt_from-the-given-generator");
   });
 
@@ -2102,10 +2305,9 @@ describe("startDaemon event file", () => {
 
     const { sink } = await start({ dataDirectory: directory, drivers: undefined });
 
-    const written = (await readFile(join(directory, "events.jsonl"), "utf8"))
-      .trimEnd()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { event: string }).event);
+    const written = (await historyEventsWhen(directory, hasEvent("device.slimmed"))).map(
+      (event) => event.event,
+    );
     expect(written).toEqual(expect.arrayContaining(["component.installed", "device.slimmed"]));
     expect(
       sink.records.filter((record) =>
@@ -2410,7 +2612,12 @@ describe("startDaemon logger wiring", () => {
       daemon.dispatch(
         "worker.drain",
         { workerId: "wrk_ghost" },
-        { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" },
+        {
+          manageEventSubscription: () => undefined,
+          via: "socket",
+          principal: "test-operator",
+          role: "admin",
+        },
       ),
     ).rejects.toMatchObject({ code: "UNKNOWN_WORKER" });
 
@@ -2450,6 +2657,7 @@ describe("startDaemon with the agent-device edge", () => {
   } as const;
   const agent = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "agent",
     role: "agent",
   } as const;
@@ -2708,6 +2916,7 @@ describe("startDaemon with the agent-device edge", () => {
   it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "op",
       role: "admin",
     } as const;
@@ -2755,6 +2964,7 @@ describe("startDaemon with the agent-device edge", () => {
   it('a worker whose config has only the old agentDevice key warns `Unknown config key: "agentDevice"` and reports agent-device off', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "op",
       role: "admin",
     } as const;
@@ -2811,6 +3021,7 @@ describe("startDaemon with the agent-device edge", () => {
   describe("doctor.run", () => {
     const operator = {
       manageEventSubscription: () => undefined,
+      via: "socket",
       principal: "operator",
       role: "admin",
     } as const;
@@ -2882,7 +3093,7 @@ describe("startDaemon with the agent-device edge", () => {
             ).findings
               .filter((finding) => finding.kind === "module-unavailable")
               .map((finding) => finding.module),
-          { timeout: 5_000 },
+          { timeout: 4_000 },
         )
         .toEqual(["agent-device", "alpha"]);
     });
@@ -2977,7 +3188,12 @@ describe("startDaemon host load", () => {
     return (await daemon.dispatch(
       "status.get",
       {},
-      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
     )) as Record<string, unknown>;
   }
 
@@ -3187,6 +3403,7 @@ describe("startDaemon in gateway mode host load", () => {
   };
   const operator = {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "test-operator",
     role: "admin",
   } as const;

@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Deliver a ready issue end to end, unattended — a task, a bug, or a whole feature:planned feature (walk its ready tasks in dependency order, two at a time). Claims, delegates implement, review and hardware checks to background agents (two issues at once), reports progress as it goes, reasons only over their report blocks, and merges through the gate (a feature's PRs stack and merge together at the end). Use when the user says "deliver #N", "pick up the next ready issue", or "ship #N".
+description: Deliver a ready task, bug or planned feature end to end, unattended — claim, delegate implement, review and hardware stages to background agents, and merge through the gate. Use when the user says "deliver #N", "ship #N" or "pick up the next ready issue".
 model: opus
 effort: medium
 ---
@@ -15,9 +15,10 @@ rules 1, 2, 3, 9, 14, 15 and 16.
 **Delegating.** Start each stage with the Agent tool, in the background:
 `subagent_type` `implementer`, `reviewer` or `hardware-verifier`; a short
 `description` naming the issue and stage (`#362 implement`); and a prompt
-of `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
+whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
+then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
-report (`map`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
+report (`remaining`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
 `previous` plus the resolution ledger. No prose, and no
 reminders of what the agent's own instructions already say. Never pass a
 model or `isolation`: every stage of a task works in the task's one
@@ -134,24 +135,17 @@ gh issue view <N> --json number,title,labels,assignees,body
 
 Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
 `<kind>/<N>`. A task of a feature, or an issue whose feature has an open
-ADR PR, is stacked (step 3): its red stage gets `base:` and its PR waits
+ADR PR, is stacked (step 3): its build stage gets `base:` and its PR waits
 in the stack instead of the gate. If it already has a PR, read the PR body's `### Status`
 section and the latest `## Handoff` comment, and go on from the next stage
 they name; never build again or restart review at round 1.
 
-1. **Implement**, one fresh `implementer` per mode: `mode: red`; then
-   `mode: green` with the report's `map`; while a `green` report still lists
-   `failing` and turned at least one test green since the last, another
-   `green` with its `map`; then `mode: audit` with the actual PR base/merge-base/head from
-   `review-inputs.sh`. An audit run takes no
-   `fixes`: an agent given both does the fixes and skips the audit, so a
-   CI failure waits for the fix run after the audit (item 2). `spec needs`
-   under `open` in any report: decide, then tell (above).
-2. **Review**: `reviewer` with the PR number. The diff's kind sets which
-   reviews run (rule 14): a tests-only or docs-only diff gets fewer, a
-   risk and test complexity select additional lenses, not size alone.
-   Use `docs/internal/REVIEW.md` for routing and metrics.
-   Before every review round
+1. **Implement**, one fresh `implementer` per mode, in the **Order**
+   `implementer.md` gives. An audit run takes no `fixes`, so a CI failure
+   waits for the fix run after the audit (item 2). `spec needs` under
+   `open` in any report: decide, then tell (above).
+2. **Review**: `reviewer` with the PR number; it picks the lenses
+   (`docs/internal/REVIEW.md`). Before every review round
    and every fix run, run `node .agents/scripts/ci-failures.mjs <M>` and
    `gh pr view <M> --json mergeable` once. The script reads the newest
    finished CI run, which is often older than the head: newer pushes cancel
@@ -165,17 +159,16 @@ they name; never build again or restart review at round 1.
      is neither a defect nor a pass.
    - Fix lines with `Rerun: round 2` or `fix-check`: one consolidated fix
      run with the immutable base/merge-base, `previous <Commit>`, ledger
-     and findings. Audit only `previous..new-head` and affected contracts.
-     Invoke targeted lenses from actual impacts; test assertions need code
-     recheck, acceptance changes spec, affected claims claims.
+     and findings, then `reviewer` with the round `Rerun` names.
    - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
      at the cap: park. Mechanical changes get a coordinator diff check.
    - Commits after reviews passed, including conflict resolutions and CI
      test fixes, need the applicable targeted fix-check before the gate.
      A clean base merge alone needs no repeat review; record its new head
      and base and let CI check it. Never silently reset the round cap.
-   - After each check persist the resolution ledger, all invocation metrics
-     (fix-check included), counts and dispositions in `## Review`.
+   - After each check persist the resolution ledger, the findings file
+     (`docs/internal/REVIEW.md`, "Measurement"), counts and dispositions in
+     `## Review`.
    - Out of scope lines may become separate issues only when verified as
      pre-existing and unrelated. New PR regressions block even if found late.
    - Spec needs: decide, then tell (above), before the fix run.
@@ -201,6 +194,7 @@ they name; never build again or restart review at round 1.
 
    Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes.
    Rounds: <n>. Tokens: <t>M.
+   <the first line review-metrics.mjs prints: Runs: … Cost USD: … Agent seconds: …>
 
    Rejected:
 
@@ -211,8 +205,8 @@ they name; never build again or restart review at round 1.
    `<m>` those confirmed and fixed, `<k>` its notes; `skipped` in place of
    the counts for a review the diff's kind left out (for an ADR-only diff:
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
-   legacy full/targeted rounds, 1 or 2; record fix-check invocations separately
-   with the metrics ledger and summary from `review-metrics.mjs`. Add
+   legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
+   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included. Add
    `Assessment: complete` only when coverage is complete and no finding is
    open; otherwise `Assessment: incomplete` and park. `<t>` is
    `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
@@ -289,7 +283,7 @@ Runnable: open, `task:ready`, unassigned, and every issue under its Depends
 on closed or a task of this feature whose PR passed review (open, not a
 draft). Check the Depends on yourself; no workflow promotes tasks.
 
-- A task's red stage gets `base: <branch of the stack's top PR>`; with no
+- A task's build stage gets `base: <branch of the stack's top PR>`; with no
   PR yet, no `base` (it starts from `main`).
 - Its review passed (step 2, item 6): `gh pr ready <M>` and `gh stack link
 <PR below> <M>` (PR numbers, bottom to top; none below yet: nothing to

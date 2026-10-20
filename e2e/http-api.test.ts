@@ -1,7 +1,8 @@
 import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import type { TestEnv } from "./helpers/env.js";
 
 /**
  * Reserves a free TCP port by binding to port 0 and releasing it immediately. Config
@@ -557,5 +558,81 @@ describe("HTTP API", () => {
     expect(await second.json()).toMatchObject({
       error: { code: "LEASE_ID_TAKEN", leaseId: "ad-7f3a" },
     });
+  });
+
+  describe("GET /v1/stats", () => {
+    const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
+
+    async function runScript(env: TestEnv): Promise<{ from: string; to: string }> {
+      const from = new Date(Date.now() - 2_000).toISOString();
+      const leased = await env.cli([...LEASE, "--agent-id", "agent-a", "--detach"], {
+        timeout: 60_000,
+      });
+      expect(leased.code).toBe(0);
+      expect(
+        (await env.cli(["release", (leased.json as { lease: { id: string } }).lease.id])).code,
+      ).toBe(0);
+      return { from, to: new Date().toISOString() };
+    }
+
+    async function expectRouteAgreesWithCli(env: TestEnv, port: number) {
+      const operator = (await env.cli(["token", "create", "--role", "operator"])).json as {
+        secret: string;
+      };
+      const agent = (await env.cli(["token", "create", "--role", "agent"])).json as {
+        secret: string;
+      };
+      const { from, to } = await runScript(env);
+      const base = `http://127.0.0.1:${port}/v1/stats?from=${from}&to=${to}`;
+      const operatorAuth = { authorization: `Bearer ${operator.secret}` };
+
+      const route = await fetch(base, { headers: operatorAuth });
+      const withLedger = await fetch(`${base}&ledger=1`, { headers: operatorAuth });
+      const asAgent = await fetch(base, { headers: { authorization: `Bearer ${agent.secret}` } });
+      const cli = await env.cli(["stats", "--from", from, "--to", to, "--json"]);
+
+      expect(route.status).toBe(200);
+      const body = (await route.json()) as { totals: { requests: number } };
+      expect(body).toEqual(cli.json);
+      expect(body).not.toHaveProperty("requests");
+      expect(withLedger.status).toBe(200);
+      const ledgered = (await withLedger.json()) as { requests: { requestId: string }[] };
+      expect(ledgered.requests).toHaveLength(body.totals.requests);
+      expect(asAgent.status).toBe(403);
+    }
+
+    it("with an operator token returns the same body as simlock stats --json for a fixed from/to, without requests, and &ledger=1 adds them, on a single host; an agent token gets 403", async () => {
+      const { env, port } = await withHttpDaemon((port) => ({
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
+      }));
+
+      await expectRouteAgreesWithCli(env, port);
+    }, 240_000);
+
+    it("with an operator token returns the same body as simlock stats --json for a fixed from/to, without requests, and &ledger=1 adds them, on a gateway with one worker; an agent token gets 403", async () => {
+      const { env: gateway, port } = await withHttpDaemon((port) => ({
+        configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+        driver: "none",
+      }));
+      const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+      const { secret } = minted.json as { secret: string };
+      await withDaemon({
+        configOverrides: {
+          gateway: { label: "worker-a", token: secret, url: `ws://127.0.0.1:${port}` },
+        },
+        driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
+      });
+      await waitFor(
+        async () => {
+          const list = await gateway.cli(["worker", "list", "--json"]);
+          const workers = (list.json as { workers: { connection: string }[] }).workers;
+          return workers.length === 1 && workers[0]?.connection === "connected";
+        },
+        { label: "the worker joined", timeout: 30_000 },
+      );
+
+      await expectRouteAgreesWithCli(gateway, port);
+    }, 240_000);
   });
 });

@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { readHistoryEvents } from "../src/history/testing.js";
 import { type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
 
 interface Envelope {
@@ -43,12 +44,12 @@ function parseLines(contents: string): Envelope[] {
 }
 
 async function eventFile(env: TestEnv): Promise<Envelope[]> {
-  const path = join(env.home, "events.jsonl");
-  let rotated = "";
-  for (let generation = 1; existsSync(`${path}.${generation}`); generation++) {
-    rotated = (await readFile(`${path}.${generation}`, "utf8")) + rotated;
-  }
-  return parseLines(rotated + (await readFile(path, "utf8")));
+  return (await readHistoryEvents(env.home)) as unknown as Envelope[];
+}
+
+async function stopDaemon(env: TestEnv): Promise<void> {
+  await env.cli(["daemon", "stop"]);
+  await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
 }
 
 function grantOf(events: readonly Envelope[], leaseId: string): Envelope | undefined {
@@ -58,18 +59,23 @@ function grantOf(events: readonly Envelope[], leaseId: string): Envelope | undef
 }
 
 describe("event history", () => {
-  it("prints a lease granted before a daemon restart with simlock events --since 1h after it", async () => {
+  it("prints a lease granted before a daemon restart with its id with simlock events --since 1h, with the daemon running and with it stopped", async () => {
     const env = await withDaemon();
     await prepare(env);
     const leaseId = await leaseDevice(env);
     const before = grantOf(await eventFile(env), leaseId);
-    expect(before).toBeDefined();
+    expect(before?.id).toMatch(/^evt_[A-Za-z0-9_-]{1,64}$/);
 
     await env.restartDaemon();
-    const history = await env.cli(["events", "--since", "1h"]);
+    const running = await env.cli(["events", "--since", "1h"]);
+    await stopDaemon(env);
+    const stopped = await env.cli(["events", "--since", "1h"]);
 
-    expect(history.code).toBe(0);
-    expect(grantOf(parseLines(history.stdout), leaseId)).toEqual(before);
+    expect(running.code).toBe(0);
+    expect(grantOf(parseLines(running.stdout), leaseId)).toEqual(before);
+    expect(stopped.code).toBe(0);
+    expect(grantOf(parseLines(stopped.stdout), leaseId)).toEqual(before);
+    expect(existsSync(env.socketPath)).toBe(false);
   });
 
   it("simlock events --since 1h after a daemon restart prints each event with the id it had before the restart", async () => {
@@ -139,8 +145,7 @@ describe("event history", () => {
     const env = await withDaemon();
     await prepare(env);
     const leaseId = await leaseDevice(env);
-    await env.cli(["daemon", "stop"]);
-    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+    await stopDaemon(env);
 
     const history = await env.cli(["events", "--since", "1h"]);
 
@@ -151,76 +156,90 @@ describe("event history", () => {
     expect(status.json).toEqual({ status: "stopped" });
   });
 
-  it("keeps no more than two generations beside events.jsonl when eventLog.maxBytes is twice eventLog.rotateBytes, holding the newest event", async () => {
-    const rotateBytes = 2 * 1024;
-    const env = await withDaemon({
-      configOverrides: { eventLog: { maxBytes: 2 * rotateBytes, rotateBytes } },
-    });
-    await prepare(env);
-    let lastLeaseId = "";
-    for (let round = 0; round < 12; round++) {
-      lastLeaseId = await leaseDevice(env);
-      expect((await env.cli(["release", lastLeaseId])).code).toBe(0);
-    }
-
-    const path = join(env.home, "events.jsonl");
-    await waitFor(
-      async () =>
-        (await eventFile(env)).some(
-          (entry) => entry.event === "lease.released" && entry.payload.leaseId === lastLeaseId,
-        ),
-      { label: "the last release in the event file" },
+  it("writes history.db and no events.jsonl in a fresh data directory, and leaves an events.jsonl placed there before the start byte-identical", async () => {
+    const fresh = await withDaemon();
+    const placed = await withDaemon({ mode: "auto" });
+    const legacy = Buffer.from(
+      `${JSON.stringify({ id: "evt_old", seq: 1, timestamp: 1 })}\nnot json\n`,
     );
-    expect(existsSync(`${path}.1`)).toBe(true);
-    const beside = (await readdir(env.home)).filter((name) => /^events\.jsonl\.\d+$/.test(name));
-    expect(beside.length).toBeLessThanOrEqual(2);
-    let total = (await stat(path)).size;
-    for (const name of beside) total += (await stat(join(env.home, name))).size;
-    expect(total).toBeLessThanOrEqual(3 * rotateBytes);
-  });
+    await writeFile(join(placed.home, "events.jsonl"), legacy);
 
-  it("simlock events --since 7d with the daemon stopped reads events from a generation older than .1", async () => {
-    const env = await withDaemon({ configOverrides: { eventLog: { rotateBytes: 2 * 1024 } } });
-    await prepare(env);
-    const firstLeaseId = await leaseDevice(env);
-    expect((await env.cli(["release", firstLeaseId])).code).toBe(0);
-    for (let round = 0; round < 6; round++) {
-      expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
-    }
-    const path = join(env.home, "events.jsonl");
-    expect(existsSync(`${path}.3`)).toBe(true);
-    await env.cli(["daemon", "stop"]);
-    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+    await placed.startDaemon();
 
-    const history = await env.cli(["events", "--since", "7d"]);
-
-    expect(history.code).toBe(0);
-    expect(grantOf(parseLines(history.stdout), firstLeaseId)).toBeDefined();
-    const ids = parseLines(history.stdout).map((entry) => entry.id);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it("deletes every generation holding only first-run events once eventLog.retention has passed and the file rotates again", async () => {
-    const env = await withDaemon({
-      configOverrides: { eventLog: { retention: 5_000, rotateBytes: 2 * 1024 } },
+    await waitFor(() => existsSync(join(fresh.home, "history.db")), {
+      label: "history.db written",
+      timeout: 10_000,
     });
+    expect(existsSync(join(fresh.home, "events.jsonl"))).toBe(false);
+    await waitFor(() => existsSync(join(placed.home, "history.db")), {
+      label: "history.db written",
+      timeout: 10_000,
+    });
+    expect(await readFile(join(placed.home, "events.jsonl"))).toEqual(legacy);
+  });
+
+  it("with eventLog.retention a few seconds, events of a first run are gone after the next start's prune, and a second run's are there", async () => {
+    const env = await withDaemon({ configOverrides: { eventLog: { retention: 5_000 } } });
     await prepare(env);
-    const path = join(env.home, "events.jsonl");
     const firstLeaseId = await leaseDevice(env);
-    expect((await env.cli(["release", firstLeaseId])).code).toBe(0);
-    for (let round = 0; round < 6; round++) {
-      expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
-    }
-    expect(existsSync(`${path}.2`)).toBe(true);
     expect(grantOf(await eventFile(env), firstLeaseId)).toBeDefined();
+    await stopDaemon(env);
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
 
-    await waitFor(
-      async () => {
-        expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
-        return grantOf(await eventFile(env), firstLeaseId) === undefined;
-      },
-      { label: "the first run's events deleted after retention", timeout: 60_000 },
+    await env.startDaemon();
+    const secondLeaseId = await leaseDevice(env);
+
+    const history = await eventFile(env);
+    expect(grantOf(history, firstLeaseId)).toBeUndefined();
+    expect(grantOf(history, secondLeaseId)).toBeDefined();
+  }, 60_000);
+
+  it("a history.db overwritten with junk while the daemon is stopped is renamed aside at the next start, a lease is granted, and simlock status prints the set-aside line", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    await leaseDevice(env);
+    await stopDaemon(env);
+    const junk = "this is not a sqlite database ".repeat(20);
+    await writeFile(join(env.home, "history.db"), junk);
+
+    await env.startDaemon();
+    const leaseId = await leaseDevice(env);
+
+    const status = await env.cli(["status"]);
+    const aside = (await readdir(env.home)).filter((name) =>
+      /^history\.db\.damaged-\d+$/.test(name),
     );
+    expect(status.stdout).toContain("History: the event history was damaged and set aside at ");
+    expect(aside).toHaveLength(1);
+    expect(await readFile(join(env.home, aside[0]!), "utf8")).toBe(junk);
+    expect(grantOf(await eventFile(env), leaseId)).toBeDefined();
+  });
+
+  it("the daemon and the CLI print no ExperimentalWarning for SQLite, and another warning still prints", async () => {
+    const env = await withDaemon({ mode: "auto" });
+    const warner = join(env.home, "warn.cjs");
+    await writeFile(warner, 'process.emitWarning("simlock-e2e-other-warning");\n');
+    const options = { env: { NODE_OPTIONS: `--require ${warner}` } };
+
+    await env.cli(["daemon", "start"], options);
+    await waitFor(() => existsSync(join(env.home, "history.db")), {
+      label: "history.db written",
+      timeout: 10_000,
+    });
+    await waitFor(
+      async () => (await readFile(env.logPath, "utf8")).includes("simlock-e2e-other-warning"),
+      {
+        label: "the daemon's other warning in daemon.log",
+      },
+    );
+    await stopDaemon(env);
+    const events = await env.cli(["events", "--since", "1h"], options);
+
+    const daemonLog = await readFile(env.logPath, "utf8");
+    expect(daemonLog).not.toContain("SQLite is an experimental feature");
+    expect(events.code).toBe(0);
+    expect(events.stderr).toContain("simlock-e2e-other-warning");
+    expect(events.stderr).not.toContain("SQLite is an experimental feature");
   });
 
   it("keeps every emitted event in the event file after daemon.log rotates", async () => {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import type { Clock, TimerHandle } from "../../ports/index.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
 import { agentDeviceLeaseMaxTtlMs } from "../shared/daemon-environment.js";
@@ -128,19 +128,19 @@ export class RelayHostLink implements HostLink {
     });
   }
 
-  status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus> {
+  status(leaseId?: string, identity?: Identity): Promise<LinkStatus> {
     if (leaseId === undefined || identity === undefined) return Promise.resolve(this.#anyStatus());
     const placed = this.#place(leaseId);
     if (placed === undefined && this.#inStartWindow()) return Promise.resolve(UNREACHABLE);
-    if (placed?.ownerId !== identity.requesterId) return Promise.resolve(this.#anyStatus());
+    if (placed?.ownerId !== identity.principal) return Promise.resolve(this.#anyStatus());
     return Promise.resolve(this.#holderStatus(placed));
   }
 
-  async forward(request: Request, identity: TokenIdentity, leaseId?: string): Promise<Response> {
-    const tenant = relayTenant(this.options.fleet.instanceId, identity.requesterId);
+  async forward(request: Request, identity: Identity, leaseId?: string): Promise<Response> {
+    const tenant = relayTenant(this.options.fleet.instanceId, identity.principal);
     if (leaseId === undefined) return this.#forwardBare(request, tenant);
     const placed = this.#place(leaseId);
-    if (placed === undefined || placed.ownerId !== identity.requesterId) {
+    if (placed === undefined || placed.ownerId !== identity.principal) {
       return refuseRequest(request, notYours(leaseId), FORBIDDEN);
     }
     return this.#relay(placed.workerId, request, tenant, leaseId);
@@ -150,8 +150,8 @@ export class RelayHostLink implements HostLink {
     this.#asked.add(leaseId);
   }
 
-  adoptable(identity: TokenIdentity): readonly AdoptableLease[] {
-    return this.options.fleet.leasesOf(identity.requesterId).flatMap((facts) => {
+  adoptable(identity: Identity): readonly AdoptableLease[] {
+    return this.options.fleet.leasesOf(identity.principal).flatMap((facts) => {
       const { listed } = facts;
       if (
         facts.requesterId !== facts.leaseId ||

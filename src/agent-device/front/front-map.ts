@@ -1,4 +1,4 @@
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import type { Clock } from "../../ports/index.js";
 
 const MAX_PRINCIPALS_PER_REFRESH = 100;
@@ -14,7 +14,7 @@ interface DeviceFacts {
 }
 
 export interface FrontMapEntry extends DeviceFacts {
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly address: string;
   readonly ttlMs: number;
   readonly deadline: number;
@@ -23,7 +23,7 @@ export interface FrontMapEntry extends DeviceFacts {
 export type EndedBy = "agent" | "simlock";
 
 export interface HeldView extends DeviceFacts {
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly address: string;
   readonly ttlMs: number;
   readonly endedAt?: number;
@@ -37,7 +37,7 @@ export interface ListedLease {
 
 interface Held extends Omit<DeviceFacts, "deviceKey"> {
   deviceKey?: string;
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly address: string;
   ttlMs: number;
   deadline: number;
@@ -79,7 +79,7 @@ export class FrontMap {
   liveOf(requesterId: string): readonly (HeldView & { readonly leaseId: string })[] {
     this.#prune();
     return [...this.#held]
-      .filter(([, held]) => held.identity.requesterId === requesterId && held.endedAt === undefined)
+      .filter(([, held]) => held.identity.principal === requesterId && held.endedAt === undefined)
       .map(([leaseId, held]) => ({ ...held, leaseId }));
   }
 
@@ -112,18 +112,15 @@ export class FrontMap {
     held.releasing = false;
   }
 
-  async refresh(list: (identity: TokenIdentity) => Promise<readonly ListedLease[]>): Promise<void> {
+  async refresh(list: (identity: Identity) => Promise<readonly ListedLease[]>): Promise<void> {
     this.#prune();
     const now = this.clock.now();
-    const byPrincipal = new Map<
-      string,
-      { identity: TokenIdentity; oldest: number; ids: string[] }
-    >();
+    const byPrincipal = new Map<string, { identity: Identity; oldest: number; ids: string[] }>();
     for (const [id, held] of this.#held) {
       if (held.endedAt !== undefined || held.deadline > now) continue;
-      const group = byPrincipal.get(held.identity.requesterId);
+      const group = byPrincipal.get(held.identity.principal);
       if (group === undefined) {
-        byPrincipal.set(held.identity.requesterId, {
+        byPrincipal.set(held.identity.principal, {
           identity: held.identity,
           ids: [id],
           oldest: held.deadline,

@@ -29,10 +29,9 @@ describe("the one daemon module the gateway imports", () => {
 });
 
 describe("the relay is the bus's only republisher", () => {
-  // ADR 0014 §2: `republish` carries a worker's id and timestamp, so it is not a second way to
-  // state a fact. Counted over every non-test source file, `src/bus` included.
   it("only the gateway's worker link calls republish", () => {
     const callers = sourceFilesRecursive(srcDir)
+      .filter((file) => !/(^|\/)(testing|test-[^/]+)\.ts$/.test(file))
       .filter((file) => /\.republish\s*[<(]/.test(stripComments(readFileSync(file, "utf8"))))
       .map((file) => relative(srcDir, file));
 

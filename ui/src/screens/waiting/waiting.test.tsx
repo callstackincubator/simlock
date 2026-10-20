@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { Paging } from "../../ds";
+import { figuresOf, waitTile } from "../../model/figures";
+import { statsOf } from "../../model/test-support";
 import { chooseWaiting, type WaitingRequest, waitingTable } from "../../model/waiting";
 import type { WaitingPage } from "../../state/waiting";
 import { WaitingBody } from ".";
@@ -40,6 +42,7 @@ function pageOf(requests: readonly WaitingRequest[], id?: string): WaitingPage {
     named: id !== undefined,
     paging: { ...PAGING, total: table.rows.length },
     rows: table.rows,
+    wait: { kind: "loading" },
   };
 }
 
@@ -83,6 +86,21 @@ describe("the Waiting screen", () => {
     expect(text(html)).toContain("Stage queued");
     expect(text(html)).toContain("Request req_1");
     expect(text(html)).toContain("Created 2026-10-02 11:58:45 UTC");
+  });
+
+  it("shows a Why fact after Queue with the reason's text, and none for a request that is starting", () => {
+    const queued = request({
+      reason: "platform-running-limit",
+    } as unknown as Partial<WaitingRequest>);
+    const starting = request({ stage: "starting" });
+    delete (starting as { queuePosition?: number }).queuePosition;
+
+    const withReason = text(renderToStaticMarkup(<WaitingBody page={pageOf([queued])} />));
+    const without = text(renderToStaticMarkup(<WaitingBody page={pageOf([starting])} />));
+
+    expect(withReason).toContain("Queue the gateway&#x27;s queue Why Full: running limit for iOS");
+    expect(without).toContain("Stage starting");
+    expect(without).not.toContain("Why");
   });
 
   it("links the worker whose queue holds the request, names the gateway's queue when none does, and the raw id of a worker it cannot see", () => {
@@ -142,5 +160,75 @@ describe("the Waiting screen", () => {
     expect(text(html)).toContain("Request not waiting.");
     expect(html).toContain('<a href="/waiting">Back to waiting</a>');
     expect(html).not.toContain("<h2");
+  });
+});
+
+describe("the Waiting inspector on a gateway", () => {
+  it("shows one row per worker, labelled by the worker's name, with the reason's text", () => {
+    const queued = request({
+      workers: [
+        { reason: "drained", workerId: "wrk_1" },
+        { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_2" },
+      ],
+    });
+    const table = waitingTable(
+      [queued],
+      [
+        {
+          catalog: [],
+          connection: "connected",
+          devices: [],
+          drained: true,
+          id: "wrk_1",
+          label: "mac-mini-1",
+          lastSeenAt: NOW,
+          leases: [],
+        },
+      ],
+      NOW,
+    );
+    const page: WaitingPage = {
+      ...chooseWaiting(table.rows, undefined, table.rows),
+      count: 1,
+      meta: table.meta,
+      named: false,
+      paging: PAGING,
+      rows: table.rows,
+      wait: { kind: "loading" },
+    };
+
+    const body = text(renderToStaticMarkup(<WaitingBody page={page} />));
+
+    expect(body).toContain("mac-mini-1 Drained");
+    expect(body).toContain("wrk_2 Full: running limit for iOS");
+  });
+
+  it("shows the Wait p95 tile above its list with no range picker", () => {
+    const stats = statsOf({ bucketMs: 60_000, from: NOW - 3_600_000, to: NOW, waitP95: 38_000 });
+    const page = {
+      ...pageOf([request()]),
+      wait: { data: waitTile(stats, "1h"), kind: "ready" },
+    } as const;
+
+    const html = renderToStaticMarkup(<WaitingBody page={page} />);
+
+    const shown = text(html);
+    expect(shown).toContain("Wait p95 38 s last hour");
+    expect(shown.indexOf("Wait p95")).toBeLessThan(shown.indexOf("agent-b"));
+    expect(html).not.toContain('type="radio"');
+    expect(figuresOf(stats, "1h", NOW).wait).toEqual(waitTile(stats, "1h"));
+  });
+
+  it("leaves the list as it was when the stats read is refused", () => {
+    const page = {
+      ...pageOf([request()]),
+      wait: { kind: "refused", message: "The stats are not allowed." },
+    } as const;
+
+    const shown = text(renderToStaticMarkup(<WaitingBody page={page} />));
+
+    expect(shown).toContain("The stats are not allowed.");
+    expect(shown).toContain("#1 agent-b 1 min 15 s iOS iPhone 16 queued");
+    expect(shown).not.toContain("Wait p95");
   });
 });

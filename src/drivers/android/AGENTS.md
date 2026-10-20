@@ -70,11 +70,13 @@ Boot — `makeReady` (per-device lock):
 Reclaim — `reclaim`:
 
 - `full` → shut down; wipe on the next `makeReady`. Returns `shutdown` / `wipe`.
-- `standard`, hash still matches → `emu avd snapshot load` → readiness → mark. Returns `ready` / `snapshot`.
+- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` → readiness → mark. Returns `ready` / `snapshot`.
 - Hash changed or load failed → as `full`.
 - Physical → uninstall every user app not on the enrollment list. Returns `ready` / `uninstall`.
 
-`shutdown`: `adb emu kill`, wait, SIGKILL. `destroy`: kills only an emulator this process
+Ownership gate: before any `emu kill` or snapshot load, `adb emu avd path` (5 s timeout, asked every time, never cached) must name this device's own AVD directory; unreachable, timed out or another path → nothing is sent (a snapshot reclaim then shuts down and wipes).
+
+`shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills only an emulator this process
 started, then `avdmanager delete avd`, frees the port.
 `listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
 
@@ -143,8 +145,6 @@ Reads only: the user's AVD home, devices.xml, the SDK.
   server with no record is `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
 - **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
   between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
-- **Port checks are partial.** After a restart `shutdown` sends `emu kill` to the stored serial
-  unchecked; reclaim's `snapshot load` goes to the serial before readiness checks it. A port
-  handed out but not yet booted reads free to another instance.
+- **Port checks are partial.** A port handed out but not yet booted reads free to another instance.
 - **Android diagnostics are dropped.** `onDiagnostic` (`snapshot-cold-boot`, unreadable
   devices.xml) is not wired in `daemon/main.ts`.

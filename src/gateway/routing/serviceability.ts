@@ -48,7 +48,7 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
   const answer = assessTable(request, views);
   const requires = request.requires;
   if (answer.kind === "reject" || requires === undefined || requires.length === 0) return answer;
-  const capable = views.filter((worker) => hasCapabilities.keeps(worker, request));
+  const capable = views.filter((worker) => hasCapabilities.check(worker, request) === undefined);
   if (assessTable(request, capable).kind === "route-or-wait") return answer;
   return {
     code: "CAPABILITY_MISSING",
@@ -60,7 +60,7 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
 }
 
 function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
-  const takers = views.filter((worker) => takesRequests.keeps(worker, request));
+  const takers = views.filter((worker) => takesRequests.check(worker, request) === undefined);
   if (takers.length === 0) return noWorker();
 
   const known = views.filter(isKnown);

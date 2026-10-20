@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { OPERATIONS } from "../../contract/index.js";
 import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import type { Clock } from "../../ports/index.js";
 import {
   frontReply,
@@ -135,7 +135,7 @@ type LeaseOutcome =
 // why: a request parked while the daemon starts cannot be called back, so wait on a read that parks at the same gate and give up if the CLI leaves, or a CLI that left would still be admitted.
 async function stillWaiting(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return false;
@@ -156,7 +156,7 @@ function requiresOf(context: FrontContext): { readonly requires?: string[] } {
 
 async function requestLease(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   plan: Plan,
   signal: AbortSignal,
 ): Promise<LeaseOutcome> {
@@ -254,13 +254,13 @@ function forwardedBody(
 
 export interface AllocateArguments {
   readonly request: Request;
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly call: RpcRead & { readonly kind: "request" };
 }
 
 interface Granted {
   readonly request: Request;
-  readonly identity: TokenIdentity;
+  readonly identity: Identity;
   readonly call: RpcRead & { readonly kind: "request" };
   readonly plan: Plan;
   readonly grant: Grant;

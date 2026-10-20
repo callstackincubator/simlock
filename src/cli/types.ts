@@ -44,7 +44,7 @@ export interface CliEnvironment {
   readonly validateConfig: (merged: Record<string, unknown>) => Promise<void>;
   readonly readLogFile?: () => Promise<string>;
   readonly followLogFile?: () => Promise<void>;
-  readonly readEventFile: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
+  readonly readEventHistory: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
   readonly loadMcpStdio?: () => Promise<McpStdioLauncher>;
   readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;

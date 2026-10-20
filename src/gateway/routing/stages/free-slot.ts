@@ -6,12 +6,17 @@ import { freeOrEvictableRunning } from "./free-running.js";
  * it for a request no warm device fits, so passing the worker over would only make the request
  * wait for the idle shutdown. A slot held by a lease or a reservation is taken. */
 export const freeSlot: FilterStage = {
-  keeps(worker, request) {
+  check(worker, request) {
     const capacity = worker.capacity;
-    if (capacity === undefined) return false;
-    const platform = capacity[request.platform];
-    const global = capacity.global;
-    return freeOrEvictableRunning(platform) > 0 && freeOrEvictableRunning(global) > 0;
+    // why: a worker whose capacity was not read has no slot to count; `takes-requests` already drops it.
+    if (capacity === undefined) return { reason: "full" };
+    if (freeOrEvictableRunning(capacity[request.platform]) <= 0) {
+      return { capacityReason: "platform-running-limit", reason: "full" };
+    }
+    if (freeOrEvictableRunning(capacity.global) <= 0) {
+      return { capacityReason: "global-running-limit", reason: "full" };
+    }
+    return undefined;
   },
   appliesToPhysical: false,
   kind: "filter",

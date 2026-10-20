@@ -1,5 +1,5 @@
-// why: `--since` without `--follow` never launches a daemon -- with none running the event file
-// is read here instead, through the bus's own reader, loaded only for that path.
+// why: `--since` without `--follow` never launches a daemon -- with none running the event history
+// is read here instead, through the history reader, loaded only for that path.
 import { parseDuration } from "../duration.js";
 import { asDaemonRefusal } from "../errors.js";
 import { connectDaemonClient } from "../connect.js";
@@ -52,7 +52,7 @@ async function connectForEvents(
     return await connectDaemonClient(environment, token, { launch: false });
   } catch (error: unknown) {
     if ((await asDaemonRefusal(error)) !== undefined) throw error;
-    for (const event of await environment.readEventFile(historySinceTs))
+    for (const event of await environment.readEventHistory(historySinceTs))
       writeResult((value) => environment.stdout.write(value), event);
     return undefined;
   }

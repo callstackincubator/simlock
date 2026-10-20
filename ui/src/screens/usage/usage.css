@@ -1,0 +1,31 @@
+.usage-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.usage-range p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.usage-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: var(--space-3);
+}
+
+.usage-panels > * {
+  min-width: 0;
+}
+
+.usage-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.usage-id {
+  margin-left: var(--space-2);
+}

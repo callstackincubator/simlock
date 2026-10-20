@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { TokenIdentity } from "../../http/token-store.js";
+import { tokenIdentity } from "../../auth/testing.js";
+import type { Identity } from "../../auth/index.js";
 import { FakeClock } from "../../ports/index.js";
 import type { FrontContext } from "./context.js";
 import { FrontMap } from "./front-map.js";
 import { Renewals } from "./renewals.js";
 
-const agent: TokenIdentity = { requesterId: "tok_a", role: "agent" };
+const agent: Identity = tokenIdentity("tok_a");
 const longestTimerDelayMs = 2 ** 31 - 1;
 
 describe("the renewals", () => {
@@ -23,7 +24,7 @@ describe("the renewals", () => {
     const renewals = new Renewals(clock);
     const context = { map } as unknown as FrontContext;
 
-    renewals.begin(context, "lease-a", agent.requesterId, 2 ** 40);
+    renewals.begin(context, "lease-a", agent.principal, 2 ** 40);
 
     expect(delays.length).toBeGreaterThanOrEqual(2);
     expect(Math.max(...delays)).toBeLessThanOrEqual(longestTimerDelayMs);
@@ -36,7 +37,7 @@ describe("the renewals", () => {
     map.add("lease-a", { address: "addr", deadline: 9e12, identity: agent, ttlMs: 60_000 });
     const renewals = new Renewals(clock);
     const context = { map } as unknown as FrontContext;
-    renewals.begin(context, "lease-a", agent.requesterId, 1_800_000);
+    renewals.begin(context, "lease-a", agent.principal, 1_800_000);
     expect(clock.pendingTimerCount).toBe(2);
 
     map.markEnded("lease-a");

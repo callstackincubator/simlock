@@ -23,12 +23,13 @@ async function freeLoopbackPort(): Promise<number> {
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
+  via: "socket",
   principal: "test-operator",
   role: "admin",
 };
 
 function agent(principal: string): DispatchSession {
-  return { manageEventSubscription: () => undefined, principal, role: "agent" };
+  return { manageEventSubscription: () => undefined, via: "socket", principal, role: "agent" };
 }
 
 type CapabilityState = "available" | "off" | "unavailable";
