@@ -249,6 +249,28 @@ describe("alerts", () => {
     ]);
   });
 
+  it("builds a message when it leaves the queue and resends the same body on later tries", async () => {
+    const h = harness([slackDestination({ events: ["worker.drain-started"] })]);
+    const first = deferred();
+    h.poster.respond = (_request, index) =>
+      index === 0 ? first.promise : Promise.resolve({ status: 503 });
+    h.labels.set("wrk_1", "old-name");
+    h.emit("worker.drain-started", { workerId: "wrk_0" });
+    await settle();
+    h.emit("worker.drain-started", { workerId: "wrk_1" });
+    h.labels.set("wrk_1", "new-name");
+    first.resolve({ status: 200 });
+    await settle();
+    h.labels.set("wrk_1", "newer-name");
+    await h.advance(1_000);
+
+    const texts = h.poster.requests.slice(1).map((request) => JSON.parse(request.body).text);
+    expect(texts).toEqual([
+      "⏸ Worker new-name is drained: it takes no new leases.",
+      "⏸ Worker new-name is drained: it takes no new leases.",
+    ]);
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
