@@ -86,7 +86,7 @@ export type AlertTestOutcome =
   | { readonly ok: true; readonly status: number }
   | {
       readonly ok: false;
-      readonly reason: "unknown-destination" | "status" | "unreachable" | "timeout";
+      readonly reason: "unknown-destination" | "stopped" | "status" | "unreachable" | "timeout";
       readonly status?: number;
       readonly error?: string;
     };
@@ -159,6 +159,8 @@ function alertTestError(
         `No alert destination named "${destination}". Check gateway.alerts.destinations in the gateway's config.`,
         { destination },
       );
+    case "stopped":
+      return new DispatchError("DAEMON_STOPPING", "Gateway is stopping");
     case "status":
       return new DispatchError(
         "ALERT_SEND_FAILED",

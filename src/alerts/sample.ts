@@ -9,7 +9,7 @@ export type AlertTestResult =
   | { readonly ok: true; readonly status: number }
   | {
       readonly ok: false;
-      readonly reason: "unknown-destination" | "status" | "unreachable" | "timeout";
+      readonly reason: "unknown-destination" | "stopped" | "status" | "unreachable" | "timeout";
       readonly status?: number;
       readonly error?: string;
     };
@@ -19,10 +19,11 @@ export function sendTest(options: {
   poster: WebhookPoster;
   clock: Clock;
   idGenerator: IdGenerator;
+  stopSignal: AbortSignal;
   version: string;
   workerLabel(workerId: string): string;
 }): Promise<AlertTestResult> {
-  const { destination, poster, clock, idGenerator, version, workerLabel } = options;
+  const { destination, poster, clock, idGenerator, stopSignal, version, workerLabel } = options;
   const request = ALERT_FORMAT_REGISTRY[destination.format].build({
     envelope: {
       id: `evt_${idGenerator.generate()}`,
@@ -40,12 +41,18 @@ export function sendTest(options: {
   return new Promise((resolve) => {
     const timer = clock.setTimer(TEST_TIMEOUT_MS, () => {
       controller.abort();
-      resolve({ ok: false, reason: "timeout" });
+      settle({ ok: false, reason: "timeout" });
     });
     const settle = (result: AlertTestResult): void => {
       clock.cancel(timer);
+      stopSignal.removeEventListener("abort", onStop);
       resolve(result);
     };
+    const onStop = (): void => {
+      controller.abort();
+      settle({ ok: false, reason: "stopped" });
+    };
+    stopSignal.addEventListener("abort", onStop, { once: true });
     let pending: Promise<{ status: number }>;
     try {
       pending = poster.post({

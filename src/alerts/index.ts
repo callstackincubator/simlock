@@ -24,6 +24,7 @@ export function createAlerts(options: {
 }): Alerts {
   const { destinations, eventBus, poster, clock, idGenerator, logger, version } = options;
   const workerLabel = (workerId: string): string => options.workerLabel(workerId) ?? workerId;
+  const stopController = new AbortController();
   const queues = destinations.map(
     (destination) =>
       new DestinationQueue({ destination, poster, clock, logger, version, workerLabel }),
@@ -44,9 +45,18 @@ export function createAlerts(options: {
       const destination = destinations.find((each) => each.name === name);
       if (destination === undefined)
         return Promise.resolve({ ok: false, reason: "unknown-destination" });
-      return sendTest({ destination, poster, clock, idGenerator, version, workerLabel });
+      return sendTest({
+        destination,
+        poster,
+        clock,
+        idGenerator,
+        stopSignal: stopController.signal,
+        version,
+        workerLabel,
+      });
     },
     stop() {
+      stopController.abort();
       for (const unsubscribe of unsubscribes) unsubscribe();
       const discarded: Record<string, number> = {};
       for (const queue of queues) {
