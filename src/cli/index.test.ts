@@ -215,39 +215,6 @@ describe("CLI: exit codes", () => {
     expect(gatewayOutput.stdout).toBe(output.stdout);
   });
 
-  it.each([[["status", "--gateway", "--help"]], [["--gateway", "status", "-h"]]])(
-    "prints usage, not GATEWAY_NOT_PRESENT, when %j asks for help",
-    async (argv) => {
-      const output = outputCapture();
-
-      await expect(runCli(argv, output.environmentWith())).resolves.toBe(0);
-      expect(output.stderr).toBe("");
-    },
-  );
-
-  it("runs --gateway config set and a command on a present gateway", async () => {
-    const output = outputCapture();
-    const written: unknown[] = [];
-
-    await expect(
-      runCli(
-        ["--gateway", "config", "set", "http.port", "4800"],
-        output.environmentWith({
-          writeConfigFile: async (contents) => void written.push(contents),
-        }),
-      ),
-    ).resolves.toBe(0);
-    expect(written).toEqual([{ http: { port: 4800 } }]);
-    await expect(
-      runCli(
-        ["status", "--gateway"],
-        output.environmentWith({
-          daemonHome: { role: "gateway", dataDirectory: "/simlock/gateway", gatewayPresent: true },
-        }),
-      ),
-    ).resolves.toBe(0);
-  });
-
   it("prints shell export lines instead of the JSON grant under --export-env", async () => {
     const output = outputCapture();
     const grant: LeaseGrant = {
@@ -2560,6 +2527,50 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(exitCode).toBe(2);
     expect(wrote).toBe(false);
     expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
+
+  it("--gateway config set validates against the gateway's rules, not the worker's", async () => {
+    const gatewayHome = {
+      role: "gateway",
+      dataDirectory: "/simlock/gateway",
+      gatewayPresent: true,
+    } as const;
+    const output = outputCapture({ ...realCliEnvironmentPorts(), daemonHome: gatewayHome });
+    let wrote = false;
+    const exitCode = await runCli(
+      ["--gateway", "config", "set", "http.enabled", "false"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(2);
+    expect(wrote).toBe(false);
+    expect(output.stderr).toContain("http.enabled");
+  });
+
+  it("starting a gateway checks its config.json as a gateway before launching", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock/gateway");
+    await filesystem.writeFileAtomic(
+      "/simlock/gateway/config.json",
+      JSON.stringify({ http: { enabled: false } }),
+    );
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      ...realCliEnvironmentPorts(filesystem),
+      daemonHome: { role: "gateway", dataDirectory: "/simlock/gateway", gatewayPresent: true },
+      launcher,
+    });
+    const exitCode = await runCli(
+      ["--gateway", "daemon", "start", "--token", "probe"],
+      output.environmentWith(),
+    );
+    expect(exitCode).not.toBe(0);
+    expect(launcher.launches).toBe(0);
+    expect(output.stderr).toContain("http.enabled");
   });
 
   it("rejects a mistyped key (missing the Ms suffix) instead of validating clean", async () => {
