@@ -521,4 +521,14 @@ describe("the event feed's loads", () => {
     expect(history.olderReads).toEqual(["/v1/events?limit=100"]);
     expect(recent.olderReads).toEqual([]);
   });
+
+  it("a refused first read on a feed that shows the history asks for the newest page of older events", async () => {
+    const view = openView(
+      () => Promise.reject(new ApiError(500, "INTERNAL", "Internal error")),
+      true,
+    );
+    await settle();
+
+    expect(view.olderReads).toEqual(["/v1/events?limit=100"]);
+  });
 });

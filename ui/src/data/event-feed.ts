@@ -124,6 +124,8 @@ export class EventFeed {
           }
           this.#settled = true;
           this.#publish({ data: this.#events, error });
+          // why: a refused last hour still leaves the older history to show, so it is asked for as for an empty one.
+          if (this.#showsHistory && this.#events.length === 0) this.loadOlder();
         },
       );
   }
