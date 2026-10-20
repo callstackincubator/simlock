@@ -340,6 +340,45 @@ describe("alerts", () => {
     );
   });
 
+  it("cuts every variable part to 300 code points, then escapes &, < and >", async () => {
+    const h = harness([
+      slackDestination({
+        events: ["component.install-failed", "worker.drain-started", "worker.rejected"],
+      }),
+    ]);
+    h.labels.set("wrk_1", "<!channel>");
+    h.labels.set("wrk_2", `${"a".repeat(299)}😀b`);
+    const install = (error: string) =>
+      [
+        "component.install-failed",
+        { workerId: "wrk_0", platform: "ios", componentId: "c", error },
+      ] as const;
+    const cases: [readonly [EventName, Record<string, unknown>], string][] = [
+      [install("<b>&"), "❌ Installing ios c on wrk_0 failed: &lt;b&gt;&amp;."],
+      [
+        ["worker.drain-started", { workerId: "wrk_1" }],
+        "⏸ Worker &lt;!channel&gt; is drained: it takes no new leases.",
+      ],
+      [
+        ["worker.rejected", { reason: "forbidden", label: "<!here>" }],
+        "⛔ A worker was refused (forbidden): &lt;!here&gt;.",
+      ],
+      [install("e".repeat(301)), `❌ Installing ios c on wrk_0 failed: ${"e".repeat(300)}….`],
+      [
+        ["worker.drain-started", { workerId: "wrk_2" }],
+        `⏸ Worker ${"a".repeat(299)}😀… is drained: it takes no new leases.`,
+      ],
+    ];
+    for (const [[event, payload]] of cases) {
+      h.emit(event, payload as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      cases.map(([, text]) => text),
+    );
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
