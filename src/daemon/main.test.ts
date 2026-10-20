@@ -1,3 +1,5 @@
+import { androidDeviceDataTable } from "../drivers/android/index.js";
+import { iosDeviceDataTable } from "../drivers/ios/index.js";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -3734,8 +3736,10 @@ describe("startDaemon state.db", () => {
     expect(await resolveDeviceDataTables({ deviceDataTables: optionMap })).toBe(optionMap);
 
     delete process.env.SIMLOCK_DRIVERS_MODULE;
-    expect(await resolveDeviceDataTables({})).toEqual(productionDeviceDataTables());
-    expect(productionDeviceDataTables().size).toBe(0);
+    const production = await resolveDeviceDataTables({});
+    expect(production).toEqual(productionDeviceDataTables());
+    expect(production.get("ios")).toBe(iosDeviceDataTable);
+    expect(production.get("android")).toBe(androidDeviceDataTable);
 
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       "export function createDrivers() { return []; }",
