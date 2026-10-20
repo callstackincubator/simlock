@@ -15,6 +15,9 @@ const SELECT_CURSOR_SQL = "SELECT timestamp, seq, rowid AS position FROM events 
 const SELECT_BEFORE_SQL =
   "SELECT envelope FROM events WHERE (timestamp, seq, rowid) < (?, ?, ?) ORDER BY timestamp DESC, seq DESC, rowid DESC LIMIT ?";
 
+const SELECT_NEWEST_SQL =
+  "SELECT envelope FROM events ORDER BY timestamp DESC, seq DESC, rowid DESC LIMIT ?";
+
 const SELECT_OLDEST_SQL = "SELECT timestamp FROM events ORDER BY timestamp, seq, rowid LIMIT 1";
 
 export function configureDatabase(database: SqliteDatabase): void {
@@ -62,8 +65,12 @@ export function envelopeSize(json: string): number {
 }
 
 export function selectEventsSince(database: SqliteDatabase, sinceTs: number): EventEnvelope[] {
+  return parseEnvelopes(database.prepare(SELECT_SINCE_SQL).all(sinceTs));
+}
+
+function parseEnvelopes(rows: readonly Record<string, unknown>[]): EventEnvelope[] {
   const events: EventEnvelope[] = [];
-  for (const row of database.prepare(SELECT_SINCE_SQL).all(sinceTs)) {
+  for (const row of rows) {
     const envelope = parseEnvelope(row.envelope);
     if (envelope !== undefined) events.push(envelope);
   }
@@ -77,15 +84,14 @@ export function selectEventsBefore(
 ): EventEnvelope[] | undefined {
   const cursor = database.prepare(SELECT_CURSOR_SQL).get(beforeId);
   if (cursor === undefined) return undefined;
-  const events: EventEnvelope[] = [];
   const rows = database
     .prepare(SELECT_BEFORE_SQL)
     .all(Number(cursor.timestamp), Number(cursor.seq), Number(cursor.position), limit);
-  for (const row of rows) {
-    const envelope = parseEnvelope(row.envelope);
-    if (envelope !== undefined) events.push(envelope);
-  }
-  return events.reverse();
+  return parseEnvelopes(rows).reverse();
+}
+
+export function selectNewestEvents(database: SqliteDatabase, limit: number): EventEnvelope[] {
+  return parseEnvelopes(database.prepare(SELECT_NEWEST_SQL).all(limit)).reverse();
 }
 
 export function selectOldestTimestamp(database: SqliteDatabase): number | undefined {

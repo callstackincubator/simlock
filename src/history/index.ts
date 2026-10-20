@@ -19,6 +19,7 @@ import {
   INSERT_EVENT_SQL,
   selectEventsBefore,
   selectEventsSince,
+  selectNewestEvents,
   selectOldestTimestamp,
 } from "./database.js";
 import { HISTORY_DB_NAME } from "./names.js";
@@ -156,7 +157,7 @@ class EventHistory implements EventHistoryHandle {
     readonly limit: number;
   }): Promise<EventsPageRead> {
     const database = this.#database;
-    if (input.beforeId === undefined) return { events: [], kind: "events" };
+    if (input.beforeId === undefined) return { events: this.#newest(input.limit), kind: "events" };
     if (database === undefined || !this.#readable || !this.#writing) return { kind: "unavailable" };
     try {
       const events = selectEventsBefore(database, input.beforeId, input.limit);
@@ -172,6 +173,21 @@ class EventHistory implements EventHistoryHandle {
       });
       return { kind: "unavailable" };
     }
+  }
+
+  #newest(limit: number): EventEnvelope[] {
+    const database = this.#database;
+    if (database !== undefined && this.#readable && this.#writing) {
+      try {
+        return selectNewestEvents(database, limit);
+      } catch (error: unknown) {
+        this.#options.logger.warn("History read failed; paging from memory", {
+          error: describe(error),
+          path: this.#path,
+        });
+      }
+    }
+    return this.#options.bus.replay().slice(-limit);
   }
 
   async start(): Promise<void> {
