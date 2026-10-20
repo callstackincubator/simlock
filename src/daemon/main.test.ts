@@ -993,7 +993,11 @@ describe("startDaemon wires core and leasing together", () => {
         version: "1.2.3",
       }) as StartDaemonOptions;
     const first = await startDaemon(options());
-    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    // why: several leases, so a reconcile that runs beside core's steps lands some releases after the announcement.
+    const grants: Grant[] = [];
+    for (const requesterId of ["agent-1", "agent-2", "agent-3"]) {
+      grants.push((await first.dispatch("lease.request", { ...ios, requesterId }, agent)) as Grant);
+    }
     await first.stop("test");
     // why: the history orders events by their time, and the second start's must follow the first's.
     clock.advance(1);
@@ -1004,7 +1008,9 @@ describe("startDaemon wires core and leasing together", () => {
     const leases = (await daemon.dispatch("list.get", { kind: "leases" }, admin)) as readonly {
       readonly id: string;
     }[];
-    expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    for (const grant of grants) {
+      expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    }
     const secondRunStart = clock.now();
     const secondRun = (
       await historyEventsWhen(directory, (all) =>
@@ -1016,8 +1022,10 @@ describe("startDaemon wires core and leasing together", () => {
       .filter((event) => event.timestamp >= secondRunStart)
       .sort((left, right) => left.seq - right.seq)
       .map((event) => event.event);
-    expect(secondRun.indexOf("lease.released")).toBeGreaterThan(-1);
-    expect(secondRun.indexOf("lease.released")).toBeLessThan(secondRun.indexOf("capacity.changed"));
+    expect(secondRun.filter((name) => name === "lease.released")).toHaveLength(grants.length);
+    expect(secondRun.lastIndexOf("lease.released")).toBeLessThan(
+      secondRun.indexOf("capacity.changed"),
+    );
   });
 
   it("closes state.db on stop, and lists the same device and lease after a worker is stopped and started again", async () => {
