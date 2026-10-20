@@ -109,7 +109,7 @@ describe("a worker's row in the list", () => {
     const row = workerRow(worker({ drained: true }));
 
     expect(row.health).toEqual({ tone: "warn", word: "drained" });
-    expect(Object.keys(row).sort()).toEqual(["health", "id", "mono", "name", "to", "use"]);
+    expect(JSON.stringify({ ...row, health: undefined })).not.toContain("drained");
   });
 
   it("has no use for a worker that is not connected or has reported no capacity", () => {

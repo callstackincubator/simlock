@@ -101,3 +101,10 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
+
+.worker-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 3rem;
+}

@@ -1,6 +1,17 @@
 import "./fleet.css";
 
-import { ChoiceChips, type Column, DataTable, Link, Loaded, Page, Toolbar } from "../../ds";
+import {
+  ChoiceChips,
+  type Column,
+  DataTable,
+  Link,
+  Loaded,
+  Meter,
+  Page,
+  Slots,
+  Status,
+  Toolbar,
+} from "../../ds";
 import {
   type FleetPage,
   useFleet,
@@ -48,8 +59,20 @@ export function FleetBody({ page }: { readonly page: FleetPage }) {
         rowTo={(row) => row.to}
         empty={page.empty ? "No workers have connected." : "No worker matches."}
         paging={page.paging}
+        wide
       />
     </>
+  );
+}
+
+function MeterCell({ label, row }: { readonly label: string; readonly row: WorkerRow }) {
+  const meter = row.meters.find((candidate) => candidate.label === label);
+  if (meter?.percent === undefined) return <>—</>;
+  return (
+    <span className="worker-meter">
+      <span className="mono">{meter.percent}%</span>
+      <Meter percent={meter.percent} tone={meter.tone} size="thin" />
+    </span>
   );
 }
 
@@ -63,4 +86,17 @@ const COLUMNS: readonly Column<WorkerRow>[] = [
     ),
     header: "Worker",
   },
+  {
+    cell: (row) => <Status tone={row.health.tone}>{row.health.word}</Status>,
+    header: "State",
+  },
+  { cell: (row) => <Slots slots={row.slots} label={row.slotsLabel} />, header: "Slots" },
+  {
+    cell: (row) => (row.use === undefined ? "—" : `${row.use.running} / ${row.use.limit}`),
+    header: "Use",
+    mono: true,
+  },
+  { cell: (row) => <MeterCell label="CPU" row={row} />, header: "CPU" },
+  { cell: (row) => <MeterCell label="Memory" row={row} />, header: "Memory" },
+  { cell: (row) => <MeterCell label="Disk" row={row} />, header: "Disk" },
 ];

@@ -306,7 +306,7 @@ test.describe("the workers page", () => {
         const cells = shown.getByRole("cell");
         const incompatible = view.connection === "incompatible";
         const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
-        const leased = view.leases.length;
+        const leased = incompatible ? 0 : view.leases.length;
         await expect(cells.nth(0), name).toHaveText(
           view.host === undefined ? name : `${name}${view.host.os} ${view.host.osVersion}`,
         );

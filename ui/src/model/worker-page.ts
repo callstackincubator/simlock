@@ -1,5 +1,5 @@
 import { defined } from "./defined";
-import { type DeviceSlot, platformSlots, slotsLabel, workerHealth } from "./fleet";
+import { type DeviceSlot, platformSlots, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { holderOf, leasePath, type TokenRecord } from "./leases";
@@ -43,8 +43,17 @@ export interface WorkerUse {
   readonly percent: number;
 }
 
+export interface RowMeter {
+  readonly label: string;
+  readonly percent?: number;
+  readonly tone: MeterTone;
+}
+
 export interface WorkerRow {
   readonly id: string;
+  readonly slots: readonly DeviceSlot[];
+  readonly slotsLabel: string;
+  readonly meters: readonly RowMeter[];
   readonly name: string;
   readonly mono: boolean;
   readonly to: string;
@@ -71,9 +80,17 @@ function systemOf(worker: WorkerView): string | undefined {
 export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const use = useOf(worker);
   const system = systemOf(worker);
+  const slots = workerSlots(worker);
   return {
     health: workerHealth(worker),
     id: worker.id,
+    meters: loadFigures(worker).map((card) => ({
+      label: card.label,
+      tone: card.tone,
+      ...(card.percent === undefined ? {} : { percent: card.percent }),
+    })),
+    slots,
+    slotsLabel: slotsLabel(slots),
     mono: worker.label === undefined,
     name: workerName(worker),
     to: `${workerPath(worker.id)}${search}`,
@@ -315,6 +332,11 @@ export interface OverviewTab {
   readonly leases?: { readonly count: number; readonly running: number | undefined };
   readonly platforms: readonly PlatformCard[];
   readonly devices?: readonly DeviceRow[];
+}
+
+// why: a reading from a worker that is not connected is stale, so it has no figures.
+function loadFigures(worker: WorkerView): readonly FigureCard[] {
+  return worker.connection === "connected" ? figureCards(worker) : [];
 }
 
 function loadOf(
