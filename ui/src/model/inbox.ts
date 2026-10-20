@@ -26,7 +26,7 @@ export type InboxItem =
     }
   | {
       readonly key: string;
-      readonly condition: "quarantined" | "stalled";
+      readonly condition: "quarantined" | "stalled" | "absent";
       readonly worker: WorkerView;
       readonly device: WorkerDevice;
     };
@@ -64,6 +64,9 @@ function deviceItems(worker: WorkerView): InboxItem[] {
     }
     if (device.stalled === true) {
       return [{ condition: "stalled", device, key: key("stalled"), worker }];
+    }
+    if (device.state === "absent") {
+      return [{ condition: "absent", device, key: key("absent"), worker }];
     }
     return [];
   });
@@ -131,6 +134,10 @@ function protocolText(versions: { readonly min: number; readonly max: number }):
 }
 
 function subjectOf(item: InboxItem): string {
+  if (item.condition === "absent") {
+    // why: the daemon names a reason for every absent phone; "not-present" is the plain fallback for a record that lacks one.
+    return `${item.device.spec.model} is absent (${item.device.absentReason ?? "not-present"})`;
+  }
   return "device" in item
     ? `${item.device.spec.model} on ${workerName(item.worker)}`
     : workerName(item.worker);
