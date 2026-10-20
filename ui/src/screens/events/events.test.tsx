@@ -48,6 +48,7 @@ function page(over: Partial<EventsPage> = {}): EventsPage {
     chosen: { detail: DETAIL, kind: "event" },
     chosenIndex: 0,
     held: 1,
+    loadOlder: () => {},
     named: false,
     rows: [row(1)],
     subject: "all",

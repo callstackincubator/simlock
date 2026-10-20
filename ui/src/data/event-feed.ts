@@ -9,6 +9,7 @@ import {
 import {
   type ConsoleEvent,
   mergeEvents,
+  OLDER_PAGE as PAGE,
   readEvent,
   readReplay,
   RECENT,
@@ -28,6 +29,7 @@ export class EventFeed {
   #needRecent = true;
   #gapFrom: number | undefined;
   #loading = false;
+  #loadingOlder = false;
   // why: counts the stream's opens, so a load knows whether one happened while it was out.
   #opens = 0;
   #retryTimer: unknown;
@@ -114,6 +116,30 @@ export class EventFeed {
         },
       );
   }
+
+  // why: one page at a time; a second signal before the answer is dropped.
+  readonly loadOlder = (): void => {
+    if (!this.#active || this.#loadingOlder) return;
+    const oldest = this.#events.at(-1);
+    const query =
+      oldest === undefined
+        ? `limit=${PAGE}`
+        : `before=${encodeURIComponent(oldest.id)}&limit=${PAGE}`;
+    this.#loadingOlder = true;
+    this.#get(`/v1/events?${query}`)
+      .then(readReplay)
+      .then(
+        (events) => {
+          this.#loadingOlder = false;
+          if (!this.#active) return;
+          this.#events = mergeEvents(this.#events, events);
+          this.#publish({ ...this.#state, data: this.#events });
+        },
+        () => {
+          this.#loadingOlder = false;
+        },
+      );
+  };
 
   #retryLater(): void {
     const delay = RETRY_BACKOFF_MS[this.#retryAttempt] ?? RETRY_INTERVAL_MS;

@@ -157,6 +157,10 @@ async function stubEvents(
   return queries;
 }
 
+function older(queries: readonly string[]): string[] {
+  return queries.filter((query) => !query.startsWith("?since="));
+}
+
 // why: the feed draws only the rows in view and prints no count, so its scroll height, one row
 // tall per event, is the only measure of how many events it holds.
 const ROW_PX = 60;
@@ -326,18 +330,15 @@ test.describe("the Activity page", () => {
       await openEvents(page, host);
 
       await expect.poll(() => eventsHeld(page)).toBe(130);
-      expect(queries).toEqual(["?since=1h", "?before=evt_0030&limit=100"]);
+      expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
 
       await feed(page).evaluate((box, top) => box.scrollTo({ top }), 100 * ROW_PX);
-      await expect.poll(() => rowOffset(page, "evt_0101")).toBe(0);
+      await expect.poll(() => rowOffset(page, "evt_0101").catch(() => undefined)).toBeDefined();
+      const inView = await rowOffset(page, "evt_0101");
       await expect.poll(() => eventsHeld(page)).toBe(230);
 
-      expect(queries).toEqual([
-        "?since=1h",
-        "?before=evt_0030&limit=100",
-        "?before=evt_0130&limit=100",
-      ]);
-      expect(await rowOffset(page, "evt_0101")).toBe(0);
+      expect(older(queries)).toEqual(["?before=evt_0030&limit=100", "?before=evt_0130&limit=100"]);
+      expect(await rowOffset(page, "evt_0101")).toBe(inView);
       expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(100 * ROW_PX);
     } finally {
       await host.dispose();

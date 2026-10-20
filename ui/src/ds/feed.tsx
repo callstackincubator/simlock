@@ -10,6 +10,9 @@ const BOX_HEIGHT_PX = 640;
 // why: rows drawn past each edge of the box, so a short scroll shows rows already there.
 const OVERSCAN = 5;
 
+// why: how close to the last row the last drawn row must be before the list asks for more.
+const NEAR_END_ROWS = 20;
+
 // why: only the rows in view, and a few past each edge, are in the page; the space of the rest is
 // padding, so the scroll bar is as long as every row. New rows come in at the top: while the box
 // is at the top they push the rows down, so the newest is always in view; once the reader scrolls
@@ -23,9 +26,20 @@ export function Feed(props: {
   readonly keyAt: (index: number) => string;
   readonly newText: (count: number) => string;
   readonly startAt?: number;
+  readonly onNearEnd?: () => void;
   readonly renderRow: (index: number) => ReactNode;
 }) {
-  const { count, keyAt, label, listLabel, newText, renderRow, rowHeight, startAt = 0 } = props;
+  const {
+    count,
+    keyAt,
+    label,
+    listLabel,
+    newText,
+    onNearEnd,
+    renderRow,
+    rowHeight,
+    startAt = 0,
+  } = props;
   const box = useRef<HTMLDivElement>(null);
   const [atTop, setAtTop] = useState(true);
   const unseen = useUnseen(count, keyAt, atTop);
@@ -44,6 +58,7 @@ export function Feed(props: {
     box.current?.focus();
   };
   const items = virtualizer.getVirtualItems();
+  useNearEnd(items.at(-1)?.index, count, onNearEnd);
   const before = items[0]?.start ?? 0;
   const after = Math.max(0, virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0));
   return (
@@ -73,6 +88,16 @@ export function Feed(props: {
       </div>
     </div>
   );
+}
+
+// why: the callback is read through a ref, so a new function on each render does not ask again;
+// only a change in the last drawn row or in the count does.
+function useNearEnd(last: number | undefined, count: number, onNearEnd: (() => void) | undefined) {
+  const callback = useRef(onNearEnd);
+  callback.current = onNearEnd;
+  useEffect(() => {
+    if (last !== undefined && last >= count - NEAR_END_ROWS) callback.current?.();
+  }, [last, count]);
 }
 
 function useUnseen(count: number, keyAt: (index: number) => string, atTop: boolean): number {

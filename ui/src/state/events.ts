@@ -32,13 +32,20 @@ export { SUBJECT_CHOICES };
 
 // why: each screen that reads events holds its own feed, filled from the last hour and then the
 // stream while it is on screen, so a screen opened later still starts from a full hour.
-export function useRecentEvents(): ResourceState<readonly ConsoleEvent[]> {
+export function useEventFeed(): {
+  readonly feed: EventFeed;
+  readonly state: ResourceState<readonly ConsoleEvent[]>;
+} {
   const api = useApi();
   const [feed] = useState(() => new EventFeed((path) => api.getJson(path), browserClock));
   useLiveEvents(feed.streamEvent);
   useStreamOpened(feed.streamOpened);
   useEffect(() => feed.start(), [feed]);
-  return useSyncExternalStore(feed.subscribe, feed.snapshot);
+  return { feed, state: useSyncExternalStore(feed.subscribe, feed.snapshot) };
+}
+
+export function useRecentEvents(): ResourceState<readonly ConsoleEvent[]> {
+  return useEventFeed().state;
 }
 
 const NO_WORKERS: readonly WorkerView[] = [];
@@ -57,10 +64,11 @@ export interface EventsPage {
   readonly named: boolean;
   // why: the row the chosen event sits at, so the box opens with it in view.
   readonly chosenIndex: number;
+  readonly loadOlder: () => void;
 }
 
 export function useEvents(): LoadView<EventsPage> {
-  const feed = useRecentEvents();
+  const { feed: source, state: feed } = useEventFeed();
   const events = feed.data;
   // why: the places an event links to are read for the links only; a route that is slow, refused
   // or not served here costs the feed nothing, only the link.
@@ -84,6 +92,7 @@ export function useEvents(): LoadView<EventsPage> {
       chart,
       chosen,
       held: held.length,
+      loadOlder: source.loadOlder,
       chosenIndex: Math.max(
         0,
         rows.findIndex((row) => row.id === chosenId),

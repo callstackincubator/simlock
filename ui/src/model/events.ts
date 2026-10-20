@@ -9,6 +9,9 @@ export interface ConsoleEvent {
 
 export const MAX_EVENTS = 10_000;
 
+// why: the size of one page of older events the console asks for.
+export const OLDER_PAGE = 100;
+
 // why: the same window as `simlock events --since 1h`, so the two show the same events.
 export const RECENT = "1h";
 

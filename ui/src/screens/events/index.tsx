@@ -104,6 +104,7 @@ function EventList(props: {
           keyAt={(index) => rows[index]?.id ?? String(index)}
           newText={(count) => (count === 1 ? "1 new event" : `${count} new events`)}
           startAt={page.chosenIndex}
+          onNearEnd={page.loadOlder}
           renderRow={(index) => {
             const row = rows[index];
             return row === undefined ? null : <Row row={row} selected={row.id === chosenId} />;
