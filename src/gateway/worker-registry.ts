@@ -565,7 +565,7 @@ export class WorkerRegistry {
 
   /** why: M1: on an operator `remove`, also clears this worker's drain flag and re-saves the store, if
    * it had one. Without this, a removed worker's `true` survives in the drain store forever -- an
-   * unbounded file that silently re-drains the machine if its id is ever seen again, with
+   * unbounded table that silently re-drains the machine if its id is ever seen again, with
    * `undrain` unable to clear it in the meantime (`UNKNOWN_WORKER`, since there is no view to
    * undrain). "Forgotten" has to mean forgotten, not "forgotten except the one flag that matters
    * most."

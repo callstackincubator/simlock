@@ -1,9 +1,9 @@
 /**
- * The one thing a gateway persists (ADR 0005, Decision 3: the worker registry is gateway
- * state): which workers an operator has drained.
+ * why: What a gateway persists of its worker registry (ADR 0005, Decision 3; ADR 0036 §1): which
+ * workers an operator has drained.
  *
  * Everything else on a view is rebuilt from the workers themselves on reconnect, which is why
- * this file holds ids and nothing else. Drain cannot be rebuilt that way -- it is an operator's
+ * this table holds ids and nothing else. Drain cannot be rebuilt that way -- it is an operator's
  * decision about a machine, not a fact the machine reports -- and losing it is the one failure
  * mode that matters: a gateway restart, or a worker reconnecting after a reboot, would silently
  * put a machine that was taken out of service back into rotation.
