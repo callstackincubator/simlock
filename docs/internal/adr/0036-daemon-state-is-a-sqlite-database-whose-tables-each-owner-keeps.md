@@ -133,13 +133,15 @@ state, but its lease part still names the lease that was granted.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> OldFiles: daemon start
+  [*] --> Probe: daemon start
+  Probe --> Refuse: socket answers (already running)
+  Probe --> OldFiles: no answer
   OldFiles --> Refuse: state.json, tokens.json or workers.json present
   OldFiles --> Open: none present
   Open --> Refuse: quick_check fails or file will not open
   Open --> Migrate: ok
   Migrate --> Refuse: a stored version is newer, or a migration fails
-  Migrate --> Ready
+  Migrate --> Ready: claim the socket
   Ready --> [*]
 ```
 
@@ -156,11 +158,12 @@ stateDiagram-v2
   will not open, refuses to start on both daemon kinds, naming the file.
   Nothing is set aside or deleted. A lock held by another process waits up
   to 5 s and is never taken for damage.
-- **Order.** The daemon opens `state.db`, runs the old-file check and
-  migrates it before it claims its socket. A newer binary started beside a
-  running daemon can therefore migrate that daemon's live file and then fail
-  with `DaemonAlreadyRunningError`. This is open: a later change may claim
-  the socket first.
+- **Order.** The daemon first checks whether its socket answers; if it
+  does, it refuses with `DaemonAlreadyRunningError` before it opens
+  anything. Only then does it open `state.db`, run the old-file check and
+  migrate, and last claim its socket. A newer binary started beside a
+  running daemon therefore never migrates that daemon's live file. Two
+  daemons starting at the same moment are still caught by the socket claim.
 - **Versions.** A stored version newer than the code's (a downgrade), or a
   migration that fails, refuses to start, naming the owner and the version,
   as `history.db` does.
