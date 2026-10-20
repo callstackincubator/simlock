@@ -50,14 +50,11 @@ async function openWaiting(page: Page, daemon: RunningDaemon, path = "/queue"): 
 }
 
 function row(page: Page, requester: string): Locator {
-  return page
-    .getByRole("list", { name: "Waiting requests" })
-    .getByRole("link")
-    .filter({ hasText: requester });
+  return page.locator("main tbody tr").filter({ hasText: requester });
 }
 
-function inspectorOf(page: Page, requester: string): Locator {
-  return page.getByRole("region", { name: requester, exact: true });
+function drawerOf(page: Page, requester: string): Locator {
+  return page.getByRole("dialog", { name: requester, exact: true });
 }
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
@@ -67,7 +64,7 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("the Queue page", () => {
-  test("a request waiting for a device appears in the list with its place, device and stage, and opens with its time waited", async ({
+  test("Queue lists each waiting request with place, requester, device, stage, why and wait, and a row opens its drawer with the inspector's facts", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -87,19 +84,21 @@ test.describe("the Queue page", () => {
       await expect(row(page, "agent-c")).toContainText("iOS iPhone 16, runtime 18.4, mode slim");
       await expect(page.getByText("2 waiting")).toBeVisible();
 
-      // why: With no request named, the first row is the one shown, and the URL stays as it was.
-      await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
+      await expect(row(page, "agent-b")).toContainText("Full: device limit");
+      await expect(row(page, "agent-b").locator("td").last()).toHaveText(/^\d+ s|\d+ min/);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       expect(new URL(page.url()).pathname).toBe("/queue");
 
-      await row(page, "agent-c").click();
-      await expect(page.getByRole("heading", { level: 2, name: "agent-c" })).toBeVisible();
+      await row(page, "agent-c").getByRole("link", { name: "agent-c" }).click();
+      const drawer = drawerOf(page, "agent-c");
+      await expect(drawer).toBeVisible();
       expect(new URL(page.url()).pathname).toMatch(/^\/queue\/.+/);
-      const inspector = inspectorOf(page, "agent-c");
-      await expect(inspector).toContainText("wants iOS iPhone 16, runtime 18.4, mode slim");
-      await expect(inspector).toContainText("2 of 2");
-      await expect(inspector.getByRole("navigation", { name: "Breadcrumb" })).toBeVisible();
-      // why: The time waited counts on in the browser, with no reload.
-      const waited = inspector.locator(".waiting-card-value").first();
+      for (const label of ["Waiting", "Place", "Stage", "Device", "Queue", "Why"]) {
+        await expect(drawer.locator("dt", { hasText: new RegExp(`^${label}$`) })).toHaveCount(1);
+      }
+      await expect(drawer).toContainText("2 of 2");
+      await expect(drawer).toContainText("iOS iPhone 16, runtime 18.4, mode slim");
+      const waited = drawer.locator("dd").first();
       const before = await waited.textContent();
       await expect(waited).not.toHaveText(before ?? "", { timeout: 3_000 });
     } finally {
