@@ -319,8 +319,7 @@ function boots(
       continue;
     }
     const ready = running.find((candidate) => !matched.has(candidate) && serves(candidate, demand));
-    const match =
-      ready ?? view.onItsWay.find((entry) => !matched.has(entry) && servesSpec(entry.spec, demand));
+    const match = ready ?? onItsWayFor(view, matched, demand);
     if (match !== undefined) {
       matched.add(match);
       atHead = head && ready !== undefined;
@@ -329,8 +328,21 @@ function boots(
       holdSlot(room, demand.platform);
     }
   }
+  bootRecentlyReleased(state, held);
+  return { proposals: state.proposals, started: state.started, stuck: state.stuck };
+}
 
-  const recent = bootable
+function onItsWayFor(
+  view: WarmPolicyView,
+  matched: ReadonlySet<unknown>,
+  demand: WaitingDemand,
+): WarmPolicyView["onItsWay"][number] | undefined {
+  return view.onItsWay.find((entry) => !matched.has(entry) && servesSpec(entry.spec, demand));
+}
+
+function bootRecentlyReleased(state: QueueState, held: Slots): void {
+  const { room, view } = state;
+  const recent = state.bootable
     .filter(
       (device) =>
         !state.taken.has(device.id) &&
@@ -346,7 +358,6 @@ function boots(
       state.proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
     }
   }
-  return { proposals: state.proposals, started: state.started, stuck: state.stuck };
 }
 
 function holdSlot(room: Slots, platform: Platform): void {
