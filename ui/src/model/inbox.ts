@@ -30,7 +30,17 @@ export type InboxItem =
       readonly condition: "quarantined" | "stalled" | "absent";
       readonly worker: WorkerView;
       readonly device: WorkerDevice;
+    }
+  | {
+      readonly key: string;
+      readonly condition: "waiting";
+      readonly request: WaitingRequest;
+      readonly waitedMs: number;
     };
+
+type WorkerItem = Extract<InboxItem, { readonly worker: unknown }>;
+
+export const WAITING_TOO_LONG_MS = 60_000;
 
 export interface InboxContext {
   readonly now: number;
@@ -40,9 +50,25 @@ export interface InboxContext {
 // why: a worker that is both disconnected and drained is two items, since each clears on its own.
 export function inboxItems(
   workers: readonly WorkerView[],
-  _context?: InboxContext,
+  context?: InboxContext,
 ): readonly InboxItem[] {
-  return workers.flatMap((worker) => [...workerItems(worker), ...deviceItems(worker)]);
+  return [
+    ...workers.flatMap((worker) => [...workerItems(worker), ...deviceItems(worker)]),
+    ...(context === undefined ? [] : waitingItems(context)),
+  ];
+}
+
+// why: a request waits on the daemon's clock, so the wait is counted from the daemon's now; the
+// longest wait comes first.
+function waitingItems(context: InboxContext): InboxItem[] {
+  return [...(context.requests ?? [])]
+    .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
+    .flatMap((request): InboxItem[] => {
+      const waitedMs = context.now - request.createdAt;
+      return waitedMs > WAITING_TOO_LONG_MS
+        ? [{ condition: "waiting", key: `request/${request.id}/waiting`, request, waitedMs }]
+        : [];
+    });
 }
 
 function workerItems(worker: WorkerView): InboxItem[] {
@@ -142,7 +168,10 @@ function protocolText(versions: { readonly min: number; readonly max: number }):
     : `${versions.min}\u2013${versions.max}`;
 }
 
-function subjectOf(item: InboxItem): string {
+export function inboxSubject(item: InboxItem): string {
+  if (item.condition === "waiting") {
+    return `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)}`;
+  }
   if (item.condition === "absent") {
     // why: the daemon names a reason for every absent phone; "not-present" is the plain fallback for a record that lacks one.
     return `${item.device.spec.model} is absent (${item.device.absentReason ?? "not-present"})`;
@@ -152,7 +181,7 @@ function subjectOf(item: InboxItem): string {
     : workerName(item.worker);
 }
 
-function factsOf(item: InboxItem, now: number): readonly InboxFact[] {
+function factsOf(item: WorkerItem, now: number): readonly InboxFact[] {
   return "device" in item ? deviceFacts(item, now) : workerFacts(item, now);
 }
 
@@ -199,7 +228,7 @@ function causeFacts(device: {
 }
 
 function workerFacts(
-  item: Exclude<InboxItem, { readonly device: unknown }>,
+  item: Exclude<WorkerItem, { readonly device: unknown }>,
   now: number,
 ): readonly InboxFact[] {
   const { worker } = item;
@@ -224,7 +253,7 @@ function workerFacts(
       ];
 }
 
-function namesItem(event: ConsoleEvent, item: InboxItem): boolean {
+function namesItem(event: ConsoleEvent, item: WorkerItem): boolean {
   if (workerIdOf(event) === item.worker.id) return true;
   if (!("device" in item)) return false;
   const { payload } = event;
@@ -236,7 +265,7 @@ function namesItem(event: ConsoleEvent, item: InboxItem): boolean {
 }
 
 function detailOf(
-  item: InboxItem,
+  item: WorkerItem,
   input: {
     readonly workers: readonly WorkerView[];
     readonly events: readonly ConsoleEvent[];
@@ -281,16 +310,18 @@ export function inboxPageOf(input: {
   readonly key: string | undefined;
   readonly requests?: readonly WaitingRequest[];
 }): InboxPage {
-  const items = inboxItems(input.workers);
+  const items = inboxItems(input.workers, input);
   const rows = items.map((item) => ({
     key: item.key,
-    subject: subjectOf(item),
+    subject: inboxSubject(item),
     to: itemPath("/inbox", item.key),
     tone: inboxTone(item.condition),
     word: item.condition,
   }));
   const named = input.key !== undefined;
   const chosen = named ? items.find((item) => item.key === input.key) : items[0];
-  if (chosen !== undefined) return { named, rows, shown: detailOf(chosen, input) };
+  if (chosen !== undefined && "worker" in chosen) {
+    return { named, rows, shown: detailOf(chosen, input) };
+  }
   return { named, rows, shown: named ? "resolved" : undefined };
 }

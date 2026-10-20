@@ -1,5 +1,5 @@
 import { eventSummary, eventTone } from "./activity";
-import { inboxItems, inboxTone } from "./inbox";
+import { inboxItems, inboxSubject, inboxTone } from "./inbox";
 import type { ConsoleEvent } from "./events";
 import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import type { FiguresState } from "./figures";
@@ -195,10 +195,7 @@ export function overviewOf(input: {
       }),
     attention: inboxItems(workers).map((item) => ({
       key: item.key,
-      subject:
-        "device" in item
-          ? `${item.device.spec.model} on ${workerName(item.worker)}`
-          : workerName(item.worker),
+      subject: inboxSubject(item),
       to: itemPath("/inbox", item.key),
       tone: inboxTone(item.condition),
       word: item.condition,

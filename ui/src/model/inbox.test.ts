@@ -57,7 +57,11 @@ function event(seq: number, name: string, at: number, payload: unknown = {}): Co
 
 function summary(workers: readonly WorkerView[]): string[] {
   return inboxItems(workers).map((item) =>
-    [item.worker.id, "device" in item ? item.device.id : "-", item.condition].join(" "),
+    [
+      "worker" in item ? item.worker.id : "-",
+      "device" in item ? item.device.id : "-",
+      item.condition,
+    ].join(" "),
   );
 }
 
