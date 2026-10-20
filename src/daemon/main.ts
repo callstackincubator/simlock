@@ -105,7 +105,8 @@ import {
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
-  FileDrainStore,
+  StateDrainStore,
+  drainedWorkersOwner,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
   GatewayDispatcher,
@@ -246,7 +247,7 @@ async function composeDaemon(
     oldFiles: role === "gateway" ? ["tokens.json"] : ["state.json", "tokens.json"],
     owners:
       role === "gateway"
-        ? [tokensOwner]
+        ? [tokensOwner, drainedWorkersOwner]
         : [registryOwner, tokensOwner, ...new Set(deviceDataTables.values())],
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
@@ -794,11 +795,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
     authenticate: (credential) => auth.authenticateUplink(credential),
     clock,
-    drainStore: new FileDrainStore({
-      filesystem,
-      logger: logger.child("gateway"),
-      path: join(dataDirectory, "workers.json"),
-    }),
+    drainStore: new StateDrainStore({ database: state.database, logger: logger.child("gateway") }),
     eventBus,
     // ADR 0005 §15: this gateway's own cap, compared against every connected worker's own
     // reported one so the registry can warn when a worker's is lower.

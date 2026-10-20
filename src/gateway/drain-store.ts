@@ -8,75 +8,32 @@
  * mode that matters: a gateway restart, or a worker reconnecting after a reboot, would silently
  * put a machine that was taken out of service back into rotation.
  */
-import { dirname } from "node:path";
-
-import type { Filesystem, Logger } from "../ports/index.js";
-import { NoopLogger } from "../ports/index.js";
-
-/** why: Owner-only, like the other files that hold secrets or state (`admin.token`,
- * `state.db`): the trust boundary is the OS user. */
-const WORKERS_FILE_MODE = 0o600;
+import type { Logger, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 
 export interface DrainStore {
   load(): Promise<readonly string[]>;
   save(drainedWorkerIds: readonly string[]): Promise<void>;
 }
 
-export interface FileDrainStoreOptions {
-  readonly filesystem: Filesystem;
-  /** `workers.json` under the gateway's data directory. */
-  readonly path: string;
+export const drainedWorkersOwner: SqliteSchemaOwner = {
+  migrations: ["CREATE TABLE drained_workers (worker_id TEXT PRIMARY KEY) STRICT;"],
+  name: "drained-workers",
+  version: 1,
+};
+
+export interface StateDrainStoreOptions {
+  readonly database: SqliteDatabase;
   readonly logger?: Logger;
 }
 
-/**
- * A tiny JSON file: `{"drained": ["wrk_a", "wrk_b"]}`.
- *
- * Read errors never stop a gateway starting. A corrupt or unreadable file means the gateway
- * forgets which workers were drained -- bad, and logged loudly -- but refusing to start would
- * take a whole fleet's *routing* offline to protect a flag on some of it, which is the worse
- * trade. Write errors are logged and swallowed for the same reason: the drain is already in
- * effect in memory, and failing the operator's `worker.drain` call after it took effect would
- * be a lie in the other direction.
- */
-export class FileDrainStore implements DrainStore {
-  readonly #logger: Logger;
-
-  constructor(private readonly options: FileDrainStoreOptions) {
-    this.#logger = options.logger ?? new NoopLogger();
-  }
+export class StateDrainStore implements DrainStore {
+  constructor(private readonly options: StateDrainStoreOptions) {}
 
   async load(): Promise<readonly string[]> {
-    if (!(await this.options.filesystem.exists(this.options.path))) return [];
-    try {
-      const parsed: unknown = JSON.parse(await this.options.filesystem.readFile(this.options.path));
-      const drained = (parsed as { readonly drained?: unknown } | null)?.drained;
-      if (!Array.isArray(drained)) throw new Error("`drained` is not an array");
-      return drained.filter((id): id is string => typeof id === "string");
-    } catch (error: unknown) {
-      this.#logger.error("Could not read the gateway's worker registry; drains are forgotten", {
-        path: this.options.path,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    }
+    return [];
   }
 
-  async save(drainedWorkerIds: readonly string[]): Promise<void> {
-    try {
-      await this.options.filesystem.mkdirp(dirname(this.options.path));
-      await this.options.filesystem.writeFileAtomic(
-        this.options.path,
-        `${JSON.stringify({ drained: [...drainedWorkerIds] }, null, 2)}\n`,
-        { mode: WORKERS_FILE_MODE },
-      );
-    } catch (error: unknown) {
-      this.#logger.error("Could not persist the gateway's worker registry", {
-        path: this.options.path,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  async save(_drainedWorkerIds: readonly string[]): Promise<void> {}
 }
 
 /** For tests and for a gateway with nowhere to write: remembers nothing across a restart. */

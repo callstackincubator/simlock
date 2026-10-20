@@ -12,7 +12,7 @@
  * *by* `GatewayService` and `GatewayDispatcher`, so nothing outside builds one directly, and
  * their own tests import their modules.
  */
-export { FileDrainStore } from "./drain-store.js";
+export { drainedWorkersOwner, StateDrainStore } from "./drain-store.js";
 // fallow-ignore-next-line unused-type -- public port shape for anyone supplying their own store.
 export type { DrainStore } from "./drain-store.js";
 export { GatewayDispatcher } from "./dispatcher.js";
