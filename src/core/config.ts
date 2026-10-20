@@ -196,6 +196,9 @@ function alertDestinationValidator(
     ) {
       throw invalidValue(`${path}.secret`, `a non-empty secret for a ${format} destination`);
     }
+    if (ALERT_FORMAT_SECRET[format] === "refused" && "secret" in entry) {
+      throw invalidValue(`${path}.secret`, `no secret: a ${format} destination is not signed`);
+    }
     names.add(name);
     return {
       name,
