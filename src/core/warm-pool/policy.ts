@@ -331,7 +331,7 @@ function boots(
       return;
     }
     const creatable = view.admit.create(demand.spec) === undefined && roomFor(demand.spec);
-    if (position > 0 && creatable && open()) {
+    if (position > 0 && creatable && open() && view.retry.mayAttempt(demand.spec, view.now)) {
       started += 1;
       proposals.push({
         action: "provision",
