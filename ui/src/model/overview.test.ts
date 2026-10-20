@@ -193,7 +193,7 @@ describe("the overview", () => {
     ]);
     expect(activity[0]).toMatchObject({
       name: "device.quarantined",
-      to: "/events/e10",
+      to: "/activity/e10",
       tone: "error",
     });
     expect(activity[1]).not.toHaveProperty("tone");

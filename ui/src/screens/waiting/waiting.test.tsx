@@ -58,7 +58,7 @@ describe("the Waiting screen", () => {
     const html = renderToStaticMarkup(<WaitingBody page={pageOf([request()])} />);
 
     expect(html).toContain('<ul class="list" aria-label="Waiting requests">');
-    expect(html).toContain('href="/waiting/req_1"');
+    expect(html).toContain('href="/queue/req_1"');
     expect(text(html)).toContain("#1 agent-b 1 min 15 s iOS iPhone 16 queued");
     expect(html).toContain('aria-label="queued"');
   });
@@ -110,7 +110,7 @@ describe("the Waiting screen", () => {
           ...pageOf([request()]),
           chosen: {
             ...pageOf([request()]).rows[0]!,
-            queue: { kind: "worker", name: "worker-a", to: "/workers/wrk_1" },
+            queue: { kind: "worker", name: "worker-a", to: "/fleet/wrk_1" },
           },
         }}
       />,
@@ -120,10 +120,10 @@ describe("the Waiting screen", () => {
       <WaitingBody page={pageOf([request({ workerId: "wrk_gone" })])} />,
     );
 
-    expect(onWorker).toContain('<a href="/workers/wrk_1">worker-a</a>');
+    expect(onWorker).toContain('<a href="/fleet/wrk_1">worker-a</a>');
     expect(text(onGateway)).toContain("Queue the gateway&#x27;s queue");
     expect(text(unseen)).toContain("Queue wrk_gone");
-    expect(unseen).not.toContain("/workers/");
+    expect(unseen).not.toContain("/fleet/");
   });
 
   it("shows a request with no place in the queue as a dash in both the row and the card", () => {
@@ -158,7 +158,7 @@ describe("the Waiting screen", () => {
     const html = renderToStaticMarkup(<WaitingBody page={pageOf([request()], "granted")} />);
 
     expect(text(html)).toContain("Request not waiting.");
-    expect(html).toContain('<a href="/waiting">Back to waiting</a>');
+    expect(html).toContain('<a href="/queue">Back to Queue</a>');
     expect(html).not.toContain("<h2");
   });
 });

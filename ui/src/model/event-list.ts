@@ -94,7 +94,7 @@ export function eventRows(
       name: event.event,
       summary: eventSummary(event, workers),
       time: timeOfDay(event.timestamp),
-      to: `${itemPath("/events", event.id)}${query}`,
+      to: `${itemPath("/activity", event.id)}${query}`,
       ...(tone === undefined ? {} : { tone }),
     };
   });
@@ -140,7 +140,7 @@ export function eventAction(event: ConsoleEvent, places: EventPlaces): EventActi
   const requestId = textField(payload, "requestId");
   const request = places.requests.find((entry) => entry.id === requestId);
   if (request !== undefined) {
-    return { label: "Open request", to: itemPath("/waiting", request.id) };
+    return { label: "Open request", to: itemPath("/queue", request.id) };
   }
   const deviceId = textField(payload, "deviceId");
   const item = attentionItems(places.workers).find(

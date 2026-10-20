@@ -125,7 +125,7 @@ function MissingWorker({ id }: { readonly id: string | undefined }) {
   if (id === undefined) return <InspectorEmpty>Nothing to show.</InspectorEmpty>;
   return (
     <InspectorEmpty>
-      Worker not found. <Link to="/workers">All workers</Link>
+      Worker not found. <Link to="/fleet">Back to Fleet</Link>
     </InspectorEmpty>
   );
 }
@@ -140,7 +140,7 @@ function WorkerDetail({
   const [tab, setTab] = useState<WorkerTab>(initialTab);
   return (
     <Inspector
-      crumbs={[{ label: "Workers", to: "/workers" }, { label: inspector.title }]}
+      crumbs={[{ label: "Fleet", to: "/fleet" }, { label: inspector.title }]}
       title={inspector.title}
       mono={inspector.mono}
       line={

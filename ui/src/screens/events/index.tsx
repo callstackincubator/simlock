@@ -160,7 +160,7 @@ function Chosen({ page }: { readonly page: EventsPage }) {
   if (chosen.kind === "missing") {
     return (
       <InspectorEmpty>
-        Event not in the last hour. <Link to="/events">Back to events</Link>
+        Event not in the last hour. <Link to="/activity">Back to Activity</Link>
       </InspectorEmpty>
     );
   }
@@ -170,7 +170,7 @@ function Chosen({ page }: { readonly page: EventsPage }) {
 function Detail({ detail }: { readonly detail: EventDetail }) {
   return (
     <Inspector
-      crumbs={[{ label: "Events", to: "/events" }, { label: detail.name }]}
+      crumbs={[{ label: "Activity", to: "/activity" }, { label: detail.name }]}
       title={<span className={toneClass(detail.tone, "")}>{detail.name}</span>}
       mono
       line={<time dateTime={detail.iso}>{detail.line}</time>}

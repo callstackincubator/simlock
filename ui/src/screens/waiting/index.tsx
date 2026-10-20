@@ -86,7 +86,7 @@ function detailOf(chosen: WaitingRow | undefined, gone: boolean) {
   if (gone) {
     return (
       <InspectorEmpty>
-        Request not waiting. <Link to="/waiting">Back to waiting</Link>
+        Request not waiting. <Link to="/queue">Back to Queue</Link>
       </InspectorEmpty>
     );
   }
@@ -126,7 +126,7 @@ function WaitingListRow({
 function WaitingInspector({ row }: { readonly row: WaitingRow }) {
   return (
     <Inspector
-      crumbs={[{ label: "Waiting", to: "/waiting" }, { label: row.id }]}
+      crumbs={[{ label: "Queue", to: "/queue" }, { label: row.id }]}
       title={row.requester}
       mono
       line={`wants ${row.device}`}

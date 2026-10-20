@@ -190,13 +190,13 @@ test.describe("the attention view", () => {
       await expect(page.getByRole("heading", { level: 2, name: "worker-b" })).toBeVisible();
       await expect(page.getByRole("link", { name: "Open worker" })).toHaveAttribute(
         "href",
-        `/workers/${encodeURIComponent(b?.id ?? "")}`,
+        `/fleet/${encodeURIComponent(b?.id ?? "")}`,
       );
       await expect(facts(page)).toContainText("Leases still held");
       const recent = page.getByRole("region", { name: "Recent events" });
       await expect(recent.getByRole("link", { name: /worker\.drain-started/ })).toHaveAttribute(
         "href",
-        /^\/events\/.+/,
+        /^\/activity\/.+/,
       );
     } finally {
       await disposeFleet(fleet);
@@ -485,7 +485,7 @@ test.describe("the attention view", () => {
       await expect(page.getByRole("heading", { level: 2, name: "old-worker" })).toBeVisible();
 
       await follow(page.getByRole("link", { name: "Open worker" }));
-      await expect(page).toHaveURL(/\/workers\/wrk_old$/);
+      await expect(page).toHaveURL(/\/fleet\/wrk_old$/);
     } finally {
       hangUp();
       await gateway.dispose();

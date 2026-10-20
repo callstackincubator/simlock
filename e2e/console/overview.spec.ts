@@ -236,11 +236,15 @@ test.describe("the Overview's figures", () => {
         { follow: () => page.getByRole("link", { name: /^All \d+$/ }).click(), path: "/fleet" },
         { follow: () => page.getByRole("link", { name: "All events" }).click(), path: "/activity" },
       ];
+      await openOverview(page, host);
       for (const { follow, path } of links) {
-        await openOverview(page, host);
+        await page.goto(new URL("/", host.url).toString());
+        await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
         await follow();
         await expect(page, path).toHaveURL(new RegExp(`${path}$`));
-        await expect(page.getByRole("heading", { level: 1, name: "Not found" })).toHaveCount(0);
+        await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toHaveCount(
+          0,
+        );
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       }
     } finally {
@@ -255,7 +259,7 @@ test.describe("the Overview's figures", () => {
     try {
       await scriptedRun(host);
       const stats = await statsOf(host, "1h");
-      await page.goto(new URL("/waiting?range=7d", host.url).toString());
+      await page.goto(new URL("/queue?range=7d", host.url).toString());
       await signIn(page, host.tokens.operator);
       await expect(page.getByRole("heading", { level: 1, name: "Waiting" })).toBeVisible();
 

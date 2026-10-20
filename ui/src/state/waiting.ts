@@ -33,7 +33,7 @@ export function useWaiting(): LoadView<WaitingPage> {
   const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
   const figures = useFigures("1h");
   const now = useNow();
-  const id = itemIdFrom("/waiting", usePath());
+  const id = itemIdFrom("/queue", usePath());
   const keep = listSearch(useSearch());
   const table = mapView(requests, (list) => waitingTable(list.requests, workers, now.server));
   const paging = usePaging({

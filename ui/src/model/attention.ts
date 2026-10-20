@@ -240,7 +240,7 @@ function detailOf(
           name: event.event,
           text: eventSummary(event, workers),
           time: timeOfDay(event.timestamp),
-          to: itemPath("/events", event.id),
+          to: itemPath("/activity", event.id),
           ...(tone === undefined ? {} : { tone }),
         };
       }),

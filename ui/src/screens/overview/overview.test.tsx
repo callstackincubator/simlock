@@ -59,7 +59,7 @@ describe("the overview screen", () => {
                 { kind: "free", label: "free" },
               ],
               slotsLabel: "1 leased, 1 free",
-              to: "/workers/w1",
+              to: "/fleet/w1",
             },
             {
               health: { tone: "warn", word: "starting" },
@@ -67,7 +67,7 @@ describe("the overview screen", () => {
               name: "mac-mini-02",
               slots: [],
               slotsLabel: "Not reported",
-              to: "/workers/w2",
+              to: "/fleet/w2",
             },
           ],
         }}
@@ -76,7 +76,7 @@ describe("the overview screen", () => {
 
     expect(html).toContain('class="status-dot status-dot-warn" role="img" aria-label="memory 88%"');
     expect(html).toContain('role="img" aria-label="1 leased, 1 free"');
-    expect(html).toContain('href="/workers/w1"');
+    expect(html).toContain('href="/fleet/w1"');
     expect(text(html)).not.toContain("memory 88%");
     expect(html).toContain('<td data-label="Leases" class="num"><span class="muted">—</span></td>');
     expect(html).toContain('<span class="muted">—</span></span></p>');

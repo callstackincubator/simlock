@@ -96,9 +96,9 @@ describe("a list row", () => {
       name: "lease.granted",
       summary: "claude-1 · mac-1",
       time: expect.stringMatching(/^\d\d:\d\d:\d\d$/),
-      to: "/events/evt_7?subject=lease",
+      to: "/activity/evt_7?subject=lease",
     });
-    expect(eventRows([granted], [], "all")[0]?.to).toBe("/events/evt_7");
+    expect(eventRows([granted], [], "all")[0]?.to).toBe("/activity/evt_7");
   });
 
   it("is toned only where the name reports trouble", () => {
@@ -183,7 +183,7 @@ describe("what an event links to", () => {
 
     expect(eventAction(queued, places({ requests: [request("req_1")] }))).toEqual({
       label: "Open request",
-      to: "/waiting/req_1",
+      to: "/queue/req_1",
     });
     expect(eventAction(queued, NO_PLACES)).toBeUndefined();
   });
@@ -212,7 +212,7 @@ describe("what an event links to", () => {
 
     expect(eventAction(connected, places({ workers: [worker("wrk_1")] }))).toEqual({
       label: "Open worker",
-      to: "/workers/wrk_1",
+      to: "/fleet/wrk_1",
     });
     expect(eventAction(connected, NO_PLACES)).toBeUndefined();
   });

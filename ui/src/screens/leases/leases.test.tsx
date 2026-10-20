@@ -69,7 +69,7 @@ function inspection(overrides: Partial<LeaseInspection> = {}): LeaseInspection {
     runtime: "18.4",
     stream: { offered: true },
     title: "ci-runner-3",
-    worker: { name: "mac-mini-1", to: "/workers/wrk_host" },
+    worker: { name: "mac-mini-1", to: "/fleet/wrk_host" },
     ...overrides,
   };
 }
@@ -259,7 +259,7 @@ describe("a lease's Events tab", () => {
             name: "lease.granted",
             summary: "dev_1",
             time: "12:00:00",
-            to: "/events/e1",
+            to: "/activity/e1",
           },
         ]}
       />,

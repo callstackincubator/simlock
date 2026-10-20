@@ -116,7 +116,7 @@ export function OverviewBody(props: {
         <Panel
           title="Workers"
           flush
-          actions={<Link to="/workers">All {overview.workers.length}</Link>}
+          actions={<Link to="/fleet">All {overview.workers.length}</Link>}
         >
           <WorkerTable workers={overview.workers} />
         </Panel>
@@ -124,7 +124,7 @@ export function OverviewBody(props: {
           <Panel title="Attention" flush>
             <AttentionList items={overview.attention} />
           </Panel>
-          <Panel title="Activity" flush actions={<Link to="/events">All events</Link>}>
+          <Panel title="Activity" flush actions={<Link to="/activity">All events</Link>}>
             <ActivityList rows={overview.activity} />
           </Panel>
         </div>

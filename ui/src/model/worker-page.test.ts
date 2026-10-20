@@ -102,7 +102,7 @@ describe("a worker's row in the list", () => {
       health: { tone: "ok", word: "connected" },
       mono: false,
       name: "worker-a",
-      to: "/workers/wrk_1",
+      to: "/fleet/wrk_1",
       use: { limit: 8, percent: 12.5, running: 1 },
     });
   });
@@ -127,7 +127,7 @@ describe("a worker's row in the list", () => {
     expect(listSearch("?page=2&size=50&devices-page=3&warm-pool-size=50")).toBe("?page=2&size=50");
     expect(listSearch("?devices-page=3")).toBe("");
     expect(listSearch("?q=ci&page=2&size=50")).toBe("?page=2&size=50&q=ci");
-    expect(workerRow(worker(), "?page=2").to).toBe("/workers/wrk_1?page=2");
+    expect(workerRow(worker(), "?page=2").to).toBe("/fleet/wrk_1?page=2");
   });
 });
 

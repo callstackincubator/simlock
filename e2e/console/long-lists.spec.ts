@@ -385,7 +385,7 @@ test.describe("long lists page", () => {
       label: `worker-${pad(index + 1)}`,
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/workers/wrk_0001");
+    await open(page, daemon, "/fleet/wrk_0001");
     const devicesTable = page.getByRole("region", { name: "Devices" }).locator("table");
     const deviceIds = async () =>
       (await devicesTable.locator("tbody tr td:first-child").allTextContents()).map(
@@ -399,7 +399,7 @@ test.describe("long lists page", () => {
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
 
     expect(await deviceIds()).toEqual(ids(51, 60, "dev"));
-    expect(await rowIds(pane(page, "Workers"), "/workers")).toEqual(ids(26, 30, "wrk"));
+    expect(await rowIds(pane(page, "Workers"), "/fleet")).toEqual(ids(26, 30, "wrk"));
     expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
       "devices-page": "3",
       page: "2",
@@ -423,23 +423,23 @@ test.describe("long lists page", () => {
       label: `worker-${pad(index + 1)}`,
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/workers");
+    await open(page, daemon, "/fleet");
     const rows = pane(page, "Workers").getByRole("list", { name: "Workers" });
     const range = pager(page, "Workers").locator(".pager-range");
 
-    expect(await rowIds(rows, "/workers")).toEqual(ids(1, 25, "wrk"));
+    expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 25, "wrk"));
     await expect(range).toHaveText("1–25 of 30");
     await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
     await expect(range).toHaveText("26–30 of 30");
-    expect(await rowIds(rows, "/workers")).toEqual(ids(26, 30, "wrk"));
+    expect(await rowIds(rows, "/fleet")).toEqual(ids(26, 30, "wrk"));
     await expect(pager(page, "Workers").getByLabel("Per page").locator("option")).toHaveText([
       "25",
       "50",
       "100",
     ]);
     await pager(page, "Workers").getByLabel("Per page").selectOption("50");
-    await expect(page).toHaveURL(/\/workers\?size=50$/);
-    expect(await rowIds(rows, "/workers")).toEqual(ids(1, 30, "wrk"));
+    await expect(page).toHaveURL(/\/fleet\?size=50$/);
+    expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 30, "wrk"));
     await expect(pager(page, "Workers")).toHaveCount(0);
   });
 });
@@ -517,7 +517,7 @@ test.describe("the events feed", () => {
   }) => {
     const replay = events(10_000);
     await answer(page, "/v1/events", () => ({ events: replay }));
-    await open(page, daemon, "/events");
+    await open(page, daemon, "/activity");
     await expect.poll(() => eventsHeld(page)).toBe(10_000);
 
     const rows = feed(page).getByRole("listitem");
@@ -546,7 +546,7 @@ test.describe("the events feed", () => {
       });
       const replay = events(1_000);
       await answer(page, "/v1/events", () => ({ events: replay }));
-      await open(page, host, "/events");
+      await open(page, host, "/activity");
       await expect.poll(() => eventsHeld(page)).toBe(1_000);
 
       await scrollDown(page);
@@ -579,7 +579,7 @@ test.describe("the events feed", () => {
       });
       const replay = events(1_000);
       await answer(page, "/v1/events", () => ({ events: replay }));
-      await open(page, host, "/events");
+      await open(page, host, "/activity");
       await expect.poll(() => eventsHeld(page)).toBe(1_000);
       await scrollDown(page);
       await client.renewLease({ leaseId: grant.lease.id });
@@ -618,7 +618,7 @@ test.describe("the events feed", () => {
   test("choosing another filter starts the feed again at the top", async ({ daemon, page }) => {
     const replay = events(1_000);
     await answer(page, "/v1/events", () => ({ events: replay }));
-    await open(page, daemon, "/events");
+    await open(page, daemon, "/activity");
     await expect.poll(() => eventsHeld(page)).toBe(1_000);
     await scrollDown(page);
 
@@ -741,7 +741,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     seeded,
   }) => {
     const { host } = seeded;
-    await open(page, host, "/events");
+    await open(page, host, "/activity");
     await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
     const held = await eventsHeld(page);
 
@@ -783,7 +783,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const oldest = (await recentEvents(host)).reduce((a, b) =>
       b.timestamp < a.timestamp || (b.timestamp === a.timestamp && b.seq < a.seq) ? b : a,
     );
-    expect(run.lastHref).toBe(`/events/${encodeURIComponent(oldest.id)}`);
+    expect(run.lastHref).toBe(`/activity/${encodeURIComponent(oldest.id)}`);
     expect(run.blank).toBe(0);
     expect(run.most).toBeLessThan(100);
     expect(run.p95).toBeLessThan(50);
@@ -814,7 +814,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     for (const path of [
       ...NAV.map((entry) => entry.path),
       "/leases?page=12",
-      `/workers/${encodeURIComponent(seeded.worker)}?devices-page=2`,
+      `/fleet/${encodeURIComponent(seeded.worker)}?devices-page=2`,
       `/leases/${encodeURIComponent(lease)}/`,
     ]) {
       await page.goto(new URL(path, seeded.host.url).href);
@@ -825,13 +825,13 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
           .first(),
       ).toBeVisible();
       await expect(page.locator("#main")).not.toContainText("Loading…");
-      if (path === "/events") {
+      if (path === "/activity") {
         await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
         await feed(page).evaluate((box) => {
           box.scrollTop = box.scrollHeight / 3;
         });
       }
-      if (path.startsWith("/leases?") || path.startsWith("/workers/")) {
+      if (path.startsWith("/leases?") || path.startsWith("/fleet/")) {
         await expect(page.locator(".pager").first()).toBeVisible();
       }
       await settled(page);

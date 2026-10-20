@@ -310,7 +310,7 @@ test.describe("the workers page", () => {
         listed.find((view) => view.label === "worker-a"),
         "worker-a",
       );
-      await expect(page).toHaveURL(new RegExp(`/workers/${a.id}$`));
+      await expect(page).toHaveURL(new RegExp(`/fleet/${a.id}$`));
       await expect(title(page, "worker-a")).toBeVisible();
       await expect(fact(page.locator("#main"), "Leases").or(figure(page, "Leases"))).toContainText(
         "1",
@@ -361,11 +361,11 @@ test.describe("the workers page", () => {
     await expect(
       page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem"),
     ).toHaveCount(1);
-    await expect(page).toHaveURL(/\/workers$/);
+    await expect(page).toHaveURL(/\/fleet$/);
     await expect(title(page, host.id)).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(host.id);
     await row(page, host.id).getByRole("link").click();
-    await expect(page).toHaveURL(new RegExp(`/workers/${encodeURIComponent(host.id)}$`));
+    await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
     await expect(page.locator(".inspector-line")).toContainText(host.version ?? "");
     await expect(page.locator(".inspector-line")).toContainText("connected");
   });
@@ -373,11 +373,11 @@ test.describe("the workers page", () => {
   test("a worker that no list has says so and links back to the list", async ({ daemon, page }) => {
     await openConsole(page, daemon);
 
-    await page.goto(new URL("/workers/wrk_nope", daemon.url).href);
+    await page.goto(new URL("/fleet/wrk_nope", daemon.url).href);
 
     await expect(page.getByText("Worker not found.")).toBeVisible();
-    await page.getByRole("link", { name: "All workers" }).click();
-    await expect(page).toHaveURL(/\/workers$/);
+    await page.getByRole("link", { name: "Back to Fleet" }).click();
+    await expect(page).toHaveURL(/\/fleet$/);
     await expect(page.getByRole("list", { name: "Workers", exact: true })).toBeVisible();
   });
 
@@ -829,7 +829,7 @@ test.describe("the workers page", () => {
     try {
       await lease(host, "console-e2e");
       await page.setViewportSize({ height: 740, width: 360 });
-      await page.goto(new URL("/workers", host.url).href);
+      await page.goto(new URL("/fleet", host.url).href);
       await signIn(page, host.tokens.operator);
       const [view] = await workerList(host);
       await expect(page.getByRole("list", { name: "Workers", exact: true })).toBeVisible();
@@ -877,7 +877,7 @@ test.describe("the workers page", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
 
     await follow(row(page, name).getByRole("link"));
-    await expect(page).toHaveURL(new RegExp(`/workers/${encodeURIComponent(name)}$`));
+    await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(name)}$`));
     await expect(title(page, name)).toBeVisible();
 
     const host_tab = page.getByRole("tab", { name: "Host" });
@@ -890,9 +890,9 @@ test.describe("the workers page", () => {
     await expect(host_tab).toHaveAttribute("aria-selected", "true");
 
     await follow(
-      page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Workers" }),
+      page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Fleet" }),
       "backward",
     );
-    await expect(page).toHaveURL(/\/workers$/);
+    await expect(page).toHaveURL(/\/fleet$/);
   });
 });

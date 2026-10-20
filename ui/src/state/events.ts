@@ -69,7 +69,7 @@ export function useEvents(): LoadView<EventsPage> {
   const requests = useLiveResource<WaitingList>("/v1/lease-requests").data?.requests ?? NO_REQUESTS;
   const now = useNow().server;
   const subject = readSubject(useSearch());
-  const id = itemIdFrom("/events", usePath());
+  const id = itemIdFrom("/activity", usePath());
   const rows = useMemo(
     () => (events === undefined ? [] : eventRows(events, workers, subject)),
     [events, workers, subject],

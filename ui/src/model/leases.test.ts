@@ -277,7 +277,7 @@ describe("a lease's inspection", () => {
       requestId: "req_7d1a",
       runtime: "18.4",
       title: "ci-runner-3",
-      worker: { name: "mac-mini-1", to: "/workers/wrk_host" },
+      worker: { name: "mac-mini-1", to: "/fleet/wrk_host" },
     });
     expect(shown.percent).toBeCloseTo(50);
   });

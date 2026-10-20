@@ -154,13 +154,13 @@ function tiles(
     },
     {
       label: "Waiting",
-      to: "/waiting",
+      to: "/queue",
       unit: requests.length === 0 ? "none" : `longest ${formatDuration(now - oldest)}`,
       value: formatCount(requests.length),
     },
     {
       label: "Workers",
-      to: "/workers",
+      to: "/fleet",
       unit: `of ${formatCount(workers.length)} up`,
       value: formatCount(connected),
     },
@@ -189,7 +189,7 @@ export function overviewOf(input: {
           name: event.event,
           text: eventSummary(event, workers),
           time: minuteLabel(event.timestamp),
-          to: itemPath("/events", event.id),
+          to: itemPath("/activity", event.id),
           ...(tone === undefined ? {} : { tone }),
         };
       }),

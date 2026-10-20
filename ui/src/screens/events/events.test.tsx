@@ -20,7 +20,7 @@ function row(index: number, over: Partial<EventRow> = {}): EventRow {
     name: "lease.granted",
     summary: "claude-1 · mac-1",
     time: "11:30:00",
-    to: `/events/evt_${index}`,
+    to: `/activity/evt_${index}`,
     ...over,
   };
 }
@@ -71,8 +71,8 @@ describe("the events page", () => {
     expect(text(html)).toContain(
       "11:30:00 lease.granted claude-1 · mac-1 11:30:00 lease.expired claude-2",
     );
-    expect(html).toContain('href="/events/evt_2"');
-    expect(html).toContain('href="/events/evt_1"');
+    expect(html).toContain('href="/activity/evt_2"');
+    expect(html).toContain('href="/activity/evt_1"');
   });
 
   it("marks the chosen event's row as the current one, and no other", () => {
@@ -80,7 +80,7 @@ describe("the events page", () => {
 
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     expect(html).toMatch(
-      /href="\/events\/evt_1"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/events\/evt_1"/,
+      /href="\/activity\/evt_1"[^>]*aria-current="page"|aria-current="page"[^>]*href="\/activity\/evt_1"/,
     );
   });
 
@@ -195,6 +195,6 @@ describe("the events page's inspector", () => {
     const html = ready({ chosen: { id: "evt_old", kind: "missing" }, named: true });
 
     expect(text(html)).toContain("Event not in the last hour.");
-    expect(html).toContain('<a href="/events">Back to events</a>');
+    expect(html).toContain('<a href="/activity">Back to Activity</a>');
   });
 });

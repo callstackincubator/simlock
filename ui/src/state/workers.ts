@@ -59,7 +59,7 @@ export interface WorkersPage {
 export function useWorkers(): LoadView<WorkersPage> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   const search = useSearch();
-  const named = itemIdFrom("/workers", usePath());
+  const named = itemIdFrom("/fleet", usePath());
   const [filter, setFilter] = useState<WorkerFilter>("all");
 
   const ready = workers.kind === "ready";

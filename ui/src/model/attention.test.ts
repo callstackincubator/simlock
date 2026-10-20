@@ -359,7 +359,7 @@ describe("the attention page", () => {
     expect(ofDevice.events.map((entry) => entry.key)).toEqual(["e2", "e1"]);
     expect(ofDevice.events[0]).toMatchObject({
       name: "device.quarantined",
-      to: "/events/e2",
+      to: "/activity/e2",
       tone: "error",
     });
   });
@@ -367,6 +367,6 @@ describe("the attention page", () => {
   it("links each item to its worker's page", () => {
     const page = pageOf([worker({ drained: true, id: "wrk/1", label: "mac-mini-1" })]);
 
-    expect(shownOf(page).worker).toEqual({ name: "mac-mini-1", to: "/workers/wrk%2F1" });
+    expect(shownOf(page).worker).toEqual({ name: "mac-mini-1", to: "/fleet/wrk%2F1" });
   });
 });

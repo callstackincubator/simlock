@@ -268,8 +268,8 @@ describe("a worker's inspector", () => {
   it("says that no worker has the id in the URL, with a link back to the list", () => {
     const markup = html(page(undefined, { missing: "wrk_nope" }, [WORKER]));
 
-    expect(text(markup)).toContain("Worker not found. All workers");
-    expect(markup).toContain('href="/workers"');
+    expect(text(markup)).toContain("Worker not found. Back to Fleet");
+    expect(markup).toContain('href="/fleet"');
   });
 });
 

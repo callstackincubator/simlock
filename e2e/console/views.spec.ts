@@ -37,7 +37,7 @@ async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly
     pages: {
       lease: `/leases/${encodeURIComponent(lease)}/`,
       views: NAV.map((entry) => ({ label: entry.label, path: entry.path })),
-      worker: `/workers/${encodeURIComponent(worker?.id ?? "")}`,
+      worker: `/fleet/${encodeURIComponent(worker?.id ?? "")}`,
     },
   };
 }
@@ -140,7 +140,7 @@ test.describe("every view", () => {
       await page.locator("#main summary").first().focus();
       await page.keyboard.press("Enter");
       await expect(page.getByRole("columnheader", { name: "Leases held" })).toBeVisible();
-      await visit(page, host, "/events");
+      await visit(page, host, "/activity");
       await page.getByRole("radio", { name: "All" }).focus();
       await page.keyboard.press("ArrowRight");
       await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
@@ -162,7 +162,7 @@ test.describe("every view", () => {
         ["/", "Leases held, last hour", 0],
         ["/", "Requests in the queue, last hour", 1],
         ["/", "Device slots in use, last hour", 2],
-        ["/events", "Events", 0],
+        ["/activity", "Events", 0],
       ] as const) {
         await visit(page, host, path);
         if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(3);

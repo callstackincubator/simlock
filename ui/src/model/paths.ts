@@ -1,4 +1,4 @@
-export type Section = "/workers" | "/leases" | "/waiting" | "/attention" | "/events";
+export type Section = "/fleet" | "/leases" | "/queue" | "/attention" | "/activity";
 
 export function itemPath(section: Section, id: string): `/${string}` {
   return `${section}/${encodeURIComponent(id)}`;

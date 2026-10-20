@@ -142,7 +142,7 @@ test.describe("sign-in", () => {
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 
     const tab = await context.newPage();
-    await tab.goto("/workers");
+    await tab.goto("/fleet");
 
     await expect(tab.getByLabel("Operator token")).toBeVisible();
     await expect(tab.getByRole("button", { name: "Sign out" })).toHaveCount(0);

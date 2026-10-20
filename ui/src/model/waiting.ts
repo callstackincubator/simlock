@@ -190,7 +190,7 @@ export function waitingTable(
       queue: queueOf(request, workers),
       requester: request.requesterId,
       stage: waitingStageStatus(request.stage),
-      to: itemPath("/waiting", request.id),
+      to: itemPath("/queue", request.id),
       waited: formatDuration(now - request.createdAt),
       ...(why === undefined ? {} : { why }),
       ...(request.workers === undefined

@@ -80,8 +80,8 @@ describe("the waiting table", () => {
     const rows = waitingTable([onGateway, onHost, inFleetQueue], workers, NOW).rows;
 
     expect(rows.map((row) => row.queue)).toEqual([
-      { kind: "worker", name: "worker-b", to: "/workers/wrk_2" },
-      { kind: "worker", name: "host", to: "/workers/wrk_1" },
+      { kind: "worker", name: "worker-b", to: "/fleet/wrk_2" },
+      { kind: "worker", name: "host", to: "/fleet/wrk_1" },
       { kind: "gateway" },
     ]);
   });
@@ -134,7 +134,7 @@ describe("the waiting table", () => {
   it("shows how long a request has waited, when it was created, and the path that opens it", () => {
     expect(rowOf({ id: "req a/b" })).toMatchObject({
       created: "2026-10-02 11:58:45 UTC",
-      to: "/waiting/req%20a%2Fb",
+      to: "/queue/req%20a%2Fb",
       waited: "1 min 15 s",
     });
   });

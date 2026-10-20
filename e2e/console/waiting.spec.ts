@@ -47,7 +47,7 @@ async function untilTheDaemonSays(
   });
 }
 
-async function openWaiting(page: Page, daemon: RunningDaemon, path = "/waiting"): Promise<void> {
+async function openWaiting(page: Page, daemon: RunningDaemon, path = "/queue"): Promise<void> {
   await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: "Waiting" })).toBeVisible();
@@ -94,11 +94,11 @@ test.describe("the Waiting page", () => {
 
       // why: With no request named, the first row is the one shown, and the URL stays as it was.
       await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
-      expect(new URL(page.url()).pathname).toBe("/waiting");
+      expect(new URL(page.url()).pathname).toBe("/queue");
 
       await row(page, "agent-c").click();
       await expect(page.getByRole("heading", { level: 2, name: "agent-c" })).toBeVisible();
-      expect(new URL(page.url()).pathname).toMatch(/^\/waiting\/.+/);
+      expect(new URL(page.url()).pathname).toMatch(/^\/queue\/.+/);
       const inspector = inspectorOf(page, "agent-c");
       await expect(inspector).toContainText("wants iOS iPhone 16, runtime 18.4, mode slim");
       await expect(inspector).toContainText("2 of 2");
@@ -183,8 +183,8 @@ test.describe("the Waiting page", () => {
       await expect(page.getByText("No requests are waiting.")).toBeVisible();
       await expect(page.getByText("Request not waiting.")).toBeVisible();
 
-      await page.getByRole("link", { name: "Back to waiting" }).click();
-      expect(new URL(page.url()).pathname).toBe("/waiting");
+      await page.getByRole("link", { name: "Back to Queue" }).click();
+      expect(new URL(page.url()).pathname).toBe("/queue");
       await expect(page.getByText("Request not waiting.")).toHaveCount(0);
       await expect(page.getByRole("heading", { level: 2 })).toHaveCount(0);
     } finally {
@@ -195,10 +195,10 @@ test.describe("the Waiting page", () => {
   test("a request id that was never waiting says it is not waiting", async ({ page }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
-      await openWaiting(page, host, "/waiting/req_none");
+      await openWaiting(page, host, "/queue/req_none");
 
       await expect(page.getByText("Request not waiting.")).toBeVisible();
-      await expect(page.getByRole("link", { name: "Back to waiting" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Back to Queue" })).toBeVisible();
     } finally {
       await host.dispose();
     }
@@ -249,7 +249,7 @@ test.describe("the Waiting page", () => {
         await expect(link).toBeFocused();
         await page.keyboard.press("Enter");
       };
-      await page.goto(new URL("/waiting", host.url).toString());
+      await page.goto(new URL("/queue", host.url).toString());
       await page.keyboard.press(tab);
       await page.keyboard.type(host.tokens.operator);
       await page.keyboard.press("Enter");
@@ -257,11 +257,11 @@ test.describe("the Waiting page", () => {
 
       await follow(row(page, "agent-b"));
       await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
-      expect(new URL(page.url()).pathname).toMatch(/^\/waiting\/.+/);
+      expect(new URL(page.url()).pathname).toMatch(/^\/queue\/.+/);
 
       // The request's worker opens that worker's page.
       await follow(inspectorOf(page, "agent-b").getByRole("link").last());
-      expect(new URL(page.url()).pathname).toMatch(/^\/workers\/.+/);
+      expect(new URL(page.url()).pathname).toMatch(/^\/fleet\/.+/);
     } finally {
       await host.dispose();
     }

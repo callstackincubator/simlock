@@ -49,7 +49,7 @@ describe("the attention screen", () => {
     const html = render([worker({ drained: true, id: "wrk/1", label: "mac-mini-1" })]);
 
     expect(html).toContain("Leases still held");
-    expect(html).toContain('href="/workers/wrk%2F1"');
+    expect(html).toContain('href="/fleet/wrk%2F1"');
     expect(html).toContain("Open worker");
     expect(html).toContain("Recent events");
     expect(html).toContain("No events in the last hour.");

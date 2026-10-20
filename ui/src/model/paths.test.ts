@@ -10,13 +10,13 @@ describe("an item's page path", () => {
   });
 
   it("names no item on the section's own page or on another section's", () => {
-    expect(itemIdFrom("/events", "/events")).toBeUndefined();
-    expect(itemIdFrom("/events", "/events/")).toBeUndefined();
-    expect(itemIdFrom("/events", "/eventsx/1")).toBeUndefined();
-    expect(itemIdFrom("/events", "/leases/1")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/activity")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/activity/")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/activityx/1")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/leases/1")).toBeUndefined();
   });
 
   it("keeps a malformed escape as it was typed", () => {
-    expect(itemIdFrom("/events", "/events/%E0%A4%A")).toBe("%E0%A4%A");
+    expect(itemIdFrom("/activity", "/activity/%E0%A4%A")).toBe("%E0%A4%A");
   });
 });

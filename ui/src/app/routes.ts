@@ -18,15 +18,15 @@ export interface Route {
 
 export const ROUTES: readonly Route[] = [
   { Screen: OverviewScreen, icon: "overview", label: "Overview", path: "/" },
-  { Screen: WorkersScreen, icon: "workers", label: "Workers", path: "/workers" },
+  { Screen: WorkersScreen, icon: "workers", label: "Workers", path: "/fleet" },
   { Screen: LeasesScreen, icon: "leases", label: "Leases", path: "/leases" },
-  { Screen: WaitingScreen, icon: "waiting", label: "Waiting", path: "/waiting" },
+  { Screen: WaitingScreen, icon: "waiting", label: "Waiting", path: "/queue" },
   { Screen: AttentionScreen, icon: "attention", label: "Attention", path: "/attention" },
-  { Screen: EventsScreen, icon: "events", label: "Events", path: "/events" },
+  { Screen: EventsScreen, icon: "events", label: "Events", path: "/activity" },
   { Screen: UsageScreen, icon: "usage", label: "Usage", path: "/usage" },
 ];
 
-// why: a section's own pages live under its path (`/workers/<id>`), so a path belongs to the route
+// why: a section's own pages live under its path (`/fleet/<id>`), so a path belongs to the route
 // it starts with; only the overview is matched exactly, since every path starts with `/`.
 export function routeFor(path: string): Route | undefined {
   return ROUTES.find((route) =>

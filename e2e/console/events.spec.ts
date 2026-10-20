@@ -47,7 +47,7 @@ async function cliEvents(daemon: RunningDaemon): Promise<readonly Envelope[]> {
     .map((line) => JSON.parse(line) as Envelope);
 }
 
-async function openEvents(page: Page, daemon: RunningDaemon, path = "/events"): Promise<void> {
+async function openEvents(page: Page, daemon: RunningDaemon, path = "/activity"): Promise<void> {
   await page.goto(new URL(path, daemon.url).href);
   await signIn(page, daemon.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
@@ -80,7 +80,7 @@ async function shownEvents(page: Page): Promise<string[]> {
           [
             item.querySelector("time")?.getAttribute("datetime") ?? "",
             name?.textContent ?? "",
-            link?.getAttribute("href")?.replace("/events/", "") ?? "",
+            link?.getAttribute("href")?.replace("/activity/", "") ?? "",
           ].join(" "),
         );
       }
@@ -97,7 +97,7 @@ function asShown(event: Envelope): string {
 }
 
 async function openEvent(page: Page, id: string): Promise<void> {
-  const link = feed(page).locator(`a[href="/events/${encodeURIComponent(id)}"]`);
+  const link = feed(page).locator(`a[href="/activity/${encodeURIComponent(id)}"]`);
   await feed(page).evaluate((box) => box.scrollTo({ top: 0 }));
   for (let step = 0; step < 200 && (await link.count()) === 0; step += 1) {
     await feed(page).evaluate((box) => box.scrollBy({ top: box.clientHeight / 2 }));
@@ -129,7 +129,7 @@ test.describe("the events page", () => {
       await expect(granted).toHaveCount(1, { timeout: 1_000 });
       await granted.click();
       await expect(title(page)).toHaveText("lease.granted");
-      await expect(page).toHaveURL(/\/events\/[^/]+$/);
+      await expect(page).toHaveURL(/\/activity\/[^/]+$/);
       await expect(page.getByText("leaseId", { exact: true })).toBeVisible();
       await expect(page.locator("dd", { hasText: new RegExp(`^${id}$`) })).toBeVisible();
 
@@ -176,7 +176,7 @@ test.describe("the events page", () => {
 
       await openEvent(page, (started as Envelope).id);
 
-      await expect(page).toHaveURL(new RegExp(`/events/${(started as Envelope).id}$`));
+      await expect(page).toHaveURL(new RegExp(`/activity/${(started as Envelope).id}$`));
       await expect(title(page)).toHaveText("daemon.started");
       await expect(page.getByRole("heading", { level: 2, name: "Payload" })).toBeVisible();
       await page.reload();
@@ -189,11 +189,11 @@ test.describe("the events page", () => {
   test("an event the feed does not hold says so and links back", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await openEvents(page, host, "/events/evt_not_there");
+      await openEvents(page, host, "/activity/evt_not_there");
 
       await expect(page.getByText("Event not in the last hour.")).toBeVisible();
-      await page.getByRole("link", { name: "Back to events" }).click();
-      await expect(page).toHaveURL(/\/events$/);
+      await page.getByRole("link", { name: "Back to Activity" }).click();
+      await expect(page).toHaveURL(/\/activity$/);
     } finally {
       await host.dispose();
     }
@@ -358,7 +358,7 @@ async function keyboardOnly(page: Page, host: RunningDaemon, tab: string): Promi
   await expect(feed(page)).toBeFocused();
   await page.keyboard.press(tab);
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/events\/[^/?]+\?subject=lease$/);
+  await expect(page).toHaveURL(/\/activity\/[^/?]+\?subject=lease$/);
 }
 
 async function isFocused(locator: Locator): Promise<boolean> {
