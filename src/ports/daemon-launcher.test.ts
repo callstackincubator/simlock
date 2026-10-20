@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,6 +124,45 @@ describe("NodeDaemonLauncher's LaunchedDaemon", () => {
         rotated: { exit: { code: 2, signal: null }, output: "tail\nfatal\n" },
       });
     } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("NodeDaemonLauncher in a parent that awaits nothing", () => {
+  it("lets the parent process exit while the launched daemon keeps running", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+    const launcherModule = fileURLToPath(new URL("./daemon-launcher.ts", import.meta.url));
+    const parentScript = `
+      const { NodeDaemonLauncher } = await import(${JSON.stringify(launcherModule)});
+      const launcher = new NodeDaemonLauncher({
+        args: ["-e", "console.log(process.pid); setTimeout(() => {}, 30000)"],
+        command: process.execPath,
+        logPath: ${JSON.stringify(join(directory, "daemon.log"))},
+        simlockHome: ${JSON.stringify(directory)},
+      });
+      await launcher.launch();
+    `;
+    const parent = spawn(
+      process.execPath,
+      ["--experimental-transform-types", "--input-type=module", "-e", parentScript],
+      { stdio: "ignore" },
+    );
+    let childPid: number | undefined;
+    try {
+      const outcome = await Promise.race([
+        new Promise<string>((resolve) => parent.once("exit", () => resolve("parent exited"))),
+        new Promise<string>((resolve) => setTimeout(() => resolve("parent still running"), 8000)),
+      ]);
+      expect(outcome).toBe("parent exited");
+      await expect
+        .poll(async () => (await readFile(join(directory, "daemon.log"), "utf8")).trim())
+        .toMatch(/^\d+$/);
+      childPid = Number((await readFile(join(directory, "daemon.log"), "utf8")).trim());
+      expect(() => process.kill(childPid as number, 0)).not.toThrow();
+    } finally {
+      parent.kill();
+      if (childPid !== undefined) process.kill(childPid);
       await rm(directory, { force: true, recursive: true });
     }
   });
