@@ -270,14 +270,20 @@ test.describe("the Activity page", () => {
     }
   });
 
-  test("an event the feed does not hold says so and links back", async ({ page }) => {
+  test("an address for an event not among those loaded opens the drawer and says older events load as the list scrolls", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await openEvents(page, host, "/activity/evt_not_there");
 
-      await expect(page.getByText("Event not in the last hour.")).toBeVisible();
-      await page.getByRole("link", { name: "Back to Activity" }).click();
-      await expect(page).toHaveURL(/\/activity$/);
+      await expect(
+        page
+          .getByRole("dialog")
+          .getByText(
+            "This event is not among those loaded. Older events load as you scroll the list, or with Load older events.",
+          ),
+      ).toBeVisible();
     } finally {
       await host.dispose();
     }
