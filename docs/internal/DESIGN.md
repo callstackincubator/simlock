@@ -147,22 +147,22 @@ put together from them and draws nothing of its own that one of them already dra
   opens the links and the bottom block under it.
 - **Page.** A page that is not a list, as the overview: its title (`h1`) and its actions on the
   right, then its content. No subtitle: the title and what is under it say what the page is.
-- **List and inspector.** Queue, Attention and Activity (waiting requests, attention items,
-  events) are each a list on the left, 260–360px wide (wider for events), and the chosen thing in
-  an inspector filling the rest. The list has a header (the page's title as `h1`, a short count
+- **List and inspector.** Attention (attention items) is a list on the left, 260–360px wide, and
+  the chosen thing in an inspector filling the rest. The list has a header (the page's title as `h1`, a short count
   in mono beside it, then its filters), its rows, and the pager under them. A row is one or two
   short lines: a status square, a title, one figure on the right, and at most one muted line or
   bar under them; the chosen row is `--surface` with a 2px `--accent` bar on its left and
-  `aria-current="page"`. The address names the chosen thing (`/queue/<id>`). The inspector
+  `aria-current="page"`. The address names the chosen thing (`/attention/<id>`). The inspector
   has a breadcrumb, the thing's title (`h2`), one muted line under it, actions on the right, and
   then cards, facts, tabs and panels.
-- **Table and drawer.** Leases and Fleet are each a toolbar (the filter chips on the left, a search box on the
-  right, at the page title's padding) over a table. Leases' filters are its own; Fleet's are
+- **Table and drawer.** Leases, Fleet and Queue are each a table (Leases and Fleet under a toolbar: the filter
+  chips on the left, a search box on the right, at the page title's padding). Activity has the same toolbar over
+  an event feed that scrolls inside itself; Queue has no toolbar, only the Wait p95 tile above its table. Leases' filters are its own; Fleet's are
   All, Issues and Busy over workers, and a row opens the worker's own page (a title, a state
   line, a banner when the worker is disconnected or drained, cards, then tabs), on which a
-  device row opens the drawer. Choosing a lease or a device opens a **drawer**: a 480px
+  device row opens the drawer. Choosing a lease, a device, a request or an event opens a **drawer**: a 480px
   panel (full width under 768px) at the right edge over the page, with a dim layer over everything
-  else, the sidebar included. It has a title (a lease's holder, a device's model and runtime), a 40px square close button
+  else, the sidebar included. It has a title (a lease's holder, a device's model and runtime, a request's requester, an event's name), a 40px square close button
   (`IconButton`) and, for a lease, tabs. Escape, the close button and the dim layer close it. It slides in once, when it opens,
   and switching its tabs does not replay that. A lease's drawer uses no status colour of its own;
   a device's shows the device's state as a status, word and square.

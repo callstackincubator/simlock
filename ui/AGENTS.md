@@ -59,16 +59,22 @@ fails leaves none. `useDaemonMode` (`state/live.tsx`) gives it to state (ADR 003
 | `/`                          | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity                                                           |
 | `/fleet[/<id>[/<deviceId>]]` | Fleet     | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` |
 | `/leases[/<id>]`             | Leases    | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events)                                                     |
-| `/queue[/<id>]`              | Queue     | Wait p95 tile, list + inspector                                                                                                                |
+| `/queue[/<id>]`              | Queue     | Wait p95 tile + table; a request opens in a `Drawer`                                                                                           |
 | `/attention[/<id>]`          | Attention | list + inspector                                                                                                                               |
-| `/activity[/<id>]`           | Activity  | list + inspector with the payload                                                                                                              |
+| `/activity[/<id>]`           | Activity  | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload          |
 | `/usage`                     | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)                                                               |
 
 The sidebar groups the pages: Overview and Attention, then Operate (Fleet, Leases, Queue), then
 Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
-On a list page (Queue, Attention, Activity) the URL names the chosen item; with none, the first item shows on a wide screen
-and the list alone on a phone (Leases shows the list alone, and a lease opens in a drawer over it).
+On a list page (Attention) the URL names the chosen item; with none, the first item shows on a wide screen
+and the list alone on a phone. Leases, Queue and Activity show the list alone, and the chosen item opens in a drawer over it
+(`state/drawer.ts`: closing steps back when the drawer was opened from the list).
+
+Activity's `EventFeed` (`data/event-feed.ts`) holds the events: the stream, the last hour and the gap after a reconnect add
+newer ones, and `loadOlder` adds the 100 before the oldest held (`GET /v1/events?before=&limit=100`, or `?limit=100` with
+none held). It reports how the history stands (`HistoryState`: more, start, gone, failed); `ds/feed.tsx` calls `onNearEnd`
+within 20 rows of the end and draws the end row.
 Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
 ## Design system
