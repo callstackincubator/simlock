@@ -246,6 +246,7 @@ function harness(
     workers,
   });
   return {
+    alerts,
     poster,
     clock,
     logSink,
@@ -1035,6 +1036,23 @@ describe("GatewayDispatcher", () => {
       ).rejects.toMatchObject(unknown);
 
       expect(configured.poster.requests).toHaveLength(1);
+    });
+
+    it("stop during a test answers DAEMON_STOPPING", async () => {
+      const { alerts, dispatcher, poster } = harness({ alertDestinations: [generic] });
+      poster.respond = () => new Promise(() => {});
+      let outcome: unknown = "pending";
+      void dispatcher.dispatch("alerts.test", { destination: "ops" }, session()).then(
+        (value) => (outcome = value),
+        (error: unknown) => (outcome = error),
+      );
+      await vi.waitFor(() => expect(poster.requests).toHaveLength(1));
+      expect(outcome).toBe("pending");
+
+      alerts?.stop();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(outcome).toMatchObject({ code: "DAEMON_STOPPING" });
     });
   });
 
