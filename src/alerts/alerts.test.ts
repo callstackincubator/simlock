@@ -772,6 +772,31 @@ describe("alerts", () => {
     expect(h.poster.requests).toHaveLength(1);
   });
 
+  it("stop during a test aborts its try, cancels its timer and resolves stopped, and a test is not counted as discarded", async () => {
+    const h = harness();
+    h.poster.respond = () => new Promise(() => {});
+    h.emit("worker.connected", connected());
+    await settle();
+    let result: unknown = "pending";
+    void h.alerts.test("audit").then((value) => (result = value));
+    await settle();
+    expect(h.poster.requests).toHaveLength(2);
+    expect(h.poster.requests[1]?.signal.aborted).toBe(false);
+    expect(h.clock.pendingTimerCount).toBe(2);
+    expect(result).toBe("pending");
+    const lines = h.sink.records.length;
+
+    h.alerts.stop();
+    await settle();
+
+    expect(result).toEqual({ ok: false, reason: "stopped" });
+    expect(h.poster.requests[1]?.signal.aborted).toBe(true);
+    expect(h.clock.pendingTimerCount).toBe(0);
+    expect(h.sink.records.slice(lines).map((record) => [record.message, record.fields])).toEqual([
+      ["Alerts discarded at stop", { discarded: { audit: 1 } }],
+    ]);
+  });
+
   it("the bus handler returns before the post settles, and a poster that throws reaches neither the emitter nor other subscribers", async () => {
     const h = harness();
     const seen: string[] = [];
