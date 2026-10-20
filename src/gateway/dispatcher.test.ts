@@ -47,6 +47,8 @@ import {
 } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
+type SentRequest = Parameters<WebhookPoster["post"]>[0];
+
 const gatewayConfig = {
   capabilities: {},
   capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
@@ -932,9 +934,9 @@ describe("GatewayDispatcher", () => {
       ).resolves.toEqual({ destination: "chat", status: 200 });
 
       expect(poster.requests).toHaveLength(2);
-      const [first, second] = poster.requests;
-      expect(first?.url).toBe("https://hooks.example.com/ops-token");
-      expect(JSON.parse(first?.body ?? "")).toEqual({
+      const [first, second] = poster.requests as [SentRequest, SentRequest];
+      expect(first.url).toBe("https://hooks.example.com/ops-token");
+      expect(JSON.parse(first.body)).toEqual({
         id: "evt_sample-id",
         seq: 0,
         timestamp: 1_000,
@@ -942,20 +944,20 @@ describe("GatewayDispatcher", () => {
         payload: { destination: "ops" },
         module: "alerts",
       });
-      expect(first?.headers).toEqual({
+      expect(first.headers).toEqual({
         "Content-Type": "application/json",
         "User-Agent": "simlock/9.9.9",
         "X-Simlock-Event": "alerts.test-sent",
         "X-Simlock-Delivery": "evt_sample-id",
         "X-Simlock-Signature": `sha256=${createHmac("sha256", "s3cr3t")
-          .update(first?.body ?? "")
+          .update(first.body)
           .digest("hex")}`,
       });
-      expect(second?.url).toBe("https://hooks.slack.example.com/chat-token");
-      expect(JSON.parse(second?.body ?? "")).toEqual({
+      expect(second.url).toBe("https://hooks.slack.example.com/chat-token");
+      expect(JSON.parse(second.body)).toEqual({
         text: "🔔 Test message from the simlock gateway to destination chat.",
       });
-      expect(second?.headers).toEqual({
+      expect(second.headers).toEqual({
         "Content-Type": "application/json",
         "User-Agent": "simlock/9.9.9",
       });
