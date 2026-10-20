@@ -22,6 +22,24 @@ export class DaemonAlreadyRunningError extends Error {
   }
 }
 
+/**
+ * why: a second daemon must learn a daemon runs before it opens `state.db`, which migrates the
+ * live daemon's file. A socket nobody answers is left for `DaemonEndpointHost.start` to recover.
+ */
+export async function refuseWhenDaemonAnswers(options: {
+  readonly connector: IpcConnector;
+  readonly endpoint: string;
+}): Promise<void> {
+  try {
+    const live = await options.connector.connect(options.endpoint);
+    await live.close();
+  } catch (error: unknown) {
+    if (error instanceof IpcError && isUnavailable(error)) return;
+    throw error;
+  }
+  throw new DaemonAlreadyRunningError(options.endpoint);
+}
+
 export interface DaemonEndpointHostOptions {
   readonly connector: IpcConnector;
   readonly endpoint: string;

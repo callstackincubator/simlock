@@ -1,7 +1,7 @@
 # 0018. Leasing is one module, and every module is entered through its index
 
 - **Status:** Accepted — partly implemented: §3 (24 entry-point violations are grandfathered) and §4's rule on warm-pool names; §4's path rules superseded by
-  [0027](0027-dependency-cruiser-checks-every-component-boundary.md)
+  [0027](0027-dependency-cruiser-checks-every-component-boundary.md); §1's "one `state.json` write" narrowed by [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md)
 - **Date:** 2026-10-05
 - **Issue:** [#358](https://github.com/callstackincubator/simlock/issues/358)
 - **Supersedes:** nothing. Narrows [ADR 0005](0005-gateway-and-worker-modes.md)

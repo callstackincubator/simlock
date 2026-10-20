@@ -125,7 +125,7 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
-import { DaemonEndpointHost } from "./connection-host.js";
+import { DaemonEndpointHost, refuseWhenDaemonAnswers } from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
@@ -241,6 +241,7 @@ async function composeDaemon(
     logger,
   });
   const deviceDataTables = await resolveDeviceDataTables(options);
+  await refuseWhenDaemonAnswers({ connector: ipc, endpoint: socketPath });
   const state = await openStateDatabase({
     dataDirectory,
     // why: node:sqlite writes the real disk, so the state never goes through a daemon's injected filesystem
