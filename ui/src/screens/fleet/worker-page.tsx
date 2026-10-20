@@ -48,6 +48,11 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
         <Status tone={page.health.tone}>{page.health.word}</Status>
         {page.system === undefined ? null : <> · {page.system}</>}
       </p>
+      {page.banners.map((banner) => (
+        <p key={banner} className="worker-banner">
+          {banner}
+        </p>
+      ))}
       <Overview page={page} />
       <Tabs label="Worker" tabs={page.tabs} value={page.tab} onChange={page.chooseTab}>
         {page.tab === "devices" ? <DevicesTab page={page} /> : null}

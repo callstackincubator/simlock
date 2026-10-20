@@ -108,3 +108,11 @@
   gap: var(--space-1);
   min-width: 3rem;
 }
+
+.worker-banner {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--status-warn);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
