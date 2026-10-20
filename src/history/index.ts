@@ -58,8 +58,17 @@ export interface EventHistoryStatus {
   readonly rebuildFailed?: true;
 }
 
+export type EventsPageRead =
+  | { readonly kind: "events"; readonly events: EventEnvelope[] }
+  | { readonly kind: "not-kept"; readonly oldestTs: number }
+  | { readonly kind: "unavailable" };
+
 export interface EventHistoryHandle {
   replay(input?: { readonly sinceTs?: number }): Promise<EventEnvelope[]>;
+  replayPage(input: {
+    readonly beforeId?: string;
+    readonly limit: number;
+  }): Promise<EventsPageRead>;
   status(): EventHistoryStatus;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -138,6 +147,13 @@ class EventHistory implements EventHistoryHandle {
       });
       return bus.replay({ sinceTs: input.sinceTs });
     }
+  }
+
+  async replayPage(_input: {
+    readonly beforeId?: string;
+    readonly limit: number;
+  }): Promise<EventsPageRead> {
+    return { events: [], kind: "events" };
   }
 
   async start(): Promise<void> {

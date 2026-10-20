@@ -169,7 +169,7 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(
   options: {
-    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly tokenRecords?: readonly { id: string; label?: string }[];
     readonly withoutTokens?: boolean;
@@ -832,6 +832,7 @@ describe("GatewayDispatcher", () => {
           asked.push(input);
           return fromHistory;
         },
+        replayPage: async () => ({ events: [], kind: "events" }),
         status: () => ({ opened: true, writing: true }),
       },
     });
@@ -1976,6 +1977,8 @@ describe("GatewayDispatcher: usage.get", () => {
     const gate = { open: true };
     const eventHistory = {
       replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      replayPage: (input: { readonly beforeId?: string; readonly limit: number }) =>
+        rig.history.replayPage(input),
       status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
     };
     return { eventHistory, gate, rig };

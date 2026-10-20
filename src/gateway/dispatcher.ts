@@ -95,7 +95,7 @@ export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly workers: WorkerRegistry;
   /**
    * why: ADR 0035 §1; declared here, not imported from `src/alerts`, which this module may not

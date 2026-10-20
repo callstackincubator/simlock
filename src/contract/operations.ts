@@ -645,7 +645,11 @@ export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
   effect: "read",
-  input: z.object({ sinceTs: z.number().optional() }),
+  input: z.object({
+    beforeId: z.string().optional(),
+    limit: z.number().optional(),
+    sinceTs: z.number().optional(),
+  }),
   output: z.array(eventEnvelopeSchema),
 });
 

@@ -146,7 +146,7 @@ export interface DaemonServerEngineOptions {
   readonly catalog: CatalogReader;
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly historyPath?: string;
   readonly leases: LeaseCommands;
   readonly hostFacts: () => HostFacts;
