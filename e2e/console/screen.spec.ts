@@ -239,7 +239,7 @@ test.describe("the Screen pane", () => {
       // still connected is not observable from a browser -- it is pinned in
       // `src/stream/captures.test.ts`, where a capture can be held open past the lease.
       await logReached(started.dir, "closed", 1);
-      await expect(page.getByText("Lease not found.")).toBeVisible();
+      await expect(page.getByText("This lease is not held.")).toBeVisible();
       expect(await captureLogLines(started.dir, "opened")).toBe(1);
     } finally {
       await cleanup(started);

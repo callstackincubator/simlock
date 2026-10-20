@@ -382,7 +382,7 @@ test.describe("the leases page", () => {
     }
   });
 
-  test("a lease's page says it is not found once the lease is released, with a way back", async ({
+  test('a lease that ends while its drawer is open, and an address naming a lease never held, show "This lease is not held."', async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -395,22 +395,14 @@ test.describe("the leases page", () => {
 
       expect((await host.cli(["release", released.id])).code).toBe(0);
 
-      await expect(page.getByText("Lease not found.")).toBeVisible();
+      const drawer = page.getByRole("dialog");
+      await expect(drawer.getByText("This lease is not held.")).toBeVisible();
       await expect(fact(page, "Device", "UDID")).toHaveCount(0);
-      await page.getByRole("link", { name: "All leases" }).click();
-      expect(new URL(page.url()).pathname).toBe("/leases");
-    } finally {
-      await host.dispose();
-    }
-  });
+      await expect(drawer.getByRole("button", { name: "Close" })).toBeVisible();
 
-  test("an address naming no lease says it is not found", async ({ page }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await openLeases(page, host, "/leases/lse_nobody/");
-
-      await expect(page.getByText("Lease not found.")).toBeVisible();
-      await expect(page.getByRole("link", { name: "All leases" })).toBeVisible();
+      await page.goto(new URL("/leases/lse_nobody/", host.url).toString());
+      await expect(page.getByRole("dialog").getByText("This lease is not held.")).toBeVisible();
+      await expect(page.locator("main")).toContainText("No leases.");
     } finally {
       await host.dispose();
     }
