@@ -318,6 +318,28 @@ describe("alerts", () => {
     );
   });
 
+  it("formats bytes in GiB and MiB with one decimal rounded half up, dropping .0", async () => {
+    const h = harness([slackDestination({ events: ["disk.pressure-detected"] })]);
+    const cases: [number, string][] = [
+      [8_804_682_956, "8.2 GiB"],
+      [10_737_418_240, "10 GiB"],
+      [536_870_912, "512 MiB"],
+      [1_020_054_733, "972.8 MiB"],
+    ];
+    for (const [freeBytes] of cases) {
+      h.emit("disk.pressure-detected", {
+        workerId: "wrk_1",
+        freeBytes,
+        threshold: 10_737_418_240,
+      } as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      cases.map(([, size]) => `💾 Worker wrk_1 is low on disk: ${size} free (threshold 10 GiB).`),
+    );
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
