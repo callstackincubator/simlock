@@ -10,6 +10,12 @@ function leases(count: unknown): string {
   return count === 1 ? " while holding 1 lease" : ` while holding ${count} leases`;
 }
 
+function more(count: unknown): string {
+  return typeof count === "number" && count > 1
+    ? ` ${count} more refusals like it came before this one.`
+    : "";
+}
+
 export const SLACK_MESSAGES: Record<AlertEventName, Message> = {
   "worker.connected": (p, worker) =>
     p.version === undefined
@@ -17,7 +23,7 @@ export const SLACK_MESSAGES: Record<AlertEventName, Message> = {
       : `🟢 Worker ${worker} connected (simlock ${p.version}).`,
   "worker.disconnected": (p, worker) => `🔴 Worker ${worker} disconnected${leases(p.leaseCount)}.`,
   "worker.rejected": (p) =>
-    `⛔ A worker was refused (${p.reason}): ${p.label ?? p.workerId ?? "an unknown worker"}.`,
+    `⛔ A worker was refused (${p.reason}): ${p.label ?? p.workerId ?? "an unknown worker"}.${more(p.count)}`,
   "worker.drain-started": (_p, worker) => `⏸ Worker ${worker} is drained: it takes no new leases.`,
   "worker.drain-ended": (_p, worker) => `▶️ Worker ${worker} takes new leases again.`,
   "device.quarantine-abandoned": (p, worker) =>
