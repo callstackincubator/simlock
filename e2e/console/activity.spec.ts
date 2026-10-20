@@ -127,9 +127,17 @@ function stubbed(n: number, now: number): Stubbed {
   };
 }
 
+// why: one clock for every stubbed event, so a time the test names is the time the page shows.
+const BASE = Date.now();
+
 function stubbedRange(from: number, to: number): Stubbed[] {
-  const now = Date.now();
-  return Array.from({ length: to - from + 1 }, (_, index) => stubbed(to - index, now));
+  return Array.from({ length: to - from + 1 }, (_, index) => stubbed(to - index, BASE));
+}
+
+function localMinute(timestamp: number): string {
+  const date = new Date(timestamp);
+  const part = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}`;
 }
 
 interface StubbedAnswer {
@@ -357,6 +365,64 @@ test.describe("the Activity page", () => {
       expect(older(queries)).toEqual(["?before=evt_0030&limit=100", "?before=evt_0130&limit=100"]);
       expect(await rowOffset(page, "evt_0101")).toBe(inView);
       expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(100 * ROW_PX);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("each end row shows its wording: the history's start, the 10,000 cap, a 422, a 503 and a 500 with Try again, and a page of events already held", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openEvents(page, host);
+
+      let queries = await stubEvents(page, (query) => {
+        if (query.get("before") === null) return { events: stubbedRange(1, 30) };
+        return query.get("before") === "evt_0030" ? { events: stubbedRange(31, 70) } : {};
+      });
+      await page.reload();
+      await expect(
+        page.getByText(`Start of the history (${localMinute(BASE - 70 * 60_000)})`),
+      ).toBeVisible();
+      await expect.poll(() => eventsHeld(page)).toBe(70);
+      expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
+
+      queries = await stubEvents(page, () => ({ events: stubbedRange(1, 10_000) }));
+      await page.reload();
+      await expect(page.getByText("Showing the newest 10,000 events.")).toBeVisible();
+      expect(older(queries)).toEqual([]);
+
+      queries = await stubEvents(page, (query) =>
+        query.get("before") === null ? { events: stubbedRange(1, 30) } : { status: 422 },
+      );
+      await page.reload();
+      await expect(page.getByText("Older events are no longer kept.")).toBeVisible();
+      expect(older(queries)).toHaveLength(1);
+
+      for (const status of [503, 500]) {
+        let failing = true;
+        queries = await stubEvents(page, (query) => {
+          if (query.get("before") === null) return { events: stubbedRange(1, 30) };
+          return failing ? { status } : { events: stubbedRange(31, 40) };
+        });
+        await page.reload();
+        await expect(page.getByText("Older events are not available right now.")).toBeVisible();
+        expect(older(queries)).toHaveLength(1);
+        failing = false;
+        await page.getByRole("button", { name: "Try again" }).click();
+        await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
+        expect(older(queries)).toHaveLength(2);
+      }
+
+      queries = await stubEvents(page, () => ({ events: stubbedRange(1, 100) }));
+      await page.reload();
+      await expect.poll(() => eventsHeld(page)).toBe(100);
+      await feed(page).focus();
+      await page.keyboard.press("End");
+      await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
+      expect(older(queries)).toEqual(["?before=evt_0100&limit=100"]);
+      expect(await eventsHeld(page)).toBe(100);
     } finally {
       await host.dispose();
     }
