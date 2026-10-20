@@ -2130,6 +2130,25 @@ describe("operator-only listing routes", () => {
     expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
   });
 
+  it.each([
+    ["before=evt_abc&limit=0", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=501", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=x", "limit must be a whole number from 1 to 500"],
+    ["before=not-an-id", "before must be an event id"],
+    ["before=evt_abc&since=1h", "before and since cannot be used together"],
+    ["limit=50&since=1h", "limit and since cannot be used together"],
+  ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.replay"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request(`/v1/events?${query}`, { headers: operatorAuth });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST", message } });
+  });
+
   describe("GET /v1/stats", () => {
     const NOW = Date.parse("2026-10-16T12:00:00Z");
     const HOUR = 3_600_000;
