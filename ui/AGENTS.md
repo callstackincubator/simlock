@@ -50,15 +50,18 @@ ends. `model/proxy-refusal.ts` words a refusal.
 
 ## Pages
 
-| Path                | Screen    | Layout                                                                               |
-| ------------------- | --------- | ------------------------------------------------------------------------------------ |
-| `/`                 | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity |
-| `/workers[/<id>]`   | Workers   | list + inspector (`MasterDetail`)                                                    |
-| `/leases[/<id>]`    | Leases    | list + inspector; the inspector holds the live screen                                |
-| `/waiting[/<id>]`   | Waiting   | Wait p95 tile, list + inspector                                                      |
-| `/attention[/<id>]` | Attention | list + inspector                                                                     |
-| `/events[/<id>]`    | Events    | list + inspector with the payload                                                    |
-| `/usage`            | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)     |
+| Path                | Screen    | Layout                                                                                     |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------ |
+| `/`                 | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity       |
+| `/fleet[/<id>]`     | Fleet     | list + inspector (`MasterDetail`)                                                          |
+| `/leases[/<id>]`    | Leases    | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events) |
+| `/queue[/<id>]`     | Queue     | Wait p95 tile, list + inspector                                                            |
+| `/attention[/<id>]` | Attention | list + inspector                                                                           |
+| `/activity[/<id>]`  | Activity  | list + inspector with the payload                                                          |
+| `/usage`            | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)           |
+
+The sidebar groups the pages: Overview and Attention, then Operate (Fleet, Leases, Queue), then
+Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
 On a list page the URL names the chosen item; with none, the first item shows on a wide screen
 and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
@@ -68,12 +71,14 @@ and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/
 `src/ds/index.ts` exports every component. Tokens and base elements: `foundation.css`.
 
 - Frame: `AppFrame`, `Sidebar` (collapsible; width kept per browser by `data/preferences.ts`),
-  `Page`, `MasterDetail`, `ListPane`, `List`, `ListRow`, `Inspector`.
+  `Page`, `MasterDetail`, `ListPane`, `List`, `ListRow`, `Inspector`, `Drawer`, `DrawerTabs`
+  (a modal panel over the page; Base UI), `Toolbar` (filters left, search right), `DesignProvider`
+  (Base UI's `CSPProvider`, so no `<style>` element).
 - Content: `Panel`, `Card`, `Row`, `Grid`, `StatRow`, `StatTile`, `Facts`, `DataTable`, `Pager`,
   `MinuteChart`, `MinuteTable`, `Empty`, `Id`, `Loaded`.
 - Signals: `Status` (square and word), `StatusDot` (square alone, the word as its name),
   `Meter`, `Slots`, `ShareBar`, `SlotLegend`.
-- Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `Icon`.
+- Controls: `Button`, `ButtonLink`, `IconButton`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
 
 ## Rules
 

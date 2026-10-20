@@ -133,7 +133,8 @@ put together from them and draws nothing of its own that one of them already dra
 
 - **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
   wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
-  Workers, Leases, Waiting, Attention, Events, Usage), then at the bottom the connection as a status,
+  Attention, then the **Operate** group: Fleet, Leases, Queue; then the **Observe** group:
+  Activity, Usage; each group under its small label, hidden when collapsed), then at the bottom the connection as a status,
   "Signed in as <name>" (hidden when collapsed, where the Sign out tooltip reads "Sign out (<name>)"),
   **Sign out** (absent for a proxy person with no sign-out address) and the collapse button. A link is an icon and its label in `--text-muted`; the
   current one is `--text` on `--field` with a 2px `--accent` bar on its left and
@@ -146,15 +147,21 @@ put together from them and draws nothing of its own that one of them already dra
   opens the links and the bottom block under it.
 - **Page.** A page that is not a list, as the overview: its title (`h1`) and its actions on the
   right, then its content. No subtitle: the title and what is under it say what the page is.
-- **List and inspector.** Every page of things (workers, leases, waiting requests, attention
-  items, events) is a list on the left, 260–360px wide (wider for events), and the chosen thing in
+- **List and inspector.** Fleet, Queue, Attention and Activity (workers, waiting requests,
+  attention items, events) are each a list on the left, 260–360px wide (wider for events), and the chosen thing in
   an inspector filling the rest. The list has a header (the page's title as `h1`, a short count
   in mono beside it, then its filters), its rows, and the pager under them. A row is one or two
   short lines: a status square, a title, one figure on the right, and at most one muted line or
   bar under them; the chosen row is `--surface` with a 2px `--accent` bar on its left and
-  `aria-current="page"`. The address names the chosen thing (`/workers/<id>`). The inspector
+  `aria-current="page"`. The address names the chosen thing (`/fleet/<id>`). The inspector
   has a breadcrumb, the thing's title (`h2`), one muted line under it, actions on the right, and
   then cards, facts, tabs and panels.
+- **Table and drawer.** Leases is a toolbar (the filter chips on the left, a search box on the
+  right, at the page title's padding) over a table. Choosing a row opens a **drawer**: a 480px
+  panel (full width under 768px) at the right edge over the page, with a dim layer over everything
+  else, the sidebar included. It has a title (the holder), a 40px square close button (`IconButton`)
+  and tabs. Escape, the close button and the dim layer close it. It slides in once, when it opens,
+  and switching its tabs does not replay that. It uses no status colour of its own.
 - **Stat tiles.** A row of tiles: a label, a big number (`--text-xl`), and a short unit in mono
   beside it ("of 48", "last hour"). A tile that leads somewhere is a link as a whole. A tile
   shows only numbers its page already has; it never makes a request of its own.
