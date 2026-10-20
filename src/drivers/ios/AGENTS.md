@@ -81,7 +81,6 @@ Passthrough —
   before `--`. Adds `--device <udid>` unless the caller names one.
 
 Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>`; physical `SIMLOCK_DEVICE_UDID=<udid>`.
-
 Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture
 <udid> --codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>` for a
 simulator; a physical iPhone runs `simlock-device-capture` with the same arguments, no such
