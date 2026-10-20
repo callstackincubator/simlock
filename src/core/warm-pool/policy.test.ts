@@ -98,12 +98,14 @@ function classDemand(
   mode: "slim" | "full" = "full",
   platform: "ios" | "android" = "ios",
   inFlight = false,
+  model = "iPhone 15",
 ) {
   return {
     classOf,
     inFlight,
     mode,
     platform,
+    spec: spec(model, { platform, ...(mode === "slim" ? { mode } : {}) }),
     requirement: {
       imageTag: undefined,
       osVersion: { kind: "installed", versions: ["26.0"] },
@@ -119,6 +121,7 @@ function modelDemand(model: string): WaitingDemand {
     inFlight: false,
     mode: "full",
     platform: "ios",
+    spec: spec(model),
     requirement: {
       imageTag: undefined,
       osVersion: { kind: "exact", version: "26.0" },
@@ -184,6 +187,55 @@ function view(
 }
 
 describe("warm pool policy", () => {
+  it("proposes, for waiters behind the head and in queue order, one creation of each waiter's spec, up to maxConcurrentBoots, and nothing for the head", () => {
+    const creation = (model: string) => ({
+      action: "provision",
+      reason: "waiting-request",
+      spec: spec(model),
+      target: spec(model),
+    });
+    const waiter = (model: string, inFlight = false) => classDemand("full", "ios", inFlight, model);
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+    const shutDown = device("shut", "shutdown", { endedAgo: 20 * minute });
+    const three = [waiter("iPhone 15", true), waiter("iPhone 17"), waiter("iPhone 16")];
+
+    expect(evaluate(view([busy], { maxConcurrentBoots: 3, waiting: three }))).toEqual([
+      creation("iPhone 17"),
+      creation("iPhone 16"),
+    ]);
+    expect(
+      evaluate(
+        view([busy], {
+          maxConcurrentBoots: 3,
+          waiting: [waiter("iPhone 15"), waiter("iPhone 17"), waiter("iPhone 16")],
+        }),
+      ),
+    ).toEqual([creation("iPhone 17"), creation("iPhone 16")]);
+    const refused = {
+      ...view([busy], {
+        maxConcurrentBoots: 1,
+        waiting: [classDemand("full", "android"), waiter("iPhone 17")],
+      }),
+      capacity: capacityOf([busy], { android: 0, global: 10 }),
+    };
+    expect(evaluate(refused)).toEqual([creation("iPhone 17")]);
+    const atCap = view([busy], {
+      inFlight: [spec("iPhone 15")],
+      maxConcurrentBoots: 1,
+      targets: [{ count: 1, spec: spec("iPad Pro", { osVersion: "18.0" }) }],
+      waiting: [waiter("iPhone 15", true), waiter("iPhone 17")],
+    });
+    expect(plan(atCap).proposals).toEqual([]);
+    expect(plan(atCap).targets[0]?.short).toBeUndefined();
+    expect(evaluate(view([shutDown], { waiting: [waiter("iPhone 15")] }))).toEqual([
+      { action: "boot", deviceId: "shut", reason: "waiting-request" },
+    ]);
+    expect(evaluate(view([busy], { waiting: [waiter("iPhone 15")] }))).toEqual([]);
+    expect(
+      evaluate(view([shutDown], { inFlight: [spec("iPad Pro")], waiting: [waiter("iPhone 15")] })),
+    ).toEqual([]);
+  });
+
   it("proposes a boot, not a shutdown, for a released iPhone 15 that serves a waiting class request at the running cap", () => {
     const released = device("lse_15", "shutdown", { endedAgo: 1_000 });
     const leased = device("busy", "leased", { spec: spec("iPhone 17") });

@@ -136,6 +136,7 @@ export interface WaitingDemand {
   readonly platform: Platform;
   readonly requirement: DeviceRequirement;
   readonly mode: DeviceMode;
+  readonly spec: VirtualSpec;
   readonly classOf: (model: string) => DeviceClass | undefined;
 }
 

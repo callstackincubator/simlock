@@ -643,6 +643,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
               mode: specMode(waiter.spec),
               platform: waiter.spec.platform,
               requirement: waiter.requirement ?? exactRequirement(waiter.spec),
+              spec: waiter.spec,
             },
           ],
     );
