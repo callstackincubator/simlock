@@ -1,7 +1,16 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
-import { expect, NAV, NAV_LABELS, openFromNav, settled, signIn, test } from "./fixtures.js";
+import {
+  expect,
+  NAV,
+  NAV_GROUPS,
+  NAV_LABELS,
+  openFromNav,
+  settled,
+  signIn,
+  test,
+} from "./fixtures.js";
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -98,6 +107,35 @@ test.describe("the shell", () => {
     await page.getByRole("button", { name: "Sign out" }).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByLabel("Operator token")).toBeVisible();
+  });
+
+  test("the sidebar shows Overview and Attention, then the Operate group, then the Observe group, each with its label", async ({
+    daemon,
+    page,
+  }) => {
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await page.goto("/");
+    await signIn(page, daemon.tokens.operator);
+    const nav = page.getByRole("navigation", { name: "Console" });
+    await expect(nav.getByRole("link")).toHaveText([...NAV_LABELS]);
+    expect(NAV.map((entry) => `${entry.label} ${entry.path}`)).toEqual([
+      "Overview /",
+      "Attention /attention",
+      "Fleet /fleet",
+      "Leases /leases",
+      "Queue /queue",
+      "Activity /activity",
+      "Usage /usage",
+    ]);
+
+    await expect(nav.getByRole("group")).toHaveCount(NAV_GROUPS.length);
+    for (const group of NAV_GROUPS) {
+      const section = nav.getByRole("group", { name: group.label });
+      await expect(nav.getByText(group.label, { exact: true })).toBeVisible();
+      await expect(section.getByRole("link")).toHaveText([...group.links]);
+    }
+    await expect(nav.getByRole("link", { name: "Overview" })).toHaveCount(1);
+    await expect(nav.getByRole("group").getByRole("link", { name: "Attention" })).toHaveCount(0);
   });
 
   test("the sidebar collapses to icons on request, keeps every link's name, and stays collapsed on every page and after a reload", async ({

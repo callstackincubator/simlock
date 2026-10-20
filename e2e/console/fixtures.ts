@@ -503,12 +503,17 @@ export async function signIn(page: Page, token: string): Promise<void> {
 
 export const NAV = [
   { label: "Overview", path: "/" },
-  { label: "Workers", path: "/fleet" },
-  { label: "Leases", path: "/leases" },
-  { label: "Waiting", path: "/queue" },
   { label: "Attention", path: "/attention" },
-  { label: "Events", path: "/activity" },
+  { label: "Fleet", path: "/fleet" },
+  { label: "Leases", path: "/leases" },
+  { label: "Queue", path: "/queue" },
+  { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
+] as const;
+
+export const NAV_GROUPS = [
+  { label: "Operate", links: ["Fleet", "Leases", "Queue"] },
+  { label: "Observe", links: ["Activity", "Usage"] },
 ] as const;
 
 export const NAV_LABELS = NAV.map((entry) => entry.label);
