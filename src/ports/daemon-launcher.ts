@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /** Starts the detached daemon owned by the operating system rather than the CLI. */
@@ -75,6 +75,8 @@ export class NodeDaemonLauncher implements DaemonLauncher {
     // this `open` is what first creates `daemon.log` for an auto-launched daemon -- the daemon's
     // own sink only appends to the file this one made.
     const log = await open(this.options.logPath, "a", 0o600);
+    const { ino, size } = await log.stat();
+    const logPath = this.options.logPath;
     try {
       const child = spawn(this.options.command, this.options.args, {
         detached: true,
@@ -84,15 +86,18 @@ export class NodeDaemonLauncher implements DaemonLauncher {
         env: { ...process.env, SIMLOCK_HOME: this.options.simlockHome },
         stdio: ["ignore", log.fd, log.fd],
       });
+      const exited = new Promise<DaemonExit>((resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);
         child.once("error", reject);
       });
       child.unref();
+      return { exited, readOutput: () => readLogSince(logPath, ino, size) };
     } finally {
       await log.close();
     }
-    return { exited: Promise.resolve({ code: null, signal: null }), readOutput: async () => "" };
   }
 }
 
@@ -113,4 +118,20 @@ export class FakeDaemonLauncher implements DaemonLauncher {
       readOutput: async () => output,
     };
   }
+}
+
+const MAX_OUTPUT_BYTES = 64 * 1024;
+
+// why: `NodeFileLogSink` rotates by renaming the log to `<path>.1`, so the bytes written since
+// the launch can sit in either file; the inode noted at launch says which one is the old log.
+async function readLogSince(logPath: string, ino: number, size: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  if ((await stat(logPath)).ino === ino) {
+    chunks.push((await readFile(logPath)).subarray(size));
+  } else {
+    const rotatedPath = `${logPath}.1`;
+    if ((await stat(rotatedPath)).ino !== ino) throw new Error("daemon.log was replaced");
+    chunks.push((await readFile(rotatedPath)).subarray(size), await readFile(logPath));
+  }
+  return Buffer.concat(chunks).subarray(-MAX_OUTPUT_BYTES).toString("utf8");
 }
