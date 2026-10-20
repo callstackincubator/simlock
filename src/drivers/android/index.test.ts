@@ -3905,7 +3905,7 @@ describe("AndroidDriver console ports across a restart", () => {
         return inner.run(command, args, options);
       },
     };
-    const after = await createDriver(filesystem, runner);
+    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
     const reality = await after.listManaged();
     const orphan = reality.devices[0]!;
     expect(orphan).toMatchObject({ deviceId: running.deviceId, runState: "running" });
