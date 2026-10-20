@@ -29,6 +29,7 @@ export type WarmProposal =
         | "disabled"
         | "waiting-request"
         | "recently-released"
+        | "displaced"
         | "target"
         | "never-leased-idle";
       readonly target?: VirtualSpec;
@@ -174,6 +175,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const keeps = queued.proposals;
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
+  const proposed = new Set([...shutdowns, ...unneeded].map((proposal) => proposal.deviceId));
   const wanted = planTargets(
     view,
     plannedKinds(targets, view.learned),
@@ -182,6 +184,13 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
     room,
     held,
     idle,
+    view.handoffInFlight
+      ? []
+      : running.filter(
+          (device) =>
+            !proposed.has(device.id) &&
+            !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
+        ),
   );
   return {
     proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
@@ -613,6 +622,10 @@ interface TargetPlan {
   readonly taken: Set<string>;
   readonly stuck: ReadonlySet<Platform>;
   readonly proposals: WarmProposal[];
+  readonly kinds: readonly PlannedKind[];
+  /** why: the idle ready devices a newer learned kind may shut down for a slot, least recently used first. */
+  readonly victims: VirtualDevice[];
+  readonly displaced: Set<string>;
   /** Pool boots and creations running or proposed, which `maxConcurrentBoots` bounds. */
   started: number;
 }
@@ -631,19 +644,26 @@ function planTargets(
   queued: QueuePass,
   room: Slots,
   held: Slots,
-  isIdle: (device: VirtualDevice) => boolean,
+  isIdleDevice: (device: VirtualDevice) => boolean,
+  victims: readonly VirtualDevice[],
 ): { proposals: WarmProposal[]; reports: TargetReport[] } {
   const keepBoots = queued.proposals.flatMap((proposal) =>
     proposal.action === "boot" ? [proposal.deviceId] : [],
   );
+  const displaced = new Set<string>();
+  const isIdle = (device: VirtualDevice): boolean =>
+    isIdleDevice(device) && !displaced.has(device.id);
   const plan: TargetPlan = {
     bootable,
+    displaced,
     held,
+    kinds: targets,
     proposals: [],
     room,
     started: queued.started,
     stuck: queued.stuck,
     taken: new Set(keepBoots),
+    victims: [...victims],
     view,
   };
   const pending = (spec: VirtualSpec): number =>
@@ -693,11 +713,33 @@ function fillTarget(
   if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return filling ? undefined : "boot-failed";
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
-    const refused = addOne(plan, spec);
+    let refused = addOne(plan, spec);
+    while (refused === "running-limit" && displaceFor(plan, spec)) refused = addOne(plan, spec);
     if (refused !== undefined) return added > 0 || filling ? undefined : refused;
     added += 1;
   }
   return undefined;
+}
+
+/**
+ * why: a learned kind short for a running slot takes the least recently used idle ready device of
+ * an older learned kind: the newest kinds are the ones asked for most lately. A configured target
+ * and a kind short for anything but the slot never displace; configured targets come first in
+ * `kinds`, so none is older than a learned kind and none is displaced.
+ */
+function displaceFor(plan: TargetPlan, spec: VirtualSpec): boolean {
+  const index = plan.kinds.findIndex((entry) => sameSpec(entry.spec, spec));
+  if (plan.kinds[index]?.origin !== "learned") return false;
+  const victim = plan.victims.find((device) => {
+    const entry = plan.kinds.findIndex((candidate) => sameSpec(candidate.spec, device.spec));
+    return entry > index && device.spec.platform === spec.platform;
+  });
+  if (victim === undefined) return false;
+  plan.victims.splice(plan.victims.indexOf(victim), 1);
+  plan.displaced.add(victim.id);
+  release(plan.room, victim);
+  plan.proposals.push({ action: "shutdown", deviceId: victim.id, reason: "displaced" });
+  return true;
 }
 
 /** Proposes one boot of a shut-down device of the kind, else one creation; or why it cannot. */
