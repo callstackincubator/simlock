@@ -294,6 +294,30 @@ describe("alerts", () => {
     );
   });
 
+  it("formats an age in seconds, minutes, and hours with minutes", async () => {
+    const h = harness([slackDestination({ events: ["device.stalled-transition-detected"] })]);
+    const cases: [number, string][] = [
+      [45_000, "45 s"],
+      [840_000, "14 min"],
+      [3_900_000, "1 h 5 min"],
+      [7_200_000, "2 h"],
+      [59_999, "59 s"],
+    ];
+    for (const [ageMs] of cases) {
+      h.emit("device.stalled-transition-detected", {
+        workerId: "wrk_1",
+        deviceId: "dev_1",
+        state: "booting",
+        ageMs,
+      } as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      cases.map(([, age]) => `⏳ Device dev_1 on wrk_1 has been booting for ${age}.`),
+    );
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
