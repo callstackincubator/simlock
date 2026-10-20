@@ -2089,7 +2089,7 @@ describe("redactConfig", () => {
     expect(config.gateway.token).toBe("secret-join-token");
   });
 
-  it("masks every destination's url and secret, keeps name, format and events, and leaves its input untouched", async () => {
+  it("masks every destination's url and secret, keeps name, format and events, and leaves its input untouched (a slack destination gets no secret key)", async () => {
     const destinations = [
       {
         name: "audit",
@@ -2105,6 +2105,12 @@ describe("redactConfig", () => {
         events: ["worker.disconnected"],
         secret: "other",
       },
+      {
+        name: "chat",
+        format: "slack",
+        url: "https://hooks.slack.com/services/T0/B0/token",
+        events: ["worker.connected"],
+      },
     ];
     for (const token of ["join-token", undefined]) {
       const config = await load({
@@ -2119,7 +2125,7 @@ describe("redactConfig", () => {
         destinations.map((destination) => ({
           ...destination,
           url: REDACTED_VALUE,
-          secret: REDACTED_VALUE,
+          ...("secret" in destination ? { secret: REDACTED_VALUE } : {}),
         })),
       );
       expect(redacted.gateway.token).toBe(token === undefined ? undefined : REDACTED_VALUE);
