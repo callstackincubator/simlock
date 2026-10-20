@@ -50,12 +50,14 @@ import {
   hostAbiFor,
   SdkMissingError,
   type AndroidEmulatorLaunchOptions,
+  androidDeviceDataTable,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
   type SlimmedFact,
+  iosDeviceDataTable,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
 import { type Auth, createAuth } from "../auth/index.js";
@@ -1119,9 +1121,12 @@ const WORKER_UPGRADE_STEP =
 const GATEWAY_UPGRADE_STEP =
   "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.";
 
-/** why: the drivers' table code, which the production map fills in once the real drivers have tables. */
+/** why: both tables whatever the host's platform, so a device whose driver was refused still loads. */
 export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTable> {
-  return new Map();
+  return new Map([
+    ["android", androidDeviceDataTable],
+    ["ios", iosDeviceDataTable],
+  ]);
 }
 
 /**
