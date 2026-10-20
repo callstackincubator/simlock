@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,7 +36,10 @@ async function startDaemon(
   config: Readonly<Record<string, unknown>>,
 ): Promise<LaneDaemon> {
   const home = await mkdtemp(join(tmpdir(), "simlock-real-proxy-"));
-  await writeFile(join(home, "config.json"), JSON.stringify({ mode, ...config }));
+  const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
+  const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
+  await mkdir(dataDirectory, { recursive: true });
+  await writeFile(join(dataDirectory, "config.json"), JSON.stringify(config));
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     SIMLOCK_HOME: home,
@@ -48,20 +51,20 @@ async function startDaemon(
         }
       : {}),
   };
-  const socketPath = join(home, "daemon.sock");
+  const socketPath = join(dataDirectory, "daemon.sock");
   const dispose = async () => {
-    await cli(["daemon", "stop"], env).catch(() => undefined);
+    await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
     await waitFor(() => !existsSync(socketPath), { timeout: 10_000 }).catch(() => undefined);
     await rm(home, { force: true, recursive: true });
   };
   try {
-    const started = await cli(["daemon", "start"], env, { timeout: 30_000 });
+    const started = await cli([...gatewayFlag, "daemon", "start"], env, { timeout: 30_000 });
     if (started.code !== 0) throw new Error(`daemon start failed: ${started.stderr}`);
   } catch (error: unknown) {
     await dispose();
     throw error;
   }
-  return { cli: (args) => cli(args, env), dispose };
+  return { cli: (args) => cli([...gatewayFlag, ...args], env), dispose };
 }
 
 export async function startGateway(): Promise<LaneDaemon> {

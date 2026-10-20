@@ -2,6 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildCliEnvironment } from "../cli/index.js";
@@ -145,6 +148,8 @@ describe("MCP stdio lifecycle", () => {
     // The connection dies with no tool call in sight, and the renew timer comes due.
     toolCallClient.emitConnectionLost();
     clock.advance(4_115);
+    // why: the renew connect looks the daemon's folder up on disk first, which takes more than microtasks.
+    await vi.waitFor(() => expect(connectToRunningDaemon).toHaveBeenCalledTimes(1));
     for (let index = 0; index < 10; index += 1) await Promise.resolve();
 
     expect(embedderConnects, "the timer did not reach for the connect it was not given").toBe(1);
@@ -153,6 +158,54 @@ describe("MCP stdio lifecycle", () => {
 
     await mcpClient.close();
     await runner.shutdown();
+  });
+
+  it("renews a --gateway session's lease on the gateway's socket, not the worker's", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mcp-gw-"));
+    vi.stubEnv("SIMLOCK_HOME", root);
+    try {
+      await mkdir(join(root, "gateway"));
+      await writeFile(join(root, "gateway", "instance.json"), "{}");
+      const clock = new FakeClock(0);
+      const toolCallClient = new FakeSimlockClient();
+      toolCallClient.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+      const renewClient = new FakeSimlockClient();
+      renewClient.renewLeaseImpl = (input) =>
+        Promise.resolve({ ...sampleGrant().lease, id: input.leaseId });
+      renewClient.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+      connectWithAutoLaunch.mockReset().mockResolvedValue(toolCallClient);
+      connectToRunningDaemon.mockReset().mockResolvedValue(renewClient);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const runner = await startMcpStdio({
+        clock,
+        createTransport: () => serverTransport,
+        daemonFlag: "gateway",
+        requesterId: "mcp-test",
+        signals: new FakeSignals(),
+      });
+      const mcpClient = new Client({ name: "test", version: "1.0.0" });
+      await mcpClient.connect(clientTransport);
+      await mcpClient.request(
+        {
+          method: "tools/call",
+          params: { arguments: { model: "iPhone", platform: "ios" }, name: "lease_simulator" },
+        },
+        CallToolResultSchema,
+      );
+
+      toolCallClient.emitConnectionLost();
+      clock.advance(4_115);
+      await vi.waitFor(() => expect(connectToRunningDaemon).toHaveBeenCalledTimes(1));
+
+      expect(connectToRunningDaemon.mock.calls[0]?.[0]).toMatchObject({
+        socketPath: join(root, "gateway", "daemon.sock"),
+      });
+      await mcpClient.close();
+      await runner.shutdown();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("sources the connection principal from SIMLOCK_AGENT_ID when no requesterId is given explicitly", async () => {
@@ -226,7 +279,7 @@ describe("MCP stdio lifecycle", () => {
       const cli = buildCliEnvironment(
         {
           clock: new FakeClock(0),
-          dataDirectory: "/simlock",
+          daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
           filesystem: new MemoryFilesystem(),
           ipc: new MemoryIpcTransport(),
           launcher: new FakeDaemonLauncher(),

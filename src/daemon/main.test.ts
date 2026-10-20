@@ -43,6 +43,7 @@ import {
   modelPreferenceWiring,
   discoverDrivers,
   emitSlimDiagnostic,
+  parseDaemonArgv,
   processRunnerFor,
   startDaemon,
   type DriverDiscoveryContext,
@@ -2707,8 +2708,8 @@ describe("startDaemon logger wiring", () => {
     const { daemon, sink } = await start({
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        mode: "gateway",
       },
+      role: "gateway",
     });
 
     await expect(
@@ -2822,6 +2823,7 @@ describe("startDaemon with the agent-device edge", () => {
       readonly modules?: readonly FakeModule[];
       readonly processRunner: ScriptedProcessRunner;
       readonly processSupervisor: FakeProcessSupervisor;
+      readonly role?: "gateway";
     },
   ) {
     const clock = new FakeClock(1_000);
@@ -2829,6 +2831,7 @@ describe("startDaemon with the agent-device edge", () => {
     const daemon = await startDaemon({
       clock,
       dataDirectory: setup.directory,
+      ...(ports.role === undefined ? {} : { role: ports.role }),
       drivers: ports.drivers ?? [
         new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
       ],
@@ -3002,14 +3005,18 @@ describe("startDaemon with the agent-device edge", () => {
       {
         capabilities: { "agent-device": { command, enabled: true } },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        mode: "gateway",
       },
       { record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
     const processSupervisor = new FakeProcessSupervisor([900]);
 
-    await startEdge(setup, { drivers: [], processRunner: runner, processSupervisor });
+    await startEdge(setup, {
+      drivers: [],
+      processRunner: runner,
+      processSupervisor,
+      role: "gateway",
+    });
     await pollUntil(() => false, 100);
 
     expect(runner.calls).toEqual([]);
@@ -3522,8 +3529,8 @@ describe("startDaemon in gateway mode host load", () => {
       clock,
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        mode: "gateway",
       },
+      role: "gateway",
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
@@ -3588,8 +3595,8 @@ describe("startDaemon in gateway mode host load", () => {
           clock,
           configOverrides: {
             http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-            mode: "gateway",
           },
+          role: "gateway",
           dataDirectory: first.directory,
           drivers: [],
           filesystem: new MemoryFilesystem(),
@@ -3609,4 +3616,39 @@ describe("startDaemon in gateway mode host load", () => {
     expect(losingProbe.reads).toBe(0);
     expect(withLoser).toBe(withoutLoser);
   });
+});
+
+describe("daemon role (ADR 0034)", () => {
+  it("startDaemon with role gateway and no data directory uses <root>/gateway", async () => {
+    const root = await mkdtemp(join(tmpdir(), "simlock-main-root-"));
+    temporaryDirectories.push(root);
+    vi.stubEnv("SIMLOCK_HOME", root);
+    try {
+      const daemon = await startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        },
+        drivers: [],
+        role: "gateway",
+      });
+      runningDaemons.push(daemon);
+
+      expect(existsSync(join(root, "gateway", "instance.json"))).toBe(true);
+      expect(existsSync(join(root, "instance.json"))).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    [[], "worker"],
+    [["--gateway"], "gateway"],
+    [["--gateway", "x"], undefined],
+    [["--worker"], undefined],
+  ] as const)(
+    "parseDaemonArgv reads no arguments as a worker, --gateway as a gateway, and anything else as nothing (%j)",
+    (argv, expected) => {
+      expect(parseDaemonArgv(argv)).toBe(expected);
+    },
+  );
 });

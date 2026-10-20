@@ -612,7 +612,8 @@ describe("HTTP API", () => {
 
     it("with an operator token returns the same body as simlock stats --json for a fixed from/to, without requests, and &ledger=1 adds them, on a gateway with one worker; an agent token gets 403", async () => {
       const { env: gateway, port } = await withHttpDaemon((port) => ({
-        configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+        configOverrides: { http: { host: "127.0.0.1", port } },
+        role: "gateway",
         driver: "none",
       }));
       const minted = await gateway.cli(["token", "create", "--role", "worker"]);

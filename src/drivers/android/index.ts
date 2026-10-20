@@ -238,6 +238,11 @@ interface DeviceState {
    */
   port: number | undefined;
   snapshotExpected: boolean;
+  /**
+   * why: Set for a device this process never provisioned: after a restart an emulator it never
+   * started may still run the AVD, so `destroy` looks for one.
+   */
+  restored?: boolean;
 }
 
 interface SystemImage {
@@ -1064,10 +1069,12 @@ export class AndroidDriver implements Driver {
     const data = this.#dataFor(device);
     await this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
-      // why: After a restart a stopped device's recorded port may be another device's (#52), so only
-      // an emulator this driver started is sent a kill.
+      // why: After a restart a stopped device's recorded port may be another device's (#52), so a
+      // handle-less device is sent a kill only on a serial whose own answer names its AVD directory.
       if (state.handle !== undefined) {
         await this.#shutdown(this.#onReservedPort(data, state), state);
+      } else if (state.restored === true) {
+        await this.#stopUnownedEmulator(data);
       }
       await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
       this.#devices.delete(data.avdName);
@@ -1075,6 +1082,59 @@ export class AndroidDriver implements Driver {
         this.#portAllocator.release(state.port);
       }
     });
+  }
+
+  /**
+   * why: An orphan found after a restart has no handle and no usable serial, so the emulator
+   * running its AVD is found by asking each attached one which AVD folder it runs. Deletion is
+   * refused when that emulator does not exit in time, never done under a live process.
+   */
+  async #stopUnownedEmulator(data: AndroidDriverData): Promise<void> {
+    const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
+    const { settledSerials } = await this.#scanAdbSerials();
+    const serials: string[] = [];
+    for (const serial of settledSerials) {
+      const answered = await this.#answeredAvdPathOf(serial);
+      if (answered === undefined || answered === "") {
+        throw new DriverCrashError(
+          `Refusing to delete ${data.avdName}: could not tell which AVD the emulator on ${serial} runs`,
+        );
+      }
+      if (await this.#isOwnAvdPath(answered, expected)) serials.push(serial);
+    }
+    for (const serial of serials) {
+      await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
+        env: this.#env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
+      });
+    }
+    const startedAt = this.#clock.now();
+    let remaining = serials;
+    while (remaining.length > 0) {
+      const attached = (await this.#scanAdbSerials()).settledSerials;
+      remaining = remaining.filter((serial) => attached.includes(serial));
+      if (remaining.length === 0) return;
+      if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
+        throw new DriverCrashError(
+          `Refusing to delete ${data.avdName}: its emulator on ${remaining.join(", ")} did not exit`,
+        );
+      }
+      await this.#delay(PORT_POLL_INTERVAL_MS);
+    }
+  }
+
+  /** why: Bounded like the ownership gate; undefined means the emulator did not say. */
+  async #answeredAvdPathOf(serial: string): Promise<string | undefined> {
+    try {
+      const answer = await this.#processRunner.run(
+        this.#sdk.adb,
+        ["-s", serial, "emu", "avd", "path"],
+        { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+      );
+      return answer.code === 0 ? answeredAvdPath(answer.stdout) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
@@ -2117,6 +2177,7 @@ export class AndroidDriver implements Driver {
       imageIdentity: data.imageIdentity ?? "",
       needsWipe: false,
       port: undefined,
+      restored: true,
       snapshotExpected: false,
     };
     this.#devices.set(data.avdName, restored);

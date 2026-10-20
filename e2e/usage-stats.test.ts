@@ -124,7 +124,8 @@ describe("simlock stats", () => {
   it("on a gateway with two workers, simlock stats --json has fleet totals and one entry per worker, and each worker's own covers itself only", async () => {
     const port = await freeLoopbackPort();
     const gateway = await withDaemon({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     });
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);

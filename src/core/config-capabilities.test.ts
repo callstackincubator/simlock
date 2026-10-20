@@ -21,6 +21,7 @@ async function load(
   contents: unknown,
   modules: readonly ModuleConfigEntry[] = [entry()],
   warnings: string[] = [],
+  role: "worker" | "gateway" = "worker",
 ) {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp("/home/agent/.simlock");
@@ -29,6 +30,7 @@ async function load(
     configPath,
     filesystem,
     modules,
+    role,
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 }),
     warn: (message) => warnings.push(message),
   });
@@ -100,13 +102,12 @@ describe("loadConfig with optional modules", () => {
   it("on a gateway, reads enabled without a warning, and warns about a key outside gatewayKeys, naming capabilities.<name>.<key>", async () => {
     const contents = {
       capabilities: { alpha: { enabled: true, greeting: "hi" } },
-      mode: "gateway",
     };
     const closed: string[] = [];
     const open: string[] = [];
 
-    const config = await load(contents, [entry()], closed);
-    await load(contents, [entry({ gatewayKeys: ["greeting"] })], open);
+    const config = await load(contents, [entry()], closed, "gateway");
+    await load(contents, [entry({ gatewayKeys: ["greeting"] })], open, "gateway");
 
     expect(config.capabilities["alpha"]?.["enabled"]).toBe(true);
     expect(closed).toEqual([

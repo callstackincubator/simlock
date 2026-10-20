@@ -2,7 +2,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { resolveDaemonSocketPath, resolveSimlockHome, SocketPathTooLongError } from "./paths.js";
+import { MemoryFilesystem } from "./filesystem.js";
+import {
+  daemonDataDirectory,
+  resolveDaemonHome,
+  resolveDaemonSocketPath,
+  resolveSimlockHome,
+  SocketPathTooLongError,
+} from "./paths.js";
 
 describe("resolveDaemonSocketPath", () => {
   it("places the socket under the data directory", () => {
@@ -74,6 +81,138 @@ describe("resolveSimlockHome", () => {
   it("normalises a SIMLOCK_HOME that is absolute but not canonical", () => {
     expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home/../other-home" })).toBe(
       "/tmp/other-home",
+    );
+  });
+});
+
+describe("daemonDataDirectory", () => {
+  it("puts the gateway in <root>/gateway and the worker in <root>", () => {
+    expect(daemonDataDirectory("/home/me/.simlock", "gateway")).toBe("/home/me/.simlock/gateway");
+    expect(daemonDataDirectory("/home/me/.simlock", "worker")).toBe("/home/me/.simlock");
+  });
+});
+
+describe("resolveDaemonHome", () => {
+  const root = "/home/me/.simlock";
+
+  it.each([
+    ["gateway", "gateway", `${root}/gateway`],
+    [undefined, "worker", root],
+  ] as const)(
+    "sends the gateway flag to <root>/gateway and everything else to <root> (flag %s)",
+    async (flag, role, dataDirectory) => {
+      const home = await resolveDaemonHome({ root, flag, filesystem: new MemoryFilesystem() });
+
+      expect(home).toMatchObject({ role, dataDirectory });
+    },
+  );
+
+  async function present(files: readonly string[], extraDirectories: readonly string[] = []) {
+    const filesystem = new MemoryFilesystem();
+    for (const directory of extraDirectories) await filesystem.mkdirp(directory);
+    for (const file of files) {
+      await filesystem.mkdirp(join(file, ".."));
+      await filesystem.writeFileAtomic(file, "{}");
+    }
+    return (await resolveDaemonHome({ root, flag: "gateway", filesystem })).gatewayPresent;
+  }
+
+  it.each([
+    ["neither file", [], false],
+    ["instance.json only", [`${root}/gateway/instance.json`], true],
+    ["config.json only", [`${root}/gateway/config.json`], true],
+    ["both files", [`${root}/gateway/instance.json`, `${root}/gateway/config.json`], true],
+  ] as const)(
+    "reports a gateway present when gateway/instance.json or gateway/config.json exists (%s)",
+    async (_name, files, expected) => {
+      expect(await present(files)).toBe(expected);
+    },
+  );
+
+  it("does not report a gateway present for an empty gateway folder", async () => {
+    expect(await present([], [`${root}/gateway`])).toBe(false);
+  });
+
+  it("counts a path under a file (ENOTDIR) as absent and rethrows any other exists error", async () => {
+    const failing = (code: string) => ({
+      exists: () => Promise.reject(Object.assign(new Error(code), { code })),
+    });
+
+    await expect(
+      resolveDaemonHome({ root, flag: "gateway", filesystem: failing("ENOTDIR") }),
+    ).resolves.toMatchObject({ gatewayPresent: false });
+    await expect(
+      resolveDaemonHome({ root, flag: "gateway", filesystem: failing("EACCES") }),
+    ).rejects.toThrow("EACCES");
+  });
+
+  async function chosen(
+    files: readonly string[],
+    flag: "gateway" | "local" | undefined,
+    extraDirectories: readonly string[] = [],
+  ) {
+    const filesystem = new MemoryFilesystem();
+    for (const directory of extraDirectories) await filesystem.mkdirp(directory);
+    for (const file of files) {
+      await filesystem.mkdirp(join(file, ".."));
+      await filesystem.writeFileAtomic(file, "{}");
+    }
+    return (await resolveDaemonHome({ root, flag, filesystem })).role;
+  }
+
+  it.each([
+    ["neither", [], [], "worker"],
+    ["worker instance only", [`${root}/instance.json`], [], "worker"],
+    ["gateway config only", [`${root}/gateway/config.json`], [], "gateway"],
+    ["gateway instance only", [`${root}/gateway/instance.json`], [], "gateway"],
+    [
+      "worker instance and gateway config",
+      [`${root}/instance.json`, `${root}/gateway/config.json`],
+      [],
+      "worker",
+    ],
+    [
+      "root config and gateway config, no root instance",
+      [`${root}/config.json`, `${root}/gateway/config.json`],
+      [],
+      "gateway",
+    ],
+    ["empty gateway folder", [], [`${root}/gateway`], "worker"],
+  ] as const)(
+    "resolveDaemonHome without a flag picks the gateway only when a gateway is present and instance.json does not exist (%s)",
+    async (_name, files, directories, role) => {
+      expect(await chosen(files, undefined, directories)).toBe(role);
+    },
+  );
+
+  it.each([
+    ["local", "worker"],
+    ["gateway", "gateway"],
+  ] as const)(
+    "resolveDaemonHome with --local picks the worker and with --gateway the gateway, whatever the folders hold (%s)",
+    async (flag, role) => {
+      const gatewayOnly = [`${root}/gateway/config.json`];
+      const both = [`${root}/gateway/config.json`, `${root}/instance.json`];
+
+      expect(await chosen(gatewayOnly, flag)).toBe(role);
+      expect(await chosen(both, flag)).toBe(role);
+      expect(await chosen([], flag)).toBe(role);
+    },
+  );
+
+  it("resolveDaemonHome rethrows an error reading instance.json and chooses nothing", async () => {
+    const inner = new MemoryFilesystem();
+    await inner.mkdirp(`${root}/gateway`);
+    await inner.writeFileAtomic(`${root}/gateway/config.json`, "{}");
+    const filesystem = {
+      exists: (path: string) =>
+        path === `${root}/instance.json`
+          ? Promise.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }))
+          : inner.exists(path),
+    };
+
+    await expect(resolveDaemonHome({ root, flag: undefined, filesystem })).rejects.toThrow(
+      "EACCES",
     );
   });
 });

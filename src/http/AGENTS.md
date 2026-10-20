@@ -81,13 +81,13 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
 
 ## State and timers
 
-| What                        | Default                          | Key                      |
-| --------------------------- | -------------------------------- | ------------------------ |
-| Listener on/off             | off on a worker, on on a gateway | `http.enabled`           |
-| Address                     | `127.0.0.1:4700`                 | `http.host`, `http.port` |
-| SSE keepalive               | 15 s                             | fixed, `sse.ts`          |
-| Long-poll cap               | 60 s                             | fixed, `app.ts`          |
-| `NO_CAPACITY` `Retry-After` | 5 s                              | fixed, `errors.ts`       |
+| What                        | Default                                               | Key                      |
+| --------------------------- | ----------------------------------------------------- | ------------------------ |
+| Listener on/off             | off on a worker, on on a gateway                      | `http.enabled`           |
+| Address                     | `127.0.0.1`, port 4701 on a worker, 4700 on a gateway | `http.host`, `http.port` |
+| SSE keepalive               | 15 s                                                  | fixed, `sse.ts`          |
+| Long-poll cap               | 60 s                                                  | fixed, `app.ts`          |
+| `NO_CAPACITY` `Retry-After` | 5 s                                                   | fixed, `errors.ts`       |
 
 - The listener starts right after the socket claim (`onSocketClaimed`), before startup
   convergence. Early requests park in the dispatcher. On a gateway the worker uplink

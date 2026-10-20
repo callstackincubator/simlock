@@ -6,7 +6,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,7 +55,6 @@ export interface RunningDaemon extends ConsoleDaemon {
 }
 
 export interface StartOptions {
-  /** Merged over the config the lane writes: HTTP on a free port, and the mode. */
   readonly config?: Readonly<Record<string, unknown>>;
   /** The fake driver's script, written before the daemon starts. */
   readonly driverScript?: FakeDriverScript;
@@ -84,13 +83,16 @@ export async function startDaemon(
   const home = await mkdtemp(join(tmpdir(), "simlock-console-"));
   const port = await freeLoopbackPort();
   const scriptPath = join(home, "fake-driver-script.json");
+  // why: a gateway lives in `<home>/gateway` and every CLI call that reaches it says `--gateway` (ADR 0034).
+  const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
+  const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
   const { http: extraHttp, ...extraConfig } = options.config ?? {};
+  await mkdir(dataDirectory, { recursive: true });
   await writeFile(
-    join(home, "config.json"),
+    join(dataDirectory, "config.json"),
     JSON.stringify({
       ...(mode === "worker" ? FAKE_CAPACITY : {}),
       http: { enabled: true, host: "127.0.0.1", port, ...(extraHttp as object | undefined) },
-      mode,
       ...extraConfig,
     }),
   );
@@ -108,19 +110,19 @@ export async function startDaemon(
         }
       : {}),
   };
-  const socketPath = join(home, "daemon.sock");
+  const socketPath = join(dataDirectory, "daemon.sock");
   const background = new Set<CliBackgroundHandle>();
   const stop = async () => {
-    await cli(["daemon", "stop"], env).catch(() => undefined);
+    await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
     await waitFor(() => !existsSync(socketPath), { timeout: 10_000 }).catch(() => undefined);
   };
   const start = async () => {
-    const started = await cli(["daemon", "start"], env, { timeout: 30_000 });
+    const started = await cli([...gatewayFlag, "daemon", "start"], env, { timeout: 30_000 });
     if (started.code === 0) return;
     // why: a failed start reports only what the CLI saw while polling the socket, and `dispose`
     // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.
     // Read the tail here, before any caller's catch reaches `dispose`, and fail with both.
-    const log = await readFile(join(home, "daemon.log"), "utf8").catch(() => "");
+    const log = await readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
     const tail = log.split("\n").slice(-20).join("\n");
     expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
   };
@@ -131,11 +133,11 @@ export async function startDaemon(
   };
   try {
     await start();
-    const status = await cli(["status", "--json"], env);
+    const status = await cli([...gatewayFlag, "status", "--json"], env);
     const url = (status.json as { daemon: { consoleUrl?: string } }).daemon.consoleUrl;
     expect(url).toBe(`http://127.0.0.1:${port}/`);
     const mint = async (role: string) => {
-      const minted = await cli(["token", "create", "--role", role], env);
+      const minted = await cli([...gatewayFlag, "token", "create", "--role", role], env);
       expect(minted.code, minted.stderr).toBe(0);
       return (minted.json as { secret: string }).secret;
     };
@@ -155,9 +157,9 @@ export async function startDaemon(
       { label: "HTTP listener accepting connections" },
     );
     return {
-      cli: (args) => cli(args, env),
+      cli: (args) => cli([...gatewayFlag, ...args], env),
       cliBackground(args) {
-        const handle = cliBackground(args, env);
+        const handle = cliBackground([...gatewayFlag, ...args], env);
         background.add(handle);
         return handle;
       },

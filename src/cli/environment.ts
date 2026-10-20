@@ -173,7 +173,8 @@ export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
 ): CliEnvironment {
-  const { clock, dataDirectory, filesystem, ipc, launcher, systemStats } = ports;
+  const { clock, daemonHome, filesystem, ipc, launcher, systemStats } = ports;
+  const { dataDirectory } = daemonHome;
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
@@ -186,6 +187,7 @@ export function buildCliEnvironment(
       configPath,
       filesystem,
       modules: await moduleConfigEntries(),
+      role: daemonHome.role,
       systemStats,
     });
   };
@@ -222,6 +224,7 @@ export function buildCliEnvironment(
   return {
     clock,
     configPath,
+    daemonHome,
     requesterId,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
@@ -260,6 +263,7 @@ export function buildCliEnvironment(
         filesystem: new MemoryFilesystem(),
         modules: await moduleConfigEntries(),
         overrides: merged as ConfigOverrides,
+        role: daemonHome.role,
         systemStats,
         warn: (message) => {
           if (message.startsWith("Unknown config key:")) unknownKeyWarnings.push(message);

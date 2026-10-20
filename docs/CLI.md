@@ -26,6 +26,72 @@ pointer to `simlock --help`, so a human hitting one from a terminal isn't
 stranded with only a JSON blob — the full command banner itself is no
 longer dumped to stderr on every failure, only on request via `--help`.
 
+## Global flags
+
+Three flags are accepted anywhere on the command line, before or after the
+command:
+
+- `--token <secret>` (or `--token=<secret>`) connects as admin with that
+  credential; see [Admin credential resolution](#admin-credential-resolution).
+- `--gateway` sends the command, the daemon auto-start it may trigger, and
+  `simlock mcp` to this machine's gateway (the daemon in `~/.simlock/gateway`)
+  in place of its worker (the daemon in `~/.simlock`). It takes no value:
+  `--gateway=yes` is a usage error. Without the flag, the command goes to the
+  gateway or the worker as [Which daemon a command
+  reaches](#which-daemon-a-command-reaches) says.
+- `--local` is the mirror of `--gateway`: it always reaches (and auto-starts)
+  this machine's worker in `~/.simlock`. It takes no value (`--local=yes` is a
+  usage error) and cannot be combined with `--gateway`.
+
+A machine has a gateway only after `simlock --gateway daemon start` (the first
+start creates it) or `simlock --gateway config set <key> <value>` (which writes
+its `config.json`). With none, every other `--gateway` command (`status`,
+`daemon status`, `daemon stop`, `daemon logs`, `events`, `config get`,
+`lease`, and the rest) exits 2 with `GATEWAY_NOT_PRESENT` and starts nothing,
+reads nothing and writes nothing; a `--gateway mcp` tool call fails with the
+same code. `--help` still prints usage, except after `adb` or `simctl`.
+
+### Which daemon a command reaches
+
+Without `--gateway` or `--local`, a command reaches the gateway when a gateway
+is present (`~/.simlock/gateway/instance.json` or
+`~/.simlock/gateway/config.json` exists) and `~/.simlock/instance.json` does
+not. Otherwise it reaches the worker. A machine with one daemon therefore
+never needs `--gateway`.
+
+| `~/.simlock/instance.json` | gateway present | A plain command reaches |
+| --- | --- | --- |
+| no | no | worker |
+| yes | no | worker |
+| no | yes | gateway |
+| yes | yes | worker, with the hint below on a gateway-only refusal |
+
+An empty `~/.simlock/gateway/` folder does not make a gateway present. A worker
+writes `~/.simlock/instance.json` on its first start, so a worker added after
+the gateway starts with `simlock --local daemon start`; from then on plain
+commands reach the worker again. A plain command run while that first start is
+in flight may still reach the gateway.
+
+When a worker refuses a gateway-only command (`worker drain`, for example) and
+a gateway is present, the message ends with `A gateway also runs on this
+machine: run the command again with --gateway.` The hint is never added when
+`--gateway` was given or when no gateway is present.
+
+To run a gateway beside the worker on one machine:
+
+```sh
+simlock --gateway daemon start
+simlock status --json | jq -r .daemon.mode
+# worker
+simlock --gateway status --json | jq -r .daemon.mode
+# gateway
+```
+
+The worker and the gateway each keep their own config, state, socket and log.
+A worker listens for HTTP on 4701 and a gateway on 4700 unless
+`http.port` says otherwise, so both can have HTTP on at once. A second worker
+for the same user cannot start: the running worker's socket refuses it.
+
 ## Prerequisites
 
 Simlock drives the platform tools already on the machine. It does not install
@@ -89,6 +155,7 @@ command starts it again) to bring the platform up.
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker, or for `component install` name the workers with `--worker` or `--all-workers` |
 | 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers or alert destinations (`worker drain`, `undrain`, `remove`, `alerts test`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
+| 2 | `GATEWAY_NOT_PRESENT` | `--gateway` on a machine with no gateway (also the code a `--gateway mcp` tool call fails with); start one with `simlock --gateway daemon start` |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — usually a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb`/`devicectl` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
@@ -862,10 +929,10 @@ startup to recover.
 
 A **gateway** is a simlock daemon that owns no devices and fronts the workers
 that joined it (see
-[CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for `mode` and
-the keys each side reads). Point the CLI at one the way you point it at any
-daemon: `SIMLOCK_HOME` selects the data directory, and the daemon socket in
-it is what the CLI connects to. **The commands do not change.** A gateway
+[CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for the keys each
+side reads). Point the CLI at one with the global `--gateway` flag (see
+[Global flags](#global-flags)): the gateway's daemon socket, in
+`~/.simlock/gateway`, is what the CLI connects to. **The commands do not change.** A gateway
 implements the same contract a worker does, so this whole document still
 applies; what follows is only the handful of places where you can tell.
 
@@ -1272,8 +1339,8 @@ the maintenance. `undrain` puts it back in rotation.
 
 Draining sticks until you undrain it. It is your intent about that machine,
 not something read off it, so it lives in the gateway's **worker registry** —
-the one piece of gateway state that is persisted (a small file under the
-gateway's `SIMLOCK_HOME`, owner-only) as opposed to the worker *view*, which
+the one piece of gateway state that is persisted (a small file in the
+gateway's folder, owner-only) as opposed to the worker *view*, which
 is rebuilt on every connect. A drained worker that restarts comes back
 drained, and so does one whose *gateway* restarted. Nothing but `undrain`
 puts a machine back in rotation, which is the point: an operator who drained
@@ -1535,7 +1602,7 @@ shows `starting` after its connection state and `leases unknown` in place of a
 lease count, in the same way.
 
 Human-oriented overview: daemon health *and mode*, the web console's address
-when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
+when HTTP is enabled (`Console: http://127.0.0.1:4701/`, see
 [CONSOLE.md](CONSOLE.md); `daemon.consoleUrl` in `--json`), the host it runs on
 (`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), its load
 (`Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · ...`; `load` in `--json`), managed capacity
@@ -1598,7 +1665,7 @@ for example after a restart with larger per-device sizes; until a device
 is deleted, none is created, and no shut-down slim device boots if its slim
 size is smaller than the full size.
 
-Against a **gateway** (`config.mode: "gateway"`) the same command
+Against a **gateway** (`simlock --gateway status`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
 `running (gateway)`, capacity is summed across the connected workers (the RAM
 budget over those that report one, over its limit when any worker is; a
@@ -2465,9 +2532,12 @@ unanswered probe times out with `DAEMON_STARTUP_FAILED`. A connection to an
 already listening daemon keeps the usual `DAEMON_CONNECTION_LOST` behavior.
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
-exists for operators and debugging. `start` starts whichever mode
-`config.mode` selects — a worker (the default) or a gateway — and
-`status` reports it, both in the human line (`Daemon: running (gateway)`) and
+exists for operators and debugging. `start` starts the daemon a plain
+command reaches (the worker, or the gateway on a machine with only a gateway;
+see above), `simlock --gateway daemon start` starts the gateway, and
+`simlock --local daemon start` starts the worker; a second worker for the
+same user cannot start, because the running one's socket refuses it. `status`
+reports the role, both in the human line (`Daemon: running (gateway)`) and
 as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
 print the web console's address on a `Console:` line (see
 [CONSOLE.md](CONSOLE.md)). `stop` does not touch leases: they persist,
@@ -2499,8 +2569,8 @@ version mismatch) — the two used to be reported identically as "stopped".
 
 A daemon that refuses to boot because of its configuration — a
 `lease.defaultTtlMs` above `lease.maxTtlMs` or a non-positive value for
-either, `mode: "gateway"` with `http.enabled: false`, or, in worker mode,
-`gateway.url` without `gateway.token` or the reverse; see
+either, a gateway with `http.enabled: false`, a `config.json` that still sets
+`mode`, or, on a worker, `gateway.url` without `gateway.token` or the reverse; see
 [CONFIGURATION.md](CONFIGURATION.md) for the full set — fails the start
 rather than picking a value the operator did not write. A command that
 would auto-start the daemon (`simlock daemon start`, `simlock lease`) loads
@@ -2601,30 +2671,31 @@ when it holds one: that key no longer exists (the event history is one SQLite
 file, not rotated generations). The command then prints `Removed
 eventLog.rotateBytes from <config path>: it is no longer used.` on stderr, once.
 
-`simlock config set mode gateway` turns this daemon into a **gateway** — one
-that owns no devices and fronts the workers that join it — and `simlock
-config set mode worker` turns it back. Like every `config set`, it is a
-validated file write, and config is daemon *input*, read at start: the
-running daemon keeps running in the mode it started in until
-`simlock daemon stop` and the next start. The same command sets a worker's
-`gateway.url` and `gateway.token` to join a fleet. See
+`simlock config set` writes the `config.json` of the daemon a plain command
+reaches (the worker's, or the gateway's on a machine with only a gateway), and
+`simlock --gateway config set` writes the gateway's (and makes the gateway
+present). Like every
+`config set`, it is a validated file write, and config is daemon *input*, read
+at start: a running daemon keeps its settings until `daemon stop` and the next
+start. The same command sets a worker's `gateway.url` and `gateway.token` to
+join a fleet. `mode` is no longer a config key; setting it exits 2 with a
+message that says to use `--gateway` instead, and a `config.json` that still
+has it is refused at load. See
 [CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for which keys
-each mode reads.
+each role reads.
 
 An object value takes JSON: `simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://…","issuer":"https://…","audience":"…"}'`. Each `config set` checks the whole file, so the four required `http.proxyAuth` keys go in together as one object; one alone is refused (see [CONFIGURATION.md](CONFIGURATION.md#signing-in-through-a-proxy)).
 
-Switching to `gateway` is **two keys, not one**: `mode` and `http.enabled`.
 A gateway is the fleet's contact point, so it must listen on HTTP — workers
-open their uplinks there and remote agents lease through it — and
-`mode: "gateway"` with `http.enabled: false` is therefore rejected at load
-and the daemon does not start, naming the key. It is the one gateway config
-pair that fails rather than warns, for the same reason a `lease.defaultTtlMs`
-above `lease.maxTtlMs` fails: there is no safe way to read it. So:
+open their uplinks there and remote agents lease through it — and a gateway
+with `http.enabled: false` is rejected at load and the daemon does not start,
+naming the key. It is the one gateway config pair that fails rather than
+warns, for the same reason a `lease.defaultTtlMs` above `lease.maxTtlMs`
+fails: there is no safe way to read it. A gateway has HTTP on by default, so:
 
 ```sh
-simlock config set mode gateway
-simlock config set http.enabled true
-simlock daemon stop && simlock daemon start
+simlock --gateway config set http.port 4800
+simlock --gateway daemon stop && simlock --gateway daemon start
 ```
 
 ## Admin credential resolution
@@ -2637,7 +2708,7 @@ to send at handshake, in order:
 
 1. `--token <secret>` — accepted anywhere on the command line.
 2. `SIMLOCK_ADMIN_TOKEN` — the environment variable.
-3. the local `admin.token` file the daemon writes under `SIMLOCK_HOME` at
+3. the local `admin.token` file the daemon writes in its data folder at
    startup (read is retried briefly, to ride out the daemon still writing it
    after a fresh `daemon start`).
 
@@ -2707,26 +2778,6 @@ opened, which is the way to eject a worker that should no longer be in the
 fleet; `simlock worker remove` then forgets its view.
 
 ## Environment variables
-
-### `SIMLOCK_HOME`
-
-Overrides the data directory the CLI, MCP server, and daemon all use for
-`config.json`, `state.json`, `daemon.sock`, `daemon.log`, `history.db`, and — unless
-overridden — the device roots themselves under `devices/`. Defaults to
-`~/.simlock`. Because devices live under it, it needs a local volume with tens
-of gigabytes free. All three frontends resolve it through the same function
-(`resolveSimlockHome` in `src/ports/paths.ts`), so setting it once in an
-agent's environment repoints every command at an isolated data directory —
-useful for running multiple independent simlock instances on one machine, or
-for tests. Two instances on one machine also need distinct
-`drivers.android.adbServerPort` values, since a TCP port is machine-global and
-`SIMLOCK_HOME` cannot isolate it. When the CLI or MCP server auto-starts the daemon, the daemon
-process inherits the variable like the rest of the environment.
-
-Keep it short: `daemon.sock` lives directly under it, and the kernel caps a Unix
-socket path at 104 bytes on macOS (108 on Linux). A deeper `SIMLOCK_HOME` is
-refused up front by every frontend with a `USAGE` error naming the limit, rather
-than failing on connect with a bare `EINVAL`.
 
 ### `SIMLOCK_ADMIN_TOKEN`
 

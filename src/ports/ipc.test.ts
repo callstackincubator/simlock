@@ -45,6 +45,27 @@ describe.each(implementations)("IpcTransport contract: $name", ({ create }) => {
     }
   });
 
+  it("closes a connection whose data was never read, even after the client wrote to it", async () => {
+    const ipc = create();
+    let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+    const listener = await ipc.listen(endpoint, (connection) => {
+      server = connection;
+    });
+    const client = await ipc.connect(endpoint);
+    client.onData(() => undefined);
+    await client.write("unread\n");
+    await expect.poll(() => server).toBeDefined();
+
+    await Promise.race([
+      server?.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("close hung")), 2000)),
+    ]);
+    await Promise.race([
+      listener.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("listener close hung")), 2000)),
+    ]);
+  });
+
   it("reports an endpoint nothing listens on as endpoint-not-found", async () => {
     await expect(create().connect(endpoint)).rejects.toMatchObject({
       code: "endpoint-not-found",

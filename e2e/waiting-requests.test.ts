@@ -63,7 +63,8 @@ describe("simlock list --requests", () => {
 
   it("on a gateway, lists the fleet queue and a request in a worker's own queue with that worker", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);

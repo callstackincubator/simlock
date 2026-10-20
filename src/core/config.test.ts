@@ -119,7 +119,7 @@ describe("loadConfig", () => {
         maxBytes: 256 * 1024 * 1024,
       },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-      http: { enabled: false, host: "127.0.0.1", port: 4700 },
+      http: { enabled: false, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 1,
@@ -1698,6 +1698,7 @@ describe("loadConfig modes (ADR 0005)", () => {
     contents: unknown,
     options: {
       readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly role?: "worker" | "gateway";
       readonly warn?: (message: string) => void;
     } = {},
   ) {
@@ -1708,6 +1709,7 @@ describe("loadConfig modes (ADR 0005)", () => {
       configPath,
       filesystem,
       systemStats: createStats(),
+      ...(options.role === undefined ? {} : { role: options.role }),
       ...(options.overrides === undefined ? {} : { overrides: options.overrides }),
       ...(options.warn === undefined ? {} : { warn: options.warn }),
     });
@@ -1727,30 +1729,39 @@ describe("loadConfig modes (ADR 0005)", () => {
     });
   });
 
-  it("rejects a mode outside the two the ADR names", async () => {
-    await expect(load({ mode: "hybrid" })).rejects.toThrow("mode");
-  });
+  it.each([
+    ["file worker", { contents: { mode: "worker" } }],
+    ["file gateway", { contents: { mode: "gateway" } }],
+    ["override gateway", { contents: {}, overrides: { mode: "gateway" } }],
+  ] as const)(
+    "refuses a config that sets mode, either value, from the file or the overrides, with the message that names --gateway (%s)",
+    async (_name, { contents, ...options }) => {
+      await expect(load(contents, options)).rejects.toThrow(
+        '"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.',
+      );
+    },
+  );
 
   it("turns HTTP on by default in gateway mode -- a gateway is the fleet's contact point", async () => {
-    const config = await load({ mode: "gateway" });
+    const config = await load({}, { role: "gateway" });
 
     expect(config.http.enabled).toBe(true);
     expect(config.http.port).toBe(4700);
   });
 
   it("refuses a gateway that switches HTTP off, naming the key, and loads a worker that does", async () => {
-    await expect(load({ mode: "gateway", http: { enabled: false } })).rejects.toThrow(
+    await expect(load({ http: { enabled: false } }, { role: "gateway" })).rejects.toThrow(
       "http.enabled",
     );
     // HTTP is genuinely optional for a worker.
-    await expect(load({ mode: "worker", http: { enabled: false } })).resolves.toMatchObject({
+    await expect(load({ http: { enabled: false } })).resolves.toMatchObject({
       http: { enabled: false },
       mode: "worker",
     });
   });
 
   it("keeps an explicit gateway http host/port", async () => {
-    const config = await load({ mode: "gateway", http: { host: "0.0.0.0", port: 4800 } });
+    const config = await load({ http: { host: "0.0.0.0", port: 4800 } }, { role: "gateway" });
 
     expect(config.http).toEqual({ enabled: true, host: "0.0.0.0", port: 4800 });
   });
@@ -1759,12 +1770,11 @@ describe("loadConfig modes (ADR 0005)", () => {
     const warn = vi.fn();
     const config = await load(
       {
-        mode: "gateway",
         capacity: { strategy: "fixed", config: { maxRunning: 3 } },
         ios: { defaultMode: "slim" },
         lease: { defaultTtlMs: 60_000 },
       },
-      { warn },
+      { role: "gateway", warn },
     );
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "capacity"'));
@@ -1780,7 +1790,7 @@ describe("loadConfig modes (ADR 0005)", () => {
   it("reads lease.maxPerRequester in gateway mode without an ignored-key warning", async () => {
     const warn = vi.fn();
 
-    const config = await load({ mode: "gateway", lease: { maxPerRequester: 2 } }, { warn });
+    const config = await load({ lease: { maxPerRequester: 2 } }, { role: "gateway", warn });
 
     expect(config.lease).toMatchObject({ maxPerRequester: 2 });
     expect(warn).not.toHaveBeenCalled();
@@ -1790,8 +1800,8 @@ describe("loadConfig modes (ADR 0005)", () => {
     const warn = vi.fn();
 
     const config = await load(
-      { mode: "gateway", metrics: { retention: 120 * 24 * 3_600_000 } },
-      { warn },
+      { metrics: { retention: 120 * 24 * 3_600_000 } },
+      { role: "gateway", warn },
     );
 
     expect(config.metrics).toEqual({ retention: 120 * 24 * 3_600_000 });
@@ -1800,7 +1810,7 @@ describe("loadConfig modes (ADR 0005)", () => {
 
   it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
     const warn = vi.fn();
-    await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
+    await load({ eventLog: { rotateBytes: 1024 } }, { role: "gateway", warn });
 
     expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
   });
@@ -1808,8 +1818,8 @@ describe("loadConfig modes (ADR 0005)", () => {
   it("warns about android.emulator on a gateway without refusing the config", async () => {
     const warn = vi.fn();
     const config = await load(
-      { mode: "gateway", android: { defaultModels: {}, emulator: { headless: true } } },
-      { warn },
+      { android: { defaultModels: {}, emulator: { headless: true } } },
+      { role: "gateway", warn },
     );
 
     expect(warn).toHaveBeenCalledWith(
@@ -1821,21 +1831,23 @@ describe("loadConfig modes (ADR 0005)", () => {
 
   it("warns about the worker-side gateway.* keys on a gateway, but not the gateway's own", async () => {
     const warn = vi.fn();
-    const config = await load({
-      mode: "gateway",
-      gateway: {
-        url: "ws://127.0.0.1:4700/v1/uplink",
-        token: "secret",
-        label: "ignored",
-        disconnectedRetentionMs: 60_000,
+    const config = await load(
+      {
+        gateway: {
+          url: "ws://127.0.0.1:4700/v1/uplink",
+          token: "secret",
+          label: "ignored",
+          disconnectedRetentionMs: 60_000,
+        },
       },
-    });
+      { role: "gateway" },
+    );
 
     expect(config.gateway.disconnectedRetentionMs).toBe(60_000);
 
     const warned = await load(
-      { mode: "gateway", gateway: { url: "ws://127.0.0.1:4700/v1/uplink" } },
-      { warn },
+      { gateway: { url: "ws://127.0.0.1:4700/v1/uplink" } },
+      { role: "gateway", warn },
     );
     expect(warned.mode).toBe("gateway");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
@@ -1871,7 +1883,7 @@ describe("loadConfig modes (ADR 0005)", () => {
   it("does not pair those keys on a gateway, which reads neither", async () => {
     const warn = vi.fn();
     await expect(
-      load({ mode: "gateway", gateway: { url: "ws://fleet.example" } }, { warn }),
+      load({ gateway: { url: "ws://fleet.example" } }, { role: "gateway", warn }),
     ).resolves.toBeDefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
   });
@@ -1898,15 +1910,18 @@ describe("loadConfig modes (ADR 0005)", () => {
   });
 
   it("defaults the gateway lease-request timeout well under the exec backstop", async () => {
-    const config = await load({ mode: "gateway" });
+    const config = await load({}, { role: "gateway" });
     expect(config.gateway.leaseRequestTimeoutMs).toBeLessThan(config.gateway.execTimeoutMs);
   });
 
-  it("lets an override name the mode, like every other key", async () => {
-    const config = await load({}, { overrides: { mode: "gateway" } });
+  it("reports the role it was loaded for as config.mode", async () => {
+    expect((await load({}, { role: "gateway" })).mode).toBe("gateway");
+    expect((await load({}, { role: "worker" })).mode).toBe("worker");
+  });
 
-    expect(config.mode).toBe("gateway");
-    expect(config.http.enabled).toBe(true);
+  it("HTTP defaults to port 4700 for a gateway and 4701 for a worker", async () => {
+    expect((await load({}, { role: "gateway" })).http.port).toBe(4700);
+    expect((await load({})).http.port).toBe(4701);
   });
 });
 
@@ -1944,17 +1959,17 @@ describe("gateway.alerts.destinations", () => {
 
   async function load(
     gateway: Record<string, unknown>,
-    mode: "gateway" | "worker" = "gateway",
+    role: "gateway" | "worker" = "gateway",
     warn: (message: string) => void = () => {},
   ): Promise<Config> {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode, gateway }));
-    return loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ gateway }));
+    return loadConfig({ configPath, filesystem, role, systemStats: createStats(), warn });
   }
 
-  function loadDestinations(destinations: unknown, mode: "gateway" | "worker" = "gateway") {
-    return load({ alerts: { destinations } }, mode);
+  function loadDestinations(destinations: unknown, role: "gateway" | "worker" = "gateway") {
+    return load({ alerts: { destinations } }, role);
   }
 
   it("loadConfig accepts a valid generic destination and defaults gateway.alerts.destinations to an empty list", async () => {
@@ -2091,11 +2106,16 @@ describe("gateway.alerts.destinations", () => {
 });
 
 describe("redactConfig", () => {
-  async function load(contents: unknown): Promise<Config> {
+  async function load(contents: unknown, role?: "gateway" | "worker"): Promise<Config> {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-    return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    return loadConfig({
+      configPath,
+      filesystem,
+      ...(role ? { role } : {}),
+      systemStats: createStats(),
+    });
   }
 
   it("replaces a set gateway.token with the marker, keeps every other key, and leaves the input untouched", async () => {
@@ -2136,10 +2156,7 @@ describe("redactConfig", () => {
       },
     ];
     for (const token of ["join-token", undefined]) {
-      const config = await load({
-        mode: "gateway",
-        gateway: { token, alerts: { destinations } },
-      });
+      const config = await load({ gateway: { token, alerts: { destinations } } }, "gateway");
       const before = structuredClone(config);
 
       const redacted = redactConfig(config);

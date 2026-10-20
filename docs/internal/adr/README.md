@@ -39,11 +39,11 @@ the status is stale.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices |
+| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034 |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
-| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a |
+| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted; §2 narrowed by 0032 (the event record is a database) |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted |
 | [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android |
@@ -71,4 +71,5 @@ the status is stale.
 | [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted |
 | [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented |
 | [0033](0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md) | A sign-in proxy is a second way to sign in, and auth is one module | Accepted — not yet implemented |
+| [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted — not yet implemented |
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |

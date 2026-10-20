@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { waitFor, withDaemon } from "./helpers/index.js";
@@ -28,6 +29,7 @@ describe("daemon lifecycle & recovery", () => {
     expect(secondStart.code).toBe(0);
     const after = await readFile(env.logPath, "utf8");
     expect(countOccurrences(after, "Daemon started")).toBe(startedCountBefore);
+    expect(existsSync(join(env.home, "gateway"))).toBe(false);
   });
 
   it("recovers from a kill -9 that leaves a stale socket behind", async () => {

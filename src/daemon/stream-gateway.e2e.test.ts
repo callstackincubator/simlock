@@ -89,9 +89,9 @@ describe("a screen stream through a gateway", () => {
     const gateway = await startDaemon({
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port },
-        mode: "gateway",
         capabilities: { stream: { enabled: true } },
       },
+      role: "gateway",
       dataDirectory: gatewayDirectory,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),

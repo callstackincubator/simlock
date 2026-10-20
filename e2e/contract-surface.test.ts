@@ -107,7 +107,8 @@ describe("contract surface", () => {
     // `UNSUPPORTED_IN_GATEWAY_MODE` reject an unparseable payload with `BAD_REQUEST` first.
     // Anything that came back `UNKNOWN_REQUEST` here would be an operation a gateway forgot.
     const { env } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     expect((await env.startDaemon()).code).toBe(0);

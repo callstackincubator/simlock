@@ -105,6 +105,7 @@ export interface ErrorDetailsMap {
   HISTORY_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
   INTERNAL: Record<string, never>;
+  GATEWAY_NOT_PRESENT: Record<string, never>;
 
   UNSUPPORTED_IN_GATEWAY_MODE: { readonly operation: string };
   /**
@@ -378,6 +379,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 503,
   },
   INTERNAL: { code: "INTERNAL", kind: "domain", cliExitCode: 1, httpStatus: 500 },
+  // why: never sent over HTTP (the CLI and MCP raise it before they connect); the table needs a value.
+  GATEWAY_NOT_PRESENT: {
+    code: "GATEWAY_NOT_PRESENT",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 404,
+  },
   // 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
   // simply does not implement that operation, which is exactly what "Not Implemented" says.
   // `cliExitCode: 2` puts it with the other "you asked the wrong thing" outcomes.
@@ -486,6 +494,16 @@ export type AnySimlockError = { [Code in SimlockErrorCode]: SimlockError<Code> }
 
 export function isSimlockError(error: unknown): error is AnySimlockError {
   return error instanceof SimlockError;
+}
+
+/** why: the CLI and MCP raise this one error from two places, so the wording lives once. */
+export function gatewayNotPresentError(): SimlockError<"GATEWAY_NOT_PRESENT"> {
+  return new SimlockError(
+    "GATEWAY_NOT_PRESENT",
+    "domain",
+    "No gateway on this machine. Start one with: simlock --gateway daemon start",
+    {},
+  );
 }
 
 /**

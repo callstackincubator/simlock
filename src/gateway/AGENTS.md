@@ -1,6 +1,6 @@
 # Gateway
 
-Does: a daemon in `mode: "gateway"`: owns no devices, fronts the workers that dial in.
+Does: a daemon started with `--gateway` (it lives in `<root>/gateway`): owns no devices, fronts the workers that dial in.
 Entry: `index.ts`; `startGatewayDaemon` (`../daemon/main.ts`) wires `GatewayService`,
 `FleetLeaseCoordinator`, `GatewayDispatcher`, `GatewayRelay`, `GatewayOwnerRoutedFacts`.
 Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admin, simlock-client, `../daemon/dispatch.ts`, and from

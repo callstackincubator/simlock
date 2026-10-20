@@ -58,7 +58,8 @@ describe("the web console", () => {
 
   it("a gateway serves the console page at the address simlock status prints", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
 

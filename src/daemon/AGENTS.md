@@ -27,7 +27,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 ## Composition (`main.ts`)
 
 Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started).
-`config.mode` then picks one branch; a gateway builds none of the worker's parts.
+The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `Registry` (`state.json`) → instance id (`instance.json`) →
   `discoverDrivers` (validates each root; a refused root costs that platform only) →
@@ -132,9 +132,9 @@ Security model: cooperative identity, not a hostile-process boundary.
 - At `log.level: debug`, `LoggingProcessRunner` logs one `process` line per command.
 - Events: ring of `eventBuffer.capacity` (1000) in memory; `history.db` via the [history](../history/AGENTS.md), kept `eventLog.retention` (7 days), event rows capped at
   `eventLog.maxBytes` (256 MiB); usage rows are kept `metrics.retention` (90 days). `onSocketClaimed`
-  starts it in both modes with `config.mode` and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
+  starts it in both modes with the role and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
   failed migration) stops the daemon with reason `history-refused` and exit 1. `status.get` carries its `history`, also while starting. `usage.get` (both dispatchers, `usageAnswer` in `dispatch.ts`) reads the same file's usage rows through `core/usage` on a read thread; `main.ts` passes `historyPath` in both modes, and `dispose` stops the thread. `history.status().opened` false → `HISTORY_UNAVAILABLE`; a window ending before the oldest row → `HISTORY_NOT_KEPT`.
-- A start that throws is logged by a fallback logger to the default `daemon.log`; exit 1.
+- A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
 
 ## Rules
 

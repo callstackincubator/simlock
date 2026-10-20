@@ -45,7 +45,8 @@ async function androidRuntimeWorkers(gateway: TestEnv, runtime: string): Promise
 describe("simlock component install through a gateway", () => {
   it("asks every worker, shows the install in worker list while it runs, reports each by id, refuses on the worker set to never, the gateway's catalog lists the component for the one that installed it, and an agent token gets 403 over HTTP", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -150,7 +151,8 @@ describe("simlock component install through a gateway", () => {
 
   it("refuses component install with no worker flag on a gateway with exit 2, telling the operator to name workers", async () => {
     const { env: gateway } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
 

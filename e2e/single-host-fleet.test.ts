@@ -79,7 +79,7 @@ describe("a single host as a fleet of one", () => {
     });
   });
 
-  it("simlock worker drain against a worker exits 2 with UNSUPPORTED_IN_WORKER_MODE", async () => {
+  it("without a gateway on the machine, worker drain exits 2 with UNSUPPORTED_IN_WORKER_MODE and no hint", async () => {
     const env = await withDaemon();
     const id = await instanceId(env);
 
@@ -87,7 +87,10 @@ describe("a single host as a fleet of one", () => {
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.error?.code).toBe("UNSUPPORTED_IN_WORKER_MODE");
+    expect(result.error).toEqual({
+      code: "UNSUPPORTED_IN_WORKER_MODE",
+      message: "worker.drain acts on a gateway's workers, and this daemon is not a gateway",
+    });
   });
 
   it("GET /v1/workers on a worker answers 200 with one worker for an operator token", async () => {

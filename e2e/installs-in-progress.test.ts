@@ -30,7 +30,8 @@ async function viewInstalls(gateway: TestEnv): Promise<readonly Install[] | unde
 describe("installs in progress", () => {
   it("shows an install on the worker's status and on its gateway's worker list while it runs, and on neither after it ends", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);

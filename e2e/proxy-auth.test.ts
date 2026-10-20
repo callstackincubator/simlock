@@ -48,7 +48,6 @@ async function startKeyServer(key: TestKey): Promise<string> {
 async function gatewayTrusting(jwksUrl: string): Promise<Gateway> {
   const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: {
-      mode: "gateway",
       http: {
         enabled: true,
         host: "127.0.0.1",
@@ -57,6 +56,7 @@ async function gatewayTrusting(jwksUrl: string): Promise<Gateway> {
       },
     },
     driver: "none",
+    role: "gateway",
   }));
   const baseUrl = `http://127.0.0.1:${String(port)}`;
   await waitFor(

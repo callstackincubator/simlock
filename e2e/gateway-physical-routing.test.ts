@@ -72,7 +72,8 @@ interface Fleet {
 async function startFleet(specs: readonly WorkerSpec[]): Promise<Fleet> {
   const { env: gateway, port } = await withHttpDaemon((port) => ({
     agentId: "fleet-agent",
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    role: "gateway",
     driver: "none",
   }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);

@@ -76,8 +76,8 @@ Reclaim — `reclaim`:
 
 Ownership gate: before any `emu kill` or snapshot load, `adb emu avd path` (5 s timeout, asked every time, never cached) must name this device's own AVD directory; unreachable, timed out or another path → nothing is sent (a snapshot reclaim then shuts down and wipes).
 
-`shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills only an emulator this process
-started, then `avdmanager delete avd`, frees the port.
+`shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills the emulator this process started, or after a restart each attached
+emulator whose bounded `emu avd path` names this AVD (any serial that cannot answer → refuse), then `avdmanager delete avd`, frees the port.
 `listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
 
 Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml

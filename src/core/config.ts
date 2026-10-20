@@ -245,10 +245,10 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
 export type DownloadPolicy = "never" | "on-request" | "always";
 
 /**
- * Which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine --
- * every daemon today -- and a `gateway` owns none and fronts the workers that joined it. One
- * daemon runs exactly one mode, and it is a config value rather than a flag because it decides
- * what the process *is*, not what one invocation does.
+ * why: which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine and a
+ * `gateway` owns none and fronts the workers that joined it. One daemon runs exactly one mode,
+ * and the folder it lives in decides it (ADR 0034): the daemon is told its role at start, and
+ * `loadConfig` takes it as an argument -- no config key names it.
  */
 export type DaemonMode = "worker" | "gateway";
 
@@ -516,6 +516,9 @@ export interface ModuleConfigEntry {
   readonly check?: (section: never, config: Config) => void;
 }
 
+const MODE_KEY_REMOVED =
+  '"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.';
+
 export interface LoadConfigOptions {
   readonly authStrategies?: readonly AuthStrategyDefinition[];
   readonly modules?: readonly ModuleConfigEntry[];
@@ -523,6 +526,7 @@ export interface LoadConfigOptions {
   readonly systemStats: SystemStats;
   readonly configPath?: string;
   readonly overrides?: ConfigOverrides;
+  readonly role?: DaemonMode;
   readonly warn?: Warn;
 }
 
@@ -534,6 +538,7 @@ export async function loadConfig({
   filesystem,
   modules = [],
   overrides,
+  role = "worker",
   systemStats,
   warn = () => {},
 }: LoadConfigOptions): Promise<Config> {
@@ -544,10 +549,12 @@ export async function loadConfig({
   // defaulted: it decides which options block `capacity.config` is, and which
   // defaults the merge starts from.
   const strategy = resolveStrategyName([fromFile, fromOverrides]);
-  // Same reason as the strategy above: `mode` decides which keys are read at all, and what
-  // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
-  // about.
-  const mode = resolveMode([fromFile, fromOverrides]);
+  // why: refused before any other validation, so a config that still sets `mode` fails on that alone.
+  for (const layer of [fromFile, fromOverrides]) {
+    if (Object.hasOwn(requireObject(layer, "config"), "mode")) {
+      throw new ConfigError(MODE_KEY_REMOVED);
+    }
+  }
   const validators = configValidators(strategy, modules, authStrategies);
 
   const fileConfig = normalizeLayer(
@@ -562,7 +569,7 @@ export async function loadConfig({
   );
 
   const mergedWithoutMetrics = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, mode, modules, authStrategies), fileConfig),
+    mergeConfig(defaultConfig(systemStats, strategy, role, modules, authStrategies), fileConfig),
     overrideConfig,
   ) as unknown as Omit<Config, "metrics"> & { readonly metrics?: Config["metrics"] };
   const merged: Config = {
@@ -578,7 +585,7 @@ export async function loadConfig({
   validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
   runModuleChecks(merged, modules);
-  if (mode === "gateway") {
+  if (role === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
   } else {
@@ -640,7 +647,6 @@ function validateMetricsRetention(config: Config): void {
  * decision -- adding a key to `Config` should not silently make it gateway-relevant.
  */
 const GATEWAY_CONFIG_KEYS: readonly string[] = [
-  "mode",
   "http",
   "log",
   "lease",
@@ -784,20 +790,6 @@ function validateGatewayMembership(config: Config): void {
   }
 }
 
-/** Last layer that names a mode wins; absent everywhere means `worker` (ADR 0005 §1). */
-function resolveMode(layers: readonly unknown[]): DaemonMode {
-  let resolved: DaemonMode = "worker";
-  for (const layer of layers) {
-    const candidate = requireObject(layer, "config")["mode"];
-    if (candidate === undefined) continue;
-    if (candidate !== "worker" && candidate !== "gateway") {
-      throw invalidValue("mode", 'one of "worker", "gateway"');
-    }
-    resolved = candidate;
-  }
-  return resolved;
-}
-
 /** Last layer that names a strategy wins; absent everywhere means the default. */
 function resolveStrategyName(layers: readonly unknown[]): CapacityStrategyName {
   let resolved: CapacityStrategyName = DEFAULT_CAPACITY_STRATEGY;
@@ -873,12 +865,12 @@ function asObject(value: unknown): Layer {
 function defaultConfig(
   systemStats: SystemStats,
   strategy: CapacityStrategyName,
-  mode: DaemonMode,
+  role: DaemonMode,
   modules: readonly ModuleConfigEntry[],
   authStrategies: readonly AuthStrategyDefinition[],
 ): Omit<Config, "metrics"> {
   return {
-    mode,
+    mode: role,
     capabilities: Object.fromEntries(
       modules.map((entry) => [
         entry.name,
@@ -929,9 +921,9 @@ function defaultConfig(
     // something every operator has to remember to switch on; a worker's HTTP gateway stays
     // opt-in exactly as before.
     http: {
-      enabled: mode === "gateway",
+      enabled: role === "gateway",
       host: "127.0.0.1",
-      port: 4700,
+      port: role === "gateway" ? 4700 : 4701,
       ...Object.fromEntries(
         authStrategies.flatMap((definition) =>
           definition.config === undefined
@@ -1019,7 +1011,6 @@ function validateConfigLayer(
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
-const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
@@ -1034,7 +1025,6 @@ function configValidators(
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
-    mode: stringUnion(DAEMON_MODES),
     gateway: objectValidator({
       url: stringValue,
       token: stringValue,

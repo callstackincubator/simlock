@@ -331,7 +331,8 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
   const gateway = await startDaemon({
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    role: "gateway",
     dataDirectory: gatewayDirectory,
     filesystem: new MemoryFilesystem(),
     gatewayRelay: (given) => {

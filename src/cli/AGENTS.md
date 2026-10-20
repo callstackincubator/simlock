@@ -18,38 +18,45 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
 
 ## Files
 
-| File             | Role                                                                              |
-| ---------------- | --------------------------------------------------------------------------------- |
-| `index.ts`       | `runCli`: the global `--token`, the command lookup, the error boundary            |
-| `tree.ts`        | The command tree — each node names the module that implements it                  |
-| `environment.ts` | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed |
-| `types.ts`       | `CliEnvironment` and its ports — types only, so routing loads no code             |
-| `errors.ts`      | The error → code/exit mapping                                                     |
-| `usage-error.ts` | `UsageError` and `withHelpHint`, the help pointer's one wording                   |
-| `connect.ts`     | `connectDaemonClient`: credential order, the admin session, the notice            |
-| `args.ts`        | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`        |
-| `commands/*.ts`  | One module per command, `run(argv, context)`; loaded by the tree on a hit         |
-| `format.ts`      | The human renderers for `status`, `worker list`, `daemon start`, etc.             |
-| `duration.ts`    | `parseDuration` for `--ttl`-style flags                                           |
-| `termination.ts` | The signals and parent-exit wait a held lease blocks on                           |
-| `log-file.ts`    | `readLogFile`: `daemon.log` plus a rotated generation                             |
-| `stdio.ts`       | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                   |
-| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited           |
-| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                              |
-| `main.ts`        | The bin; sets `process.exitCode`                                                  |
+| File             | Role                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `index.ts`       | `runCli`: the global `--token`, `--gateway` and `--local`, the command lookup, the error boundary |
+| `tree.ts`        | The command tree — each node names the module that implements it                                  |
+| `environment.ts` | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed                 |
+| `types.ts`       | `CliEnvironment` and its ports — types only, so routing loads no code                             |
+| `errors.ts`      | The error → code/exit mapping                                                                     |
+| `usage-error.ts` | `UsageError` and `withHelpHint`, the help pointer's one wording                                   |
+| `connect.ts`     | `connectDaemonClient`: credential order, the admin session, the notice                            |
+| `args.ts`        | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`                        |
+| `commands/*.ts`  | One module per command, `run(argv, context)`; loaded by the tree on a hit                         |
+| `format.ts`      | The human renderers for `status`, `worker list`, `daemon start`, etc.                             |
+| `duration.ts`    | `parseDuration` for `--ttl`-style flags                                                           |
+| `termination.ts` | The signals and parent-exit wait a held lease blocks on                                           |
+| `log-file.ts`    | `readLogFile`: `daemon.log` plus a rotated generation                                             |
+| `stdio.ts`       | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                                   |
+| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited                           |
+| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                                              |
+| `main.ts`        | The bin; sets `process.exitCode`                                                                  |
 
 `format.ts`, `duration.ts` and `termination.ts` are reached only from a command module, and
 `follow-log.ts` and `passthrough.ts` only from a dynamic import inside `environment.ts`.
 
 ## How it works
 
-1. **Route** — `runCli` takes out a global `--token`, then walks `COMMANDS` to the deepest
+1. **Route** — `runCli` takes out the global `--token`, `--gateway` and `--local` (bare, anywhere; `--gateway=<x>` and `--local=<x>` are usage errors, and both flags together are one), then walks `COMMANDS` to the deepest
    node the words name and loads that one module (a parent and its children can share it).
    Nothing runs without a node: an unmatched word is
    a usage error before any command module is read. `--help`/`-h` as the first word, or no
    words, prints the root usage without building an environment at all. Any error is one JSON
    line on stderr, `{ error: { code, message } }`. Exit code: `ERROR_TABLE` `cliExitCode`,
-   2 for a usage error, else 1.
+   2 for a usage error, else 1. The flag goes to `resolveDaemonHome`, which picks the folder:
+   `--gateway` `<root>/gateway`, `--local` the worker, and with no flag the gateway only when
+   one is present and `<root>/instance.json` does not exist. The launcher gets `--gateway`
+   whenever the chosen role is the gateway (`SIMLOCK_HOME` still the root). When a worker
+   answers `UNSUPPORTED_IN_WORKER_MODE`, no `--gateway` was given and a gateway is present,
+   the printed message gets the `--gateway` hint appended. With `--gateway` and no gateway
+   present every command but `daemon start`, `config set` and `mcp` (and any `--help`, except after `adb`/`simctl`)
+   stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects.
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
    `SIMLOCK_ADMIN_TOKEN` → `admin.token` in the data directory (3 reads, 50 ms apart).
@@ -85,7 +92,7 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    A new identity on `daemon.log.1` is a rotation: print its rest, restart at offset 0.
 8. **`simlock config set`** — validates the merged file with `loadConfig`, writes
    `config.json` atomically, mode `0600`.
-9. **`simlock mcp`** — imports `src/mcp/main.ts` and runs it.
+9. **`simlock mcp`** — imports `src/mcp/main.ts` and runs it, passing the global flag as `{ daemonFlag }`.
 
 ## Rules
 

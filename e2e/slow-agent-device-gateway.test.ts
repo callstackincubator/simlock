@@ -155,10 +155,10 @@ function defineSuite(target: Target): void {
     gateway = await withSharedDaemon({
       driver: "none",
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
         capabilities: { "agent-device": { enabled: true } },
       },
+      role: "gateway",
     });
     sharedEnvs.add(gateway);
     const minted = await gateway.cli(["token", "create", "--role", "worker"], { timeout: 60_000 });

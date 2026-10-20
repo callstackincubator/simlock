@@ -230,8 +230,8 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
           defaultTtlMs: options.defaultTtlMs ?? defaultTtlMs,
           maxTtlMs: options.maxTtlMs ?? gatewayMaxTtlMs,
         },
-        mode: "gateway",
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem,
       gatewayRelay: (created) => {
