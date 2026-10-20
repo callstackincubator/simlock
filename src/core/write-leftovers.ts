@@ -25,24 +25,26 @@ export async function sweepWriteLeftovers(options: SweepWriteLeftoversOptions): 
     } catch {
       continue;
     }
-    for (const name of names) {
-      const path = join(directory, name);
-      const temporary = TEMPORARY_FILE.exec(name);
-      if (temporary !== null) {
-        await removeIfAbandoned(path, temporary[1], options);
-        continue;
-      }
-      for (const root of options.deviceRoots) {
-        if (dirname(root) !== directory) continue;
-        const staging = stagingWriter(name, basename(root));
-        if (staging === undefined) continue;
-        if (staging === "legacy") {
-          options.logger.info("left a legacy staging directory in place", { path });
-        } else {
-          await removeIfAbandoned(path, staging, options);
-        }
-      }
-    }
+    const rootNames = options.deviceRoots
+      .filter((root) => dirname(root) === directory)
+      .map((root) => basename(root));
+    for (const name of names) await sweepEntry(join(directory, name), rootNames, options);
+  }
+}
+
+async function sweepEntry(
+  path: string,
+  rootNames: readonly string[],
+  options: SweepWriteLeftoversOptions,
+): Promise<void> {
+  const name = basename(path);
+  const temporary = TEMPORARY_FILE.exec(name);
+  if (temporary !== null) return removeIfAbandoned(path, temporary[1], options);
+  for (const rootName of rootNames) {
+    const staging = stagingWriter(name, rootName);
+    if (staging === "legacy")
+      options.logger.info("left a legacy staging directory in place", { path });
+    else if (staging !== undefined) await removeIfAbandoned(path, staging, options);
   }
 }
 
