@@ -1401,6 +1401,7 @@ describe("startDaemon stop with a warm target", () => {
         capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         warmPool: {
+          maxConcurrentBoots: 1,
           targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
         },
       },
