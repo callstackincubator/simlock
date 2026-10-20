@@ -138,6 +138,13 @@ function harness(
   }[] = [];
   const provisionReservations: { released: number }[] = [];
   const reserveAttempts = { count: 0 };
+  const finishProvisioning = async (id: string): Promise<void> => {
+    if (options.provisioning === undefined) return;
+    await options.provisioning;
+    state.devices = state.devices.map((item) =>
+      item.id === id ? { ...item, state: "ready" } : item,
+    );
+  };
   const poolOptions: WarmPoolOptions = {
     acquisition: {
       kick,
@@ -282,12 +289,7 @@ function harness(
         if (claim === undefined) throw new Error("the new device is already claimed");
         provisionOptions.reservation.release();
         record.deviceId = id;
-        if (options.provisioning !== undefined) {
-          await options.provisioning;
-          state.devices = state.devices.map((item) =>
-            item.id === id ? { ...item, state: "ready" } : item,
-          );
-        }
+        await finishProvisioning(id);
         return { claim, device: created };
       },
     },

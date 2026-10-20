@@ -532,10 +532,7 @@ export class WarmPool {
     // frees nothing, but any other trigger that comes soon would propose it again, so it is held
     // back the same way. A target's or a waiter's boot is held back by the retry schedule instead,
     // which the policy reads before it proposes one.
-    const owner =
-      proposal.action === "boot" && proposal.reason === "waiting-request"
-        ? this.#specOf(proposal.deviceId)
-        : proposal.target;
+    const owner = this.#ownerOf(proposal);
     if (
       owner === undefined &&
       (this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()
@@ -545,6 +542,14 @@ export class WarmPool {
     if (proposal.action === "shutdown") await this.#shutdown(proposal.deviceId);
     else if (owner === undefined) await this.#boot(proposal.deviceId, undefined);
     else this.#launch(owner, false, () => this.#boot(proposal.deviceId, owner));
+  }
+
+  /** why: the spec a boot or creation is held back by, when it is one of a target's or a waiter's. */
+  #ownerOf(proposal: Exclude<WarmProposal, { action: "provision" }>): VirtualSpec | undefined {
+    if (proposal.action === "boot" && proposal.reason === "waiting-request") {
+      return this.#specOf(proposal.deviceId);
+    }
+    return proposal.target;
   }
 
   #specOf(deviceId: string): VirtualSpec | undefined {

@@ -275,6 +275,16 @@ interface QueuePass {
   readonly stuck: ReadonlySet<Platform>;
 }
 
+interface QueueState {
+  readonly view: WarmPolicyView;
+  readonly bootable: readonly VirtualDevice[];
+  readonly room: Slots;
+  readonly proposals: WarmProposal[];
+  readonly taken: Set<string>;
+  readonly stuck: Set<Platform>;
+  started: number;
+}
+
 /**
  * why: the queue is served in order, one device per waiter. A waiter behind the head gets a
  * shut-down device booted or a new one created, within `maxConcurrentBoots` counting the pool's
@@ -290,24 +300,22 @@ function boots(
   room: Slots,
   held: Slots,
 ): QueuePass {
-  const proposals: WarmProposal[] = [];
-  const taken = new Set<string>();
-  const stuck = new Set<Platform>();
-  const matched = new Set<VirtualDevice | WarmPolicyView["onItsWay"][number]>();
-  let started = view.inFlight.length + view.waiting.filter((demand) => demand.inFlight).length;
-  const open = (): boolean => started < view.config.maxConcurrentBoots;
-  const hold = (platform: "ios" | "android"): void => {
-    room.global -= 1;
-    room[platform] -= 1;
+  const state: QueueState = {
+    bootable,
+    proposals: [],
+    room,
+    started: view.inFlight.length + view.waiting.filter((demand) => demand.inFlight).length,
+    stuck: new Set(),
+    taken: new Set(),
+    view,
   };
-  const roomFor = (spec: VirtualSpec): boolean => room.global >= 1 && room[spec.platform] >= 1;
-
+  const matched = new Set<VirtualDevice | WarmPolicyView["onItsWay"][number]>();
   let atHead = true;
   for (const demand of view.waiting) {
     const head: boolean = atHead;
+    atHead = false;
     if (demand.inFlight) {
-      atHead = false;
-      hold(demand.platform);
+      holdSlot(room, demand.platform);
       continue;
     }
     const ready = running.find((candidate) => !matched.has(candidate) && serves(candidate, demand));
@@ -316,43 +324,16 @@ function boots(
     if (match !== undefined) {
       matched.add(match);
       atHead = head && ready !== undefined;
-      continue;
+    } else if (!bootForWaiter(state, demand)) {
+      createForWaiter(state, demand, head);
+      holdSlot(room, demand.platform);
     }
-    atHead = false;
-    const device = open()
-      ? bootable.find(
-          (candidate) =>
-            !taken.has(candidate.id) &&
-            hasRoom(room, candidate) &&
-            serves(candidate, demand) &&
-            view.admit.boot(candidate) === undefined,
-        )
-      : undefined;
-    if (device !== undefined) {
-      taken.add(device.id);
-      claim(room, device);
-      started += 1;
-      proposals.push({ action: "boot", deviceId: device.id, reason: "waiting-request" });
-      continue;
-    }
-    const creatable = view.admit.create(demand.spec) === undefined && roomFor(demand.spec);
-    if (!head && creatable && open() && view.retry.mayAttempt(demand.spec, view.now)) {
-      started += 1;
-      proposals.push({
-        action: "provision",
-        reason: "waiting-request",
-        spec: demand.spec,
-        target: demand.spec,
-      });
-    } else if (head && creatable) started += 1;
-    else stuck.add(demand.platform);
-    hold(demand.platform);
   }
 
   const recent = bootable
     .filter(
       (device) =>
-        !taken.has(device.id) &&
+        !state.taken.has(device.id) &&
         !view.resetDevices.has(device.id) &&
         view.now - (device.lastLeaseEndedAt ?? Number.NEGATIVE_INFINITY) <
           view.config.shutdownAfterMs,
@@ -361,11 +342,61 @@ function boots(
   for (const device of recent) {
     if (hasWarmRoom(room, held, device) && view.admit.boot(device) === undefined) {
       claim(room, device);
-      started += 1;
-      proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
+      state.started += 1;
+      state.proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
     }
   }
-  return { proposals, started, stuck };
+  return { proposals: state.proposals, started: state.started, stuck: state.stuck };
+}
+
+function holdSlot(room: Slots, platform: Platform): void {
+  room.global -= 1;
+  room[platform] -= 1;
+}
+
+function bootsOpen(state: QueueState): boolean {
+  return state.started < state.view.config.maxConcurrentBoots;
+}
+
+function bootForWaiter(state: QueueState, demand: WaitingDemand): boolean {
+  if (!bootsOpen(state)) return false;
+  const device = state.bootable.find(
+    (candidate) =>
+      !state.taken.has(candidate.id) &&
+      hasRoom(state.room, candidate) &&
+      serves(candidate, demand) &&
+      state.view.admit.boot(candidate) === undefined,
+  );
+  if (device === undefined) return false;
+  state.taken.add(device.id);
+  claim(state.room, device);
+  state.started += 1;
+  state.proposals.push({ action: "boot", deviceId: device.id, reason: "waiting-request" });
+  return true;
+}
+
+function createForWaiter(state: QueueState, demand: WaitingDemand, head: boolean): void {
+  const { room, view } = state;
+  const creatable =
+    view.admit.create(demand.spec) === undefined &&
+    room.global >= 1 &&
+    room[demand.spec.platform] >= 1;
+  if (head && creatable) {
+    state.started += 1;
+  } else if (
+    !head &&
+    creatable &&
+    bootsOpen(state) &&
+    view.retry.mayAttempt(demand.spec, view.now)
+  ) {
+    state.started += 1;
+    state.proposals.push({
+      action: "provision",
+      reason: "waiting-request",
+      spec: demand.spec,
+      target: demand.spec,
+    });
+  } else state.stuck.add(demand.platform);
 }
 
 /** The targets with those that resolved to one spec merged into one, counts summed. */
