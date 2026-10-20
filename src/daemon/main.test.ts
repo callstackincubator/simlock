@@ -995,7 +995,6 @@ describe("startDaemon wires core and leasing together", () => {
     const first = await startDaemon(options());
     const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
     await first.stop("test");
-    // The restarted process's driver knows no device, so the leased one is gone from its platform.
 
     const daemon = await startDaemon(options());
     runningDaemons.push(daemon);

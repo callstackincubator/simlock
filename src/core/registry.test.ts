@@ -1093,7 +1093,6 @@ describe("Registry", () => {
     });
     const reloaded = await loadTestRegistry(options);
 
-    // Stamped on the move into `ready`, and left alone by a later move out of it.
     expect(reloaded.snapshot.devices[0]?.readyAt).toBe(1_000);
     expect(reloaded.snapshot.devices[0]?.shutdownAt).toBe(6_000);
   });
