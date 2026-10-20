@@ -281,6 +281,106 @@ test.describe("the leases page", () => {
     }
   });
 
+  test("the dim layer covers the sidebar: its links cannot be clicked while the drawer is open", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-dim");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host);
+      await leaseRow(page, lease.id).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+
+      const covered = await page.evaluate(() => {
+        const link = document.querySelector<HTMLElement>(".sidebar-nav a");
+        const box = link?.getBoundingClientRect();
+        if (box === undefined) return undefined;
+        const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return top?.classList.contains("drawer-dim");
+      });
+
+      expect(covered).toBe(true);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the drawer animates once: switching its tabs does not restart the animation", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-motion");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host);
+      await page.evaluate(() => {
+        const counted = window as unknown as { drawerStarts: number };
+        counted.drawerStarts = 0;
+        document.addEventListener(
+          "animationstart",
+          (event) => {
+            if ((event.target as Element).classList.contains("drawer")) counted.drawerStarts += 1;
+          },
+          true,
+        );
+      });
+
+      await leaseRow(page, lease.id).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      for (const name of ["Screen", "Details", "Screen", "Details"]) {
+        await page.getByRole("tab", { name }).click();
+      }
+      await page.waitForTimeout(400);
+
+      expect(
+        await page.evaluate(() => (window as unknown as { drawerStarts: number }).drawerStarts),
+      ).toBe(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("at 360px wide the drawer fills the width and the page has no sideways scroll", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-narrow");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await page.setViewportSize({ height: 740, width: 360 });
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toBeVisible();
+      expect((await drawer.boundingBox())?.width).toBeCloseTo(360, 0);
+      expect(await hasHorizontalScroll(page)).toBe(false);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the drawer's close button is 40px tall with the button border", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-icon");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+
+      const shape = await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Close" })
+        .evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { border: style.borderTopWidth, height: element.getBoundingClientRect().height };
+        });
+
+      expect(shape).toEqual({ border: "1px", height: 40 });
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("a lease opens to its details on a gateway", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
