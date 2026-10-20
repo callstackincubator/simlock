@@ -45,7 +45,7 @@ its `config.json`). With none, every other `--gateway` command (`status`,
 `daemon status`, `daemon stop`, `daemon logs`, `events`, `config get`,
 `lease`, and the rest) exits 2 with `GATEWAY_NOT_PRESENT` and starts nothing,
 reads nothing and writes nothing; a `--gateway mcp` tool call fails with the
-same code. `--help` still prints usage.
+same code. `--help` still prints usage, except after `adb` or `simctl`.
 
 To run a gateway beside the worker on one machine:
 
