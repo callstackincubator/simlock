@@ -809,6 +809,41 @@ describe("alerts", () => {
     expect(h.clock.pendingTimerCount).toBe(0);
   });
 
+  it("the sample is not put on the bus and does not go through the destination's queue", async () => {
+    const h = harness();
+    h.poster.respond = (_request, index) => Promise.resolve({ status: index === 0 ? 503 : 200 });
+    const seen: string[] = [];
+    h.eventBus.subscribeAll((envelope) => seen.push(envelope.event));
+    h.emit("worker.connected", connected("wrk_a"));
+    h.emit("worker.connected", connected("wrk_b"));
+    await settle();
+    expect(h.poster.requests).toHaveLength(1);
+
+    await expect(h.alerts.test("audit")).resolves.toEqual({ ok: true, status: 200 });
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).event)).toEqual([
+      "worker.connected",
+      "alerts.test-sent",
+    ]);
+    await h.advance(999);
+    expect(h.poster.requests).toHaveLength(2);
+    await h.advance(1);
+    await settle();
+    expect(
+      h.poster.requests.map((request) => {
+        const { event, payload } = JSON.parse(request.body);
+        return [event, payload.workerId];
+      }),
+    ).toEqual([
+      ["worker.connected", "wrk_a"],
+      ["alerts.test-sent", undefined],
+      ["worker.connected", "wrk_a"],
+      ["worker.connected", "wrk_b"],
+    ]);
+    expect(seen).toEqual(["worker.connected", "worker.connected"]);
+    expect(h.eventBus.replay({}).map((envelope) => envelope.event)).toEqual(seen);
+  });
+
   it("the bus handler returns before the post settles, and a poster that throws reaches neither the emitter nor other subscribers", async () => {
     const h = harness();
     const seen: string[] = [];
