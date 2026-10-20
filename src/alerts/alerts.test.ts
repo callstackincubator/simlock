@@ -48,6 +48,7 @@ class Harness {
       eventBus: this.eventBus,
       poster: this.poster,
       clock: this.clock,
+      idGenerator: { generate: () => "sample-id" },
       logger: new JsonLinesLogger({ clock: this.clock, level: "debug", sink: this.sink }).child(
         "alerts",
       ),
@@ -886,6 +887,7 @@ describe("alerts", () => {
       eventBus: h.eventBus,
       poster: new FetchWebhookPoster(),
       clock: h.clock,
+      idGenerator: { generate: () => "sample-id" },
       logger: new JsonLinesLogger({ clock: h.clock, level: "debug", sink: h.sink }),
       version: "9.9.9",
       workerLabel: () => undefined,

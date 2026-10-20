@@ -87,6 +87,13 @@ export interface GatewayDispatcherOptions {
   readonly config: GatewayConfig;
   readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
   readonly workers: WorkerRegistry;
+  /**
+   * why: ADR 0035 §1; declared here, not imported from `src/alerts`, which this module may not
+   * import. Posts one sample to the named alert destination and says what came of it.
+   */
+  readonly testDestination?: (
+    destination: string,
+  ) => Promise<{ readonly ok: true; readonly status: number }>;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
   readonly directory: WorkerDirectory;
@@ -326,7 +333,12 @@ export class GatewayDispatcher {
     return { drained: false, workerId: input.workerId };
   };
 
-  #alertsTest: Handler<"alerts.test"> = (input) => ({ destination: input.destination, status: 0 });
+  #alertsTest: Handler<"alerts.test"> = async (input) => {
+    const result = await (
+      this.options.testDestination as NonNullable<GatewayDispatcherOptions["testDestination"]>
+    )(input.destination);
+    return { destination: input.destination, status: result.status };
+  };
 
   #workerRemove: Handler<"worker.remove"> = async (input) => ({
     removed: await this.options.workers.remove(input.workerId),
