@@ -2,6 +2,7 @@ import { eventSummary, eventTone } from "./activity";
 import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
 import { itemPath } from "./paths";
 import { formatDuration } from "./time";
+import type { WaitingRequest } from "./waiting";
 import type { Tone } from "./tones";
 import {
   stateEnteredAt,
@@ -31,8 +32,16 @@ export type InboxItem =
       readonly device: WorkerDevice;
     };
 
+export interface InboxContext {
+  readonly now: number;
+  readonly requests?: readonly WaitingRequest[];
+}
+
 // why: a worker that is both disconnected and drained is two items, since each clears on its own.
-export function inboxItems(workers: readonly WorkerView[]): readonly InboxItem[] {
+export function inboxItems(
+  workers: readonly WorkerView[],
+  _context?: InboxContext,
+): readonly InboxItem[] {
   return workers.flatMap((worker) => [...workerItems(worker), ...deviceItems(worker)]);
 }
 
@@ -270,6 +279,7 @@ export function inboxPageOf(input: {
   readonly events: readonly ConsoleEvent[];
   readonly now: number;
   readonly key: string | undefined;
+  readonly requests?: readonly WaitingRequest[];
 }): InboxPage {
   const items = inboxItems(input.workers);
   const rows = items.map((item) => ({

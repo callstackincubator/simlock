@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { inboxItems, inboxPageOf } from "./inbox";
 import type { ConsoleEvent } from "./events";
+import type { WaitingRequest } from "./waiting";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -205,6 +206,36 @@ describe("the Inbox items of an absent phone", () => {
       ["wrk_1/dev_untrusted/absent", "absent", "warn", "iPhone 15 Pro is absent (untrusted)"],
       ["wrk_1/dev_gone/absent", "absent", "warn", "iPhone 15 Pro is absent (not-present)"],
     ]);
+  });
+});
+
+describe("the Inbox items of a long wait", () => {
+  it("hold a request that has waited over 60 s by the daemon's now, titled with its requester and the wait", () => {
+    const waiting = (waitedMs: number): WaitingRequest => ({
+      createdAt: NOW - waitedMs,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent-b",
+      spec: { model: "iPhone 16", platform: "ios" },
+      stage: "queued",
+    });
+    const rowsAt = (waitedMs: number) =>
+      inboxPageOf({
+        events: [],
+        key: undefined,
+        now: NOW,
+        requests: [waiting(waitedMs)],
+        workers: [worker()],
+      }).rows.map((row) => [row.key, row.word, row.tone, row.subject]);
+
+    expect(rowsAt(59_999)).toEqual([]);
+    expect(rowsAt(60_000)).toEqual([]);
+    expect(rowsAt(60_001)).toEqual([
+      ["request/req_1/waiting", "waiting", "warn", "agent-b has waited 1 min"],
+    ]);
+    expect(
+      inboxItems([worker()], { now: NOW, requests: [waiting(61_000)] }).map((item) => item.key),
+    ).toEqual(["request/req_1/waiting"]);
   });
 });
 
