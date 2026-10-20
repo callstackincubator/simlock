@@ -1006,6 +1006,38 @@ describe("startDaemon wires core and leasing together", () => {
     expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
   });
 
+  it("lists the same device and lease after a worker is stopped and started again", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const options = () =>
+      ({
+        clock,
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [driver],
+        filesystem: new MemoryFilesystem(),
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+    const first = await startDaemon(options());
+    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    const list = async (daemon: Awaited<ReturnType<typeof startDaemon>>, kind: string) =>
+      (
+        (await daemon.dispatch("list.get", { kind }, admin)) as readonly { readonly id: string }[]
+      ).map((row) => row.id);
+    const devicesBefore = await list(first, "devices");
+    await first.stop("test");
+
+    const daemon = await startDaemon(options());
+    runningDaemons.push(daemon);
+
+    expect(devicesBefore).toContain(grant.device.id);
+    expect(await list(daemon, "devices")).toEqual(devicesBefore);
+    expect(await list(daemon, "leases")).toEqual([grant.lease.id]);
+  });
+
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
     const clock = new FakeClock(1_000);
     const { daemon, driver, grant } = await leasedIos({
