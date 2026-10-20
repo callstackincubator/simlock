@@ -306,6 +306,16 @@ describe("warm pool policy", () => {
       { action: "boot", deviceId: "lse_15", reason: "waiting-request" },
     ]);
     expect(evaluate(view([released], { waiting, blocked: [spec("iPhone 15")] }))).toEqual([]);
+
+    // why: the converger records the failure under the device's spec, which a class waiter's may differ from.
+    const other = device("lse_17", "shutdown", {
+      endedAgo: 90 * minute,
+      spec: spec("iPhone 17"),
+    });
+    expect(evaluate(view([other], { waiting }))).toEqual([
+      { action: "boot", deviceId: "lse_17", reason: "waiting-request" },
+    ]);
+    expect(evaluate(view([other], { waiting, blocked: [spec("iPhone 17")] }))).toEqual([]);
   });
 
   it("proposes a boot, not a shutdown, for a released iPhone 15 that serves a waiting class request at the running cap", () => {

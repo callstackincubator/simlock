@@ -370,12 +370,14 @@ function bootsOpen(state: QueueState): boolean {
 }
 
 function bootForWaiter(state: QueueState, demand: WaitingDemand): boolean {
-  if (!bootsOpen(state) || !state.view.retry.mayAttempt(demand.spec, state.view.now)) return false;
+  if (!bootsOpen(state)) return false;
   const device = state.bootable.find(
     (candidate) =>
       !state.taken.has(candidate.id) &&
       hasRoom(state.room, candidate) &&
       serves(candidate, demand) &&
+      // why: the converger records a failed boot under the device's spec, not the waiter's.
+      state.view.retry.mayAttempt(candidate.spec, state.view.now) &&
       state.view.admit.boot(candidate) === undefined,
   );
   if (device === undefined) return false;
