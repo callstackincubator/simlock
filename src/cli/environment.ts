@@ -12,6 +12,7 @@ import type {
   DaemonLauncher,
   Filesystem,
   IpcConnector,
+  LaunchedDaemon,
   ParentWatch,
   ParentWatchHandle,
 } from "../ports/index.js";
@@ -55,22 +56,8 @@ class AutoLaunchAdminConnector {
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
-        if (exit !== undefined) {
-          const output = await launched.readOutput().catch(() => "");
-          try {
-            return await this.finishConnection(await this.connectClient(resolveCredential));
-          } catch (lastAttempt: unknown) {
-            if (!(await isUnavailable(lastAttempt))) throw lastAttempt;
-          }
-          const { SimlockError } = await import("../contract/index.js");
-          const { startErrorFrom } = await import("../ports/index.js");
-          throw new SimlockError(
-            "DAEMON_STARTUP_FAILED",
-            "transport",
-            startErrorFrom(exit, output),
-            {},
-          );
-        }
+        if (exit !== undefined)
+          return await this.connectAfterExit(launched, exit, resolveCredential);
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
@@ -81,6 +68,22 @@ class AutoLaunchAdminConnector {
       `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
       {},
     );
+  }
+
+  private async connectAfterExit(
+    launched: LaunchedDaemon,
+    exit: DaemonExit,
+    resolveCredential: () => Promise<string | undefined>,
+  ): Promise<SimlockAdminClient> {
+    const output = await launched.readOutput().catch(() => "");
+    try {
+      return await this.finishConnection(await this.connectClient(resolveCredential));
+    } catch (error: unknown) {
+      if (!(await isUnavailable(error))) throw error;
+    }
+    const { SimlockError } = await import("../contract/index.js");
+    const { startErrorFrom } = await import("../ports/index.js");
+    throw new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
   }
 
   private async finishConnection(client: SimlockAdminClient): Promise<SimlockAdminClient> {
