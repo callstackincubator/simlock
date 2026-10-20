@@ -177,7 +177,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
 
   private constructor(private readonly options: Required<RegistryOptions>) {}
 
-  static load(options: RegistryOptions): Promise<Registry> {
+  static async load(options: RegistryOptions): Promise<Registry> {
     const registry = new Registry({
       ...options,
       leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
@@ -191,7 +191,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     registry.#leases = loaded.leases;
     registry.#leaseRequests = loaded.leaseRequests;
     registry.#components = loaded.components;
-    return Promise.resolve(registry);
+    return registry;
   }
 
   get snapshot(): RegistrySnapshot {
