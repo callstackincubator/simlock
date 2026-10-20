@@ -106,8 +106,8 @@ const PAGING: Paging = {
   total: 1,
 };
 
-function table(rows: readonly LeaseRowView[], filter: "all" | "ios" = "all"): string {
-  return renderToStaticMarkup(<LeaseTable rows={rows} filter={filter} paging={PAGING} />);
+function table(rows: readonly LeaseRowView[], narrowed = false): string {
+  return renderToStaticMarkup(<LeaseTable rows={rows} narrowed={narrowed} paging={PAGING} />);
 }
 
 describe("the lease list", () => {
@@ -128,9 +128,9 @@ describe("the lease list", () => {
     expect(fine).not.toContain("expiring");
   });
 
-  it("says there are no leases, or none matching the filter", () => {
+  it("says there are no leases, or none matching the filter or search", () => {
     expect(text(table([]))).toBe("No leases.");
-    expect(text(table([], "ios"))).toBe("No leases match this filter.");
+    expect(text(table([], true))).toBe("No leases match this filter or search.");
   });
 });
 

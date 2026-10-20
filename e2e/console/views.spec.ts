@@ -96,7 +96,7 @@ test.describe("every view", () => {
     const { host, pages } = await hostWithLease();
     try {
       await openSignedIn(page, host);
-      // why: a drawer traps the keyboard inside itself, so its own order is checked in the leases spec.
+      // why: a drawer traps the keyboard inside itself, so the lease page is left out of this order.
       for (const path of every(pages).filter((candidate) => candidate !== pages.lease)) {
         await visit(page, host, path);
         // why: a radio group is one stop, at its checked radio, and nothing inside a closed

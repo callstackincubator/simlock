@@ -1,7 +1,5 @@
 import "./leases.css";
 
-import { useRef } from "react";
-
 import {
   ChoiceChips,
   type Column,
@@ -14,14 +12,12 @@ import {
   SearchField,
   Toolbar,
 } from "../../ds";
-import { navigate, useSearch } from "../../state/router";
-import { LEASE_FILTERS, type LeaseFilter, type LeaseRowView, useLeases } from "../../state/leases";
+import { LEASE_FILTERS, type LeaseRowView, useLeaseDrawer, useLeases } from "../../state/leases";
 import { LeaseDrawer } from "./drawer";
 
 export function LeasesScreen() {
   const { choose, filter, paging, query, search: setQuery, urlId, view } = useLeases();
-  const address = useSearch();
-  const fromList = useOpenedFromList(urlId);
+  const { close, fromList } = useLeaseDrawer(urlId);
   return (
     <Page
       title="Leases"
@@ -39,13 +35,19 @@ export function LeasesScreen() {
         end={<SearchField label="Search leases" value={query} onChange={setQuery} />}
       />
       <Loaded view={view}>
-        {(page) => <LeaseTable rows={page.rows} filter={filter} paging={paging} />}
+        {(page) => (
+          <LeaseTable
+            rows={page.rows}
+            narrowed={filter !== "all" || query !== ""}
+            paging={paging}
+          />
+        )}
       </Loaded>
       {urlId === undefined ? null : (
         <LeaseDrawer
           key={urlId}
           id={urlId}
-          onClose={() => closeDrawer(fromList, `/leases${address}`)}
+          onClose={close}
           finalFocus={() => focusAfterClosing(fromList, urlId)}
         />
       )}
@@ -78,10 +80,10 @@ const COLUMNS: readonly Column<LeaseRowView>[] = [
 
 export function LeaseTable(props: {
   readonly rows: readonly LeaseRowView[];
-  readonly filter: LeaseFilter;
+  readonly narrowed: boolean;
   readonly paging: Paging;
 }) {
-  const { filter, paging, rows } = props;
+  const { narrowed, paging, rows } = props;
   return (
     <DataTable
       label="Leases"
@@ -89,26 +91,10 @@ export function LeaseTable(props: {
       columns={COLUMNS}
       rowId={(row) => row.key}
       rowTo={(row) => row.to}
-      empty={filter === "all" ? "No leases." : "No leases match this filter."}
+      empty={narrowed ? "No leases match this filter or search." : "No leases."}
       paging={paging}
     />
   );
-}
-
-// why: the screen stays mounted from the list to a lease, so a lease that appears while it is
-// mounted was opened from the list in this tab, and one present at the first render was loaded
-// directly.
-function useOpenedFromList(urlId: string | undefined): boolean {
-  const mountedOpen = useRef(urlId !== undefined);
-  if (urlId === undefined) mountedOpen.current = false;
-  return !mountedOpen.current;
-}
-
-// why: closing a drawer opened from the list is a step back, so Back does not reopen it; one loaded
-// directly has no list entry behind it, so closing replaces its address.
-function closeDrawer(fromList: boolean, list: string): void {
-  if (fromList) window.history.back();
-  else navigate(list, { replace: true });
 }
 
 // why: focus goes back to the row that opened the drawer, or to the page's heading when that row is

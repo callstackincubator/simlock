@@ -9,7 +9,7 @@ import {
 } from "../../state/leases";
 import { ScreenPanel } from "./screen-panel";
 
-// why: the drawer opens at once, named by the lease's id until the details arrive, and says so when
+// why: the drawer opens at once, titled "Lease" until the details arrive, and says so when
 // the lease is no longer held, so an address that outlives its lease still lands somewhere.
 export function LeaseDrawer(props: {
   readonly id: string;

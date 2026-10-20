@@ -64,7 +64,8 @@ The sidebar groups the pages: Overview and Attention, then Operate (Fleet, Lease
 Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
 On a list page the URL names the chosen item; with none, the first item shows on a wide screen
-and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
+and the list alone on a phone (Leases shows the list alone, and a lease opens in a drawer over it).
+Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
 ## Design system
 
