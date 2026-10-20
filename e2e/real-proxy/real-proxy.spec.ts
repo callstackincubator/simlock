@@ -63,7 +63,10 @@ test.describe("behind a real sign-in proxy", () => {
       await page.getByRole("link", { name: "Fleet", exact: true }).click();
 
       await expect(
-        page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem"),
+        page
+          .getByRole("table")
+          .getByRole("row")
+          .filter({ has: page.getByRole("cell") }),
       ).toHaveCount(1);
     } finally {
       await worker.dispose();
