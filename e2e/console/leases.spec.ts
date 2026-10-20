@@ -547,7 +547,7 @@ test.describe("the leases page", () => {
       await expect(leaseRow(page, later.id)).toBeVisible();
 
       await page.getByRole("radio", { name: "Android" }).check();
-      await expect(page.getByText("No leases match this filter.")).toBeVisible();
+      await expect(page.getByText("No leases match this filter or search.")).toBeVisible();
     } finally {
       await host.dispose();
     }
