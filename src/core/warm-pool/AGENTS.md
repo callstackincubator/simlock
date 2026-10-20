@@ -13,7 +13,7 @@ Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGE
 | `converger.ts` | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`   |
 | `policy.ts`    | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning` |
 | `retry.ts`     | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec              |
-| `config.ts`    | `WarmPoolConfig`, `defaultWarmPoolConfig`, validators                                    |
+| `config.ts`    | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                       |
 | `figures.ts`   | `WarmPoolFigures`, `WarmTargetFigures`                                                   |
 
 ## How it works
@@ -22,8 +22,8 @@ Warm = virtual, `ready`, unleased. Budget = running limit minus every slot a lea
 quarantined or reserved device holds (`RunningCapacity`), per platform and global.
 
 1. **Trigger** — bus facts `daemon.started`, `device.reclaimed`, `device.quarantine-recovered`,
-   `lease.granted`, `lease.released`, `device.shutdown`, `device.deleted`, `cleanup.executed`,
-   `capacity.changed`; a 30 s tick; the retry timer; `core.passWarmPool()` (leasing, once a
+   `lease.granted`, `lease.released`, `lease.queued`, `device.shutdown`, `device.deleted`,
+   `cleanup.executed`, `capacity.changed`; a 30 s tick; the retry timer; `core.passWarmPool()` (leasing, once a
    background reclaim drops its claim). A trigger during a pass asks for one more pass.
 2. **Fence** — while nuke holds acquisition closed: do nothing, and remember each `shutdown`
    device; it is never booted back unasked.
@@ -35,18 +35,27 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
    - pool off: shut down every idle `ready` device (`disabled`);
    - over budget: shut down idle devices, LRU first, never one a waiting request would take;
      none while a booted device is on its way to a lease;
-   - boot one shut-down device for the queue head; then devices released less than
-     `idle.shutdownAfterMs` ago, newest first, while room beyond the reserve is left;
+   - the queue, oldest first, one device per waiter and one waiter per device: an idle ready device or
+     one on its way (`onItsWay`: `provisioning` or shut down under an ownerless `boot` claim) that
+     serves it, else a shut-down device that serves it is booted, else a device of its spec is
+     created (`waiting-request`), under `maxConcurrentBoots` counting the pool's flights, each
+     in-flight waiter and the head's own work. No creation for the head or for a waiter every
+     earlier waiter of which is matched to a ready device: leasing creates for those. A boot or
+     creation the capacity strategy or the retry schedule refuses is not proposed;
+   - then devices released less than `idle.shutdownAfterMs` ago, newest first, while room beyond
+     the reserve is left;
    - shut down a device never leased, `ready` longer than `idle.shutdownAfterMs`, no target keeps;
    - targets: merge those of one spec (counts summed); boot a shut-down device of the kind, else
-     create one. Not while a request is queued on its platform, not while `RetrySchedule` holds the
-     spec, not past running slots, reserve, device limit, RAM or `maxConcurrentBoots`.
+     create one, after the queue's devices. Not while a waiter on its platform is one the pass could not
+     serve, not while `RetrySchedule` holds the spec, not past running slots, reserve, device limit,
+     RAM or `maxConcurrentBoots`.
 5. **Act** — each proposal revalidated (same state, no lease, no claim):
    - shutdown: `lifecycle.shutdown`, initiator `warm-pool`, `cleanup` claim;
    - boot (lock: `tryReserveBoot` + `boot` claim) → `bootWarm` → release both;
    - creation (lock: `tryReserveProvisioning`) → `provisioner.provision` with an ownerless `boot`
      claim, dropped once ready, so a request may wait on it.
-     Target boots and creations run beside the pass. Every attempted action ends in `kick()`.
+     Target and `waiting-request` boots and creations run beside the pass. Every attempted action
+     ends in `kick()`.
 6. **Report** — emit `warm-pool.target-missed`, arm the retry timer.
 
 `targeted()`: per target, its ready unleased unclaimed devices, oldest first, up to its count.
@@ -58,7 +67,7 @@ Figures (`figures()`, read by `status.get`, doctor's `warm-pool-target-unreachab
 
 `short`, the first that applies: `disabled`; set in the converger `no-driver`, `runtime-missing`,
 `unknown-model`, `unresolvable`; set in the policy `boot-failed`, `device-limit`, `running-limit`,
-`reserve`, `ram-budget`. None while filling or waiting behind a queued request.
+`reserve`, `ram-budget`. None while filling or waiting behind a queued request the pass could not serve.
 
 `warm-pool.target-missed`: once per report that is short now and whose configured targets have not
 missed since they were last met (ready ≥ count). Payload: platform, model, osVersion, mode, count,
@@ -74,7 +83,7 @@ Stop: `close()` at stop start; `drain()` finishes the pass and running boots, st
 | Pool on                                          | `true`                              | `warmPool.enabled`               |
 | Running slots idle devices may not fill          | 0 per platform, capped at its limit | `warmPool.reserveRunning`        |
 | Targets                                          | none, at most 256                   | `warmPool.targets`               |
-| Target boots and creations at once               | 1                                   | `warmPool.maxConcurrentBoots`    |
+| Boots and creations in flight at once            | `max(1, floor(cpuCount / 4))`       | `warmPool.maxConcurrentBoots`    |
 | Recently released, never-leased idle             | 10 min                              | `idle.shutdownAfterMs`           |
 | Tick; pause after a failed keep boot or shutdown | 30 s                                | `WARM_POOL_TICK_MS`              |
 | Target retry                                     | 60 s, doubling, cap 10 min          | `RETRY_FIRST_MS`, `RETRY_MAX_MS` |

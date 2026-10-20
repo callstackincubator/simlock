@@ -104,7 +104,7 @@ export interface WarmPolicyView {
   readonly targets: readonly ResolvedTarget[];
   /** Targets whose resolution failed and that keep a stale spec: their devices are spared. */
   readonly spared: readonly ResolvedTarget[];
-  /** The spec of each target boot or creation still running: they count toward the boot cap. */
+  /** why: the spec of each boot or creation of the pool still running, for a target or a waiter; they count toward the boot cap. */
   readonly inFlight: readonly VirtualSpec[];
   readonly onItsWay: readonly { readonly spec: VirtualSpec; readonly deviceId?: string }[];
   /** The failure schedule: whether a spec may be tried now. */
@@ -501,9 +501,9 @@ interface TargetPlan {
 }
 
 /**
- * What each target still needs, and the boots and creations that fill it: a shut-down device of
- * its kind is booted before a new one is created, never while a request is queued on its
- * platform, never while its spec is held back after a failure, and never past the slots, the
+ * why: what each target still needs, and the boots and creations that fill it: a shut-down device
+ * of its kind is booted before a new one is created, never while a waiter on its platform is one
+ * the queue pass could not serve, never while its spec is held back after a failure, and never past the slots, the
  * device limit and RAM the capacity allows, nor past `maxConcurrentBoots` pool boots at once. A
  * target never shuts a device down: what it cannot fit it reports short.
  */
@@ -559,9 +559,9 @@ function planTargets(
 }
 
 /**
- * Adds the boots and creations a target is missing. The reason it is short, when a pass could do
- * nothing for it: a target with a boot already running or one proposed here is still filling, and
- * one waiting behind a queued request is waiting, and neither is short, whatever stopped the rest.
+ * why: adds the boots and creations a target is missing, after the queue's. A target with a boot
+ * already running or one proposed here is still filling, and one on a platform where a waiter
+ * could not be served is waiting; neither is short, whatever stopped the rest.
  */
 function fillTarget(
   plan: TargetPlan,

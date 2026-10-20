@@ -81,7 +81,7 @@ same platform, same image tag, model equal or `classOf(model)` equal to the clas
 `classOf` reads the catalog entry read during resolution; a device record stores no class.
 
 1. A `ready`, unclaimed device that serves → grant.
-2. Unless `noWait`: one the warm pool is booting or creating for nobody → wait.
+2. Unless `noWait`: one the warm pool is booting or creating under an ownerless claim (for a target, a released device or a request queued behind) → wait.
 3. A `shutdown` device that serves → boot it.
 4. Else provision the spec, evict an idle device, wait, or `NO_CAPACITY`.
 

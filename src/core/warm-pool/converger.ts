@@ -75,7 +75,7 @@ export interface WarmPoolOptions {
 /** The tick that re-runs a pass when no event does, so a slot freed silently is still used. */
 export const WARM_POOL_TICK_MS = 30_000;
 
-/** A target boot or creation that runs beside the pass: the target's spec, and its end. */
+/** why: a boot or creation of the pool that runs beside the pass, for a target or a waiter: its spec, and its end. */
 interface Flight {
   readonly creation: boolean;
   readonly spec: VirtualSpec;
@@ -83,15 +83,16 @@ interface Flight {
 }
 
 /**
- * Observes the bus and runs one pass at a time over the pool: it resolves the operator's targets,
+ * why: observes the bus and runs one pass at a time over the pool: it resolves the operator's targets,
  * reads a snapshot, asks the policy what to shut down, boot and create, and does each through the
  * device lifecycle and the provisioner, revalidating the device first (safety rule 2). A trigger
  * that arrives during a pass asks for one more, not one each.
  *
  * Every action that is attempted ends in `kick()`, whether it worked or not, so a request waiting
  * on a boot the pool started plans again either way; one declined before it began does not. A
- * boot or creation for a target runs beside the pass, up to `maxConcurrentBoots` at a time, and
- * asks for the next pass when it ends.
+ * boot or creation for a target or for a waiting request runs beside the pass, up to
+ * `maxConcurrentBoots` at a time with the waiting requests' own, and asks for the next pass when
+ * it ends.
  */
 export class WarmPool {
   readonly #logger: Logger;
@@ -552,7 +553,7 @@ export class WarmPool {
   }
 
   /**
-   * Starts a target's boot or creation beside the pass, which does not wait for it: the policy
+   * why: starts a boot or creation for a target or a waiter beside the pass, which does not wait for it: the policy
    * counts it toward `maxConcurrentBoots` until it ends, and its end asks for the next pass when
    * an attempt was made. One that was declined (the device or the budget was gone by then) asks
    * for none: the same view would propose it again at once, and the pool would spin.

@@ -1121,13 +1121,14 @@ describe("warm pool policy", () => {
       expect(result.targets.map((report) => report.booting)).toEqual([1, 0]);
     });
 
-    it("reports a target held by the boot cap, or behind a queued request, with no reason", () => {
+    it("reports a target held by the boot cap, or behind a waiter the pass could not serve, with no reason", () => {
       const capped = plan(view([], { inFlight: [spec("iPad Pro")], targets: [target(1)] }));
       expect(capped.targets[0]).toMatchObject({ booting: 0, count: 1, ready: 0 });
       expect(capped.targets[0]).not.toHaveProperty("short");
 
       const queued = plan(
         view([], {
+          refuseProvision: "device-limit",
           targets: [target(1)],
           waiting: [classDemand()],
         }),
