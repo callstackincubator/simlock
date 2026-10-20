@@ -51,7 +51,7 @@ async function openEvents(page: Page, daemon: RunningDaemon, path = "/activity")
   await page.goto(new URL(path, daemon.url).href);
   await signIn(page, daemon.tokens.operator);
   // why: a drawer over the page hides the page's heading from the accessibility tree.
-  if (path === "/activity") {
+  if (new URL(path, daemon.url).pathname === "/activity") {
     await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   } else await expect(page.getByRole("dialog")).toBeVisible();
 }
@@ -447,6 +447,41 @@ test.describe("the Activity page", () => {
       await page.reload();
       await expect(page.getByText("No events yet.")).toBeVisible();
       expect(older(queries)).toEqual(["?limit=100"]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("with a chip or a search on, nothing loads by itself, and Load older events loads one page per press", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openEvents(page, host);
+      for (const address of ["/activity?subject=lease", "/activity?q=RENEWED"]) {
+        const queries = await stubEvents(page, (query) => {
+          if (query.get("before") === null) return { events: stubbedRange(1, 30) };
+          if (query.get("before") === "evt_0030") return { events: stubbedRange(31, 130) };
+          return query.get("before") === "evt_0130" ? { events: stubbedRange(131, 230) } : {};
+        });
+        await page.goto(new URL(address, host.url).href);
+        await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+        await expect.poll(() => eventsHeld(page)).toBe(30);
+        const more = page.getByRole("button", { name: "Load older events" });
+        await expect(more).toBeVisible();
+        await page.waitForTimeout(500);
+        expect(older(queries)).toEqual([]);
+
+        await more.click();
+        await expect.poll(() => eventsHeld(page)).toBe(130);
+        expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
+        await page.waitForTimeout(500);
+        expect(older(queries)).toHaveLength(1);
+
+        await more.click();
+        await expect.poll(() => eventsHeld(page)).toBe(230);
+        expect(older(queries)).toHaveLength(2);
+      }
     } finally {
       await host.dispose();
     }
