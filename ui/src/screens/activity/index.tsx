@@ -105,6 +105,9 @@ export function ActivityContent(props: {
 function EventList({ page }: { readonly page: EventsPage }) {
   const { rows } = page;
   const chosenId = page.chosen.kind === "event" ? page.chosen.detail.id : undefined;
+  // why: a chip or a search shows few of the events held, so scrolling would not tell how many
+  // more are worth loading; the reader asks for each page.
+  const narrowed = page.subject !== "all" || page.query !== "";
   if (page.held === 0) {
     return page.end === undefined ? (
       <p className="muted">Loading…</p>
@@ -123,15 +126,26 @@ function EventList({ page }: { readonly page: EventsPage }) {
       keyAt={(index) => rows[index]?.id ?? String(index)}
       newText={(count) => (count === 1 ? "1 new event" : `${count} new events`)}
       startAt={page.chosenIndex}
-      onNearEnd={page.loadOlder}
-      footer={
-        page.end === undefined ? undefined : <EndRow end={page.end} onRetry={page.loadOlder} />
-      }
+      onNearEnd={narrowed ? undefined : page.loadOlder}
+      footer={<Footer page={page} narrowed={narrowed} />}
       renderRow={(index) => {
         const row = rows[index];
         return row === undefined ? null : <Row row={row} selected={row.id === chosenId} />;
       }}
     />
+  );
+}
+
+function Footer(props: { readonly page: EventsPage; readonly narrowed: boolean }) {
+  const { narrowed, page } = props;
+  if (page.end !== undefined) return <EndRow end={page.end} onRetry={page.loadOlder} />;
+  if (!narrowed) return null;
+  return (
+    <p className="feed-end">
+      <Button type="button" onClick={page.loadOlder}>
+        Load older events
+      </Button>
+    </p>
   );
 }
 

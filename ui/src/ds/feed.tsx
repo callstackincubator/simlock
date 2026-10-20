@@ -26,7 +26,7 @@ export function Feed(props: {
   readonly keyAt: (index: number) => string;
   readonly newText: (count: number) => string;
   readonly startAt?: number;
-  readonly onNearEnd?: () => void;
+  readonly onNearEnd?: (() => void) | undefined;
   // why: below the scrolling box, outside the list, so it never counts as a row.
   readonly footer?: ReactNode;
   readonly renderRow: (index: number) => ReactNode;
