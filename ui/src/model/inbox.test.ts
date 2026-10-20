@@ -326,6 +326,51 @@ describe("the order of the Inbox items", () => {
   });
 });
 
+describe("the Inbox groups", () => {
+  it("group the rows as Broken, Needs a look, Heads-up, and count problems without the heads-ups", () => {
+    const workers = [
+      worker({ drained: true, id: "wrk_a" }),
+      worker({ connection: "disconnected", id: "wrk_b" }),
+    ];
+    const request: WaitingRequest = {
+      createdAt: NOW - 90_000,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent-b",
+      spec: { model: "iPhone 16", platform: "ios" },
+      stage: "queued",
+    };
+    const lease: LeaseRecord = {
+      deviceId: "dev_1",
+      grantedAt: NOW - 60_000,
+      id: "lse_1",
+      idChosenByRequester: false,
+      lastRenewedAt: NOW - 30_000,
+      ownerId: "tok_1",
+      requesterId: "tok_1",
+      ttlDeadline: NOW + 100_000,
+      ttlMs: 900_000,
+    };
+
+    const page = inboxPageOf({
+      events: [],
+      key: undefined,
+      leases: [lease],
+      now: NOW,
+      requests: [request],
+      workers,
+    });
+
+    expect(page.rows.map((row) => [row.group, row.key])).toEqual([
+      ["Broken", "wrk_b/disconnected"],
+      ["Needs a look", "wrk_a/drained"],
+      ["Needs a look", "request/req_1/waiting"],
+      ["Heads-up", "lease/lse_1/ending"],
+    ]);
+    expect(page.problems).toBe(3);
+  });
+});
+
 describe("the Inbox page", () => {
   it("lists a row per item, naming the worker or the device on its worker", () => {
     const page = pageOf([

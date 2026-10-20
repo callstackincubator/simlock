@@ -153,7 +153,10 @@ export function inboxTone(condition: InboxItem["condition"]): Tone {
     : "warn";
 }
 
+export type InboxGroup = "Broken" | "Needs a look" | "Heads-up";
+
 export interface InboxRow {
+  readonly group?: InboxGroup;
   readonly key: string;
   readonly to: string;
   readonly tone: Tone;
@@ -186,6 +189,7 @@ export interface InboxDetail {
 }
 
 export interface InboxPage {
+  readonly problems?: number;
   readonly rows: readonly InboxRow[];
   // why: a URL can name an item the daemon has since cleared; that is told apart from a list
   // with nothing in it, which has no item to show at all.
