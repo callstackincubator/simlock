@@ -2789,4 +2789,27 @@ describe("Registry: state.db rows", () => {
       expect((refusal as Error).message).toMatch(message(deviceId));
     }
   });
+
+  it("a physical device loads with empty driver data and has no device-data row", async () => {
+    const { open, readyDevice, registry, state } = await world();
+    const virtual = await readyDevice("fk-virtual");
+    const physical = await registry.enrollPhysical({
+      apps: ["com.a"],
+      class: "phone",
+      driverDeviceId: "udid-1",
+      model: "iPhone 15",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+
+    const restarted = await open({ generate: () => "later" });
+
+    expect(restarted.snapshot.devices.find((device) => device.id === physical.id)).toMatchObject({
+      driverData: {},
+      physical: true,
+    });
+    expect(state.database.prepare("SELECT device_id FROM fake_device_data").all()).toEqual([
+      { device_id: virtual.id },
+    ]);
+  });
 });
