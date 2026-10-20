@@ -15,6 +15,7 @@ const CLI_ENTRY = join(REPO_ROOT, "dist/cli/main.js");
 export interface McpClientOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly gateway?: boolean;
+  readonly local?: boolean;
 }
 
 export interface McpClientHandle {
@@ -53,7 +54,12 @@ export async function mcpClient(
   let stderrOutput = "";
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [CLI_ENTRY, ...(options.gateway === true ? ["--gateway"] : []), "mcp"],
+    args: [
+      CLI_ENTRY,
+      ...(options.gateway === true ? ["--gateway"] : []),
+      ...(options.local === true ? ["--local"] : []),
+      "mcp",
+    ],
     // StdioClientTransport only inherits a safe-listed subset of process.env by
     // default (DEFAULT_INHERITED_ENV_VARS) -- explicit here so SIMLOCK_HOME /
     // SIMLOCK_DRIVERS_MODULE / SIMLOCK_AGENT_ID actually reach the spawned process.

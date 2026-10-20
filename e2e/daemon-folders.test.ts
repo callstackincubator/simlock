@@ -277,6 +277,29 @@ describe("daemon folders (ADR 0034)", () => {
       }
     });
 
+    it("simlock --local mcp on a machine with only a present gateway lists the worker's catalog", async () => {
+      const env = await withDaemon({ mode: "auto" });
+      await env.driverScript.set({
+        ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+      });
+      const mcp = await env.mcpClient({ local: true });
+
+      try {
+        await makeGatewayPresent(env);
+
+        const catalog = await mcp.client.callTool({ name: "list_devices", arguments: {} });
+
+        expect(catalog.structuredContent).toMatchObject({
+          platforms: expect.arrayContaining([
+            expect.objectContaining({ platform: "ios", models: ["iPhone 16"] }),
+          ]),
+        });
+        expect(existsSync(join(env.home, "instance.json"))).toBe(true);
+      } finally {
+        await stopGateway(env);
+      }
+    });
+
     it("with no gateway present, a --gateway mcp tool call fails with GATEWAY_NOT_PRESENT", async () => {
       const env = await withDaemon({ mode: "auto" });
       const mcp = await env.mcpClient({ gateway: true });
