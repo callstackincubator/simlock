@@ -3718,6 +3718,13 @@ describe("startDaemon state.db", () => {
       fakeDeviceDataTables,
     );
 
+    // why: the module exports tables of its own, so a module checked first would answer a different map.
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      "export function createDrivers() { return []; }",
+    );
+    const optionMap = new Map(fakeDeviceDataTables);
+    expect(await resolveDeviceDataTables({ deviceDataTables: optionMap })).toBe(optionMap);
+
     delete process.env.SIMLOCK_DRIVERS_MODULE;
     expect(await resolveDeviceDataTables({})).toEqual(productionDeviceDataTables());
     expect(productionDeviceDataTables().size).toBe(0);
