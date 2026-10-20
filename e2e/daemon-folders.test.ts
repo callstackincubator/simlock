@@ -245,6 +245,21 @@ describe("daemon folders (ADR 0034)", () => {
     }
   });
 
+  it("with a worker and a present gateway, a worker error of another code carries no hint", async () => {
+    const env = await withDaemon();
+
+    try {
+      await startGateway(env);
+
+      const result = await env.cli(["release", "lease_unknown"]);
+
+      expect(result.error?.code).toBe("UNKNOWN_LEASE");
+      expect(result.error?.message).toBe("Unknown lease: lease_unknown");
+    } finally {
+      await stopGateway(env);
+    }
+  });
+
   describe("MCP", () => {
     it("simlock --gateway mcp lists the gateway's catalog, plain simlock mcp lists the worker's", async () => {
       const env = await withDaemon();
