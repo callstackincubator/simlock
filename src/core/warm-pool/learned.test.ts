@@ -204,7 +204,7 @@ describe("LearnedKinds", () => {
       ["last_leased_at", "INTEGER", 1],
     ]);
     expect(columns("warm_kind_leases")).toEqual([
-      ["lease_id", "TEXT", 0],
+      ["lease_id", "TEXT", 1],
       ["kind_id", "INTEGER", 1],
       ["granted_at", "INTEGER", 1],
       ["ended_at", "INTEGER", 0],
