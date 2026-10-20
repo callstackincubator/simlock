@@ -121,9 +121,7 @@ async function openLeases(page: Page, daemon: RunningDaemon, path = "/leases"): 
 }
 
 function leaseRow(page: Page, id: string): Locator {
-  return page
-    .getByRole("list", { name: "Leases" })
-    .locator(`a[href="/leases/${encodeURIComponent(id)}/"]`);
+  return page.locator(`main a[href^="/leases/${encodeURIComponent(id)}/"]`);
 }
 
 function inspectorTitle(page: Page, name: string | RegExp): Locator {
@@ -208,7 +206,7 @@ test.describe("the leases page", () => {
     }
   });
 
-  test("with no lease named in the address the first lease shows in the inspector, and the address stays", async ({
+  test("a lease row opens a dialog named after its holder at the lease's address, on its Details tab, over the table, and nothing opens by itself", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -219,9 +217,20 @@ test.describe("the leases page", () => {
 
       await openLeases(page, host);
 
-      await expect(inspectorTitle(page, /agent-first/)).toBeVisible();
-      await expect(leaseRow(page, first?.id ?? "")).toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       expect(new URL(page.url()).pathname).toBe("/leases");
+
+      await leaseRow(page, first?.id ?? "").click();
+
+      const drawer = page.getByRole("dialog", { name: /agent-first/ });
+      await expect(drawer).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(`/leases/${encodeURIComponent(first?.id ?? "")}/`);
+      await expect(drawer.getByRole("tab", { name: "Details" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await expect(fact(page, "Device", "UDID")).not.toHaveText("—");
+      await expect(page.locator("main table")).toBeVisible();
     } finally {
       await host.dispose();
     }
