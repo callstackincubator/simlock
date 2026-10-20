@@ -64,7 +64,7 @@ export function resolveDaemonSocketPath(
 
 export type DaemonRole = "worker" | "gateway";
 
-export type DaemonFlag = "gateway" | undefined;
+export type DaemonFlag = "gateway" | "local" | undefined;
 
 export interface DaemonHome {
   readonly role: DaemonRole;
