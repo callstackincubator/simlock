@@ -15,7 +15,7 @@ function more(count: unknown): string {
     : "";
 }
 
-export const SLACK_MESSAGES: Record<AlertEventName, Message> = {
+export const SLACK_MESSAGES: Record<AlertEventName | "alerts.test-sent", Message> = {
   "worker.connected": (p, worker) =>
     p.version === undefined
       ? `🟢 Worker ${worker} connected.`
@@ -37,4 +37,6 @@ export const SLACK_MESSAGES: Record<AlertEventName, Message> = {
     `💾 Worker ${worker} is low on disk: ${formatBytes(p.freeBytes)} free (threshold ${formatBytes(p.threshold)}).`,
   "component.install-failed": (p, worker) =>
     `❌ Installing ${part(p.platform)} ${part(p.componentId)} on ${worker} failed: ${part(p.error)}.`,
+  "alerts.test-sent": (p) =>
+    `🔔 Test message from the simlock gateway to destination ${part(p.destination)}.`,
 };
