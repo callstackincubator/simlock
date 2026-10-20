@@ -42,3 +42,13 @@ function parseLimit(value: string): number | undefined {
   const limit = Number(value);
   return limit <= EVENTS_PAGE_MAX ? limit : undefined;
 }
+
+export const EVENTS_PAGE_WITH_SINCE_MESSAGE = "beforeId and limit cannot be used with sinceTs";
+
+export function eventsPageWithoutSince(input: {
+  readonly beforeId?: unknown;
+  readonly limit?: unknown;
+  readonly sinceTs?: unknown;
+}): boolean {
+  return input.sinceTs === undefined || (input.beforeId === undefined && input.limit === undefined);
+}
