@@ -56,6 +56,7 @@ async function cleanup(started: StreamingHost): Promise<void> {
 async function openLeasePage(page: Page, host: RunningDaemon, lease: string): Promise<void> {
   await page.goto(new URL(`/leases/${encodeURIComponent(lease)}`, host.url).toString());
   await signIn(page, host.tokens.operator);
+  await page.getByRole("tab", { name: "Screen" }).click();
   await expect(page.getByRole("heading", { level: 3, name: "Screen" })).toBeVisible();
 }
 
@@ -191,6 +192,7 @@ test.describe("the Screen pane", () => {
       await page.goto(
         new URL(`/leases/${encodeURIComponent(started.lease)}`, started.host.url).toString(),
       );
+      await page.getByRole("tab", { name: "Screen" }).click();
       await expect(showButton(page)).toHaveText("Show screen");
       expect(await captureLogLines(started.dir, "opened")).toBe(2);
     } finally {

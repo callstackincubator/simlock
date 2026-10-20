@@ -162,7 +162,7 @@ function rowIds(list: Locator, section: string): Promise<string[]> {
 }
 
 function leaseRows(page: Page): Locator {
-  return pane(page, "Leases").getByRole("list", { name: "Leases" });
+  return page.locator("main tbody");
 }
 
 function ids(from: number, to: number, prefix = "lse"): string[] {
@@ -287,9 +287,9 @@ test.describe("long lists page", () => {
       return { leases: listed };
     });
     await open(page, daemon, "/leases?page=2");
-    const row = leaseRows(page).getByRole("listitem").nth(2);
+    const row = leaseRows(page).locator("tr").nth(2);
     const link = row.getByRole("link");
-    const expires = row.locator(".list-aside");
+    const expires = row.locator("td").last();
     await expect(link).toHaveAttribute("href", "/leases/lse_0028/?page=2");
     await link.focus();
     await expect(link).toBeFocused();
@@ -313,17 +313,14 @@ test.describe("long lists page", () => {
     expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 50));
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2$/);
-    await expect(leaseRows(page).locator('a[href^="/leases/lse_0028/"]')).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await expect(page.getByRole("dialog")).toBeVisible();
   });
 
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
     let count = 25;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
     await open(page, daemon, "/leases");
-    await expect(leaseRows(page).getByRole("listitem")).toHaveCount(25);
+    await expect(leaseRows(page).locator("tr")).toHaveCount(25);
     await expect(pager(page, "Leases")).toHaveCount(0);
 
     // One row more and the list needs a second page: the pager shows.
@@ -783,7 +780,12 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
       `/leases/${encodeURIComponent(lease)}/`,
     ]) {
       await page.goto(new URL(path, seeded.host.url).href);
-      await expect(page.locator("#main").getByRole("heading").first()).toBeVisible();
+      await expect(
+        page
+          .locator("#main")
+          .getByRole("heading", { includeHidden: path.startsWith("/leases/") })
+          .first(),
+      ).toBeVisible();
       await expect(page.locator("#main")).not.toContainText("Loading…");
       if (path === "/events") {
         await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
