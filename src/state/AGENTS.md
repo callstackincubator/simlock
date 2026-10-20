@@ -4,7 +4,7 @@ Does: opens a daemon's `state.db` in its data directory, refuses what it cannot 
 Entry: `index.ts` → `openStateDatabase(options)`, `StateDatabase`, `STATE_DB_NAME`.
 Uses: ports (`SqliteOpener`, `Filesystem`, `Logger`, `SqliteSchemaOwner`). Never imports: core, leasing, daemon, drivers, gateway.
 Imported by: daemon (opens it for both roles), core (`Registry` takes a `StateDatabase`).
-Flows: [startup](../../docs/internal/flows/startup.md). Decision: [ADR 0036](../../docs/internal/adr/0036-daemon-state-is-a-sqlite-database-and-each-owner-keeps-its-own-tables.md).
+Flows: [startup](../../docs/internal/flows/startup.md). Decision: [ADR 0036](../../docs/internal/adr/0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md).
 
 ## Files
 
