@@ -8,6 +8,7 @@ import {
   readySince,
   sameSpec,
   specMode,
+  type Platform,
   type TargetRefusal,
   type WaitingDemand,
 } from "../domain.js";
@@ -271,6 +272,7 @@ function overBudget(
 interface QueuePass {
   readonly proposals: WarmProposal[];
   readonly started: number;
+  readonly stuck: ReadonlySet<Platform>;
 }
 
 /**
@@ -290,6 +292,7 @@ function boots(
 ): QueuePass {
   const proposals: WarmProposal[] = [];
   const taken = new Set<string>();
+  const stuck = new Set<Platform>();
   const matched = new Set<VirtualDevice | WarmPolicyView["onItsWay"][number]>();
   let started = view.inFlight.length + view.waiting.filter((demand) => demand.inFlight).length;
   const open = (): boolean => started < view.config.maxConcurrentBoots;
@@ -337,6 +340,7 @@ function boots(
         target: demand.spec,
       });
     } else if (position === 0 && creatable) started += 1;
+    else stuck.add(demand.platform);
     hold(demand.platform);
   });
 
@@ -356,7 +360,7 @@ function boots(
       proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
     }
   }
-  return { proposals, started };
+  return { proposals, started, stuck };
 }
 
 /** The targets with those that resolved to one spec merged into one, counts summed. */
@@ -485,6 +489,7 @@ interface TargetPlan {
   readonly room: Slots;
   readonly held: Slots;
   readonly taken: Set<string>;
+  readonly stuck: ReadonlySet<Platform>;
   readonly proposals: WarmProposal[];
   /** Pool boots and creations running or proposed, which `maxConcurrentBoots` bounds. */
   started: number;
@@ -515,6 +520,7 @@ function planTargets(
     proposals: [],
     room,
     started: queued.started,
+    stuck: queued.stuck,
     taken: new Set(keepBoots),
     view,
   };
@@ -558,10 +564,7 @@ function fillTarget(
   missing: number,
   filling: boolean,
 ): TargetShort | undefined {
-  // A request queued on this platform is served first; the target waits, and is not short.
-  if (plan.view.waiting.some((demand) => !demand.inFlight && demand.platform === spec.platform)) {
-    return undefined;
-  }
+  if (plan.stuck.has(spec.platform)) return undefined;
   if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return filling ? undefined : "boot-failed";
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {

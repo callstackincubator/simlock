@@ -1206,7 +1206,13 @@ describe("warm pool policy", () => {
         "short",
       );
       expect(
-        plan(view([shut], { ...held, waiting: [modelDemand("iPad Pro")] })).targets[0],
+        plan(
+          view([shut], {
+            ...held,
+            refuseProvision: "device-limit",
+            waiting: [modelDemand("iPad Pro")],
+          }),
+        ).targets[0],
       ).not.toHaveProperty("short");
     });
 
