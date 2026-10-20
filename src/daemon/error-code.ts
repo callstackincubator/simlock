@@ -88,8 +88,8 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof AdminAuthenticationFailedError) {
     return "ADMIN_AUTHENTICATION_FAILED";
   }
-  // A stored failure carries the code it was classified as when the request first failed. It is
-  // read back from `state.json`, so it is checked against the table rather than trusted.
+  // why: a stored failure carries the code it was classified as when the request first failed, and it is
+  // read back from `state.db`, so it is checked against the table rather than trusted.
   if (error instanceof ReplayedLeaseRequestError) {
     return isErrorCode(error.code) ? error.code : "INTERNAL";
   }

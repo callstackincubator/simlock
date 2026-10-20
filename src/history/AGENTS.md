@@ -7,16 +7,16 @@ Flows: [startup](../../docs/internal/flows/startup.md). Catalog: [EVENTS.md](../
 
 ## Files
 
-| File           | Role                                                                |
-| -------------- | ------------------------------------------------------------------- |
-| `index.ts`     | the handle (`replay`, `status`, `start`, `stop`) and the CLI reader |
-| `database.ts`  | pragmas, schema, `quick_check`, the read query, lock-error test     |
-| `prune.ts`     | age, size, projection prune, vacuum and checkpoint                  |
-| `versions.ts`  | `projection_versions`: migrate, refuse, the rebuild mark            |
-| `rebuild.ts`   | refills a projection from the kept events, 1 000 at a time          |
-| `set-aside.ts` | renames a damaged file and its `-wal` and `-shm`                    |
-| `projections/` | `HISTORY_PROJECTIONS`: one directory per projection (`usage`)       |
-| `testing.ts`   | a reader, a seeder, a probing opener and a fixed handle for tests   |
+| File           | Role                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| `index.ts`     | the handle (`replay`, `status`, `start`, `stop`) and the CLI reader                              |
+| `database.ts`  | pragmas, schema, the read query (`quick_check` and the lock-error test are in `ports/sqlite.ts`) |
+| `prune.ts`     | age, size, projection prune, vacuum and checkpoint                                               |
+| `versions.ts`  | `projection_versions`: migrate, refuse, the rebuild mark                                         |
+| `rebuild.ts`   | refills a projection from the kept events, 1 000 at a time                                       |
+| `set-aside.ts` | renames a damaged file and its `-wal` and `-shm`                                                 |
+| `projections/` | `HISTORY_PROJECTIONS`: one directory per projection (`usage`)                                    |
+| `testing.ts`   | a reader, a seeder, a probing opener and a fixed handle for tests                                |
 
 ## How it works
 

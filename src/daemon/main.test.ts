@@ -101,7 +101,7 @@ async function start(
 }
 
 describe("interrupted writes", () => {
-  it("startup followed by doctor --fix removes dead-pid .tmp files beside state.json and instance.json while preserving live-pid files", async () => {
+  it("startup followed by doctor --fix removes dead-pid .tmp files beside config.json and instance.json while preserving live-pid files", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-interrupted-write-"));
     temporaryDirectories.push(directory);
     const filesystem = new MemoryFilesystem();
@@ -110,7 +110,7 @@ describe("interrupted writes", () => {
     const livePid = 41002;
     const processSupervisor = new FakeProcessSupervisor([livePid]);
     const writeId = "00000000-0000-4000-8000-000000000001";
-    const leftovers = ["state.json", "instance.json"].flatMap((target) =>
+    const leftovers = ["config.json", "instance.json"].flatMap((target) =>
       [deadPid, livePid].map((pid) => ({
         path: join(directory, `.${target}.${pid}.${writeId}.tmp`),
         pid,

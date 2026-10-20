@@ -118,7 +118,7 @@ export class MemoryLogSink implements LogSink {
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 // why: Owner-only, like the other files that hold secrets or state (`config.json`,
-// `state.json`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and a shared
+// `state.db`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and a shared
 // runner's other users have no business reading a daemon's log. Set at each
 // `open`, never a later `chmod`, so no generation is ever born world-readable.
 const FILE_MODE = 0o600;

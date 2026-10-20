@@ -263,10 +263,9 @@ export const grantedDeviceSchema = z
     driverDeviceId: z.string(),
     spec: deviceSpecSchema,
     /**
-     * The driver-reported address (see `DriverDevice.address`), current as of this device's
+     * why: The driver-reported address (see `DriverDevice.address`), current as of this device's
      * last `ready` transition. Undefined for a device still `provisioning` (never made ready
-     * yet) and, as an upgrade path, for a record written by a pre-address daemon -- `state.json`
-     * from before this field existed loads without one rather than failing to start. It becomes
+     * yet) and for a device that was shut down, which has no address to reach. It becomes
      * defined the next time the device is made ready (`bootForLease`/`readyProvisionedForLease`);
      * nothing here ever guesses at a value it wasn't told.
      */

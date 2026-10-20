@@ -26,7 +26,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
   dispatcher in process, never through the socket.
 - A gateway is a second set of handlers for the same contract. Every frontend
   works against either mode unchanged.
-- State lives on the worker (`state.json`, written only by core's
+- State lives on the worker (`state.db`, its registry tables written only by core's
   `Registry`). A gateway keeps only its tokens, its instance id and its drained-worker set on
   disk; everything else is rebuilt from the workers that reconnect.
 
@@ -56,6 +56,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/AGENTS.md) · [client](../../src/client/AGENTS.md) · [admin](../../src/admin/AGENTS.md) |
 | lease-policy | Client-side renew timer | [lease-policy](../../src/lease-policy/AGENTS.md) |
 | bus | Post-commit business events and their in-memory ring | [bus](../../src/bus/AGENTS.md) |
+| state | `state.db`: opens it, refuses an old file, damage and a newer version, migrates each owner's tables | [state](../../src/state/AGENTS.md) |
 | history | The durable event history: `history.db`, prune, set-aside, projections (usage: request, minute and device fact rows) | [history](../../src/history/AGENTS.md) |
 | ports | Every external API behind an interface, with a fake | [ports](../../src/ports/AGENTS.md) |
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |

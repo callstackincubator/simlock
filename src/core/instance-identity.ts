@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { Filesystem, IdGenerator } from "../ports/index.js";
 
 /** why: Owner-only, like the other files that hold secrets or state (`config.json`,
- * `state.json`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and the id this
+ * `state.db`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and the id this
  * file holds is what every device root's ownership marker is checked against. */
 const INSTANCE_FILE_MODE = 0o600;
 
@@ -25,13 +25,13 @@ export class InstanceIdentityError extends Error {
 }
 
 /**
- * Reads this Simlock installation's identity, generating it exactly once.
+ * why: Reads this Simlock installation's identity, generating it exactly once.
  *
  * The identity is what every device root's ownership marker is checked against, so losing
  * it is not a recoverable inconvenience: a regenerated id strands every device already in
  * the root behind `wrong-instance`, with no way back short of deleting tens of gigabytes
  * by hand. That is why an unreadable or malformed file is a hard failure rather than a
- * reason to write a fresh one, and why the id lives here instead of in `state.json` -- a
+ * reason to write a fresh one, and why the id lives here instead of in `state.db` -- a
  * corrupt registry is precisely the situation in which someone rebuilds state, and the
  * identity has to survive that (ADR 0001, decision 2).
  */

@@ -9,12 +9,16 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
+   `openStateDatabase` then opens the role's `state.db` (both roles) in this order, each failure
+   being the daemon's start error: an old file of the role's former state refuses, then
+   `node:sqlite` missing, the open and its pragmas, `quick_check`, and in one `BEGIN IMMEDIATE`
+   transaction each owner's version (a newer one, or a migration that throws, refuses).
    `createAuth` then builds the token store and the admin secret (hash in memory), once, for both modes.
 5. Started with `--gateway` (role `gateway`, data directory `<root>/gateway`) → the gateway section. Otherwise go on.
 
 ## Worker: build (before the claim)
 
-6. `Registry.load` — `state.json`.
+6. `Registry.load` — the `registry` and device-data tables of `state.db`.
 7. Instance identity — `loadInstanceId`, `instance.json`. Written once per home,
    never regenerated.
 8. Root validation — `discoverDrivers`: each driver checks its owned root against
@@ -43,7 +47,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 
 Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop
 reaches its settle step, the steps after the read are skipped. Before step 16 it
-removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside `state.json`, beside each device root and in
+removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside each device root and in
 the data directory (`sweepWriteLeftovers`).
 
 16. Settle open requests — `leasing.settleRequests`: every `open` request fails
@@ -122,7 +126,7 @@ platform runs the deferred reclaim (step 21.2).
 7. Close connections, remove `admin.token`, release the socket (released even when the removal fails).
 
 A gateway's stop: agent-device edge and HTTP, then `FleetLeaseCoordinator` and
-`GatewayService` are disposed, then the event history stops.
+`GatewayService` are disposed, then the event history stops and `state.db` closes.
 
-A stop releases nothing. Leases stay in `state.json` with their deadlines; the
+A stop releases nothing. Leases stay in `state.db` with their deadlines; the
 next start re-arms or ends them (steps 19–20).

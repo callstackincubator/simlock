@@ -89,7 +89,7 @@ its lease as `device-lost` with no reclaim.
 | Reads before a crash or absence | 2                   | `health.stableObservations`                              |
 | Recovery attempts               | 3, backoff from 5 s | `health.maxRecoveryAttempts`, `health.recoveryBackoffMs` |
 
-Writes go through core's `Registry` (`state.json`). Request states: `open` →
+Writes go through core's `Registry` (`state.db`). Request states: `open` →
 `granted` | `failed` | `cancelled`. Waiter states live in memory only.
 
 ## Rules
@@ -103,7 +103,7 @@ Writes go through core's `Registry` (`state.json`). Request states: `open` →
   `createLeasing` builds.
 - A daemon start fails every request the previous process left open,
   as `daemon-restarted`.
-- A waiting reason is never stored: not in `state.json`, not in an event.
+- A waiting reason is never stored: not in `state.db`, not in an event.
 
 ## Known gaps
 

@@ -14,7 +14,7 @@ import type { Filesystem, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
 /** why: Owner-only, like the other files that hold secrets or state (`tokens.json`,
- * `admin.token`, `state.json`): the trust boundary is the OS user. */
+ * `admin.token`, `state.db`): the trust boundary is the OS user. */
 const WORKERS_FILE_MODE = 0o600;
 
 export interface DrainStore {

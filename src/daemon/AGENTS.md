@@ -26,10 +26,10 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Composition (`main.ts`)
 
-Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started).
+Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway has no tables in it yet; closed last in `dispose`).
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
-- **Worker** — `Registry` (`state.json`) → instance id (`instance.json`) →
+- **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
   `discoverDrivers` (validates each root; a refused root costs that platform only) →
   `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
   `CleanupReaper`, `Nuke`, `TokenStore`, `AdminSecretManager` → `GatewayUplink`

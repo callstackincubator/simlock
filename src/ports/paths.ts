@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import type { Filesystem } from "./filesystem.js";
 
 /**
- * Resolves simlock's data directory (config.json, state.json, daemon.sock, daemon.log,
+ * why: Resolves simlock's data directory (config.json, state.db, daemon.sock, daemon.log,
  * and the device roots under `devices/`). `SIMLOCK_HOME` overrides the default
  * `~/.simlock` -- used by tests that need an isolated data directory per daemon instance,
  * and by anyone running multiple independent simlock installs on one machine.
