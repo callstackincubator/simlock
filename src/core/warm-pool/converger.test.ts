@@ -18,7 +18,7 @@ import type { StateDatabase } from "../../state/index.js";
 import { openMemoryState } from "../testing.js";
 import type { WarmTarget } from "./config.js";
 import { WARM_POOL_TICK_MS, WarmPool, type WarmPoolOptions } from "./converger.js";
-import { warmPoolOwner } from "./learned.js";
+import { LearnedKinds, warmPoolOwner } from "./learned.js";
 
 const minute = 60_000;
 const now = 1_000 * minute;
@@ -2162,6 +2162,21 @@ describe("warm pool targets", () => {
       await rig.pool.pass();
 
       expect([...(await rig.pool.targeted())].sort()).toEqual(["older", "oldest"]);
+    });
+
+    it("names a learned kind's ready devices up to its count before the first pass, and again for a pool started over the same record", async () => {
+      const spec = ofKind("x", "ready").spec;
+      new LearnedKinds(learnedState).learn(spec, "lease-1", now - minute);
+      new LearnedKinds(learnedState).learn(spec, "lease-2", now - minute);
+      const devices = [ofKind("newer", "ready", 20), ofKind("older", "ready", 10)];
+
+      const before = harness(devices, { limit: 5 });
+      const restarted = harness(devices, { limit: 5 });
+      const off = harness(devices, { enabled: false, limit: 5 });
+
+      expect([...(await before.pool.targeted())].sort()).toEqual(["newer", "older"]);
+      expect([...(await restarted.pool.targeted())].sort()).toEqual(["newer", "older"]);
+      expect([...(await off.pool.targeted())]).toEqual([]);
     });
 
     it("does not name a device that is leased or claimed", async () => {

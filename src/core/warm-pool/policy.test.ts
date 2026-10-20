@@ -1509,7 +1509,7 @@ describe("warm pool policy", () => {
         devices,
         isClaimed: (id: string) => id === "claimed",
         leases: devices.filter((item) => item.state === "leased").map(leaseOn),
-        learned: [],
+        learned: [] as WarmPolicyView["learned"],
         targets,
       });
 
@@ -1522,6 +1522,27 @@ describe("warm pool policy", () => {
         expect(
           [...targetedDevices(input([newer, older, oldest, iPad], [target(2)]))].sort(),
         ).toEqual(["older", "oldest"]);
+      });
+
+      it("names a learned kind's ready unleased devices up to its count, oldest first, and the larger of a configured and a learned count", () => {
+        const devices = [
+          ofKind("newer", "ready", { createdAt: 20 }),
+          ofKind("older", "ready", { createdAt: 10 }),
+          ofKind("oldest", "ready", { createdAt: 5 }),
+          device("ipad", "ready", { spec: spec("iPad Pro") }),
+        ];
+        const named = (learnedCount: number, targets: readonly ResolvedTarget[] = []) =>
+          [
+            ...targetedDevices({
+              ...input(devices, targets),
+              learned: [learnedOf(kind, learnedCount)],
+            }),
+          ].sort();
+
+        expect(named(2)).toEqual(["older", "oldest"]);
+        expect(named(1)).toEqual(["oldest"]);
+        expect(named(1, [target(2)])).toEqual(["older", "oldest"]);
+        expect(named(3, [target(2)])).toEqual(["newer", "older", "oldest"]);
       });
 
       it("leaves out a leased, claimed, shut-down or spent device and one of another mode", () => {
