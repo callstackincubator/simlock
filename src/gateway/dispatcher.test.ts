@@ -871,6 +871,17 @@ describe("GatewayDispatcher", () => {
     expect(page.map((event) => (event.payload as { reason: string }).reason)).toEqual(["b", "c"]);
   });
 
+  it("events.replay with beforeId and no limit returns at most 100 events through the gateway dispatcher", async () => {
+    const rig = await usageRig({ fleet: true });
+    for (let n = 0; n < 130; n += 1) rig.emit("daemon.stopping", { reason: `r${n}` });
+    const newest = rig.bus.replay().at(-1) as { id: string };
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch("events.replay", { beforeId: newest.id }, session());
+
+    expect(page).toHaveLength(100);
+  });
+
   it.each([
     {
       health: "running" as const,
