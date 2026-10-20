@@ -1066,8 +1066,8 @@ export class AndroidDriver implements Driver {
     const data = this.#dataFor(device);
     await this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
-      // why: After a restart a stopped device's recorded port may be another device's (#52), so only
-      // an emulator this driver started is sent a kill.
+      // why: After a restart a stopped device's recorded port may be another device's (#52), so a
+      // handle-less device is sent a kill only on a serial whose own answer names its AVD directory.
       if (state.handle !== undefined) {
         await this.#shutdown(this.#onReservedPort(data, state), state);
       } else if (state.restored === true) {
@@ -1091,16 +1091,28 @@ export class AndroidDriver implements Driver {
     const { settledSerials } = await this.#scanAdbSerials();
     const serials: string[] = [];
     for (const serial of settledSerials) {
-      const answer = await this.#adbShellOrUndefined(["-s", serial, "emu", "avd", "path"]);
-      if (answer === undefined) continue;
-      const answered = answeredAvdPath(answer.stdout);
-      if (answered === expected || (await this.#sameDirectory(answered, expected))) {
-        serials.push(serial);
+      let answered: string | undefined;
+      try {
+        const answer = await this.#processRunner.run(
+          this.#sdk.adb,
+          ["-s", serial, "emu", "avd", "path"],
+          { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+        );
+        if (answer.code === 0) answered = answeredAvdPath(answer.stdout);
+      } catch {
+        answered = undefined;
       }
+      if (answered === undefined || answered === "") {
+        throw new DriverCrashError(
+          `Refusing to delete ${data.avdName}: could not tell which AVD the emulator on ${serial} runs`,
+        );
+      }
+      if (await this.#isOwnAvdPath(answered, expected)) serials.push(serial);
     }
     for (const serial of serials) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
         env: this.#env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
     }
     const startedAt = this.#clock.now();

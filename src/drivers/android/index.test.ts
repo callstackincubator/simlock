@@ -3949,6 +3949,60 @@ describe("AndroidDriver console ports across a restart", () => {
     expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}.avd`)).toBe(true);
   });
 
+  it("refuses to delete the AVD when an attached emulator cannot say which AVD it runs", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    const spec = await before.resolveSpec({ model: "Pixel 5", platform: "android" });
+    const running = await before.makeReady(await before.provision(spec));
+    const calls: { args: readonly string[]; timeoutMs: number | undefined }[] = [];
+    const inner = answeringAvdPath(host.runner(), { code: 1, stderr: "error", stdout: "" });
+    const runner: ProcessRunner = {
+      ...inner,
+      run: async (command, args, options) => {
+        if (command === binaries.adb) calls.push({ args, timeoutMs: options?.timeoutMs });
+        return inner.run(command, args, options);
+      },
+    };
+    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const orphan = (await after.listManaged()).devices[0]!;
+
+    await expect(after.destroy(orphan)).rejects.toThrow("could not tell which AVD");
+
+    expect({
+      kills: calls.filter((call) => call.args.includes("kill")).length,
+      probeTimeoutMs: calls.find((call) => call.args.includes("path"))?.timeoutMs,
+      kept: await filesystem.exists(`${avdDirectory}/${running.deviceId}.avd`),
+      running: host.avdAnswering(running.address),
+    }).toEqual({ kills: 0, probeTimeoutMs: 5_000, kept: true, running: running.deviceId });
+  });
+
+  it("never kills an emulator that runs a different AVD when deleting a discovered one", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    const spec = await before.resolveSpec({ model: "Pixel 5", platform: "android" });
+    const running = await before.makeReady(await before.provision(spec));
+    const kills: string[] = [];
+    const inner = answeringAvdPath(host.runner(), ok(`${avdDirectory}/simlock_other.avd\nOK\n`));
+    const runner: ProcessRunner = {
+      ...inner,
+      run: async (command, args, options) => {
+        if (args.includes("kill")) kills.push(args.join(" "));
+        return inner.run(command, args, options);
+      },
+    };
+    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const orphan = (await after.listManaged()).devices[0]!;
+
+    await after.destroy(orphan);
+
+    expect({ kills, running: host.avdAnswering(running.address) }).toEqual({
+      kills: [],
+      running: running.deviceId,
+    });
+  });
+
   it.each(["shutdown", "full reclaim", "standard reclaim"] as const)(
     "%s after a restart sends neither kill nor snapshot load to another device on the stored serial (#284)",
     async (operation) => {
