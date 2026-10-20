@@ -42,6 +42,7 @@ export function createAlerts(options: {
 
   return {
     test(name) {
+      if (stopController.signal.aborted) return Promise.resolve({ ok: false, reason: "stopped" });
       const destination = destinations.find((each) => each.name === name);
       if (destination === undefined)
         return Promise.resolve({ ok: false, reason: "unknown-destination" });
