@@ -1,6 +1,6 @@
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
-import { type AttentionPage, attentionPageOf, type AttentionRow } from "../model/attention";
+import { type InboxPage, inboxPageOf, type InboxRow } from "../model/inbox";
 import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
@@ -10,31 +10,26 @@ import { usePaging } from "./paging";
 import { bothViews, loadView, mapView } from "./resource";
 import { usePath, useSearch } from "./router";
 
-export type {
-  AttentionDetail,
-  AttentionEvent,
-  AttentionPage,
-  AttentionRow,
-} from "../model/attention";
+export type { InboxDetail, InboxEvent, InboxPage, InboxRow } from "../model/inbox";
 export type { Paging } from "../ds/pager";
 
-export function useAttention(): LoadView<AttentionPage> {
+export function useAttention(): LoadView<InboxPage> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   // why: the events only fill the inspector's list, so a feed still loading shows the page with
   // none rather than holding back the list.
   const feed = useRecentEvents();
   const now = useNow();
-  const key = itemIdFrom("/attention", usePath());
+  const key = itemIdFrom("/inbox", usePath());
   const reads = bothViews(workers, { data: feed.data ?? [], kind: "ready" });
   return mapView(reads, ([list, events]) =>
-    attentionPageOf({ events, key, now: now.server, workers: list.workers }),
+    inboxPageOf({ events, key, now: now.server, workers: list.workers }),
   );
 }
 
 // why: the pager is read once the list is known, so a page in the URL is never corrected against
 // a list that has not arrived.
-export function useAttentionRows(rows: readonly AttentionRow[]): {
-  readonly shown: readonly AttentionRow[];
+export function useInboxRows(rows: readonly InboxRow[]): {
+  readonly shown: readonly InboxRow[];
   readonly paging: Paging;
 } {
   const paging = usePaging({ sizes: TABLE_SIZES, total: rows.length });

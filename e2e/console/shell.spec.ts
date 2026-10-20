@@ -109,7 +109,7 @@ test.describe("the shell", () => {
     await expect(page.getByLabel("Operator token")).toBeVisible();
   });
 
-  test("the sidebar shows Overview and Attention, then the Operate group, then the Observe group, each with its label", async ({
+  test("the sidebar shows Overview and Inbox, then the Operate group, then the Observe group, each with its label", async ({
     daemon,
     page,
   }) => {
@@ -120,7 +120,7 @@ test.describe("the shell", () => {
     await expect(nav.getByRole("link")).toHaveText([...NAV_LABELS]);
     expect(NAV.map((entry) => `${entry.label} ${entry.path}`)).toEqual([
       "Overview /",
-      "Attention /attention",
+      "Inbox /inbox",
       "Fleet /fleet",
       "Leases /leases",
       "Queue /queue",
@@ -135,7 +135,7 @@ test.describe("the shell", () => {
       await expect(section.getByRole("link")).toHaveText([...group.links]);
     }
     await expect(nav.getByRole("link", { name: "Overview" })).toHaveCount(1);
-    await expect(nav.getByRole("group").getByRole("link", { name: "Attention" })).toHaveCount(0);
+    await expect(nav.getByRole("group").getByRole("link", { name: "Inbox" })).toHaveCount(0);
   });
 
   test("/fleet, /queue and /activity open the pages titled Fleet, Queue and Activity; /workers, /waiting and /events show Not found", async ({

@@ -503,7 +503,7 @@ export async function signIn(page: Page, token: string): Promise<void> {
 
 export const NAV = [
   { label: "Overview", path: "/" },
-  { label: "Attention", path: "/attention" },
+  { label: "Inbox", path: "/inbox" },
   { label: "Fleet", path: "/fleet" },
   { label: "Leases", path: "/leases" },
   { label: "Queue", path: "/queue" },

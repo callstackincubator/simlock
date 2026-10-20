@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { attentionPageOf } from "../../model/attention";
+import { inboxPageOf } from "../../model/inbox";
 import type { WorkerView } from "../../model/workers";
-import { AttentionBody } from ".";
+import { InboxBody } from ".";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 
@@ -21,15 +21,15 @@ function worker(overrides: Partial<WorkerView> = {}): WorkerView {
 }
 
 function render(workers: readonly WorkerView[], key?: string): string {
-  const page = attentionPageOf({ events: [], key, now: NOW, workers });
-  return renderToStaticMarkup(<AttentionBody page={page} />);
+  const page = inboxPageOf({ events: [], key, now: NOW, workers });
+  return renderToStaticMarkup(<InboxBody page={page} />);
 }
 
-describe("the attention screen", () => {
-  it("says so when nothing needs attention", () => {
+describe("the Inbox screen", () => {
+  it("says so when the Inbox is empty", () => {
     const html = render([worker()]);
 
-    expect(html).toContain("Nothing needs attention.");
+    expect(html).toContain("Nothing needs you.");
     expect(html).toContain("0 open");
   });
 
@@ -41,8 +41,8 @@ describe("the attention screen", () => {
 
     expect(html).toContain("2 open");
     expect(html).toContain('aria-label="disconnected"');
-    expect(html).toContain('href="/attention/wrk_a%2Fdisconnected"');
-    expect(html).toContain('href="/attention/wrk_b%2Fdrained"');
+    expect(html).toContain('href="/inbox/wrk_a%2Fdisconnected"');
+    expect(html).toContain('href="/inbox/wrk_b%2Fdrained"');
   });
 
   it("shows the first item in the inspector with its worker linked and an Open worker button", () => {
@@ -55,10 +55,10 @@ describe("the attention screen", () => {
     expect(html).toContain("No events in the last hour.");
   });
 
-  it("says Resolved. with a link back when the URL names an item that no longer needs attention", () => {
+  it("says Resolved. with a link back when the URL names an item that is no longer in the Inbox", () => {
     const html = render([worker()], "wrk_1/drained");
 
     expect(html).toContain("Resolved.");
-    expect(html).toContain('<a href="/attention">Back to Attention</a>');
+    expect(html).toContain('<a href="/inbox">Back to Inbox</a>');
   });
 });

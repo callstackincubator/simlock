@@ -4,7 +4,7 @@ import { AppFrame, Button, Icon, Sidebar, Status, StatusDot } from "../ds";
 import { NotFoundScreen } from "../screens/not-found";
 import { usePath } from "../state/router";
 import {
-  useAttentionCount,
+  useInboxCount,
   useConnectionStatus,
   useSignedIn,
   useSignOut,
@@ -16,7 +16,7 @@ import { ROUTES, routeFor } from "./routes";
 export function Shell() {
   const path = usePath();
   const route = routeFor(path);
-  const attention = useAttentionCount();
+  const inbox = useInboxCount();
   const sidebar = useSidebar();
   useTokenCheck();
 
@@ -30,9 +30,7 @@ export function Shell() {
     icon: entry.icon,
     label: entry.label,
     to: entry.path,
-    ...(entry.path === "/attention" && attention !== undefined
-      ? { alert: true, count: attention }
-      : {}),
+    ...(entry.path === "/inbox" && inbox !== undefined ? { alert: true, count: inbox } : {}),
   }));
 
   return (

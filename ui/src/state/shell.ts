@@ -1,16 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import type { ConnectionPhase } from "../data/live/connection";
-import { attentionItems } from "../model/attention";
+import { inboxItems } from "../model/inbox";
 import { formatDuration } from "../model/time";
 import type { Toned } from "../model/tones";
 import type { WorkerList } from "../model/workers";
 import { useConnection, useLiveResource, useNow } from "./live";
 import { useApi, useSession } from "./services";
 
-export function useAttentionCount(): number | undefined {
+export function useInboxCount(): number | undefined {
   const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers;
-  return workers === undefined ? undefined : attentionItems(workers).length;
+  return workers === undefined ? undefined : inboxItems(workers).length;
 }
 
 // why: a 401 at any time signs the operator out; a tab reloaded with a token since revoked finds out

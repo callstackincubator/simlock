@@ -1,4 +1,4 @@
-import "./attention.css";
+import "./inbox.css";
 
 import {
   ButtonLink,
@@ -19,34 +19,34 @@ import {
   StatusDot,
 } from "../../ds";
 import {
-  type AttentionDetail,
-  type AttentionEvent,
-  type AttentionPage,
+  type InboxDetail,
+  type InboxEvent,
+  type InboxPage,
   useAttention,
-  useAttentionRows,
-} from "../../state/attention";
+  useInboxRows,
+} from "../../state/inbox";
 
-export function AttentionScreen() {
+export function InboxScreen() {
   const view = useAttention();
-  return <Loaded view={view}>{(page) => <AttentionBody page={page} />}</Loaded>;
+  return <Loaded view={view}>{(page) => <InboxBody page={page} />}</Loaded>;
 }
 
-export function AttentionBody({ page }: { readonly page: AttentionPage }) {
-  const { paging, shown } = useAttentionRows(page.rows);
+export function InboxBody({ page }: { readonly page: InboxPage }) {
+  const { paging, shown } = useInboxRows(page.rows);
   const chosen = typeof page.shown === "object" ? page.shown.key : undefined;
   return (
     <MasterDetail
       focus={page.named ? "detail" : "list"}
       list={
         <ListPane
-          title="Attention"
+          title="Inbox"
           meta={`${page.rows.length} open`}
-          footer={<Pager label="Attention" paging={paging} />}
+          footer={<Pager label="Inbox" paging={paging} />}
         >
           {page.rows.length === 0 ? (
-            <Empty>Nothing needs attention.</Empty>
+            <Empty>Nothing needs you.</Empty>
           ) : (
-            <List label="Needs attention">
+            <List label="Needs you">
               {shown.map((row) => (
                 <ListRow
                   key={row.key}
@@ -66,27 +66,27 @@ export function AttentionBody({ page }: { readonly page: AttentionPage }) {
   );
 }
 
-function Detail({ shown }: { readonly shown: AttentionPage["shown"] }) {
+function Detail({ shown }: { readonly shown: InboxPage["shown"] }) {
   if (shown === undefined) return <InspectorEmpty>Nothing to show.</InspectorEmpty>;
   if (shown === "resolved") {
     return (
       <InspectorEmpty>
-        Resolved. <Link to="/attention">Back to Attention</Link>
+        Resolved. <Link to="/inbox">Back to Inbox</Link>
       </InspectorEmpty>
     );
   }
   return <Item key={shown.key} detail={shown} />;
 }
 
-function Item({ detail }: { readonly detail: AttentionDetail }) {
+function Item({ detail }: { readonly detail: InboxDetail }) {
   return (
     <Inspector
-      crumbs={[{ label: "Attention", to: "/attention" }]}
+      crumbs={[{ label: "Inbox", to: "/inbox" }]}
       title={detail.title}
       line={
         <>
           <Status tone={detail.tone}>{detail.word}</Status> ·{" "}
-          <span className="attention-worker">
+          <span className="inbox-worker">
             <Link to={detail.worker.to}>{detail.worker.name}</Link>
           </span>
         </>
@@ -110,20 +110,18 @@ function Item({ detail }: { readonly detail: AttentionDetail }) {
   );
 }
 
-function EventList({ events }: { readonly events: readonly AttentionEvent[] }) {
+function EventList({ events }: { readonly events: readonly InboxEvent[] }) {
   if (events.length === 0) return <Empty>No events in the last hour.</Empty>;
   return (
-    <ul className="attention-events">
+    <ul className="inbox-events">
       {events.map((event) => (
         <li key={event.key}>
-          <Link to={event.to} className="attention-event">
+          <Link to={event.to} className="inbox-event">
             <span className="mono muted">{event.time}</span>
-            <span
-              className={event.tone === undefined ? "mono" : `mono attention-event-${event.tone}`}
-            >
+            <span className={event.tone === undefined ? "mono" : `mono inbox-event-${event.tone}`}>
               {event.name}
             </span>
-            <span className="attention-event-text">{event.text}</span>
+            <span className="inbox-event-text">{event.text}</span>
           </Link>
         </li>
       ))}

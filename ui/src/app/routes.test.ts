@@ -19,7 +19,7 @@ describe("the console's routes", () => {
   it("lists the sections in the sidebar's order, the overview first", () => {
     expect(ROUTES.map((route) => route.path)).toEqual([
       "/",
-      "/attention",
+      "/inbox",
       "/fleet",
       "/leases",
       "/queue",

@@ -164,9 +164,9 @@ describe("the overview", () => {
     const { attention } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
 
     expect(attention.map((item) => [item.word, item.tone, item.subject, item.to])).toEqual([
-      ["drained", "warn", "mini-2", "/attention/mini-2%2Fdrained"],
-      ["quarantined", "error", "Pixel 8 on mini-2", "/attention/mini-2%2Fd%2Fquarantined"],
-      ["disconnected", "error", "down-1", "/attention/down-1%2Fdisconnected"],
+      ["drained", "warn", "mini-2", "/inbox/mini-2%2Fdrained"],
+      ["quarantined", "error", "Pixel 8 on mini-2", "/inbox/mini-2%2Fd%2Fquarantined"],
+      ["disconnected", "error", "down-1", "/inbox/down-1%2Fdisconnected"],
     ]);
   });
 

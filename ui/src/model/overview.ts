@@ -1,5 +1,5 @@
 import { eventSummary, eventTone } from "./activity";
-import { attentionItems, attentionTone } from "./attention";
+import { inboxItems, inboxTone } from "./inbox";
 import type { ConsoleEvent } from "./events";
 import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import type { FiguresState } from "./figures";
@@ -193,14 +193,14 @@ export function overviewOf(input: {
           ...(tone === undefined ? {} : { tone }),
         };
       }),
-    attention: attentionItems(workers).map((item) => ({
+    attention: inboxItems(workers).map((item) => ({
       key: item.key,
       subject:
         "device" in item
           ? `${item.device.spec.model} on ${workerName(item.worker)}`
           : workerName(item.worker),
-      to: itemPath("/attention", item.key),
-      tone: attentionTone(item.condition),
+      to: itemPath("/inbox", item.key),
+      tone: inboxTone(item.condition),
       word: item.condition,
     })),
     figures,

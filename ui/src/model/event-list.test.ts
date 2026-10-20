@@ -211,7 +211,7 @@ describe("what an event links to", () => {
     expect(eventAction(queued, NO_PLACES)).toBeUndefined();
   });
 
-  it("is the attention item of a quarantined device", () => {
+  it("is the Inbox item of a quarantined device", () => {
     const quarantined = worker("wrk_1", "mac-1", {
       devices: [
         {
@@ -227,7 +227,7 @@ describe("what an event links to", () => {
         event("device.quarantined", { deviceId: "dev_1", workerId: "wrk_1" }),
         places({ workers: [quarantined] }),
       ),
-    ).toEqual({ label: "Open attention item", to: "/attention/wrk_1%2Fdev_1%2Fquarantined" });
+    ).toEqual({ label: "Open Inbox item", to: "/inbox/wrk_1%2Fdev_1%2Fquarantined" });
   });
 
   it("is the worker the console lists, and none for one it does not", () => {
