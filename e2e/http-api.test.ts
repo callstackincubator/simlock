@@ -515,8 +515,6 @@ describe("HTTP API", () => {
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
     });
     const baseUrl = `http://127.0.0.1:${port}`;
-    // One at a time: the token file is read, extended and rewritten per create, so two creates
-    // at once can lose a token (#424).
     const tokens: string[] = [];
     for (const _ of [0, 1]) {
       const result = await env.cli(["token", "create", "--role", "agent"]);
