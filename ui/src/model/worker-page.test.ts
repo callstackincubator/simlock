@@ -655,4 +655,12 @@ describe("a worker page's tab", () => {
     expect(tabOf("?tab=overview")).toBe("devices");
     expect(tabOf("?tab=")).toBe("devices");
   });
+
+  it("is Devices when ?tab= names the warm pool of a starting worker, which has none", () => {
+    const starting = worker({ health: "starting" });
+
+    expect(tabOf("?tab=warm-pool")).toBe("warm-pool");
+    expect(tabOf("?tab=warm-pool", starting)).toBe("devices");
+    expect(tabOf("?tab=host", starting)).toBe("host");
+  });
 });
