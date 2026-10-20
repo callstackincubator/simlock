@@ -181,6 +181,18 @@ async function firstRowInView(page: Page): Promise<{ href: string | null; top: n
   });
 }
 
+// why: the first visit signs in; a later one in the same test finds the session still there.
+async function visit(
+  page: Page,
+  daemon: RunningDaemon,
+  path: string,
+  first: boolean,
+): Promise<void> {
+  if (first) return openEvents(page, daemon, path);
+  await page.goto(new URL(path, daemon.url).href);
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+}
+
 function older(queries: readonly string[]): string[] {
   return queries.filter((query) => !query.startsWith("?since="));
 }
@@ -401,13 +413,11 @@ test.describe("the Activity page", () => {
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await openEvents(page, host);
-
       let queries = await stubEvents(page, (query) => {
         if (query.get("before") === null) return { events: stubbedRange(1, 30) };
         return query.get("before") === "evt_0030" ? { events: stubbedRange(31, 70) } : {};
       });
-      await page.reload();
+      await openEvents(page, host);
       await expect(
         page.getByText(`Start of the history (${localMinute(BASE - 70 * 60_000)})`),
       ).toBeVisible();
@@ -459,12 +469,10 @@ test.describe("the Activity page", () => {
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await openEvents(page, host);
-
       let queries = await stubEvents(page, (query) =>
         query.has("since") ? {} : { events: stubbedRange(1, 40) },
       );
-      await page.reload();
+      await openEvents(page, host);
       await expect.poll(() => eventsHeld(page)).toBe(40);
       await expect(rows(page).first()).toBeVisible();
       expect(older(queries)).toEqual(["?limit=100"]);
@@ -483,15 +491,13 @@ test.describe("the Activity page", () => {
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await openEvents(page, host);
-      for (const address of ["/activity?subject=lease", "/activity?q=RENEWED"]) {
+      for (const [turn, address] of ["/activity?subject=lease", "/activity?q=RENEWED"].entries()) {
         const queries = await stubEvents(page, (query) => {
           if (query.get("before") === null) return { events: stubbedRange(1, 30) };
           if (query.get("before") === "evt_0030") return { events: stubbedRange(31, 130) };
           return query.get("before") === "evt_0130" ? { events: stubbedRange(131, 230) } : {};
         });
-        await page.goto(new URL(address, host.url).href);
-        await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+        await visit(page, host, address, turn === 0);
         await expect.poll(() => eventsHeld(page)).toBe(30);
         const more = page.getByRole("button", { name: "Load older events" });
         await expect(more).toBeVisible();
@@ -518,18 +524,18 @@ test.describe("the Activity page", () => {
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await openEvents(page, host);
       const queries = await stubEvents(page, (query) =>
         query.get("before") === null
           ? { events: stubbedRange(1, 30) }
           : { events: stubbedRange(31, 70) },
       );
-      for (const [address, said] of [
+      const cases = [
         ["/activity?subject=worker", "No worker events among those loaded."],
         ["/activity?q=zzz", "No events match zzz among those loaded."],
-      ] as const) {
+      ] as const;
+      for (const [turn, [address, said]] of cases.entries()) {
         queries.length = 0;
-        await page.goto(new URL(address, host.url).href);
+        await visit(page, host, address, turn === 0);
         await expect(page.getByText(said)).toBeVisible();
         const more = page.getByRole("button", { name: "Load older events" });
         await expect(more).toBeVisible();
