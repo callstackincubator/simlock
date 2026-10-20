@@ -419,15 +419,25 @@ test.describe("the workers page", () => {
     await expect(page.locator(".inspector-line")).toContainText("connected");
   });
 
-  test("a worker that no list has says so and links back to the list", async ({ daemon, page }) => {
+  test("an unknown worker id shows This worker is not in the fleet. and a link to Fleet, and an unknown device id shows This device is gone.", async ({
+    daemon,
+    page,
+  }) => {
+    const host = found((await workerList(daemon))[0], "the host's worker");
     await openConsole(page, daemon);
 
     await page.goto(new URL("/fleet/wrk_nope", daemon.url).href);
 
-    await expect(page.getByText("Worker not found.")).toBeVisible();
+    await expect(page.getByText("This worker is not in the fleet.")).toBeVisible();
     await page.getByRole("link", { name: "Back to Fleet" }).click();
     await expect(page).toHaveURL(/\/fleet$/);
-    await expect(page.getByRole("list", { name: "Workers", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
+
+    await page.goto(
+      new URL(`/fleet/${encodeURIComponent(host.id)}/dev_nope?tab=devices`, daemon.url).href,
+    );
+
+    await expect(page.getByRole("dialog").getByText("This device is gone.")).toBeVisible();
   });
 
   test("the Issues and Busy filters keep the workers they name", async ({ page }) => {
