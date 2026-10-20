@@ -978,7 +978,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
   });
 
-  it("ends the lease whose device is not running before it is up, so a restart no longer holds it", async () => {
+  it("ends the lease whose device is not running before core's device steps announce capacity, so a restart no longer holds it", async () => {
     const clock = new FakeClock(1_000);
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
@@ -995,6 +995,8 @@ describe("startDaemon wires core and leasing together", () => {
     const first = await startDaemon(options());
     const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
     await first.stop("test");
+    // why: the history orders events by their time, and the second start's must follow the first's.
+    clock.advance(1);
 
     const daemon = await startDaemon(options());
     runningDaemons.push(daemon);
@@ -1003,6 +1005,19 @@ describe("startDaemon wires core and leasing together", () => {
       readonly id: string;
     }[];
     expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    const secondRunStart = clock.now();
+    const secondRun = (
+      await historyEventsWhen(directory, (all) =>
+        all.some(
+          (event) => event.event === "capacity.changed" && event.timestamp >= secondRunStart,
+        ),
+      )
+    )
+      .filter((event) => event.timestamp >= secondRunStart)
+      .sort((left, right) => left.seq - right.seq)
+      .map((event) => event.event);
+    expect(secondRun.indexOf("lease.released")).toBeGreaterThan(-1);
+    expect(secondRun.indexOf("lease.released")).toBeLessThan(secondRun.indexOf("capacity.changed"));
   });
 
   it("closes state.db on stop, and lists the same device and lease after a worker is stopped and started again", async () => {
