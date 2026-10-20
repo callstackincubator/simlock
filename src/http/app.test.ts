@@ -2104,6 +2104,32 @@ describe("operator-only listing routes", () => {
     expect(JSON.stringify(await response.json())).toContain("Invalid duration: nonsense");
   });
 
+  it("GET /v1/events with before and limit dispatches events.replay with beforeId and limit, and answers HISTORY_NOT_KEPT with 422 and oldestTs in the body and HISTORY_UNAVAILABLE with 503", async () => {
+    const { app, dispatcher } = buildHarness();
+    const asked: unknown[] = [];
+    dispatcher.handlers["events.replay"] = (input) => {
+      asked.push(input);
+      throw new DispatchError("HISTORY_NOT_KEPT", "The history does not hold that event.", {
+        oldestTs: 1_234,
+      });
+    };
+    const notKept = await app.request("/v1/events?before=evt_abc&limit=50", {
+      headers: operatorAuth,
+    });
+    dispatcher.handlers["events.replay"] = () => {
+      throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be read.");
+    };
+    const unavailable = await app.request("/v1/events?before=evt_abc", { headers: operatorAuth });
+
+    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50 }]);
+    expect(notKept.status).toBe(422);
+    expect(await notKept.json()).toMatchObject({
+      error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
+    });
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
+  });
+
   describe("GET /v1/stats", () => {
     const NOW = Date.parse("2026-10-16T12:00:00Z");
     const HOUR = 3_600_000;
