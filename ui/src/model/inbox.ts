@@ -145,6 +145,18 @@ function deviceItems(worker: WorkerView): InboxItem[] {
   });
 }
 
+const GROUPS: readonly InboxGroup[] = ["Broken", "Needs a look", "Heads-up"];
+
+export function inboxGroup(item: InboxItem): InboxGroup {
+  if (item.condition === "ending") return "Heads-up";
+  return inboxTone(item.condition) === "error" ? "Broken" : "Needs a look";
+}
+
+// why: the Inbox lists its groups in a fixed order, each keeping the order its items came in.
+function inGroupOrder(items: readonly InboxItem[]): readonly InboxItem[] {
+  return GROUPS.flatMap((group) => items.filter((item) => inboxGroup(item) === group));
+}
+
 // why: a lost worker or a quarantined device is broken; everything else on the list needs a look
 // soon, which is the warning tone, the same split the status words use.
 export function inboxTone(condition: InboxItem["condition"]): Tone {
@@ -156,7 +168,7 @@ export function inboxTone(condition: InboxItem["condition"]): Tone {
 export type InboxGroup = "Broken" | "Needs a look" | "Heads-up";
 
 export interface InboxRow {
-  readonly group?: InboxGroup;
+  readonly group: InboxGroup;
   readonly key: string;
   readonly to: string;
   readonly tone: Tone;
@@ -189,7 +201,7 @@ export interface InboxDetail {
 }
 
 export interface InboxPage {
-  readonly problems?: number;
+  readonly problems: number;
   readonly rows: readonly InboxRow[];
   // why: a URL can name an item the daemon has since cleared; that is told apart from a list
   // with nothing in it, which has no item to show at all.
@@ -364,7 +376,8 @@ export function inboxPageOf(input: {
   readonly tokens?: readonly TokenRecord[];
 }): InboxPage {
   const items = inboxItems(input.workers, input);
-  const rows = items.map((item) => ({
+  const rows = inGroupOrder(items).map((item) => ({
+    group: inboxGroup(item),
     key: item.key,
     subject: inboxSubject(item),
     to: itemPath("/inbox", item.key),
@@ -373,8 +386,9 @@ export function inboxPageOf(input: {
   }));
   const named = input.key !== undefined;
   const chosen = named ? items.find((item) => item.key === input.key) : items[0];
+  const problems = items.filter((item) => inboxGroup(item) !== "Heads-up").length;
   if (chosen !== undefined && "worker" in chosen) {
-    return { named, rows, shown: detailOf(chosen, input) };
+    return { named, problems, rows, shown: detailOf(chosen, input) };
   }
-  return { named, rows, shown: named ? "resolved" : undefined };
+  return { named, problems, rows, shown: named ? "resolved" : undefined };
 }
