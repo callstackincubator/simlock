@@ -67,8 +67,10 @@ class AutoLaunchAdminConnector {
     const { isSimlockError, SimlockError } = await import("../contract/index.js");
     const remainingMs = Math.max(0, this.startupDeadline - this.clock.now());
     let timer: ReturnType<Clock["setTimer"]> | undefined;
+    let timedOut = false;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = this.clock.setTimer(remainingMs, () => {
+        timedOut = true;
         reject(
           new SimlockError(
             "DAEMON_STARTUP_FAILED",
@@ -84,7 +86,10 @@ class AutoLaunchAdminConnector {
       this.startupDeadline = undefined;
       return client;
     } catch (error: unknown) {
-      await client.close();
+      // why: a daemon that went silent after `hello` never ends its side, so awaiting the close
+      // would hang the start this deadline bounds; other failures close against a live peer.
+      if (timedOut) void client.close().catch(() => undefined);
+      else await client.close();
       if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
         throw new SimlockError(
           "DAEMON_STARTUP_FAILED",

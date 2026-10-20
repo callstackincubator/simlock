@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer, type Socket } from "node:net";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1575,6 +1576,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       clock.now(),
       "probe must use the budget left after the socket appeared",
     ).toBeLessThanOrEqual(20_050);
+    expect(clock.now(), "probe must wait out the launch deadline").toBeGreaterThanOrEqual(20_000);
     expect(await run).toBe(1);
     expect(launcher.launches).toBe(1);
     expect(daemon.helloReplies).toBe(1);
@@ -1585,6 +1587,79 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         message: expect.stringContaining("Timed out starting"),
       },
     });
+  });
+
+  it("fails a start with DAEMON_STARTUP_FAILED when the daemon stops reading after hello, without waiting for its side of the close", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-wedged-"));
+    temporaryDirectories.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    const sockets: Socket[] = [];
+    let hellos = 0;
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      let buffered = "";
+      socket.on("data", (chunk) => {
+        buffered += chunk.toString();
+        for (const line of buffered.split("\n").slice(0, -1)) {
+          const frame = JSON.parse(line) as { id: number; type: string };
+          if (frame.type !== "hello") continue;
+          hellos += 1;
+          socket.write(
+            `${JSON.stringify({
+              id: frame.id,
+              ok: true,
+              payload: {
+                protocolVersion: PROTOCOL_VERSION_RANGE.max,
+                daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+                version: "0.0.0-test",
+                role: "admin",
+                principal: "test-requester",
+              },
+            })}\n`,
+          );
+          // why: a daemon wedged after `hello` neither answers nor ends its side of the socket.
+          socket.pause();
+        }
+        buffered = buffered.slice(buffered.lastIndexOf("\n") + 1);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      const real = new NodeIpcTransport();
+      let launched = false;
+      const clock = new FakeClock(0);
+      const launcher = new FakeDaemonLauncher(() => {
+        launched = true;
+      });
+      const ipc: IpcConnector = {
+        connect: async () => {
+          if (!launched) throw new IpcError("endpoint-not-found", "not yet", undefined);
+          return real.connect(socketPath);
+        },
+      };
+      const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
+      let settled = false;
+      const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+        (code) => {
+          settled = true;
+          return code;
+        },
+      );
+      for (let tick = 0; tick < 200 && hellos === 0; tick += 1) {
+        clock.advance(50);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(hellos).toBe(1);
+      clock.advance(20_000);
+      await expect.poll(() => settled, { timeout: 2_000 }).toBe(true);
+      expect(await run).toBe(1);
+      expect(JSON.parse(output.stderr)).toMatchObject({
+        error: { code: "DAEMON_STARTUP_FAILED" },
+      });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it.each([

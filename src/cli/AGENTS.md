@@ -58,8 +58,8 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
    for `DAEMON_STARTUP_TIMEOUT_MS`. After a launch, `status.get` probes the connection
    before handing it to a command, within that same deadline. A connection loss during this
-   probe becomes `DAEMON_STARTUP_FAILED`; a silent probe times out with that code and closes
-   its client. An answered probe ends the window, including a `starting` status: subsequent
+   probe becomes `DAEMON_STARTUP_FAILED`; a silent probe times out with that code and starts closing
+   its client without waiting for the daemon to end its side. An answered probe ends the window, including a `starting` status: subsequent
    command failures retain their original codes even while a lease queues or boots.
    The connector retains the launch deadline across a rejected credential and agent fallback.
    A pre-existing daemon is never probed or reclassified; other daemon errors keep their codes.
