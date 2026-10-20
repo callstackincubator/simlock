@@ -20,10 +20,22 @@ export default function runHero(root: HTMLElement) {
   };
   type Wait = ReturnType<typeof waiter>;
 
+  // why: every line is built from text nodes, so no text is ever parsed as markup.
+  const span = (text: string, cls = "") => {
+    const s = document.createElement("span");
+    if (cls) s.className = cls;
+    s.textContent = text;
+    return s;
+  };
+  // why: a state word in a colour, then plain text: "granted iPhone 17 Pro", "leased agent-1".
+  const say = (el: HTMLElement, word: string, cls: string, rest = "") => {
+    el.replaceChildren(span(word, cls), ...(rest ? [` ${rest}`] : []));
+  };
+
   // why: the untyped rest stays in the line as an invisible ghost, so typing never reflows.
   const ghost = (el: HTMLElement) => {
     const text = el.dataset.text ?? (el.dataset.text = el.textContent ?? "");
-    el.innerHTML = `<span></span><span class="ghost">${text}</span>`;
+    el.replaceChildren(span(""), span(text, "ghost"));
     return text;
   };
   const type = async (el: HTMLElement, w: Wait, speed = 24) => {
@@ -44,13 +56,14 @@ export default function runHero(root: HTMLElement) {
   const setSlot = (act: HTMLElement, n: number, state: string, holder = "") => {
     const dev = act.querySelector<HTMLElement>(`[data-slot="${n}"]`)!;
     dev.querySelector<HTMLElement>(".st-phone")!.dataset.state = state;
-    dev.querySelector<HTMLElement>("[data-dstate]")!.innerHTML =
-      state === "leased" ? `<span class="st-live">leased</span> ${holder}` : state;
+    const label = dev.querySelector<HTMLElement>("[data-dstate]")!;
+    if (state === "leased") say(label, "leased", "st-live", holder);
+    else label.textContent = state;
   };
-  const result = (act: HTMLElement, i: number, html: string) => {
+  const result = (act: HTMLElement, i: number, word: string, cls: string, rest = "") => {
     const r = act.querySelectorAll<HTMLElement>("[data-result]")[i]!;
     r.classList.remove("is-pending");
-    r.innerHTML = html;
+    say(r, word, cls, rest);
   };
   const workers = (act: HTMLElement, n: number) => {
     const foot = act.querySelector<HTMLElement>("[data-gw-foot]");
@@ -85,7 +98,7 @@ export default function runHero(root: HTMLElement) {
     const up = act.querySelector<HTMLElement>(`[data-up="${i}"]`)!;
     const down = act.querySelector<HTMLElement>(`[data-down="${i}"]`);
     await type(act.querySelectorAll<HTMLElement>("[data-t]")[i]!, w, 22);
-    result(act, i, '<span class="st-dim">waiting</span>');
+    result(act, i, "waiting", "st-dim");
     await pkt(up, false, w);
     if (down) {
       act.querySelector<HTMLElement>(`[data-route="${i}"]`)!.classList.add("is-on");
@@ -94,13 +107,13 @@ export default function runHero(root: HTMLElement) {
     }
     if (a.boots) {
       setSlot(act, a.slot, "booting");
-      result(act, i, '<span class="st-dim">booting</span>');
+      result(act, i, "booting", "st-dim");
       await w(1700);
     }
     setSlot(act, a.slot, "leased", a.agent);
     if (down) await pkt(down, true, w);
     await pkt(up, true, w);
-    result(act, i, `<span class="st-live">granted</span> ${a.route?.worker ?? a.device}`);
+    result(act, i, "granted", "st-live", a.route?.worker ?? a.device);
   };
 
   const join = async (act: HTMLElement, mi: number, w: Wait) => {

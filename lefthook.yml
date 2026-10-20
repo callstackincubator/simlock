@@ -4,7 +4,11 @@ pre-commit:
     # Formats what is staged and stages the result, so nobody runs a formatter by hand.
     format:
       glob: "*.{ts,tsx,js,mjs,json,md,yml,yaml}"
-      exclude: "docs/**"
+      # website/ is its own package and oxfmt skips it, so a commit with only website/ files would
+      # hand oxfmt nothing and fail.
+      exclude:
+        - "docs/**"
+        - "website/**"
       run: pnpm exec oxfmt {staged_files}
       stage_fixed: true
     lint:
