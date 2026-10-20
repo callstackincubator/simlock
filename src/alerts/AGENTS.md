@@ -9,14 +9,14 @@ Imported by: `../daemon/main.ts` only.
 
 ## Files
 
-| File               | Role                                                                           |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `index.ts`         | `createAlerts`: one subscription per listed event, `stop()`                    |
-| `queue.ts`         | `DestinationQueue`: one message at a time, tries, timeout, bounded wait        |
-| `formats/types.ts` | `AlertFormatDefinition`: `build` turns an envelope into headers and body       |
-| `formats/index.ts` | `ALERT_FORMAT_REGISTRY`, typed over core's `ALERT_FORMATS`                     |
-| `formats/generic/` | The envelope as JSON, signed with HMAC-SHA256                                  |
-| `formats/slack/`   | `{text}` from a message table (`messages.ts`), `units.ts` cuts, escapes, sizes |
+| File               | Role                                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `index.ts`         | `createAlerts`: one subscription per listed event, `stop()`                                                |
+| `queue.ts`         | `DestinationQueue`: one message at a time, tries, timeout, bounded wait                                    |
+| `formats/types.ts` | `AlertFormatDefinition`: `build` turns an envelope into headers and body                                   |
+| `formats/index.ts` | `ALERT_FORMAT_REGISTRY`, typed over core's `ALERT_FORMATS`                                                 |
+| `formats/generic/` | The envelope as JSON, signed with HMAC-SHA256                                                              |
+| `formats/slack/`   | `{text}` from a message table (`formats/slack/messages.ts`), `formats/slack/units.ts` cuts, escapes, sizes |
 
 ## How it works
 
