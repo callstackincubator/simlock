@@ -487,6 +487,39 @@ test.describe("the Activity page", () => {
     }
   });
 
+  test("a chip or a search that matches no held event says so and offers Load older events, which loads one page", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openEvents(page, host);
+      const queries = await stubEvents(page, (query) =>
+        query.get("before") === null
+          ? { events: stubbedRange(1, 30) }
+          : { events: stubbedRange(31, 70) },
+      );
+      for (const [address, said] of [
+        ["/activity?subject=worker", "No worker events among those loaded."],
+        ["/activity?q=zzz", "No events match zzz among those loaded."],
+      ] as const) {
+        queries.length = 0;
+        await page.goto(new URL(address, host.url).href);
+        await expect(page.getByText(said)).toBeVisible();
+        const more = page.getByRole("button", { name: "Load older events" });
+        await expect(more).toBeVisible();
+
+        await more.click();
+
+        await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
+        expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
+        await expect(page.getByText(said)).toBeVisible();
+        await expect(more).toHaveCount(0);
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("on a gateway, a worker's event shows that worker's label", async ({ page }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
     try {
