@@ -21,7 +21,7 @@ export function LeaseDrawer(props: {
       finalFocus={finalFocus}
     >
       {view.kind === "ready" && lease === undefined ? (
-        <p className="muted drawer-note">Lease not found.</p>
+        <p className="muted drawer-note">This lease is not held.</p>
       ) : (
         <Loaded view={view}>
           {(inspection) =>
