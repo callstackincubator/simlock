@@ -271,6 +271,29 @@ describe("alerts", () => {
     ]);
   });
 
+  it("worker.rejected names the claimed label, else the claimed id, else an unknown worker, and adds the count only above one", async () => {
+    const h = harness([slackDestination({ events: ["worker.rejected"] })]);
+    h.labels.set("wrk_9", "registry-name");
+    const cases: [Record<string, unknown>, string][] = [
+      [{ reason: "forbidden", workerId: "wrk_9", label: "claimed-label" }, "claimed-label."],
+      [{ reason: "forbidden", workerId: "wrk_9" }, "wrk_9."],
+      [{ reason: "unauthenticated" }, "an unknown worker."],
+      [{ reason: "forbidden", workerId: "wrk_9", count: 1 }, "wrk_9."],
+      [
+        { reason: "forbidden", workerId: "wrk_9", count: 4 },
+        "wrk_9. 4 more refusals like it came before this one.",
+      ],
+    ];
+    for (const [payload] of cases) {
+      h.emit("worker.rejected", payload as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      cases.map(([payload, tail]) => `⛔ A worker was refused (${payload.reason}): ${tail}`),
+    );
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
