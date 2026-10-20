@@ -6022,21 +6022,21 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
 
 describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
   it.each([
-    [["--gateway", "mcp"], 0, true],
-    [["mcp", "--gateway"], 0, true],
-    [["mcp"], 0, false],
+    [["--gateway", "mcp"], 0, "gateway"],
+    [["mcp", "--gateway"], 0, "gateway"],
+    [["mcp"], 0, "none"],
     [["--gateway=yes", "mcp"], 2, undefined],
   ] as const)(
-    "--gateway is taken from anywhere in the argv and reaches the command as context.gateway; --gateway=<x> is a usage error (%j)",
+    "--gateway is taken from anywhere in the argv and reaches the command as context.daemonFlag; --gateway=<x> is a usage error (%j)",
     async (argv, exitCode, gateway) => {
       const output = outputCapture();
-      const seen: boolean[] = [];
+      const seen: string[] = [];
 
       const code = await runCli(
         argv,
         output.environmentWith({
           runMcpStdio: async (options) => {
-            seen.push(options.gateway);
+            seen.push(options.daemonFlag ?? "none");
           },
         }),
       );

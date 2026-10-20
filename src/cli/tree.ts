@@ -2,13 +2,14 @@
 // its module and nothing else; a parent whose children share one implementation points them at
 // one `load` (the ESM cache makes the repeat free) and hands the consumed words down as `path`,
 // so a parent branches without its module ever being imported by the router.
+import type { DaemonFlag } from "../ports/index.js";
 import type { CliEnvironment } from "./types.js";
 
 export interface CommandContext {
   readonly path: readonly string[];
   readonly environment: CliEnvironment;
   readonly token: string | undefined;
-  readonly gateway: boolean;
+  readonly daemonFlag: DaemonFlag;
 }
 
 export interface CommandModule {

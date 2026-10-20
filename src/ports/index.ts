@@ -8,6 +8,7 @@ export type { PathDetails } from "./filesystem.js";
 export { readPackageVersion } from "./package-version.js";
 export {
   daemonDataDirectory,
+  type DaemonFlag,
   type DaemonHome,
   resolveDaemonHome,
   resolveDaemonSocketPath,

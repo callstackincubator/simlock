@@ -3,6 +3,7 @@
 // are answered without loading the control plane (see `lazy-loading.test.ts`).
 import { COMMANDS, resolveCommand } from "./tree.js";
 import { errorExitCode, UsageError, withHelpHint, writeError } from "./errors.js";
+import type { DaemonFlag } from "../ports/index.js";
 import type { CliEnvironment } from "./types.js";
 
 export type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
@@ -43,12 +44,12 @@ Pass --gateway anywhere on the command line to reach this machine's gateway in p
 
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
-  readonly gateway: boolean;
+  readonly daemonFlag: DaemonFlag;
   readonly rest: string[];
 } {
   const rest: string[] = [];
   let token: string | undefined;
-  let gateway = false;
+  let daemonFlag: DaemonFlag;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index] as string;
     if (arg === "--token") {
@@ -63,13 +64,13 @@ function extractGlobalFlags(argv: readonly string[]): {
       continue;
     }
     if (arg === "--gateway") {
-      gateway = true;
+      daemonFlag = "gateway";
       continue;
     }
     if (arg.startsWith("--gateway=")) throw new UsageError("--gateway takes no value");
     rest.push(arg);
   }
-  return { token, gateway, rest };
+  return { token, daemonFlag, rest };
 }
 
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
@@ -77,7 +78,7 @@ function extractGlobalFlags(argv: readonly string[]): {
  * exceeds the platform limit throws `SocketPathTooLongError`, and this runs inside `runCli`'s
  * try, where that throw becomes the single structured error line `docs/CLI.md` promises instead
  * of a raw stack trace. */
-async function buildDefaultEnvironment(gateway: boolean): Promise<CliEnvironment> {
+async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment> {
   const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }] = await Promise.all([
     import("node:path"),
     import("node:url"),
@@ -95,7 +96,7 @@ async function buildDefaultEnvironment(gateway: boolean): Promise<CliEnvironment
   } = ports;
   const root = resolveSimlockHome(process.env);
   const filesystem = new NodeFilesystem();
-  const daemonHome = await resolveDaemonHome({ root, gateway, filesystem });
+  const daemonHome = await resolveDaemonHome({ root, flag, filesystem });
   const logPath = join(daemonHome.dataDirectory, "daemon.log");
   return buildCliEnvironment(
     {
@@ -106,7 +107,7 @@ async function buildDefaultEnvironment(gateway: boolean): Promise<CliEnvironment
       launcher: new NodeDaemonLauncher({
         args: [
           join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
-          ...(gateway ? ["--gateway"] : []),
+          ...(daemonHome.role === "gateway" ? ["--gateway"] : []),
         ],
         command: process.execPath,
         logPath,
@@ -147,7 +148,7 @@ export async function runCli(
   environment?: CliEnvironment,
 ): Promise<number> {
   try {
-    const { token, gateway, rest } = extractGlobalFlags(argv);
+    const { token, daemonFlag, rest } = extractGlobalFlags(argv);
     if (rest.length === 0 || isHelp(rest[0])) {
       (environment?.stdout ?? process.stdout).write(`${USAGE}\n`);
       return 0;
@@ -155,13 +156,13 @@ export async function runCli(
     const command = await resolveCommand(COMMANDS, rest);
     if (command === undefined)
       throw new UsageError(withHelpHint(`Unknown command: ${String(rest[0])}`));
-    const resolved = environment ?? (await buildDefaultEnvironment(gateway));
-    if (gateway) await refuseWhenNoGateway(resolved, command.path, command.rest);
+    const resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
+    if (daemonFlag === "gateway") await refuseWhenNoGateway(resolved, command.path, command.rest);
     return await command.module.run(command.rest, {
       path: command.path,
       environment: resolved,
       token,
-      gateway,
+      daemonFlag,
     });
   } catch (error: unknown) {
     await writeError((value) => (environment?.stderr ?? process.stderr).write(value), error);

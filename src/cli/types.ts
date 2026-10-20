@@ -5,6 +5,7 @@ import type { EventEnvelope } from "../bus/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import type {
   Clock,
+  DaemonFlag,
   DaemonHome,
   DaemonLauncher,
   Filesystem,
@@ -25,7 +26,7 @@ export interface Output {
 /** why: the CLI's own shape for "start the stdio MCP server and run until it closes";
  * `src/mcp/main.ts` has a runner of the same job under the same name and a different shape, so
  * this one is named for what the CLI holds rather than shared, which would couple the two. */
-export type McpStdioLauncher = (options: { readonly gateway: boolean }) => Promise<void>;
+export type McpStdioLauncher = (options: { readonly daemonFlag: DaemonFlag }) => Promise<void>;
 
 export interface CliEnvironment {
   readonly clock: Clock;

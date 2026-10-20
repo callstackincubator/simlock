@@ -96,12 +96,12 @@ describe("resolveDaemonHome", () => {
   const root = "/home/me/.simlock";
 
   it.each([
-    [true, "gateway", `${root}/gateway`],
-    [false, "worker", root],
+    ["gateway", "gateway", `${root}/gateway`],
+    [undefined, "worker", root],
   ] as const)(
     "sends the gateway flag to <root>/gateway and everything else to <root> (flag %s)",
-    async (gateway, role, dataDirectory) => {
-      const home = await resolveDaemonHome({ root, gateway, filesystem: new MemoryFilesystem() });
+    async (flag, role, dataDirectory) => {
+      const home = await resolveDaemonHome({ root, flag, filesystem: new MemoryFilesystem() });
 
       expect(home).toMatchObject({ role, dataDirectory });
     },
@@ -114,7 +114,7 @@ describe("resolveDaemonHome", () => {
       await filesystem.mkdirp(join(file, ".."));
       await filesystem.writeFileAtomic(file, "{}");
     }
-    return (await resolveDaemonHome({ root, gateway: true, filesystem })).gatewayPresent;
+    return (await resolveDaemonHome({ root, flag: "gateway", filesystem })).gatewayPresent;
   }
 
   it.each([
@@ -139,10 +139,10 @@ describe("resolveDaemonHome", () => {
     });
 
     await expect(
-      resolveDaemonHome({ root, gateway: true, filesystem: failing("ENOTDIR") }),
+      resolveDaemonHome({ root, flag: "gateway", filesystem: failing("ENOTDIR") }),
     ).resolves.toMatchObject({ gatewayPresent: false });
     await expect(
-      resolveDaemonHome({ root, gateway: true, filesystem: failing("EACCES") }),
+      resolveDaemonHome({ root, flag: "gateway", filesystem: failing("EACCES") }),
     ).rejects.toThrow("EACCES");
   });
 });

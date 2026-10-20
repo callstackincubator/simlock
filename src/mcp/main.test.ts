@@ -179,7 +179,7 @@ describe("MCP stdio lifecycle", () => {
       const runner = await startMcpStdio({
         clock,
         createTransport: () => serverTransport,
-        gateway: true,
+        daemonFlag: "gateway",
         requesterId: "mcp-test",
         signals: new FakeSignals(),
       });

@@ -64,6 +64,8 @@ export function resolveDaemonSocketPath(
 
 export type DaemonRole = "worker" | "gateway";
 
+export type DaemonFlag = "gateway" | undefined;
+
 export interface DaemonHome {
   readonly role: DaemonRole;
   readonly dataDirectory: string;
@@ -97,17 +99,23 @@ async function existsOrAbsent(
 // why: the one place the folder choice lives (ADR 0034); the daemon never calls it, it derives its folder from its role.
 export async function resolveDaemonHome({
   filesystem,
-  gateway,
+  flag,
   root,
 }: {
   readonly root: string;
-  readonly gateway: boolean;
+  readonly flag: DaemonFlag;
   readonly filesystem: Pick<Filesystem, "exists">;
 }): Promise<DaemonHome> {
-  const role: DaemonRole = gateway ? "gateway" : "worker";
   const gatewayFolder = daemonDataDirectory(root, "gateway");
   const gatewayPresent =
     (await existsOrAbsent(filesystem, join(gatewayFolder, "instance.json"))) ||
     (await existsOrAbsent(filesystem, join(gatewayFolder, "config.json")));
+  const role: DaemonRole =
+    flag === "gateway" ||
+    (flag === undefined &&
+      gatewayPresent &&
+      !(await existsOrAbsent(filesystem, join(root, "instance.json"))))
+      ? "gateway"
+      : "worker";
   return { role, dataDirectory: daemonDataDirectory(root, role), gatewayPresent };
 }

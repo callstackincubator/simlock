@@ -15,6 +15,7 @@ import {
   resolveSimlockHome,
   SystemClock,
   type Clock,
+  type DaemonFlag,
 } from "../ports/index.js";
 import { connectToRunningDaemon, connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
@@ -50,7 +51,7 @@ export interface McpStdioEnvironment {
   /** Source for `SIMLOCK_AGENT_ID` and the agent tool's session id (`resolveRequesterId`) when
    * `requesterId` is not given explicitly. */
   readonly env?: NodeJS.ProcessEnv;
-  readonly gateway?: boolean;
+  readonly daemonFlag?: DaemonFlag;
   readonly requesterId?: string;
   readonly signals?: Signals;
   /** The stdio transport currently does not surface stdin EOF as onclose. */
@@ -81,7 +82,7 @@ export async function startMcpStdio(
   // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
   // loop must not be able to disagree about what time it is (architecture rule 9).
   const clock = environment.clock ?? new SystemClock();
-  const defaults = defaultEnvironment(requesterId, clock, environment.gateway === true);
+  const defaults = defaultEnvironment(requesterId, clock, environment.daemonFlag);
   const session = new McpSession({
     clock,
     connect: environment.connect ?? defaults.connect,
@@ -162,7 +163,7 @@ export async function startMcpStdio(
 function defaultEnvironment(
   requesterId: string,
   clock: Clock,
-  gateway: boolean,
+  flag: DaemonFlag,
 ): Required<Pick<McpStdioEnvironment, "connect" | "connectForRenew" | "createTransport">> {
   const root = resolveSimlockHome();
   const filesystem = new NodeFilesystem();
@@ -171,9 +172,9 @@ function defaultEnvironment(
   // a throw (an over-long `SIMLOCK_HOME`, a missing gateway) is a tool error rather than a dead
   // server and a raw stack trace on the stdio channel an MCP client is speaking protocol over.
   const daemonHome = async () => {
-    const home = await resolveDaemonHome({ root, gateway, filesystem });
-    if (gateway && !home.gatewayPresent) throw gatewayNotPresentError();
-    return home.dataDirectory;
+    const home = await resolveDaemonHome({ root, flag, filesystem });
+    if (flag === "gateway" && !home.gatewayPresent) throw gatewayNotPresentError();
+    return home;
   };
   return {
     // The tool-call trigger: auto-launches a daemon that is not running, exactly as the CLI
@@ -181,14 +182,14 @@ function defaultEnvironment(
     // and releases explicitly when the agent goes away (stdin EOF -> session.close()), so it
     // declares no daemon-initiated heartbeat -- there is none left to declare.
     connect: async () => {
-      const dataDirectory = await daemonHome();
+      const { dataDirectory, role } = await daemonHome();
       return connectWithAutoLaunch({
         clock,
         ipc,
         launcher: new NodeDaemonLauncher({
           args: [
             join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
-            ...(gateway ? ["--gateway"] : []),
+            ...(role === "gateway" ? ["--gateway"] : []),
           ],
           command: process.execPath,
           logPath: join(dataDirectory, "daemon.log"),
@@ -205,7 +206,7 @@ function defaultEnvironment(
       connectToRunningDaemon({
         ipc,
         principal: requesterId,
-        socketPath: resolveDaemonSocketPath(await daemonHome()),
+        socketPath: resolveDaemonSocketPath((await daemonHome()).dataDirectory),
       }),
     createTransport: () => new StdioServerTransport(),
   };
