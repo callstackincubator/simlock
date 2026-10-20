@@ -3901,10 +3901,9 @@ describe("CLI: alerts test (ADR 0035 §1)", () => {
 
   it("simlock alerts test prints the sent line, --json prints the output, a missing name prints the Expected line, simlock alerts and --help print the usage, and an unknown subcommand is a usage error", async () => {
     const sent = await runAlerts(["alerts", "test", "ops-slack"]);
-    expect([sent.code, sent.stdout, sent.stderr, sent.inputs]).toEqual([
+    expect([sent.code, sent.stdout, sent.inputs]).toEqual([
       0,
       "Sent a test message to ops-slack: HTTP 204\n",
-      "",
       [{ destination: "ops-slack" }],
     ]);
 

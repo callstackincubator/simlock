@@ -19,6 +19,8 @@ Commands:
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway; on a
                               single host, list shows the host itself
+  alerts test <destination> [--json]
+                              Send one sample message to a gateway's alert destination
   component install <ios|android> <version> [--worker <id>... | --all-workers]
                               Install a simulator runtime or system image
   component list [--platform <ios|android>]
