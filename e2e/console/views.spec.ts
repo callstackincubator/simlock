@@ -21,6 +21,8 @@ interface Pages {
   readonly worker: string;
   readonly device: string;
   readonly lease: string;
+  readonly request: string;
+  readonly event: string;
 }
 
 async function takeLease(host: RunningDaemon, agent: string): Promise<string> {
@@ -36,11 +38,19 @@ async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly
   const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
     .workers;
   const workerPath = `/fleet/${encodeURIComponent(worker?.id ?? "")}`;
+  const replay = await fetch(new URL("/v1/events?since=1h", host.url), {
+    headers: { Authorization: `Bearer ${host.tokens.operator}` },
+  });
+  const granted = (
+    (await replay.json()) as { events: { event: string; id: string }[] }
+  ).events.find((entry) => entry.event === "lease.granted");
   return {
     host,
     pages: {
       device: `${workerPath}/${encodeURIComponent(worker?.leases[0]?.deviceId ?? "")}?tab=devices`,
+      event: `/activity/${encodeURIComponent(granted?.id ?? "")}`,
       lease: `/leases/${encodeURIComponent(lease)}/`,
+      request: "/queue/req_none",
       views: NAV.map((entry) => ({ label: entry.label, path: entry.path })),
       worker: workerPath,
     },
@@ -48,7 +58,14 @@ async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly
 }
 
 function every(pages: Pages): readonly string[] {
-  return [...pages.views.map((view) => view.path), pages.worker, pages.device, pages.lease];
+  return [
+    ...pages.views.map((view) => view.path),
+    pages.worker,
+    pages.device,
+    pages.lease,
+    pages.request,
+    pages.event,
+  ];
 }
 
 async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
@@ -59,7 +76,7 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
 
 // why: an open drawer hides the page behind it from assistive technology.
 function opensDrawer(path: string): boolean {
-  return /^\/leases\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
+  return /^\/(leases|queue|activity)\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
 }
 
 async function visit(page: Page, host: RunningDaemon, path: string): Promise<void> {
@@ -92,7 +109,10 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
-        for (const summary of await page.locator("#main summary").all()) await summary.click();
+        // why: a drawer makes the page behind it inert, so its disclosures cannot be opened.
+        if (!opensDrawer(path)) {
+          for (const summary of await page.locator("#main summary").all()) await summary.click();
+        }
         expect(await hasHorizontalScroll(page), path).toBe(false);
       }
     } finally {
@@ -256,7 +276,7 @@ test.describe("every view", () => {
         await visit(page, host, path);
         if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
         const chart = page.locator(".chart svg").first();
-        if ((await chart.count()) > 0) {
+        if (!opensDrawer(path) && (await chart.count()) > 0) {
           await chart.hover();
           await expect(page.locator(".chart-tip")).toBeVisible();
           await page.locator("#main summary").first().click();
@@ -274,14 +294,22 @@ test.describe("every view", () => {
   });
 
   for (const colorScheme of ["light", "dark"] as const) {
-    test(`Fleet, a worker page and a device drawer pass an automated WCAG AA check (${colorScheme})`, async ({
+    test(`Fleet, a worker page, a device drawer, and Queue and Activity with a drawer open pass an automated WCAG AA check (${colorScheme})`, async ({
       page,
     }) => {
       const { host, pages } = await hostWithLease();
       try {
         await page.emulateMedia({ colorScheme });
         await openSignedIn(page, host);
-        for (const path of ["/fleet", pages.worker, pages.device]) {
+        for (const path of [
+          "/fleet",
+          pages.worker,
+          pages.device,
+          "/queue",
+          pages.request,
+          "/activity",
+          pages.event,
+        ]) {
           await visit(page, host, path);
           if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
           const results = await new AxeBuilder({ page })
