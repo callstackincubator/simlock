@@ -145,7 +145,7 @@ command starts it again) to bring the platform up.
 |---|---|---|
 | 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
-| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout, or answered the handshake then closed before the CLI's startup status probe answered |
+| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout, or exited while starting (the message is the daemon's start error), or answered the handshake then closed before the CLI's startup status probe answered |
 | 1 | `PROVISION_FAILED` | creating a device for the request failed twice; the message is the driver's error |
 | 1 | `HISTORY_UNAVAILABLE` | `stats` while `history.db` could not be opened, so the usage figures cannot be read; the daemon's log says why |
 | 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down), or a worker named with `component install --worker` cannot be asked |
@@ -2521,7 +2521,11 @@ Totals
 
 ## `simlock daemon <start|stop|status|logs [--follow]>`
 
-If a command auto-starts a daemon and it answers the handshake but closes
+If a command auto-starts a daemon and that daemon exits before it accepts
+connections, the command fails at once with `DAEMON_STARTUP_FAILED` and the
+daemon's start error (`The daemon could not start: <error>`, or the exit code
+when it logged none); a daemon that exits because another one holds the socket
+is not a failure, and the command goes on with that one. If it answers the handshake but closes
 before the CLI's startup status probe answers, the command reports
 `DAEMON_STARTUP_FAILED` (exit 1). The probe shares the launch timeout and runs
 before the command's operation, including after a rejected credential falls

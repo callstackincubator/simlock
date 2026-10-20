@@ -26,7 +26,8 @@ import {
 import { seedTokensDatabase } from "../auth/testing.js";
 import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { androidDeviceDataTable } from "../drivers/android/index.js";
+import { IosSimctlDriver, iosDeviceDataTable } from "../drivers/ios/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -37,6 +38,7 @@ import {
   FakeHostLoadProbe,
   type HostLoadCounters,
   FakeProcessSupervisor,
+  FakeSystemStats,
   FakeTcpProbe,
   JsonLinesLogger,
   MemoryFilesystem,
@@ -990,6 +992,8 @@ describe("startDaemon wires core and leasing together", () => {
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
         filesystem: new MemoryFilesystem(),
         logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        // why: capacity follows the host's cpus and memory, and a small runner has too few slots for three leases at once, so a later request waits for ever on the fake clock (30 s timeout in runs 39459769408 and 39457371326).
+        systemStats: new FakeSystemStats({ cpuCount: 16, totalRamBytes: 64 * 1024 ** 3 }),
         version: "1.2.3",
       }) as StartDaemonOptions;
     const first = await startDaemon(options());
@@ -3804,8 +3808,10 @@ describe("startDaemon state.db", () => {
     expect(await resolveDeviceDataTables({ deviceDataTables: optionMap })).toBe(optionMap);
 
     delete process.env.SIMLOCK_DRIVERS_MODULE;
-    expect(await resolveDeviceDataTables({})).toEqual(productionDeviceDataTables());
-    expect(productionDeviceDataTables().size).toBe(0);
+    const production = await resolveDeviceDataTables({});
+    expect(production).toEqual(productionDeviceDataTables());
+    expect(production.get("ios")).toBe(iosDeviceDataTable);
+    expect(production.get("android")).toBe(androidDeviceDataTable);
 
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       "export function createDrivers() { return []; }",

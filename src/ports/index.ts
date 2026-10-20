@@ -17,9 +17,12 @@ export {
 } from "./paths.js";
 export {
   DAEMON_STARTUP_TIMEOUT_MS,
+  type DaemonExit,
   type DaemonLauncher,
   FakeDaemonLauncher,
+  type LaunchedDaemon,
   NodeDaemonLauncher,
+  startErrorFrom,
 } from "./daemon-launcher.js";
 export {
   type IpcConnection,

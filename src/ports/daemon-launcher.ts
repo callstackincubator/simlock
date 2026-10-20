@@ -1,10 +1,44 @@
 import { spawn } from "node:child_process";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /** Starts the detached daemon owned by the operating system rather than the CLI. */
 export interface DaemonLauncher {
-  launch(): Promise<void>;
+  launch(): Promise<LaunchedDaemon>;
+}
+
+export interface DaemonExit {
+  readonly code: number | null;
+  readonly signal: string | null;
+}
+
+export interface LaunchedDaemon {
+  readonly exited: Promise<DaemonExit>;
+  readOutput(): Promise<string>;
+}
+
+export function startErrorFrom(exit: DaemonExit, output: string): string {
+  const lines = output.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const message = fatalMessage(lines[index] ?? "");
+    if (message !== undefined) return `The daemon could not start: ${message}`;
+  }
+  return `The daemon exited with code ${String(exit.code ?? exit.signal)} while starting; see \`simlock daemon logs\``;
+}
+
+function fatalMessage(line: string): string | undefined {
+  let record: unknown;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof record !== "object" || record === null) return undefined;
+  const { message, fields } = record as { message?: unknown; fields?: unknown };
+  if (message !== "Daemon failed to start") return undefined;
+  if (typeof fields !== "object" || fields === null) return undefined;
+  const detail = (fields as { message?: unknown }).message;
+  return typeof detail === "string" ? detail : undefined;
 }
 
 /**
@@ -35,12 +69,14 @@ export interface NodeDaemonLauncherOptions {
 export class NodeDaemonLauncher implements DaemonLauncher {
   constructor(private readonly options: NodeDaemonLauncherOptions) {}
 
-  async launch(): Promise<void> {
+  async launch(): Promise<LaunchedDaemon> {
     await mkdir(dirname(this.options.logPath), { recursive: true });
     // why: 0600 at creation, like the other files that hold secrets or state under the home:
     // this `open` is what first creates `daemon.log` for an auto-launched daemon -- the daemon's
     // own sink only appends to the file this one made.
     const log = await open(this.options.logPath, "a", 0o600);
+    const { ino, size } = await log.stat();
+    const logPath = this.options.logPath;
     try {
       const child = spawn(this.options.command, this.options.args, {
         detached: true,
@@ -50,11 +86,15 @@ export class NodeDaemonLauncher implements DaemonLauncher {
         env: { ...process.env, SIMLOCK_HOME: this.options.simlockHome },
         stdio: ["ignore", log.fd, log.fd],
       });
+      const exited = new Promise<DaemonExit>((resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);
         child.once("error", reject);
       });
       child.unref();
+      return { exited, readOutput: () => readLogSince(logPath, ino, size) };
     } finally {
       await log.close();
     }
@@ -64,10 +104,34 @@ export class NodeDaemonLauncher implements DaemonLauncher {
 export class FakeDaemonLauncher implements DaemonLauncher {
   launches = 0;
 
-  constructor(private readonly onLaunch: () => Promise<void> | void = () => undefined) {}
+  constructor(
+    private readonly onLaunch: () => Promise<void> | void = () => undefined,
+    private readonly result: { readonly exit?: DaemonExit; readonly output?: string } = {},
+  ) {}
 
-  async launch(): Promise<void> {
+  async launch(): Promise<LaunchedDaemon> {
     this.launches += 1;
     await this.onLaunch();
+    const { exit, output = "" } = this.result;
+    return {
+      exited: exit === undefined ? new Promise<DaemonExit>(() => undefined) : Promise.resolve(exit),
+      readOutput: async () => output,
+    };
   }
+}
+
+const MAX_OUTPUT_BYTES = 64 * 1024;
+
+// why: `NodeFileLogSink` rotates by renaming the log to `<path>.1`, so the bytes written since
+// the launch can sit in either file; the inode noted at launch says which one is the old log.
+async function readLogSince(logPath: string, ino: number, size: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  if ((await stat(logPath)).ino === ino) {
+    chunks.push((await readFile(logPath)).subarray(size));
+  } else {
+    const rotatedPath = `${logPath}.1`;
+    if ((await stat(rotatedPath)).ino !== ino) throw new Error("daemon.log was replaced");
+    chunks.push((await readFile(rotatedPath)).subarray(size), await readFile(logPath));
+  }
+  return Buffer.concat(chunks).subarray(-MAX_OUTPUT_BYTES).toString("utf8");
 }

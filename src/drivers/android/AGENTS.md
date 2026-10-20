@@ -7,20 +7,21 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## Files
 
-| File                       | Role                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `index.ts`                 | `AndroidDriver`: every `Driver` verb, console-port allocator, passthrough rules |
-| `adb-server.ts`            | `AdbServerSupervisor`: start, adopt, reap Simlock's adb server                  |
-| `adb-registrar.ts`         | `AdbRegistrar`: announces an emulator (`host:emulator:<adbPort>`)               |
-| `screen/`                  | Screen capture: scrcpy client ([screen](screen/AGENTS.md))                      |
-| `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers   |
-| `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                    |
-| `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones      |
-| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                    |
-| `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                             |
-| `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                      |
-| `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`            |
-| `data.ts`                  | `AndroidDriverData`: `avdName`, `configHash`, `imageIdentity`, `port`, `serial` |
+| File                       | Role                                                                                                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`                 | `AndroidDriver`: every `Driver` verb, console-port allocator, passthrough rules                                                                                       |
+| `device-data.ts`           | `androidDeviceDataTable`: owner `android-device-data` version 1, table `android_device_data` (`avd_name`, `config_hash`, nullable `image_identity`, `port`, `serial`) |
+| `adb-server.ts`            | `AdbServerSupervisor`: start, adopt, reap Simlock's adb server                                                                                                        |
+| `adb-registrar.ts`         | `AdbRegistrar`: announces an emulator (`host:emulator:<adbPort>`)                                                                                                     |
+| `screen/`                  | Screen capture: scrcpy client ([screen](screen/AGENTS.md))                                                                                                            |
+| `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers                                                                                         |
+| `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                                                                                                          |
+| `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones                                                                                            |
+| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                                                                                                          |
+| `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                                                                                                                   |
+| `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                                                                                                            |
+| `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`                                                                                                  |
+| `data.ts`                  | `AndroidDriverData`: `avdName`, `configHash`, `imageIdentity`, `port`, `serial`                                                                                       |
 
 ## How it works
 

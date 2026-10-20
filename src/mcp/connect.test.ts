@@ -2,7 +2,7 @@
 // default startup deadline it shares with the CLI's own loop (#663).
 import { describe, expect, it } from "vitest";
 
-import { FakeClock, FakeDaemonLauncher, MemoryIpcTransport } from "../ports/index.js";
+import { FakeClock, FakeDaemonLauncher, IpcError, MemoryIpcTransport } from "../ports/index.js";
 import { connectWithAutoLaunch } from "./connect.js";
 
 const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -55,5 +55,108 @@ describe("MCP: auto-launch's startup deadline (#663)", () => {
       message: expect.stringContaining("Timed out starting simlock daemon"),
     });
     expect(launcher.launches).toBe(1);
+  });
+});
+
+describe("MCP: auto-launch's daemon that exits while starting (#760)", () => {
+  const fatal = (message: string): string =>
+    `${JSON.stringify({ message: "Daemon failed to start", fields: { message } })}\n`;
+
+  // why: the winner is not listening yet at the first poll after the launch, so the loop reaches
+  // the launched daemon's exit before it finds the winner.
+  class LateWinnerTransport extends MemoryIpcTransport {
+    connects = 0;
+    override async connect(endpoint: string): ReturnType<MemoryIpcTransport["connect"]> {
+      this.connects += 1;
+      if (this.connects === 2) {
+        throw new IpcError("endpoint-not-found", `No IPC endpoint at ${endpoint}`, undefined);
+      }
+      return super.connect(endpoint);
+    }
+  }
+
+  async function answerHello(ipc: MemoryIpcTransport): Promise<void> {
+    await ipc.listen("/simlock/daemon.sock", (connection) => {
+      connection.onData((chunk) => {
+        for (const line of chunk.split("\n").filter((value) => value !== "")) {
+          const frame = JSON.parse(line) as { id: number; type: string };
+          if (frame.type !== "hello") continue;
+          void connection.write(
+            `${JSON.stringify({
+              id: frame.id,
+              ok: true,
+              payload: {
+                daemonProtocolRange: { max: 3, min: 3 },
+                principal: "agent-1",
+                protocolVersion: 3,
+                role: "agent",
+                version: "0.3.0",
+              },
+            })}\n`,
+          );
+        }
+      });
+    });
+  }
+
+  it("rejects with the start error as soon as the launched daemon exits, and connects when another daemon answers", async () => {
+    const outcome = async (message: string, winner: boolean) => {
+      const clock = new FakeClock(0);
+      const ipc = new LateWinnerTransport();
+      const launcher = new FakeDaemonLauncher(winner ? () => answerHello(ipc) : undefined, {
+        exit: { code: 1, signal: null },
+        output: fatal(message),
+      });
+      const result = await Promise.race([
+        connectWithAutoLaunch({
+          clock,
+          ipc,
+          launcher,
+          principal: "agent-1",
+          socketPath: "/simlock/daemon.sock",
+        }).then(
+          (client) => `connected as ${client.role}`,
+          (error: unknown) => `${(error as { code: string }).code}: ${(error as Error).message}`,
+        ),
+        settle()
+          .then(settle)
+          .then(settle)
+          .then(() => "still waiting"),
+      ]);
+      return { result, elapsed: clock.now() };
+    };
+    expect({
+      refused: await outcome("Found state.json", false),
+      raced: await outcome("Simlock daemon is already running", true),
+    }).toEqual({
+      refused: {
+        result: "DAEMON_STARTUP_FAILED: The daemon could not start: Found state.json",
+        elapsed: 0,
+      },
+      raced: { result: "connected as agent", elapsed: 0 },
+    });
+  });
+
+  it("names the exit code when the launched daemon's output cannot be read", async () => {
+    const clock = new FakeClock(0);
+    const launcher = {
+      launch: async () => ({
+        exited: Promise.resolve({ code: 3, signal: null }),
+        readOutput: async (): Promise<string> => {
+          throw new Error("daemon.log was replaced");
+        },
+      }),
+    };
+    const result = await connectWithAutoLaunch({
+      clock,
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      principal: "agent-1",
+      socketPath: "/simlock/daemon.sock",
+    }).then(
+      () => "connected",
+      (error: unknown) => (error as Error).message,
+    );
+    expect(result).toBe("The daemon exited with code 3 while starting; see `simlock daemon logs`");
   });
 });

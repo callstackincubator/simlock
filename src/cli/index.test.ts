@@ -1486,6 +1486,141 @@ describe("CLI: auto-launch's failed start (#672)", () => {
   });
 });
 
+describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
+  it("status fails at once with the daemon's start error when the launched daemon exits with a fatal line", async () => {
+    const clock = new FakeClock(0);
+    const fatal = JSON.stringify({
+      message: "Daemon failed to start",
+      fields: { message: "Found /simlock/state.json, remove it" },
+    });
+    const launcher = new FakeDaemonLauncher(undefined, {
+      exit: { code: 1, signal: null },
+      output: `older line\n${fatal}\n`,
+    });
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    });
+    let settled = false;
+    const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 100 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, "status had not settled by 5 s").toBe(true);
+    expect(clock.now()).toBeLessThan(20_000);
+    expect(await exitCode).toBe(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: "The daemon could not start: Found /simlock/state.json, remove it",
+      },
+    });
+  });
+
+  it("status names the exit code when the launched daemon's output cannot be read", async () => {
+    const clock = new FakeClock(0);
+    const launcher = {
+      launch: async () => ({
+        exited: Promise.resolve({ code: 3, signal: null }),
+        readOutput: async (): Promise<string> => {
+          throw new Error("daemon.log was replaced");
+        },
+      }),
+    };
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    });
+    let settled = false;
+    const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 100 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, "status had not settled by 5 s").toBe(true);
+    expect(await exitCode).toBe(1);
+    expect(JSON.parse(output.stderr).error.message).toBe(
+      "The daemon exited with code 3 while starting; see `simlock daemon logs`",
+    );
+  });
+});
+
+describe("CLI: auto-launch's daemon that lost the socket to another daemon (#760)", () => {
+  it("status goes on with the daemon that holds the socket when the launched daemon exits already running", async () => {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(0);
+    // why: the winner is not listening yet at the first poll after the launch, so the loop reaches
+    // the launched daemon's exit before it finds the winner.
+    class LateWinnerTransport extends MemoryIpcTransport {
+      connects = 0;
+      override async connect(endpoint: string): ReturnType<MemoryIpcTransport["connect"]> {
+        this.connects += 1;
+        if (this.connects === 2) {
+          throw new IpcError("endpoint-not-found", `No IPC endpoint at ${endpoint}`, undefined);
+        }
+        return super.connect(endpoint);
+      }
+    }
+    const ipcTransport = new LateWinnerTransport();
+    const launcher = new FakeDaemonLauncher(
+      async () => {
+        await startInMemoryDaemon({
+          adminTokenPath: "/simlock/admin.token",
+          filesystem,
+          ipcTransport,
+          socketPath: "/simlock/daemon.sock",
+        });
+      },
+      {
+        exit: { code: 1, signal: null },
+        output: `${JSON.stringify({
+          message: "Daemon failed to start",
+          fields: { message: "Simlock daemon is already running at /simlock/daemon.sock" },
+        })}\n`,
+      },
+    );
+    const output = outputCapture({
+      filesystem,
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: ipcTransport,
+      launcher,
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    });
+    let settled = false;
+    const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 100 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, "status had not settled by 5 s").toBe(true);
+    expect(await exitCode).toBe(0);
+    expect(output.stderr).not.toContain("DAEMON_STARTUP_FAILED");
+    expect(ipcTransport.connects).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)", () => {
   it.each([
     { closeAfter: "hello", rejectedCredential: false },
