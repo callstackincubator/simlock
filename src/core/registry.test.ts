@@ -2712,4 +2712,81 @@ describe("Registry: state.db rows", () => {
     }
     expect(state.database.prepare("SELECT COUNT(*) AS n FROM lease_grants").get()?.n).toBe(1);
   });
+
+  it("load refuses with RegistryLoadError naming the table and key for a virtual device with no device-data row, a device whose platform has no table, a grant naming a missing device and a state outside its type", async () => {
+    const reload = (state: StateDatabase, platforms: readonly Platform[] = ["ios", "android"]) =>
+      Registry.load({
+        clock: new FakeClock(1_000),
+        deviceData: new Map(platforms.map((platform) => [platform, fakeDeviceDataTable])),
+        eventBus: new EventBus(new FakeClock(1_000)),
+        idGenerator: { generate: () => "z" },
+        state,
+      });
+    const grantedWorld = async () => {
+      const built = await world();
+      const device = await built.readyDevice("fk-load");
+      await built.registry.createLeaseRequest({
+        id: "req_load",
+        ownerId: "agent-1",
+        request: { platform: "ios" },
+        requesterId: "agent-1",
+      });
+      await built.registry.createLease({
+        deviceId: device.id,
+        ownerId: "agent-1",
+        request: {
+          environment: {},
+          id: "req_load",
+          timing: {
+            estimatedBootMs: 0,
+            estimatedProvisionMs: 0,
+            estimatedReadyMs: 0,
+            estimatedReclaimMs: 0,
+          },
+        },
+        requesterId: "agent-1",
+        ttlDeadline: 5_000,
+        ttlMs: 4_000,
+      });
+      return { ...built, deviceId: device.id };
+    };
+
+    const cases: {
+      readonly corrupt: (state: StateDatabase, deviceId: string) => void;
+      readonly platforms?: readonly Platform[];
+      readonly message: (deviceId: string) => RegExp;
+    }[] = [
+      {
+        corrupt: (state, deviceId) =>
+          state.database.prepare("DELETE FROM fake_device_data WHERE device_id = ?").run(deviceId),
+        message: (deviceId) => new RegExp(`devices row ${deviceId}`),
+      },
+      {
+        corrupt: () => undefined,
+        message: (deviceId) => new RegExp(`devices row ${deviceId}`),
+        platforms: ["android"],
+      },
+      {
+        corrupt: (state, deviceId) => {
+          state.database.exec("PRAGMA foreign_keys=OFF");
+          state.database.prepare("DELETE FROM fake_device_data WHERE device_id = ?").run(deviceId);
+          state.database.prepare("DELETE FROM devices WHERE id = ?").run(deviceId);
+        },
+        message: () => /lease_grants row req_load/,
+      },
+      {
+        corrupt: (state, deviceId) =>
+          state.database.prepare("UPDATE devices SET state = 'warm' WHERE id = ?").run(deviceId),
+        message: (deviceId) => new RegExp(`devices row ${deviceId}`),
+      },
+    ];
+    for (const { corrupt, message, platforms } of cases) {
+      const { deviceId, state } = await grantedWorld();
+      await expect(reload(state)).resolves.toBeInstanceOf(Registry);
+      corrupt(state, deviceId);
+      const refusal = await reload(state, platforms).catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(RegistryLoadError);
+      expect((refusal as Error).message).toMatch(message(deviceId));
+    }
+  });
 });
