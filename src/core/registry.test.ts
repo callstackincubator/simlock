@@ -2587,4 +2587,38 @@ describe("Registry: state.db rows", () => {
       expect(view.leaseRequests().map((request) => request.state)).toEqual(["open"]);
     }
   });
+
+  it("a commit that throws in SQLite leaves snapshot and the commit listeners as before the call, and the caller's promise rejects", async () => {
+    const { readyDevice, registry, state } = await world();
+    const device = await readyDevice("fk-throw");
+    const committed: string[] = [];
+    registry.onCommit(() => committed.push("commit"));
+    const before = registry.snapshot;
+    state.database.exec(
+      "CREATE TRIGGER no_leases BEFORE INSERT ON leases BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+    );
+
+    await expect(
+      registry.createLease({
+        deviceId: device.id,
+        ownerId: "agent-1",
+        requesterId: "agent-1",
+        ttlDeadline: 5_000,
+        ttlMs: 4_000,
+      }),
+    ).rejects.toThrow("disk full");
+
+    expect(registry.snapshot).toEqual(before);
+    expect(committed).toEqual([]);
+    expect(state.database.prepare("SELECT state FROM devices").all()).toEqual([{ state: "ready" }]);
+    state.database.exec("DROP TRIGGER no_leases");
+    await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 5_000,
+      ttlMs: 4_000,
+    });
+    expect(committed).toEqual(["commit"]);
+  });
 });
