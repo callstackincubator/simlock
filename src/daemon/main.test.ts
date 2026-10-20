@@ -280,6 +280,7 @@ describe("the version a daemon reports", () => {
     const clock = new FakeClock(1_000);
     const socketPath = join(directory, "daemon.sock");
     const daemon = await startDaemon({
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
@@ -1337,6 +1338,7 @@ describe("startDaemon stop with a warm target", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.hangMakeReady();
     const daemon = await startDaemon({
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       configOverrides: {
         capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
@@ -1671,6 +1673,7 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
     const daemon = await startDaemon({
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       dataDirectory: directory,
@@ -3212,6 +3215,7 @@ describe("startDaemon host load", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const daemon = await startDaemon({
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
