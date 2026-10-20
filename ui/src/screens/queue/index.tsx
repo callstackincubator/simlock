@@ -50,7 +50,7 @@ export function QueueScreen() {
                   })
                 }
               >
-                <DrawerBody page={page} />
+                <QueueDrawerBody page={page} />
               </Drawer>
             )}
           </>
@@ -114,7 +114,7 @@ function QueueTable({ page }: { readonly page: WaitingPage }) {
   );
 }
 
-export function DrawerBody({ page }: { readonly page: WaitingPage }) {
+export function QueueDrawerBody({ page }: { readonly page: WaitingPage }) {
   const { chosen, gone } = page;
   if (gone || chosen === undefined)
     return <p className="muted queue-drawer">Request not waiting.</p>;

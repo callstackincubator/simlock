@@ -33,7 +33,7 @@ export { SUBJECT_CHOICES };
 
 // why: each screen that reads events holds its own feed, filled from the last hour and then the
 // stream while it is on screen, so a screen opened later still starts from a full hour.
-export function useEventFeed(): {
+function useEventFeed(): {
   readonly feed: EventFeed;
   readonly state: ResourceState<readonly ConsoleEvent[]>;
   readonly history: HistoryState;

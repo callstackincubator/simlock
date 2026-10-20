@@ -91,7 +91,7 @@ export function ActivityContent(props: {
                 onClose={onClose}
                 finalFocus={finalFocus}
               >
-                <DrawerBody page={page} />
+                <EventDrawerBody page={page} />
               </Drawer>
             )}
           </>
@@ -219,7 +219,7 @@ function DrawerTitle({ page }: { readonly page: EventsPage }) {
   return <span className={toneClass(chosen.detail.tone, "")}>{chosen.detail.name}</span>;
 }
 
-export function DrawerBody({ page }: { readonly page: EventsPage }) {
+export function EventDrawerBody({ page }: { readonly page: EventsPage }) {
   const { chosen } = page;
   if (chosen.kind === "event") return <Detail detail={chosen.detail} />;
   return (

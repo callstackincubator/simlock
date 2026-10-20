@@ -6,7 +6,7 @@ import { figuresOf, waitTile } from "../../model/figures";
 import { statsOf } from "../../model/test-support";
 import { chooseWaiting, type WaitingRequest, waitingTable } from "../../model/waiting";
 import type { WaitingPage } from "../../state/waiting";
-import { DrawerBody, QueueBody } from ".";
+import { QueueDrawerBody, QueueBody } from ".";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 
@@ -50,7 +50,7 @@ function table(page: WaitingPage): string {
 }
 
 function drawer(page: WaitingPage): string {
-  return renderToStaticMarkup(<DrawerBody page={page} />);
+  return renderToStaticMarkup(<QueueDrawerBody page={page} />);
 }
 
 function text(html: string): string {

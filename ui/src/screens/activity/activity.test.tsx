@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { LoadView } from "../../ds";
 import type { EventDetail, EventRow, EventsPage } from "../../state/events";
-import { ActivityContent, DrawerBody } from ".";
+import { ActivityContent, EventDrawerBody } from ".";
 
 function text(html: string): string {
   return html
@@ -71,7 +71,7 @@ function render(view: LoadView<EventsPage>): string {
 }
 
 function drawer(over: Partial<EventsPage> = {}): string {
-  return renderToStaticMarkup(<DrawerBody page={page(over)} />);
+  return renderToStaticMarkup(<EventDrawerBody page={page(over)} />);
 }
 
 function ready(over: Partial<EventsPage> = {}): string {
