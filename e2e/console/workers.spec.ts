@@ -367,7 +367,9 @@ test.describe("the workers page", () => {
     );
   });
 
-  test("an incompatible worker shows both protocol ranges", async ({ page }) => {
+  test("an incompatible worker says its devices cannot be read, and shows both protocol ranges", async ({
+    page,
+  }) => {
     const gateway = await startDaemon("gateway");
     let hangUp = () => {};
     try {
@@ -377,15 +379,15 @@ test.describe("the workers page", () => {
       expect(view.protocol?.worker).toEqual(OLD_PROTOCOL);
 
       await openConsole(page, gateway);
-      await expect(
-        row(page, "old-worker").getByRole("img", { name: "incompatible" }),
-      ).toBeVisible();
+      await expect(row(page, "old-worker")).toContainText("incompatible");
       await row(page, "old-worker").getByRole("link").click();
 
       const expected =
         `incompatible gateway ${gatewayRange.min}–${gatewayRange.max}, ` +
         `worker ${OLD_PROTOCOL.min}–${OLD_PROTOCOL.max}`;
-      await expect(page.getByRole("tabpanel")).toContainText(expected);
+      await expect(page.getByRole("tabpanel")).toHaveText(
+        "No devices: the gateway cannot read this worker.",
+      );
       await openTab(page, "Host");
       await expect(fact(page.locator("#main"), "Protocol")).toHaveText(expected);
       await expect(fact(page.locator("#main"), "Connection")).toHaveText("incompatible");
