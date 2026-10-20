@@ -343,6 +343,17 @@ test.describe("long lists page", () => {
     });
   }
 
+  test("changing the leases search goes back to page 1", async ({ daemon, page }) => {
+    await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
+    await open(page, daemon, "/leases?page=2");
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("26–50 of 60");
+
+    await page.getByRole("searchbox", { name: "Search leases" }).fill("lse_00");
+
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 60");
+    await expect(page).toHaveURL(/\/leases\?q=lse_00$/);
+  });
+
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
     let count = 25;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));

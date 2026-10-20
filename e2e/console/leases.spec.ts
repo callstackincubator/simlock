@@ -429,6 +429,30 @@ test.describe("the leases page", () => {
     }
   });
 
+  test("the toolbar puts the filter chips on the left and the search box on the right, at the page title's padding", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-bar");
+      await openLeases(page, host);
+
+      const title = await page.getByRole("heading", { level: 1, name: "Leases" }).boundingBox();
+      const chips = await page.getByRole("group", { name: "Filter leases" }).boundingBox();
+      const search = await page.getByRole("searchbox", { name: "Search leases" }).boundingBox();
+      const table = await page.locator("main table").boundingBox();
+
+      expect(chips?.x).toBeCloseTo(title?.x ?? -1, 0);
+      expect((search?.x ?? 0) > (chips?.x ?? 0) + (chips?.width ?? 0)).toBe(true);
+      expect((search?.x ?? 0) + (search?.width ?? 0)).toBeCloseTo(
+        (table?.x ?? 0) + (table?.width ?? 0),
+        0,
+      );
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("a lease opens to its details on a gateway", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
