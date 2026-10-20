@@ -243,6 +243,21 @@ test.describe("the leases page", () => {
     }
   });
 
+  test("loading /leases/<id> directly opens the drawer over the table", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-direct");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+
+      await expect(page.getByRole("dialog", { name: /agent-direct/ })).toBeVisible();
+      await expect(leaseRow(page, lease.id)).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("loaded directly at a lease's address, closing the drawer replaces the address with /leases and focus goes to the heading", async ({
     page,
   }) => {

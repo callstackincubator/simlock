@@ -200,6 +200,39 @@ test.describe("the Screen pane", () => {
     }
   });
 
+  test("switching from Screen to Details keeps the capture running, and closing the drawer stops it", async ({
+    page,
+  }) => {
+    const started = await streamingHost();
+    try {
+      const ended: string[] = [];
+      const track = (request: { url(): string }) => {
+        if (request.url().includes("/v1/stream/leases/")) ended.push(request.url());
+      };
+      page.on("requestfinished", track);
+      page.on("requestfailed", track);
+      await openLeasePage(page, started.host, started.lease);
+      await showButton(page).click();
+      await logReached(started.dir, "opened", 1);
+      await expect.poll(async () => (await frames(page)) > 0, { timeout: 10_000 }).toBe(true);
+
+      await page.getByRole("tab", { name: "Details" }).click();
+      await expect(page.getByRole("tab", { name: "Details" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await page.waitForTimeout(500);
+      expect(ended).toEqual([]);
+      expect(await captureLogLines(started.dir, "closed")).toBe(0);
+
+      await page.keyboard.press("Escape");
+      await logReached(started.dir, "closed", 1);
+      await expect.poll(() => ended.length).toBe(1);
+    } finally {
+      await cleanup(started);
+    }
+  });
+
   test("a worker with streaming off disables Show screen and says why before any click", async ({
     page,
   }) => {
