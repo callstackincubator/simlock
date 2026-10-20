@@ -2697,6 +2697,7 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
   allocationsByRunner.set(processRunner, allocator);
   return allocator;
 }
+export { androidDeviceDataTable } from "./device-data.js";
 export { androidPrerequisites } from "./prerequisites.js";
 
 function virtualReclaimStrategy(clean: "standard" | "full"): "snapshot" | "wipe" {
