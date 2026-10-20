@@ -2675,4 +2675,41 @@ describe("Registry: state.db rows", () => {
       capped.state.database.prepare("SELECT id FROM lease_requests ORDER BY rowid").all(),
     ).toEqual([{ id: "req_b" }, { id: "req_c" }]);
   });
+
+  it("a replayed answer's device is the current device record, before and after a restart, while its lease, environment and timing are as first granted", async () => {
+    const { open, readyDevice, registry, state } = await world();
+    const device = await readyDevice("fk-replay");
+    await registry.createLeaseRequest({
+      id: "req_replay",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    const timing = {
+      estimatedBootMs: 2,
+      estimatedProvisionMs: 1,
+      estimatedReadyMs: 4,
+      estimatedReclaimMs: 3,
+    };
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      request: { environment: { SIMLOCK_UDID: "abc" }, id: "req_replay", timing },
+      requesterId: "agent-1",
+      ttlDeadline: 5_000,
+      ttlMs: 4_000,
+    });
+    expect(registry.leaseRequests()[0]?.grant?.device.state).toBe("leased");
+    await registry.beginRelease(lease.id);
+
+    const restarted = await open({ generate: () => "after" });
+    for (const view of [registry, restarted]) {
+      const grant = view.leaseRequests()[0]?.grant;
+      expect(grant?.device).toMatchObject({ id: device.id, state: "reclaiming" });
+      expect(grant?.lease).toEqual(lease);
+      expect(grant?.environment).toEqual({ SIMLOCK_UDID: "abc" });
+      expect(grant?.timing).toEqual(timing);
+    }
+    expect(state.database.prepare("SELECT COUNT(*) AS n FROM lease_grants").get()?.n).toBe(1);
+  });
 });
