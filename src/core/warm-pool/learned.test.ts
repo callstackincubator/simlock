@@ -180,4 +180,34 @@ describe("LearnedKinds", () => {
     ).toBe(0);
     second.close();
   });
+
+  it("warmPoolOwner version 1 creates both STRICT tables with their columns", async () => {
+    const { state } = await open();
+    const table = (name: string) =>
+      state.database.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(name)?.sql;
+    const columns = (name: string) =>
+      state.database
+        .prepare(`SELECT name, type, "notnull" AS required FROM pragma_table_info('${name}')`)
+        .all()
+        .map((column) => [column.name, column.type, column.required]);
+
+    expect(warmPoolOwner.version).toBe(1);
+    expect(String(table("warm_kinds"))).toMatch(/STRICT/);
+    expect(String(table("warm_kind_leases"))).toMatch(/STRICT/);
+    expect(columns("warm_kinds")).toEqual([
+      ["id", "INTEGER", 0],
+      ["platform", "TEXT", 1],
+      ["model", "TEXT", 1],
+      ["os_version", "TEXT", 1],
+      ["mode", "TEXT", 1],
+      ["image_tag", "TEXT", 1],
+      ["last_leased_at", "INTEGER", 1],
+    ]);
+    expect(columns("warm_kind_leases")).toEqual([
+      ["lease_id", "TEXT", 0],
+      ["kind_id", "INTEGER", 1],
+      ["granted_at", "INTEGER", 1],
+      ["ended_at", "INTEGER", 0],
+    ]);
+  });
 });
