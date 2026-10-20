@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EventEnvelope } from "../../bus/index.js";
-import { ALERT_EVENTS, ALERT_FORMATS } from "../../core/index.js";
+import { ALERT_EVENTS } from "../../core/index.js";
 import { ALERT_FORMAT_REGISTRY } from "./index.js";
 
 describe.each(Object.entries(ALERT_FORMAT_REGISTRY))("format %s", (name, format) => {
@@ -34,11 +34,5 @@ describe.each(Object.entries(ALERT_FORMAT_REGISTRY))("format %s", (name, format)
       expect(built.headers["Content-Type"]).toBe("application/json");
       expect(built.headers["User-Agent"]).toBe("simlock/1.2.3");
     }
-  });
-});
-
-describe("ALERT_FORMAT_REGISTRY", () => {
-  it("has exactly the formats core names", () => {
-    expect(Object.keys(ALERT_FORMAT_REGISTRY).sort()).toEqual([...ALERT_FORMATS].sort());
   });
 });

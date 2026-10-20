@@ -361,6 +361,12 @@ describe("alerts", () => {
     await h.advance(60_000);
     expect(h.poster.requests).toHaveLength(1);
     expect(h.sink.records).toHaveLength(lines);
+
+    const same = harness();
+    same.emit("worker.connected", connected("wrk_e"));
+    same.alerts.stop();
+    await same.advance(60_000);
+    expect(same.poster.requests).toHaveLength(0);
   });
 
   it("stop counts a message waiting between tries as discarded and cancels its retry", async () => {
@@ -453,13 +459,23 @@ describe("alerts", () => {
     await settle();
     await h.advance(1_000);
     await h.advance(5_000);
+    h.poster.respond = () => Promise.resolve({ status: 200 });
+    h.emit("worker.connected", connected());
+    await settle();
+    vi.spyOn(ALERT_FORMAT_REGISTRY.generic, "build").mockImplementationOnce(() => {
+      throw new Error(`cannot build ${destination().url} s3cr3t`);
+    });
+    h.emit("worker.connected", connected());
+    await settle();
+    h.poster.respond = () => new Promise(() => {});
     for (let index = 0; index < 102; index += 1) {
       h.emit("worker.disconnected", { workerId: `wrk_${index}`, leaseCount: 0 });
     }
     h.alerts.stop();
 
     const text = h.sink.records.map((record) => JSON.stringify(record)).join("\n");
-    expect(h.logs("Alert send gave up")).toHaveLength(1);
+    expect(h.logs("Alert delivered")).toHaveLength(1);
+    expect(h.logs("Alert send gave up")).toHaveLength(2);
     expect(h.logs("Alert dropped: queue full")).toHaveLength(1);
     expect(h.logs("Alerts discarded at stop")).toHaveLength(1);
     expect(text).not.toContain(URL_TOKEN);
