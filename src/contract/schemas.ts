@@ -123,7 +123,7 @@ const deviceSpecSchema = z.object({
 
 const QUARANTINE_MESSAGE_MAX = 300;
 
-export const quarantineCauseSchema = z
+const quarantineCauseSchema = z
   .object({
     kind: z.enum(["purge-failed", "shutdown-failed", "delete-failed", "stalled"]),
     stalledState: z.enum(["provisioning", "reclaiming"]).optional(),

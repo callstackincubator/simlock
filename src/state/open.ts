@@ -112,7 +112,7 @@ function check(database: SqliteDatabase, path: string): void {
   throw damaged(path, `quick_check: ${String(first)}`, undefined);
 }
 
-export function stateDatabase(database: SqliteDatabase): StateDatabase {
+function stateDatabase(database: SqliteDatabase): StateDatabase {
   let closed = false;
   return {
     close: () => {
@@ -151,40 +151,46 @@ function migrate(
     database.exec(
       "CREATE TABLE IF NOT EXISTS schema_versions (owner TEXT PRIMARY KEY, version INTEGER NOT NULL) STRICT",
     );
-    for (const owner of owners) {
-      const row = database
-        .prepare("SELECT version FROM schema_versions WHERE owner = ?")
-        .get(owner.name);
-      const stored = row === undefined ? 0 : Number(row.version);
-      if (stored > owner.version) {
-        throw new StateRefusal(
-          `${owner.name} in ${path} is at version ${String(stored)}; this Simlock knows up to ${String(owner.version)}. Upgrade Simlock, or move state.db away.`,
-        );
-      }
-      for (let from = stored; from < owner.version; from += 1) {
-        try {
-          database.exec(owner.migrations[from] ?? "");
-        } catch (error: unknown) {
-          if (isLockError(error)) throw error;
-          throw new StateRefusal(
-            `${owner.name} in ${path} could not move from version ${String(from)} to ${String(from + 1)}: ${describe(error)}. Upgrade Simlock, or move state.db away.`,
-            { cause: error },
-          );
-        }
-        logger.debug("Moved a state.db schema owner up one version", {
-          from,
-          owner: owner.name,
-          to: from + 1,
-        });
-      }
-      if (stored < owner.version) {
-        database
-          .prepare(
-            `INSERT INTO schema_versions (owner, version) VALUES (?, ?)
-             ON CONFLICT (owner) DO UPDATE SET version = excluded.version`,
-          )
-          .run(owner.name, owner.version);
-      }
-    }
+    for (const owner of owners) migrateOwner(database, owner, path, logger);
   });
+}
+
+function migrateOwner(
+  database: SqliteDatabase,
+  owner: SqliteSchemaOwner,
+  path: string,
+  logger: Logger,
+): void {
+  const row = database
+    .prepare("SELECT version FROM schema_versions WHERE owner = ?")
+    .get(owner.name);
+  const stored = row === undefined ? 0 : Number(row.version);
+  if (stored > owner.version) {
+    throw new StateRefusal(
+      `${owner.name} in ${path} is at version ${String(stored)}; this Simlock knows up to ${String(owner.version)}. Upgrade Simlock, or move state.db away.`,
+    );
+  }
+  if (stored === owner.version) return;
+  for (let from = stored; from < owner.version; from += 1) {
+    try {
+      database.exec(owner.migrations[from] ?? "");
+    } catch (error: unknown) {
+      if (isLockError(error)) throw error;
+      throw new StateRefusal(
+        `${owner.name} in ${path} could not move from version ${String(from)} to ${String(from + 1)}: ${describe(error)}. Upgrade Simlock, or move state.db away.`,
+        { cause: error },
+      );
+    }
+    logger.debug("Moved a state.db schema owner up one version", {
+      from,
+      owner: owner.name,
+      to: from + 1,
+    });
+  }
+  database
+    .prepare(
+      `INSERT INTO schema_versions (owner, version) VALUES (?, ?)
+       ON CONFLICT (owner) DO UPDATE SET version = excluded.version`,
+    )
+    .run(owner.name, owner.version);
 }

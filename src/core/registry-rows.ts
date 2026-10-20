@@ -12,7 +12,6 @@ import {
   type LeaseRequestState,
   type LeaseTiming,
   type PhysicalClass,
-  type PhysicalDevice,
   type PhysicalState,
   type Platform,
   type QuarantineCause,
@@ -234,11 +233,21 @@ function flagValue(value: boolean | undefined): number | null {
   return value === undefined ? null : value ? 1 : 0;
 }
 
+function specColumns(device: DeviceRecord): SqliteValue[] {
+  if (device.physical) return [null, null, device.spec.class];
+  return [device.spec.mode ?? null, device.spec.imageTag ?? null, null];
+}
+
+function causeColumns(cause: QuarantineCause | undefined): SqliteValue[] {
+  return [cause?.kind ?? null, cause?.stalledState ?? null, cause?.message ?? null];
+}
+
+function physicalColumns(device: DeviceRecord): SqliteValue[] {
+  if (!device.physical) return [null, null];
+  return [device.reclaimingSince ?? null, device.absentReason ?? null];
+}
+
 function deviceValues(device: DeviceRecord): SqliteValue[] {
-  const shared = device as DeviceRecord &
-    Partial<Pick<PhysicalDevice, "reclaimingSince">> &
-    Partial<Pick<PhysicalDevice, "absentReason">>;
-  const cause = device.quarantineCause;
   return [
     device.id,
     device.spec.platform,
@@ -247,20 +256,15 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     device.state,
     device.spec.model,
     device.spec.osVersion,
-    device.physical ? null : (device.spec.mode ?? null),
-    device.physical ? null : (device.spec.imageTag ?? null),
-    device.physical ? device.spec.class : null,
+    ...specColumns(device),
     device.mode ?? null,
     device.leaseIdentity ?? null,
     device.createdAt,
     ...DEVICE_OPTIONAL_NUMBERS.map(([property]) => device[property] ?? null),
     device.deferredReclaimLeaseId ?? null,
-    cause?.kind ?? null,
-    cause?.stalledState ?? null,
-    cause?.message ?? null,
+    ...causeColumns(device.quarantineCause),
     device.address ?? null,
-    shared.reclaimingSince ?? null,
-    shared.absentReason ?? null,
+    ...physicalColumns(device),
   ];
 }
 
