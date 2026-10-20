@@ -50,20 +50,20 @@ ends. `model/proxy-refusal.ts` words a refusal.
 
 ## Pages
 
-| Path                | Screen    | Layout                                                                                     |
-| ------------------- | --------- | ------------------------------------------------------------------------------------------ |
-| `/`                 | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity       |
-| `/fleet[/<id>]`     | Fleet     | list + inspector (`MasterDetail`)                                                          |
-| `/leases[/<id>]`    | Leases    | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events) |
-| `/queue[/<id>]`     | Queue     | Wait p95 tile, list + inspector                                                            |
-| `/attention[/<id>]` | Attention | list + inspector                                                                           |
-| `/activity[/<id>]`  | Activity  | list + inspector with the payload                                                          |
-| `/usage`            | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)           |
+| Path                         | Screen    | Layout                                                                                                                                         |
+| ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                          | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity                                                           |
+| `/fleet[/<id>[/<deviceId>]]` | Fleet     | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` |
+| `/leases[/<id>]`             | Leases    | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events)                                                     |
+| `/queue[/<id>]`              | Queue     | Wait p95 tile, list + inspector                                                                                                                |
+| `/attention[/<id>]`          | Attention | list + inspector                                                                                                                               |
+| `/activity[/<id>]`           | Activity  | list + inspector with the payload                                                                                                              |
+| `/usage`                     | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)                                                               |
 
 The sidebar groups the pages: Overview and Attention, then Operate (Fleet, Leases, Queue), then
 Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
-On a list page the URL names the chosen item; with none, the first item shows on a wide screen
+On a list page (Queue, Attention, Activity) the URL names the chosen item; with none, the first item shows on a wide screen
 and the list alone on a phone (Leases shows the list alone, and a lease opens in a drawer over it).
 Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
