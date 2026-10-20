@@ -64,6 +64,7 @@ agent-device front and the stream (`/v1/stream`).
   opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`).
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.
+- `GET /v1/events` — reads `since`, `before` and `limit` through `eventsPageQuery` (contract), refused as 400 before dispatching `events.replay`; `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503 here too.
 - `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).
 - `GET /v1/leases/{id}/events` — the lease's notices; ends on `lease_lost`.
 - `POST /v1/leases/{id}/exec` → `device.exec`. The stream opens on `onStarted`; a failure
