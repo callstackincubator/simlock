@@ -729,4 +729,5 @@ const TRIGGERS = [
   "device.deleted",
   "cleanup.executed",
   "capacity.changed",
+  "lease.queued",
 ] as const;
