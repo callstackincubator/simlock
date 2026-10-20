@@ -1,6 +1,7 @@
 import { eventSummary, eventTone } from "./activity";
 import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
 import { itemPath } from "./paths";
+import type { LeaseRecord, TokenRecord } from "./leases";
 import { formatDuration } from "./time";
 import type { WaitingRequest } from "./waiting";
 import type { Tone } from "./tones";
@@ -45,6 +46,8 @@ export const WAITING_TOO_LONG_MS = 60_000;
 export interface InboxContext {
   readonly now: number;
   readonly requests?: readonly WaitingRequest[];
+  readonly leases?: readonly LeaseRecord[];
+  readonly tokens?: readonly TokenRecord[];
 }
 
 // why: a worker that is both disconnected and drained is two items, since each clears on its own.
@@ -309,6 +312,8 @@ export function inboxPageOf(input: {
   readonly now: number;
   readonly key: string | undefined;
   readonly requests?: readonly WaitingRequest[];
+  readonly leases?: readonly LeaseRecord[];
+  readonly tokens?: readonly TokenRecord[];
 }): InboxPage {
   const items = inboxItems(input.workers, input);
   const rows = items.map((item) => ({

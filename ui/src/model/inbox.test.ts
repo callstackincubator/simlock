@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { inboxItems, inboxPageOf } from "./inbox";
 import type { ConsoleEvent } from "./events";
+import { filterLeaseRows, type LeaseRecord, leaseRows, type TokenRecord } from "./leases";
 import type { WaitingRequest } from "./waiting";
 import type { WorkerDevice, WorkerView } from "./workers";
 
@@ -240,6 +241,44 @@ describe("the Inbox items of a long wait", () => {
     expect(
       inboxItems([worker()], { now: NOW, requests: [waiting(61_000)] }).map((item) => item.key),
     ).toEqual(["request/req_1/waiting"]);
+  });
+});
+
+describe("the Inbox items of a lease about to end", () => {
+  it("hold a lease with under 5 minutes left as a heads-up, not one with more, and the Leases filter agrees", () => {
+    const lease = (id: string, leftMs: number): LeaseRecord => ({
+      deviceId: "dev_1",
+      grantedAt: NOW - 60_000,
+      id,
+      idChosenByRequester: false,
+      lastRenewedAt: NOW - 30_000,
+      ownerId: "tok_1",
+      requesterId: "tok_1",
+      ttlDeadline: NOW + leftMs,
+      ttlMs: 900_000,
+    });
+    const tokens: TokenRecord[] = [
+      { createdAt: NOW - 1_000_000, id: "tok_1", label: "ci-runner-3", role: "agent" },
+    ];
+    const workers = [worker({ devices: [device("dev_1")] })];
+    const leases = [
+      lease("lse_far", 301_000),
+      lease("lse_edge", 300_000),
+      lease("lse_near", 299_000),
+      lease("lse_past", -1_000),
+    ];
+
+    const page = inboxPageOf({ events: [], key: undefined, leases, now: NOW, tokens, workers });
+
+    expect(page.rows.map((row) => [row.key, row.word, row.subject])).toEqual([
+      ["lease/lse_past/ending", "ending", "ci-runner-3 · iPhone 16 ends now"],
+      ["lease/lse_near/ending", "ending", "ci-runner-3 · iPhone 16 ends in 4:59"],
+    ]);
+    expect(
+      filterLeaseRows(leaseRows({ leases, now: NOW, tokens, workers }), "expiring").map(
+        (row) => row.id,
+      ),
+    ).toEqual(["lse_near", "lse_past"]);
   });
 });
 
