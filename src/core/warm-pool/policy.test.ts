@@ -1553,5 +1553,72 @@ describe("warm pool policy", () => {
         ).toEqual(["a", "b", "c", "ipad"]);
       });
     });
+
+    describe("learned kinds", () => {
+      const older = spec("iPad Pro");
+      const learnedOf = (
+        learnedSpec: VirtualSpec,
+        count: number,
+        lastLeasedAt: number,
+      ): WarmPolicyView["learned"][number] => ({ count, lastLeasedAt, spec: learnedSpec });
+      const provision = (wanted: VirtualSpec) => ({
+        action: "provision",
+        reason: "target",
+        spec: wanted,
+        target: wanted,
+      });
+
+      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating, and counts a learned kind's leased and reclaiming devices as had", () => {
+        const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 1, now - 2 * minute)];
+
+        const first = plan(view([], { learned, limit: 1, maxConcurrentBoots: 2 }));
+        expect(first.proposals).toEqual([provision(kind)]);
+        expect(first.targets.map((report) => [report.target, report.origin, report.short])).toEqual(
+          [
+            ["ios iPhone 17 26.0", "learned", undefined],
+            ["ios iPad Pro 26.0", "learned", "running-limit"],
+          ],
+        );
+
+        const configured = spec("iPhone 15");
+        expect(
+          evaluate(view([], { learned, limit: 1, targets: [{ count: 1, spec: configured }] })),
+        ).toEqual([provision(configured)]);
+
+        const shut = ofKind("shut", "shutdown");
+        expect(evaluate(view([shut], { learned: [learnedOf(kind, 1, now)] }))).toEqual([
+          { action: "boot", deviceId: "shut", reason: "target", target: kind },
+        ]);
+
+        const held = [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")];
+        expect(evaluate(view(held, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
+        const reclaiming = [
+          ofKind("a", "leased"),
+          ofKind("b", "leased"),
+          ofKind("c", "reclaiming"),
+        ];
+        expect(evaluate(view(reclaiming, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
+
+        const mixed = [ofKind("a", "leased"), ofKind("b", "ready")];
+        expect(
+          evaluate(view(mixed, { learned: [learnedOf(kind, 3, now)], maxConcurrentBoots: 3 })),
+        ).toEqual([provision(kind)]);
+
+        const merged = plan(
+          view([ofKind("a", "leased")], {
+            learned: [learnedOf(kind, 2, now), learnedOf(older, 1, now - minute)],
+            limit: 2,
+            targets: [{ count: 1, spec: kind }],
+          }),
+        );
+        expect(merged.proposals).toEqual([provision(kind)]);
+        expect(
+          merged.targets.map((report) => [report.origin, report.count, report.configuredCount]),
+        ).toEqual([
+          ["configured", 2, 1],
+          ["learned", 1, 0],
+        ]);
+      });
+    });
   });
 });
