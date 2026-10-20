@@ -11,7 +11,7 @@ import {
 } from "./events";
 import { eventsPerMinute, extremes, type MinuteCount } from "./history";
 import { type LeaseRecord, leasePath } from "./leases";
-import { formatCount } from "./paging";
+import { formatCount, writeQuery } from "./paging";
 import { itemPath } from "./paths";
 import type { Tone } from "./tones";
 import type { WaitingRequest } from "./waiting";
@@ -79,15 +79,16 @@ export interface EventRow {
   readonly summary: string;
 }
 
-// why: a row keeps the filter in its link, so choosing an event does not undo the filter.
+// why: a row keeps the filter and the search in its link, so choosing an event does not undo them.
 export function eventRows(
   events: readonly ConsoleEvent[],
   workers: readonly WorkerView[],
   subject: SubjectFilter,
-  _search = "",
+  search = "",
 ): readonly EventRow[] {
-  const query = writeSubject("", subject);
-  return shownEvents(events, subject).map((event) => {
+  const query = writeQuery(writeSubject("", subject), search);
+  const wanted = search.toLowerCase();
+  const rows = shownEvents(events, subject).map((event) => {
     const tone = eventTone(event.event);
     return {
       id: event.id,
@@ -99,6 +100,14 @@ export function eventRows(
       ...(tone === undefined ? {} : { tone }),
     };
   });
+  // why: the match is over what a row shows, its name and its summary line, and over no other
+  // part of the payload.
+  return wanted === ""
+    ? rows
+    : rows.filter(
+        (row) =>
+          row.name.toLowerCase().includes(wanted) || row.summary.toLowerCase().includes(wanted),
+      );
 }
 
 export interface EventAction {
@@ -197,19 +206,17 @@ export type Chosen =
   | { readonly kind: "missing"; readonly id: string }
   | { readonly kind: "event"; readonly detail: EventDetail };
 
-// why: with no id in the URL the first row shows, so a wide screen is never half empty; an id the
-// feed does not hold (older than the hour, or not loaded yet) is said so, not guessed at. An id is
-// looked up among every event held, so an event the filter hides still opens.
+// why: the drawer opens only for an id in the URL; an id the console does not hold (older than
+// what has loaded) is said so, not guessed at. An id is looked up among every event held, so an
+// event the filter or the search hides still opens.
 export function chosenEvent(
   events: readonly ConsoleEvent[],
-  rows: readonly EventRow[],
   id: string | undefined,
   places: EventPlaces,
   now: number,
 ): Chosen {
-  const wanted = id ?? rows[0]?.id;
-  if (wanted === undefined) return { kind: "none" };
-  const event = events.find((entry) => entry.id === wanted);
-  if (event === undefined) return { id: wanted, kind: "missing" };
+  if (id === undefined) return { kind: "none" };
+  const event = events.find((entry) => entry.id === id);
+  if (event === undefined) return { id, kind: "missing" };
   return { detail: eventDetail(event, places, now), kind: "event" };
 }

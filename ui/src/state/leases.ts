@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import { ApiError } from "../data/api";
 import type { LoadView } from "../ds/loaded";
@@ -21,10 +21,11 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
 import { useRecentEvents } from "./events";
+import { useListDrawer, type ListDrawerState } from "./drawer";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { navigate, setSearch, usePath, useSearch } from "./router";
+import { setSearch, usePath, useSearch } from "./router";
 
 export { type EventRow } from "../model/event-list";
 export {
@@ -50,27 +51,8 @@ export interface Leases {
   readonly urlId: string | undefined;
 }
 
-export interface LeaseDrawerState {
-  readonly fromList: boolean;
-  readonly close: () => void;
-}
-
-// why: the screen stays mounted from the list to a lease, so a lease that appears while it is
-// mounted was opened from the list in this tab, and one present at the first render was loaded
-// directly. Closing the first is a step back, so Back does not reopen it; the second has no list
-// entry behind it, so closing replaces its address.
-export function useLeaseDrawer(urlId: string | undefined): LeaseDrawerState {
-  const mountedOpen = useRef(urlId !== undefined);
-  if (urlId === undefined) mountedOpen.current = false;
-  const fromList = !mountedOpen.current;
-  const address = useSearch();
-  return {
-    close: () => {
-      if (fromList) window.history.back();
-      else navigate(`/leases${address}`, { replace: true });
-    },
-    fromList,
-  };
+export function useLeaseDrawer(urlId: string | undefined): ListDrawerState {
+  return useListDrawer("/leases", urlId);
 }
 
 // why: tokens and workers only name what the leases already show, so while they have not arrived

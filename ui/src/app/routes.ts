@@ -2,11 +2,11 @@ import type { ComponentType } from "react";
 
 import type { IconName } from "../ds";
 import { AttentionScreen } from "../screens/attention";
-import { EventsScreen } from "../screens/events";
+import { ActivityScreen } from "../screens/activity";
 import { LeasesScreen } from "../screens/leases";
 import { OverviewScreen } from "../screens/overview";
 import { UsageScreen } from "../screens/usage";
-import { WaitingScreen } from "../screens/waiting";
+import { QueueScreen } from "../screens/queue";
 import { FleetScreen } from "../screens/fleet";
 
 export type NavGroup = "Operate" | "Observe";
@@ -24,8 +24,14 @@ export const ROUTES: readonly Route[] = [
   { Screen: AttentionScreen, icon: "attention", label: "Attention", path: "/attention" },
   { Screen: FleetScreen, group: "Operate", icon: "workers", label: "Fleet", path: "/fleet" },
   { Screen: LeasesScreen, group: "Operate", icon: "leases", label: "Leases", path: "/leases" },
-  { Screen: WaitingScreen, group: "Operate", icon: "waiting", label: "Queue", path: "/queue" },
-  { Screen: EventsScreen, group: "Observe", icon: "events", label: "Activity", path: "/activity" },
+  { Screen: QueueScreen, group: "Operate", icon: "waiting", label: "Queue", path: "/queue" },
+  {
+    Screen: ActivityScreen,
+    group: "Observe",
+    icon: "events",
+    label: "Activity",
+    path: "/activity",
+  },
   { Screen: UsageScreen, group: "Observe", icon: "usage", label: "Usage", path: "/usage" },
 ];
 

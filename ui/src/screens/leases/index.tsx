@@ -3,6 +3,7 @@ import "./leases.css";
 import {
   ChoiceChips,
   type Column,
+  focusAfterClosing,
   DataTable,
   Link,
   Loaded,
@@ -48,7 +49,13 @@ export function LeasesScreen() {
           key={urlId}
           id={urlId}
           onClose={close}
-          finalFocus={() => focusAfterClosing(fromList, urlId)}
+          finalFocus={() =>
+            focusAfterClosing({
+              fromList,
+              links: "main tbody a",
+              path: `/leases/${encodeURIComponent(urlId)}`,
+            })
+          }
         />
       )}
     </Page>
@@ -95,16 +102,4 @@ export function LeaseTable(props: {
       paging={paging}
     />
   );
-}
-
-// why: focus goes back to the row that opened the drawer, or to the page's heading when that row is
-// gone or the drawer was loaded directly.
-function focusAfterClosing(fromList: boolean, id: string): HTMLElement | null {
-  const prefix = `/leases/${encodeURIComponent(id)}/`;
-  const row = fromList
-    ? [...document.querySelectorAll<HTMLElement>("main tbody a")].find((link) =>
-        link.getAttribute("href")?.startsWith(prefix),
-      )
-    : undefined;
-  return row ?? document.querySelector<HTMLElement>("main h1");
 }

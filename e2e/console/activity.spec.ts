@@ -50,7 +50,10 @@ async function cliEvents(daemon: RunningDaemon): Promise<readonly Envelope[]> {
 async function openEvents(page: Page, daemon: RunningDaemon, path = "/activity"): Promise<void> {
   await page.goto(new URL(path, daemon.url).href);
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  // why: a drawer over the page hides the page's heading from the accessibility tree.
+  if (path === "/activity") {
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  } else await expect(page.getByRole("dialog")).toBeVisible();
 }
 
 function feed(page: Page): Locator {
@@ -251,7 +254,7 @@ test.describe("the Activity page", () => {
 
       await expect(page).toHaveURL(new RegExp(`/activity/${(started as Envelope).id}$`));
       await expect(title(page)).toHaveText("daemon.started");
-      await expect(page.getByRole("heading", { level: 2, name: "Payload" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 3, name: "Payload" })).toBeVisible();
       await page.reload();
       await expect(title(page)).toHaveText("daemon.started");
     } finally {
@@ -396,7 +399,9 @@ test.describe("the Activity page", () => {
         for (const event of events) {
           await openEvent(page, event.id);
           await expect(title(page)).toHaveText(event.event);
-          seen.push(await page.locator("#main").innerText());
+          seen.push(await page.getByRole("dialog").innerText());
+          await page.keyboard.press("Escape");
+          await expect(page.getByRole("dialog")).toHaveCount(0);
         }
         expect(seen.join("\n"), name).not.toContain(joinToken);
         expect(await page.content(), name).not.toContain(joinToken);

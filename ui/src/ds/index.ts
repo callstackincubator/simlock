@@ -21,3 +21,4 @@ export { StatRow, StatTile } from "./stat";
 export { Status, StatusDot } from "./status";
 export { type Column, DataTable } from "./table";
 export { Toolbar } from "./toolbar";
+export { focusAfterClosing } from "./focus-after-drawer";

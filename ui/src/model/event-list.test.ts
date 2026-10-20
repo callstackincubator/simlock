@@ -286,32 +286,19 @@ describe("the events chart", () => {
 
 describe("the event chosen", () => {
   const events = [event("lease.granted", {}, 2), event("device.ready", {}, 1)];
-  const rows = eventRows(events, [], "all");
-  const choose = (id: string | undefined, shown = rows) =>
-    chosenEvent(events, shown, id, NO_PLACES, T0);
+  const choose = (id: string | undefined) => chosenEvent(events, id, NO_PLACES, T0);
 
-  it("is the one the URL names", () => {
+  it("is the one the URL names, even one a filter or a search hides", () => {
     const chosen = choose("evt_1");
 
     expect(chosen.kind === "event" && chosen.detail.name).toBe("device.ready");
   });
 
-  it("is the first row when the URL names none", () => {
-    const chosen = choose(undefined);
-
-    expect(chosen.kind === "event" && chosen.detail.id).toBe("evt_2");
+  it("is none when the URL names none, so the drawer stays shut", () => {
+    expect(choose(undefined)).toEqual({ kind: "none" });
   });
 
-  it("opens an event the filter hides", () => {
-    const filtered = eventRows(events, [], "lease");
-
-    const chosen = choose("evt_1", filtered);
-
-    expect(chosen.kind === "event" && chosen.detail.id).toBe("evt_1");
-  });
-
-  it("is missing for an id the feed does not hold, and none for an empty feed", () => {
+  it("is missing for an id the feed does not hold", () => {
     expect(choose("evt_gone")).toEqual({ id: "evt_gone", kind: "missing" });
-    expect(chosenEvent([], [], undefined, NO_PLACES, T0)).toEqual({ kind: "none" });
   });
 });

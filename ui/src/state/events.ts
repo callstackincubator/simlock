@@ -18,6 +18,7 @@ import {
   writeSubject,
 } from "../model/event-list";
 import type { ConsoleEvent } from "../model/events";
+import { readQuery, writeQuery } from "../model/paging";
 import type { LeaseList, LeaseRecord } from "../model/leases";
 import { itemIdFrom } from "../model/paths";
 import type { WaitingList, WaitingRequest } from "../model/waiting";
@@ -55,16 +56,17 @@ const MINUTE = 60_000;
 
 export interface EventsPage {
   readonly subject: SubjectFilter;
+  readonly query: string;
   // why: an empty list says whether nothing happened or the filter hides it.
   readonly held: number;
   readonly rows: readonly EventRow[];
   readonly chart: EventsChart;
   readonly chosen: Chosen;
-  // why: only a URL that names an event shows the inspector first on a phone.
-  readonly named: boolean;
   // why: the row the chosen event sits at, so the box opens with it in view.
   readonly chosenIndex: number;
   readonly loadOlder: () => void;
+  // why: the id in the URL stands before the list has loaded, so the drawer can open at once.
+  readonly urlId: string | undefined;
 }
 
 export function useEvents(): LoadView<EventsPage> {
@@ -76,17 +78,19 @@ export function useEvents(): LoadView<EventsPage> {
   const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? NO_LEASES;
   const requests = useLiveResource<WaitingList>("/v1/lease-requests").data?.requests ?? NO_REQUESTS;
   const now = useNow().server;
-  const subject = readSubject(useSearch());
+  const address = useSearch();
+  const subject = readSubject(address);
+  const query = readQuery(address);
   const id = itemIdFrom("/activity", usePath());
   const rows = useMemo(
-    () => (events === undefined ? [] : eventRows(events, workers, subject)),
-    [events, workers, subject],
+    () => (events === undefined ? [] : eventRows(events, workers, subject, query)),
+    [events, workers, subject, query],
   );
   // why: the chart moves once a minute, not with the clock's every tick.
   const minute = Math.floor(now / MINUTE) * MINUTE;
   const chart = useMemo(() => eventsChart(events ?? [], minute), [events, minute]);
   return mapView(loadView(feed), (held) => {
-    const chosen = chosenEvent(held, rows, id, { leases, requests, workers }, now);
+    const chosen = chosenEvent(held, id, { leases, requests, workers }, now);
     const chosenId = chosen.kind === "event" ? chosen.detail.id : undefined;
     return {
       chart,
@@ -97,13 +101,20 @@ export function useEvents(): LoadView<EventsPage> {
         0,
         rows.findIndex((row) => row.id === chosenId),
       ),
-      named: id !== undefined,
+      query,
       rows,
       subject,
+      urlId: id,
     };
   });
 }
 
 export function setSubject(subject: SubjectFilter): void {
   setSearch(writeSubject(window.location.search, subject), { replace: true });
+}
+
+// why: each key replaces the entry rather than adding one, so Back leaves the page, not a letter
+// of the search.
+export function setQuery(query: string): void {
+  setSearch(writeQuery(window.location.search, query), { replace: true });
 }

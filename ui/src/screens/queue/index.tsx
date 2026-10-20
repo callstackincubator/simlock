@@ -1,4 +1,4 @@
-import "./waiting.css";
+import "./queue.css";
 
 import {
   Card,
@@ -28,7 +28,7 @@ import {
   useWaiting,
 } from "../../state/waiting";
 
-export function WaitingScreen() {
+export function QueueScreen() {
   const view = useWaiting();
   return <Loaded view={view}>{(page) => <WaitingBody page={page} />}</Loaded>;
 }
