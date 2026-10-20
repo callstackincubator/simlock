@@ -244,7 +244,7 @@ async function composeDaemon(
     // why: node:sqlite writes the real disk, so the state never goes through a daemon's injected filesystem
     filesystem: new NodeFilesystem(),
     logger: logger.child("state"),
-    oldFiles: role === "gateway" ? ["tokens.json"] : ["state.json", "tokens.json"],
+    oldFiles: role === "gateway" ? ["tokens.json", "workers.json"] : ["state.json", "tokens.json"],
     owners:
       role === "gateway"
         ? [tokensOwner, drainedWorkersOwner]

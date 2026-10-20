@@ -372,8 +372,8 @@ function bearerToken(request: IncomingMessage): string | undefined {
   return secret === "" ? undefined : secret;
 }
 
-/** P3: how long a claimed `workerId` or decoded label is allowed to be before either reaches
- * anything -- the event bus (`worker.rejected`, `worker.connected`), a view, or `workers.json`.
+/** why: P3: how long a claimed `workerId` or decoded label is allowed to be before either reaches
+ * anything -- the event bus (`worker.rejected`, `worker.connected`), a view, or the drain store.
  * Comfortably longer than any real hostname or label an operator would set, far short of the
  * ~16 KB a raw header can carry. */
 const MAX_CLAIMED_FIELD_LENGTH = 128;

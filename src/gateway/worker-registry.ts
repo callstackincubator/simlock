@@ -479,8 +479,7 @@ export class WorkerRegistry {
     return view;
   }
 
-  /**
-   * ADR 0005 §8: forgets a disconnected worker's view. A connected one is refused --
+  /** why: ADR 0005 §8: forgets a disconnected worker's view. A connected one is refused --
    * `worker.remove` on a live worker would forget a machine that announces itself again on its
    * very next frame, which is a confusing no-op rather than an operator action. An
    * `incompatible` worker counts as connected for this rule: its uplink is open, and removing
@@ -492,7 +491,7 @@ export class WorkerRegistry {
    * holding an id with nothing left to view. Neither `setDrained` nor `undrain` can reach it at
    * that point (`#requireView` throws `UNKNOWN_WORKER`), which is exactly M1's "unbounded file"
    * relocated rather than closed: nothing could ever clear that flag again, short of editing
-   * `workers.json` by hand. `remove` on that same id is the one command already documented as
+   * the drain store by hand. `remove` on that same id is the one command already documented as
    * "no view to forget is fine" (`removed: false`) -- letting it also clear a leftover flag,
    * still answering `removed: false`, is what actually closes the file rather than moving the
    * leak.
@@ -564,9 +563,8 @@ export class WorkerRegistry {
     for (const view of expired) await this.#forget(view, "retention", { clearDrain: false });
   }
 
-  /**
-   * M1: on an operator `remove`, also clears this worker's drain flag and re-saves the store, if
-   * it had one. Without this, a removed worker's `true` survives in `workers.json` forever -- an
+  /** why: M1: on an operator `remove`, also clears this worker's drain flag and re-saves the store, if
+   * it had one. Without this, a removed worker's `true` survives in the drain store forever -- an
    * unbounded file that silently re-drains the machine if its id is ever seen again, with
    * `undrain` unable to clear it in the meantime (`UNKNOWN_WORKER`, since there is no view to
    * undrain). "Forgotten" has to mean forgotten, not "forgotten except the one flag that matters

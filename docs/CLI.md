@@ -2631,6 +2631,10 @@ token again with `simlock --gateway token create --role worker` and set it as
 that worker's `gateway.token`: a worker still holding an old token is refused
 with 401 and keeps redialling.
 
+A gateway keeps its drained workers in `state.db` too, and does not start while
+a `workers.json` sits in its folder. Nothing is imported from it: remove it, and
+drain the workers again with `simlock worker drain`.
+
 A daemon also does not start when `state.db` is damaged, when another Simlock
 daemon holds it locked for more than five seconds, or when it was written by a
 newer Simlock (the message names the file and what to do). The reason is

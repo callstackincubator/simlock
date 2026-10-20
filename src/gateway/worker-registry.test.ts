@@ -879,11 +879,11 @@ describe("WorkerRegistry", () => {
       expect(workers.connected("wrk_1", undefined, undefined).drained).toBe(true);
     });
 
-    // Hardening: the C1 test above is correct that retention must not clear a drain flag -- but
+    // why: Hardening: the C1 test above is correct that retention must not clear a drain flag -- but
     // once a view is gone, neither `setDrained` nor `undrain` can reach that flag either
     // (`UNKNOWN_WORKER`, no view to require). Before this fix, nothing could ever clear it
     // again: `remove` returned early on a missing view before touching `#drained`, leaving
-    // `workers.json` growing a permanent `true` for a worker that no longer exists -- M1's
+    // the drain store growing a permanent `true` for a worker that no longer exists -- M1's
     // "unbounded file" relocated, not closed. `remove` on that same id is the one command
     // already documented as a no-op-but-not-an-error for a forgotten worker; it must also be
     // the one that can still clear a flag stranded behind it.
@@ -1024,8 +1024,8 @@ describe("WorkerRegistry", () => {
       expect(names(events)).not.toContain("worker.removed");
     });
 
-    // M1: `#forget` used to delete the view and leave the drain flag standing forever --
-    // `workers.json` grew without bound, and a worker whose id was ever seen again would come
+    // why: M1: `#forget` used to delete the view and leave the drain flag standing forever --
+    // the drain store grew without bound, and a worker whose id was ever seen again would come
     // back silently drained with no way to `undrain` it (there is no view to undrain).
     it("clears a removed worker's drain flag too, and persists that", async () => {
       const store = new MemoryDrainStore();

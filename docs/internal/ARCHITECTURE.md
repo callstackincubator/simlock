@@ -28,7 +28,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
   works against either mode unchanged.
 - State lives on the worker (`state.db`, its registry tables written only by core's
   `Registry`). A gateway keeps only its tokens, its instance id and its drained-worker set on
-  disk; everything else is rebuilt from the workers that reconnect.
+  disk (`state.db`); everything else is rebuilt from the workers that reconnect.
 
 ## Modules
 

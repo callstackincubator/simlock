@@ -160,7 +160,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   /**
    * why: #119: a gateway that can be stopped and started again *as the same gateway* -- the same
    * `SIMLOCK_HOME` directory and the same `Filesystem` instance backing it, which is what
-   * `instance.json`, `workers.json` and the `tokens` table of `state.db` actually persisting across the restart depends
+   * `instance.json` and the `tokens` and `drained_workers` tables of `state.db` actually persisting across the restart depends
    * on (ADR §30, §8a). `startGateway` above deliberately hands each call a fresh
    * `MemoryFilesystem`, which is right for a test that starts one gateway once; this one needs
    * the state to survive the restart it is about to perform.
@@ -401,7 +401,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
    * scripted uplink `fleet-coordinator.test.ts` and `dispatcher.test.ts` already cover each
    * piece of in isolation (including §27a's ownership round trip, pinned there too). What only
    * this shape of test can catch: the gateway's own persisted state (`instance.json`,
-   * `workers.json`, and the join tokens in `state.db`) actually surviving a real `stop()`/`startDaemon()` cycle, and
+   * the drained workers and join tokens in `state.db`) actually surviving a real `stop()`/`startDaemon()` cycle, and
    * a real worker's own `GatewayUplink` actually redialling and reconnecting on its own backoff
    * once the new process is listening again.
    */
@@ -523,8 +523,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       { timeout: 15_000 },
     );
 
-    // C1 (round 1 review, #119): this is the assertion this test's own header comment promises
-    // and never made -- that `workers.json` actually survived the restart. A drained-but-absent
+    // why: C1 (round 1 review, #119): this is the assertion this test's own header comment promises
+    // and never made -- that the drain actually survived the restart. A drained-but-absent
     // worker has no `WorkerView` at all (a view is only ever built by `connected()`/`refresh()`,
     // never synthesized from the persisted drain set on its own), so the only way to observe the
     // restarted gateway's own on-disk state through the same `worker.list` the rest of this test
@@ -533,7 +533,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     // had before (so its `instance.json`, and therefore its `workerId`, survives too), exactly as
     // `restartedGateway` reuses the gateway's own. Its view is built from nothing but this fresh
     // process's own `connected()` call plus whatever `restartedGateway` loaded from
-    // `workers.json` at startup -- there is no other way `drained` could come back `true` here.
+    // `state.db` at startup -- there is no other way `drained` could come back `true` here.
     const restartedWorkerB = await startWorker({
       label: "worker-b",
       model: "Pixel-B",
@@ -551,6 +551,14 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       },
       { timeout: 15_000 },
     );
+    // why: `drained: true` is the flag; this proves the restarted gateway also keeps routing off the worker.
+    await expect(
+      restartedGateway.dispatch(
+        "lease.request",
+        { model: "Pixel-B", platform: "android", noWait: true },
+        agentSession({ principal: "someone-else" }),
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
     await restartedWorkerB.daemon.stop("test");
     daemons.splice(daemons.indexOf(restartedWorkerB.daemon), 1);
 

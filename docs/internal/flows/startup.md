@@ -99,7 +99,7 @@ platform runs the deferred reclaim (step 21.2).
 
 1. Instance identity — `instance.json`.
 2. `FleetLeaseIndex`, routing policy,
-   `GatewayService` (`workers.json`), `FleetLeaseCoordinator`, `DaemonServer`
+   `GatewayService` (drained workers in `state.db`), `FleetLeaseCoordinator`, `DaemonServer`
    with `GatewayDispatcher`. No registry, drivers, reaper or health monitor.
 3. `DaemonServer.start`: claim → host load → `admin.token` → converge starts →
    the event history starts → HTTP starts (uplink listener on the same server).

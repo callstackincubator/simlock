@@ -36,7 +36,7 @@ The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through
   when `gateway.url` and `gateway.token` are both set → `DaemonServer` with `Dispatcher`.
   HTTP starts only when `http.enabled`.
 - **Gateway** — instance id → `TokenStore`, `AdminSecretManager` → `FleetLeaseIndex`
-  (requester prefix `gw:<instanceId>:`) → `GatewayService` (uplink listener, `workers.json`)
+  (requester prefix `gw:<instanceId>:`) → `GatewayService` (uplink listener, drained workers in `state.db`)
   → `FleetLeaseCoordinator` → `createAlerts` when `gateway.alerts.destinations` is not empty
   (before `start()`; stopped first in `stopAuxiliary`) → `DaemonServer` with `GatewayDispatcher`.
   HTTP always starts; the uplink upgrades on the same listener.

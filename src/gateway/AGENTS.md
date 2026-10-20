@@ -16,7 +16,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 | `service.ts`                  | `GatewayService`: uplink listener, one `WorkerLink` per worker, 30 s tick                                                 |
 | `worker-link.ts`              | One uplink, gateway side: admin client, view reads, event relay                                                           |
 | `worker-registry.ts`          | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                              |
-| `drain-store.ts`              | `FileDrainStore`: `workers.json`, the drained ids                                                                         |
+| `drain-store.ts`              | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                    |
 | `dispatcher.ts`               | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through the `testDestination` option |
 | `fleet-coordinator.ts`        | `FleetLeaseCoordinator`: admit, dispatch, retry, forward renew/release/exec                                               |
 | `queue.ts`                    | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                            |
@@ -119,7 +119,7 @@ views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.r
 | Link: channels per side, accept, stall | 64, 30 s, 60 s                           | `../link/` constants                                  |
 | Request records                        | 10 000, 10 min                           | `lease.maxRequestRecords`, `lease.requestRetentionMs` |
 
-Persisted: `workers.json` (drained ids), the `tokens` table of `state.db`, `instance.json`. Nothing else.
+Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.json`. Nothing else.
 
 ## Rules
 
