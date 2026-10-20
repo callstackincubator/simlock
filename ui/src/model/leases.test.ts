@@ -394,3 +394,18 @@ describe("a lease's events", () => {
     expect(eventsOfLease(events, "lse_9")).toEqual([]);
   });
 });
+
+describe("a lease's events on a gateway", () => {
+  it("lists a worker's relayed event by the gateway's spelling and the gateway's own event by its id", () => {
+    const events = [
+      heldEvent(1, "lease.granted", { leaseId: "lse_1", workerId: "wrk_a" }),
+      heldEvent(2, "lease.granted", { leaseId: "lse_1", workerId: "wrk_b" }),
+      heldEvent(3, "lease.released", { leaseId: "wrk_a.lse_1" }),
+    ];
+
+    expect(eventsOfLease(events, "wrk_a.lse_1").map((event) => event.id)).toEqual([
+      "evt_3",
+      "evt_1",
+    ]);
+  });
+});
