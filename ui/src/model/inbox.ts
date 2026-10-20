@@ -1,7 +1,13 @@
 import { eventSummary, eventTone } from "./activity";
 import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
 import { itemPath } from "./paths";
-import type { LeaseRecord, TokenRecord } from "./leases";
+import {
+  deviceOfLease,
+  holderName,
+  isExpiring,
+  type LeaseRecord,
+  type TokenRecord,
+} from "./leases";
 import { formatDuration } from "./time";
 import type { WaitingRequest } from "./waiting";
 import type { Tone } from "./tones";
@@ -37,6 +43,14 @@ export type InboxItem =
       readonly condition: "waiting";
       readonly request: WaitingRequest;
       readonly waitedMs: number;
+    }
+  | {
+      readonly key: string;
+      readonly condition: "ending";
+      readonly lease: LeaseRecord;
+      readonly holder: string;
+      readonly model: string;
+      readonly leftMs: number;
     };
 
 type WorkerItem = Extract<InboxItem, { readonly worker: unknown }>;
@@ -58,6 +72,7 @@ export function inboxItems(
   return [
     ...workers.flatMap((worker) => [...workerItems(worker), ...deviceItems(worker)]),
     ...(context === undefined ? [] : waitingItems(context)),
+    ...(context === undefined ? [] : endingItems(workers, context)),
   ];
 }
 
@@ -71,6 +86,26 @@ function waitingItems(context: InboxContext): InboxItem[] {
       return waitedMs > WAITING_TOO_LONG_MS
         ? [{ condition: "waiting", key: `request/${request.id}/waiting`, request, waitedMs }]
         : [];
+    });
+}
+
+// why: a lease's time left counts against the daemon's clock, and the least time left comes first.
+function endingItems(workers: readonly WorkerView[], context: InboxContext): InboxItem[] {
+  const { now, tokens = [] } = context;
+  return [...(context.leases ?? [])]
+    .sort((a, b) => a.ttlDeadline - b.ttlDeadline || (a.id < b.id ? -1 : 1))
+    .flatMap((lease): InboxItem[] => {
+      if (!isExpiring(lease.ttlDeadline, now)) return [];
+      return [
+        {
+          condition: "ending",
+          holder: holderName(lease.requesterId, tokens),
+          key: `lease/${lease.id}/ending`,
+          lease,
+          leftMs: lease.ttlDeadline - now,
+          model: deviceOfLease(lease, workers)?.spec.model ?? lease.deviceId,
+        },
+      ];
     });
 }
 
@@ -171,9 +206,18 @@ function protocolText(versions: { readonly min: number; readonly max: number }):
     : `${versions.min}\u2013${versions.max}`;
 }
 
+function minutesAndSeconds(ms: number): string {
+  const seconds = Math.floor(ms / 1_000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 export function inboxSubject(item: InboxItem): string {
   if (item.condition === "waiting") {
     return `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)}`;
+  }
+  if (item.condition === "ending") {
+    const base = `${item.holder} · ${item.model} ends`;
+    return item.leftMs <= 0 ? `${base} now` : `${base} in ${minutesAndSeconds(item.leftMs)}`;
   }
   if (item.condition === "absent") {
     // why: the daemon names a reason for every absent phone; "not-present" is the plain fallback for a record that lacks one.

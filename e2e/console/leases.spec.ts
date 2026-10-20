@@ -539,7 +539,7 @@ test.describe("the leases page", () => {
       await expect(leaseRow(page, soon.id)).toBeVisible();
       await expect(leaseRow(page, later.id)).toBeVisible();
 
-      await page.getByRole("radio", { name: "Expiring" }).check();
+      await page.getByRole("radio", { name: "Ending < 5 min" }).check();
       await expect(leaseRow(page, soon.id)).toBeVisible();
       await expect(leaseRow(page, later.id)).toHaveCount(0);
 

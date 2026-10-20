@@ -60,6 +60,10 @@ function holderTitle(holder: Holder): string {
   return holder.label ?? holder.id;
 }
 
+export function holderName(requesterId: string, tokens: readonly TokenRecord[]): string {
+  return holderTitle(holderOf(requesterId, tokens));
+}
+
 // why: a single host names no worker on its leases, and every lease there is on its one worker, the
 // host itself.
 function workerOfLease(
@@ -94,7 +98,7 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-function deviceOfLease(
+export function deviceOfLease(
   lease: LeaseRecord,
   workers: readonly WorkerView[],
 ): WorkerDevice | undefined {
@@ -123,16 +127,16 @@ export type LeaseFilter = "all" | "expiring" | "ios" | "android";
 
 export const LEASE_FILTERS: readonly { readonly value: LeaseFilter; readonly label: string }[] = [
   { label: "All", value: "all" },
-  { label: "Expiring", value: "expiring" },
+  { label: "Ending < 5 min", value: "expiring" },
   { label: "iOS", value: "ios" },
   { label: "Android", value: "android" },
 ];
 
-// why: a lease with under 15 minutes left has not been renewed for a while, so the list and the
-// inspector warn by the same rule.
-const EXPIRING_UNDER_MS = 15 * 60_000;
+// why: a lease with under 5 minutes left is about to end, so the list, the inspector and the Inbox
+// warn by the same rule.
+export const EXPIRING_UNDER_MS = 5 * 60_000;
 
-function isExpiring(deadline: number, now: number): boolean {
+export function isExpiring(deadline: number, now: number): boolean {
   return deadline - now < EXPIRING_UNDER_MS;
 }
 
@@ -176,7 +180,7 @@ export function leaseRows(input: {
     const sub = [model, worker].filter((part) => part !== undefined).join(" · ");
     return {
       expiring: isExpiring(lease.ttlDeadline, now),
-      holder: holderTitle(holderOf(lease.requesterId, tokens)),
+      holder: holderName(lease.requesterId, tokens),
       id: lease.id,
       key: `${lease.workerId ?? ""} ${lease.id}`,
       model,

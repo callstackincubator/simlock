@@ -140,7 +140,7 @@ describe("the lease list rows", () => {
     expect(ids(sent.toReversed())).toEqual(ids(sent));
   });
 
-  it("marks a lease expiring only when under 15 minutes are left", () => {
+  it("marks a lease expiring only when under 5 minutes are left", () => {
     const left = (ms: number) =>
       leaseRows({
         leases: [lease({ ttlDeadline: NOW + ms })],
@@ -149,8 +149,8 @@ describe("the lease list rows", () => {
         workers: [],
       })[0]?.expiring;
 
-    expect(left(15 * 60_000 - 1)).toBe(true);
-    expect(left(15 * 60_000)).toBe(false);
+    expect(left(5 * 60_000 - 1)).toBe(true);
+    expect(left(5 * 60_000)).toBe(false);
     expect(left(-5_000)).toBe(true);
   });
 
@@ -290,9 +290,9 @@ describe("a lease's inspection", () => {
     expect(shown.granted).toBe("07:05");
   });
 
-  it("warns once under 15 minutes are left", () => {
-    const soon = details({ expiresAt: new Date(NOW + 14 * 60_000).toISOString() });
-    const later = details({ expiresAt: new Date(NOW + 16 * 60_000).toISOString() });
+  it("warns once under 5 minutes are left", () => {
+    const soon = details({ expiresAt: new Date(NOW + 4 * 60_000).toISOString() });
+    const later = details({ expiresAt: new Date(NOW + 6 * 60_000).toISOString() });
 
     expect(inspect({ lease: soon }).expiring).toBe(true);
     expect(inspect({ lease: later }).expiring).toBe(false);
