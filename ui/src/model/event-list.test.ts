@@ -120,6 +120,29 @@ describe("a list row", () => {
   });
 });
 
+describe("a search of the list", () => {
+  const events = [
+    event("lease.granted", { requester: "claude-1", token: "Marker-Value" }, 1),
+    event("worker.connected", { workerId: "wrk_1" }, 2),
+    event("device.ready", { deviceId: "dev_1" }, 3),
+  ];
+  const found = (query: string) =>
+    eventRows(events, [worker("wrk_1", "Mac Studio")], "all", query).map((row) => row.name);
+
+  it("matches part of the event name or the summary line, ignoring case, and no other payload value", () => {
+    expect(found("")).toEqual(["lease.granted", "worker.connected", "device.ready"]);
+    expect(found("GRANT")).toEqual(["lease.granted"]);
+    expect(found("ice.rea")).toEqual(["device.ready"]);
+    expect(found("mac stu")).toEqual(["worker.connected"]);
+    expect(found("CLAUDE")).toEqual(["lease.granted"]);
+    expect(found("marker-value")).toEqual([]);
+    expect(found("dev_1")).toEqual([]);
+    expect(eventRows(events, [], "lease", "grant")[0]?.to).toBe(
+      "/activity/evt_1?subject=lease&q=grant",
+    );
+  });
+});
+
 describe("an event's day", () => {
   const noon = new Date(2026, 9, 2, 12, 0, 0).getTime();
 

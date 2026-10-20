@@ -272,7 +272,9 @@ test.describe("the Activity page", () => {
     }
   });
 
-  test("the filter shows only one subject's events and is kept in the URL", async ({ page }) => {
+  test("the filter and the search show only the events they match and are kept in the URL", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await lease(host, "console-e2e-filter");
@@ -286,6 +288,18 @@ test.describe("the Activity page", () => {
       expect(names.every((name) => name.startsWith("lease."))).toBe(true);
       await page.reload();
       await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
+
+      await page.getByRole("searchbox", { name: "Search events" }).fill("GRANTED");
+
+      await expect(page).toHaveURL(/\?subject=lease&q=GRANTED$/);
+      await expect(rows(page)).not.toHaveCount(0);
+      expect(
+        (await rows(page).locator("time + span").allTextContents()).every(
+          (name) => name === "lease.granted",
+        ),
+      ).toBe(true);
+      await page.reload();
+      await expect(page.getByRole("searchbox", { name: "Search events" })).toHaveValue("GRANTED");
     } finally {
       await host.dispose();
     }

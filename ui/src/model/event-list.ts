@@ -84,6 +84,7 @@ export function eventRows(
   events: readonly ConsoleEvent[],
   workers: readonly WorkerView[],
   subject: SubjectFilter,
+  _search = "",
 ): readonly EventRow[] {
   const query = writeSubject("", subject);
   return shownEvents(events, subject).map((event) => {
