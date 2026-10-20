@@ -1,4 +1,5 @@
 import type { DeviceDataTable } from "../../core/index.js";
+import type { AndroidDriverData } from "./data.js";
 
 interface AndroidDeviceDataRow {
   readonly avd_name: string;
@@ -6,6 +7,20 @@ interface AndroidDeviceDataRow {
   readonly image_identity: string | null;
   readonly port: number;
   readonly serial: string;
+}
+
+const STRING_KEYS = ["avdName", "configHash", "serial"] as const;
+const KNOWN_KEYS = new Set<string>([...STRING_KEYS, "imageIdentity", "port"]);
+
+function isAndroidDeviceData(value: unknown): value is AndroidDriverData {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) => KNOWN_KEYS.has(key)) &&
+    STRING_KEYS.every((key) => typeof record[key] === "string") &&
+    typeof record.port === "number" &&
+    (record.imageIdentity === undefined || typeof record.imageIdentity === "string")
+  );
 }
 
 export const androidDeviceDataTable: DeviceDataTable = {
@@ -37,7 +52,10 @@ export const androidDeviceDataTable: DeviceDataTable = {
   },
   version: 1,
   write(database, deviceId, driverData) {
-    const data = driverData as Record<string, string | number | undefined>;
+    if (!isAndroidDeviceData(driverData)) {
+      throw new Error(`Invalid android driver data for device ${deviceId}`);
+    }
+    const data = driverData;
     database
       .prepare(
         `INSERT INTO android_device_data (device_id, avd_name, config_hash, image_identity, port, serial)
@@ -48,11 +66,11 @@ export const androidDeviceDataTable: DeviceDataTable = {
       )
       .run(
         deviceId,
-        (data.avdName as string | undefined) ?? null,
-        (data.configHash as string | undefined) ?? null,
-        (data.imageIdentity as string | undefined) ?? null,
-        (data.port as number | undefined) ?? null,
-        (data.serial as string | undefined) ?? null,
+        data.avdName,
+        data.configHash,
+        data.imageIdentity ?? null,
+        data.port,
+        data.serial,
       );
   },
 };
