@@ -3,7 +3,6 @@ import type { Locator, Page } from "@playwright/test";
 import { waitFor } from "../helpers/wait.js";
 import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
 
-/** What `GET /v1/lease-requests` answers, as far as these tests read. */
 interface WaitingRequest {
   readonly id: string;
   readonly requesterId: string;
@@ -12,18 +11,15 @@ interface WaitingRequest {
 }
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
-/** One iOS device and no more, so a second request waits. */
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
 
-/** Leases the host's one device for `agent`, and answers the lease id. */
 async function holdTheDevice(daemon: RunningDaemon, agent: string): Promise<string> {
   const granted = await daemon.cli([...LEASE, "--agent-id", agent, "--detach"]);
   expect(granted.code, granted.stderr).toBe(0);
   return (granted.json as { lease: { id: string } }).lease.id;
 }
 
-/** The daemon's own `GET /v1/lease-requests`, asked as an operator. */
 async function waiting(daemon: RunningDaemon): Promise<readonly WaitingRequest[]> {
   const response = await fetch(new URL("/v1/lease-requests", daemon.url), {
     headers: { Authorization: `Bearer ${daemon.tokens.operator}` },
@@ -33,7 +29,7 @@ async function waiting(daemon: RunningDaemon): Promise<readonly WaitingRequest[]
 }
 
 /**
- * Waits, asking every 20 ms, until the daemon's own list says what `predicate` looks for. The
+ * why: Waits, asking every 20 ms, until the daemon's own list says what `predicate` looks for. The
  * console's second starts there: it cannot show a fact before its daemon has it.
  */
 async function untilTheDaemonSays(
@@ -64,14 +60,13 @@ function inspectorOf(page: Page, requester: string): Locator {
   return page.getByRole("region", { name: requester, exact: true });
 }
 
-/** Whether the page itself scrolls sideways. */
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
 }
 
-test.describe("the Waiting page", () => {
+test.describe("the Queue page", () => {
   test("a request waiting for a device appears in the list with its place, device and stage, and opens with its time waited", async ({
     page,
   }) => {
@@ -103,7 +98,7 @@ test.describe("the Waiting page", () => {
       await expect(inspector).toContainText("wants iOS iPhone 16, runtime 18.4, mode slim");
       await expect(inspector).toContainText("2 of 2");
       await expect(inspector.getByRole("navigation", { name: "Breadcrumb" })).toBeVisible();
-      // The time waited counts on in the browser, with no reload.
+      // why: The time waited counts on in the browser, with no reload.
       const waited = inspector.locator(".waiting-card-value").first();
       const before = await waited.textContent();
       await expect(waited).not.toHaveText(before ?? "", { timeout: 3_000 });
@@ -129,7 +124,7 @@ test.describe("the Waiting page", () => {
         },
         driverScript: { ios: IOS },
       });
-      // A local agent on the worker takes the fleet's one device, and a second one waits in the
+      // why: A local agent on the worker takes the fleet's one device, and a second one waits in the
       // worker's own queue. A further lease through the gateway then waits in the gateway's.
       await holdTheDevice(worker, "local-a");
       worker.cliBackground([...LEASE, "--agent-id", "local-b"]);
@@ -234,7 +229,7 @@ test.describe("the Waiting page", () => {
   });
 
   test("the Waiting page is usable with the keyboard alone", async ({ browserName, page }) => {
-    // Safari moves focus to links with Option-Tab; plain Tab reaches only form controls there.
+    // why: Safari moves focus to links with Option-Tab; plain Tab reaches only form controls there.
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
@@ -259,7 +254,7 @@ test.describe("the Waiting page", () => {
       await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
       expect(new URL(page.url()).pathname).toMatch(/^\/queue\/.+/);
 
-      // The request's worker opens that worker's page.
+      // why: The request's worker opens that worker's page.
       await follow(inspectorOf(page, "agent-b").getByRole("link").last());
       expect(new URL(page.url()).pathname).toMatch(/^\/fleet\/.+/);
     } finally {

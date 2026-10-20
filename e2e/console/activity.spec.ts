@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 
 import {
   disposeFleet,
@@ -106,6 +106,75 @@ async function openEvent(page: Page, id: string): Promise<void> {
   await link.click();
 }
 
+interface Stubbed {
+  readonly id: string;
+  readonly seq: number;
+  readonly timestamp: number;
+  readonly event: string;
+  readonly payload: Record<string, never>;
+}
+
+function stubbed(n: number, now: number): Stubbed {
+  return {
+    event: "lease.renewed",
+    id: `evt_${String(n).padStart(4, "0")}`,
+    payload: {},
+    seq: 1_000_000 - n,
+    timestamp: now - n * 60_000,
+  };
+}
+
+function stubbedRange(from: number, to: number): Stubbed[] {
+  const now = Date.now();
+  return Array.from({ length: to - from + 1 }, (_, index) => stubbed(to - index, now));
+}
+
+interface StubbedAnswer {
+  readonly status?: number;
+  readonly events?: readonly Stubbed[];
+}
+
+/**
+ * why: Answers every `GET /v1/events` with what `answer` returns for its query, and records each
+ * query, so a test sees which pages the console asked for.
+ */
+async function stubEvents(
+  page: Page,
+  answer: (query: URLSearchParams) => StubbedAnswer,
+): Promise<string[]> {
+  const queries: string[] = [];
+  await page.route(
+    (url) => url.pathname === "/v1/events",
+    async (route: Route) => {
+      const { search } = new URL(route.request().url());
+      queries.push(search);
+      const { events = [], status = 200 } = answer(new URLSearchParams(search));
+      if (status === 200) await route.fulfill({ json: { events } });
+      else
+        await route.fulfill({ json: { error: { code: "STUBBED", message: "stubbed" } }, status });
+    },
+  );
+  return queries;
+}
+
+// why: the feed draws only the rows in view and prints no count, so its scroll height, one row
+// tall per event, is the only measure of how many events it holds.
+const ROW_PX = 60;
+
+async function eventsHeld(page: Page): Promise<number> {
+  return Math.round((await feed(page).evaluate((box) => box.scrollHeight)) / ROW_PX);
+}
+
+async function rowOffset(page: Page, id: string): Promise<number> {
+  return feed(page).evaluate((box, wanted) => {
+    const link = box.querySelector(`a[href^="/activity/${wanted}"]`);
+    if (link === null) throw new Error(`${wanted} is not drawn`);
+    return Math.round(
+      link.closest("li")!.getBoundingClientRect().top - box.getBoundingClientRect().top,
+    );
+  }, id);
+}
+
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   await settled(page);
   return page.evaluate(
@@ -113,7 +182,7 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
-test.describe("the events page", () => {
+test.describe("the Activity page", () => {
   test("a lease taken with the CLI appears in the feed within a second, and its page opens from it", async ({
     page,
   }) => {
@@ -237,6 +306,39 @@ test.describe("the events page", () => {
       await more.click();
       await expect.poll(() => feed(page).evaluate((box) => box.scrollTop)).toBe(0);
       await expect(more).toHaveCount(0);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("scrolling within 20 rows of the end loads the 100 events before the oldest held and appends them without moving the rows in view", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const queries = await stubEvents(page, (query) => {
+        const before = query.get("before");
+        if (before === null) return { events: stubbedRange(1, 30) };
+        if (before === "evt_0030") return { events: stubbedRange(31, 130) };
+        if (before === "evt_0130") return { events: stubbedRange(131, 230) };
+        return {};
+      });
+      await openEvents(page, host);
+
+      await expect.poll(() => eventsHeld(page)).toBe(130);
+      expect(queries).toEqual(["?since=1h", "?before=evt_0030&limit=100"]);
+
+      await feed(page).evaluate((box, top) => box.scrollTo({ top }), 100 * ROW_PX);
+      await expect.poll(() => rowOffset(page, "evt_0101")).toBe(0);
+      await expect.poll(() => eventsHeld(page)).toBe(230);
+
+      expect(queries).toEqual([
+        "?since=1h",
+        "?before=evt_0030&limit=100",
+        "?before=evt_0130&limit=100",
+      ]);
+      expect(await rowOffset(page, "evt_0101")).toBe(0);
+      expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(100 * ROW_PX);
     } finally {
       await host.dispose();
     }
