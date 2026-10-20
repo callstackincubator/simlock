@@ -742,6 +742,59 @@ test.describe("the workers page", () => {
     }
   });
 
+  test("on a gateway the Events tab lists only that worker's events, on a single host all of them, and with none it says No events for this worker in the last hour.", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
+    ]);
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const views = await workerList(fleet.gateway);
+      const idOf = (label: string) =>
+        found(
+          views.find((view) => view.label === label),
+          label,
+        ).id;
+      await lease(fleet.gateway, "console-e2e");
+      expect((await fleet.gateway.cli(["worker", "drain", idOf("worker-b")])).code).toBe(0);
+      await lease(host, "console-e2e-host");
+      const eventsOf = async (daemon: RunningDaemon, id: string) => {
+        await page.goto(new URL(`/fleet/${encodeURIComponent(id)}?tab=events`, daemon.url).href);
+        return page.getByRole("list", { name: "Events for this worker" });
+      };
+
+      await page.goto(fleet.gateway.url);
+      await signIn(page, fleet.gateway.tokens.operator);
+      const forA = await eventsOf(fleet.gateway, idOf("worker-a"));
+      await expect(forA.getByText("lease.granted").first()).toBeVisible();
+      await expect(forA.getByText("worker.drained")).toHaveCount(0);
+      const forB = await eventsOf(fleet.gateway, idOf("worker-b"));
+      await expect(forB.getByText("worker.drained").first()).toBeVisible();
+      await expect(forB.getByText("lease.granted")).toHaveCount(0);
+
+      await page.route(
+        (url) => url.pathname === "/v1/events",
+        async (route) => {
+          await route.fulfill({ json: { events: [] } });
+        },
+      );
+      await eventsOf(fleet.gateway, idOf("worker-a"));
+      await expect(page.getByText("No events for this worker in the last hour.")).toBeVisible();
+      await page.unroute((url) => url.pathname === "/v1/events");
+
+      const [only] = await workerList(host);
+      await page.goto(host.url);
+      await signIn(page, host.tokens.operator);
+      const forHost = await eventsOf(host, found(only, "the host's worker").id);
+      await expect(forHost.getByText("lease.granted").first()).toBeVisible();
+    } finally {
+      await host.dispose();
+      await disposeFleet(fleet);
+    }
+  });
+
   test("each tab shows its content, sets ?tab=, and survives a reload", async ({ page }) => {
     const host = await startDaemon("worker", {
       driverScript: {
