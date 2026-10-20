@@ -221,6 +221,18 @@ describe("interrupted root assembly", () => {
     expect(await filesystem.exists(theirs)).toBe(true);
   });
 
+  it("startup leaves a .tmp-named file of the user's own beside a device root", async () => {
+    const filesystem = new MemoryFilesystem();
+    const devices = join(SIMLOCK_HOME, "devices");
+    await filesystem.mkdirp(devices);
+    const theirs = join(devices, ".notes.41006.0b9f6c1e-6a4d-4c43-9d0e-3f2a1b7c8d90.tmp");
+    await filesystem.writeFileAtomic(theirs, "mine");
+
+    await startWithRoot(filesystem, new FakeProcessSupervisor());
+
+    expect(await filesystem.exists(theirs)).toBe(true);
+  });
+
   it("startup leaves a dead writer's leftover that another user owns", async () => {
     const filesystem = new MemoryFilesystem();
     const devices = join(SIMLOCK_HOME, "devices");

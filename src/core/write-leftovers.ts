@@ -28,17 +28,20 @@ export async function sweepWriteLeftovers(options: SweepWriteLeftoversOptions): 
     const rootNames = options.deviceRoots
       .filter((root) => dirname(root) === directory)
       .map((root) => basename(root));
-    for (const name of names) await sweepEntry(join(directory, name), rootNames, options);
+    const temporaryToo = options.directories.includes(directory);
+    for (const name of names)
+      await sweepEntry(join(directory, name), rootNames, temporaryToo, options);
   }
 }
 
 async function sweepEntry(
   path: string,
   rootNames: readonly string[],
+  temporaryToo: boolean,
   options: SweepWriteLeftoversOptions,
 ): Promise<void> {
   const name = basename(path);
-  const temporary = TEMPORARY_FILE.exec(name);
+  const temporary = temporaryToo ? TEMPORARY_FILE.exec(name) : null;
   if (temporary !== null) return removeIfAbandoned(path, temporary[1], options);
   for (const rootName of rootNames) {
     const staging = stagingWriter(name, rootName);
