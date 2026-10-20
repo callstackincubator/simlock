@@ -302,6 +302,8 @@ describe("alerts", () => {
       [3_900_000, "1 h 5 min"],
       [7_200_000, "2 h"],
       [59_999, "59 s"],
+      [60_000, "1 min"],
+      [3_600_000, "1 h"],
     ];
     for (const [ageMs] of cases) {
       h.emit("device.stalled-transition-detected", {
@@ -325,6 +327,7 @@ describe("alerts", () => {
       [10_737_418_240, "10 GiB"],
       [536_870_912, "512 MiB"],
       [1_020_054_733, "972.8 MiB"],
+      [1_073_741_824, "1 GiB"],
     ];
     for (const [freeBytes] of cases) {
       h.emit("disk.pressure-detected", {
@@ -364,6 +367,7 @@ describe("alerts", () => {
         "⛔ A worker was refused (forbidden): &lt;!here&gt;.",
       ],
       [install("e".repeat(301)), `❌ Installing ios c on wrk_0 failed: ${"e".repeat(300)}….`],
+      [install("e".repeat(300)), `❌ Installing ios c on wrk_0 failed: ${"e".repeat(300)}.`],
       [
         ["worker.drain-started", { workerId: "wrk_2" }],
         `⏸ Worker ${"a".repeat(299)}😀… is drained: it takes no new leases.`,
