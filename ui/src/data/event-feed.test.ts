@@ -41,7 +41,7 @@ function eventLog(
   };
 }
 
-function openView(first: Replay = []) {
+function openView(first: Replay = [], showsHistory = false) {
   const live = connect();
   const replays: ApiPath[] = [];
   const olderReads: ApiPath[] = [];
@@ -59,7 +59,11 @@ function openView(first: Replay = []) {
     const body = typeof replay === "function" ? await replay(path) : { events: replay };
     return { body, date: null } satisfies ApiResponse<unknown>;
   };
-  const feed = new EventFeed(async (path) => (await live.daemon.get(path)).body, fakeClock);
+  const feed = new EventFeed(
+    async (path) => (await live.daemon.get(path)).body,
+    fakeClock,
+    showsHistory,
+  );
   live.connection.onEvent(feed.streamEvent);
   live.connection.onStreamOpened(feed.streamOpened);
   const stop = feed.start();
@@ -507,5 +511,14 @@ describe("the event feed's loads", () => {
 
     expect(view.shown()).toEqual([`6@${T0 + 1_000}`, `5@${T0}`, `1@${T0 - 10_000}`]);
     expect(view.olderReads).toEqual([`/v1/events?before=evt_5_${T0}&limit=100`]);
+  });
+
+  it("asks for the newest page of older events at once when the last hour is empty, only on a feed that shows the history", async () => {
+    const history = openView([], true);
+    const recent = openView([]);
+    await settle();
+
+    expect(history.olderReads).toEqual(["/v1/events?limit=100"]);
+    expect(recent.olderReads).toEqual([]);
   });
 });

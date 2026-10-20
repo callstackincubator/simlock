@@ -33,13 +33,15 @@ export { SUBJECT_CHOICES };
 
 // why: each screen that reads events holds its own feed, filled from the last hour and then the
 // stream while it is on screen, so a screen opened later still starts from a full hour.
-function useEventFeed(): {
+function useEventFeed(showsHistory: boolean): {
   readonly feed: EventFeed;
   readonly state: ResourceState<readonly ConsoleEvent[]>;
   readonly history: HistoryState;
 } {
   const api = useApi();
-  const [feed] = useState(() => new EventFeed((path) => api.getJson(path), browserClock));
+  const [feed] = useState(
+    () => new EventFeed((path) => api.getJson(path), browserClock, showsHistory),
+  );
   useLiveEvents(feed.streamEvent);
   useStreamOpened(feed.streamOpened);
   useEffect(() => feed.start(), [feed]);
@@ -51,7 +53,7 @@ function useEventFeed(): {
 }
 
 export function useRecentEvents(): ResourceState<readonly ConsoleEvent[]> {
-  return useEventFeed().state;
+  return useEventFeed(false).state;
 }
 
 const NO_WORKERS: readonly WorkerView[] = [];
@@ -77,7 +79,7 @@ export interface EventsPage {
 }
 
 export function useEvents(): LoadView<EventsPage> {
-  const { feed: source, history, state: feed } = useEventFeed();
+  const { feed: source, history, state: feed } = useEventFeed(true);
   const events = feed.data;
   // why: the places an event links to are read for the links only; a route that is slow, refused
   // or not served here costs the feed nothing, only the link.

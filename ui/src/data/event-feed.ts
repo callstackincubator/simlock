@@ -40,9 +40,14 @@ export class EventFeed {
   #retryAttempt = 0;
   #active = false;
 
-  constructor(get: (path: ApiPath) => Promise<unknown>, clock: Clock) {
+  readonly #showsHistory: boolean;
+
+  // why: only a screen that scrolls back through the history asks for it; the others read the last
+  // hour and nothing older, so a quiet hour does not fill their lists with older events.
+  constructor(get: (path: ApiPath) => Promise<unknown>, clock: Clock, showsHistory = false) {
     this.#get = get;
     this.#clock = clock;
+    this.#showsHistory = showsHistory;
   }
 
   start(): () => void {
@@ -108,7 +113,7 @@ export class EventFeed {
           this.#publish({ data: this.#events });
           this.#loadMissing();
           // why: a quiet last hour still shows the older history, so the newest page is asked for at once.
-          if (this.#events.length === 0) this.loadOlder();
+          if (this.#showsHistory && this.#events.length === 0) this.loadOlder();
         },
         (error: unknown) => {
           this.#loading = false;

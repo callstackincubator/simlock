@@ -7,6 +7,7 @@ import {
   mergeEvents,
   payloadPairs,
   readEvent,
+  readOlder,
   readReplay,
   sinceFor,
   subjectOf,
@@ -85,6 +86,20 @@ describe("the events an older page adds", () => {
     const capped = mergeEvents(full.slice(0, MAX_EVENTS - 2), [at(3), at(2), at(1)]);
     expect(capped).toHaveLength(MAX_EVENTS);
     expect(capped.at(-1)?.seq).toBe(2);
+  });
+});
+
+describe("a page of older events", () => {
+  it("is full when the reply held 100 events, even if some were malformed, and not full with 99", () => {
+    const body = (count: number) => ({
+      events: Array.from({ length: count }, (_, index) =>
+        index === 0 ? { malformed: true } : event("lease.renewed", {}, index),
+      ),
+    });
+
+    expect(readOlder(body(100)).full).toBe(true);
+    expect(readOlder(body(100)).events).toHaveLength(99);
+    expect(readOlder(body(99)).full).toBe(false);
   });
 });
 

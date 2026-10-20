@@ -395,6 +395,12 @@ test.describe("the Activity page", () => {
       await expect.poll(() => eventsHeld(page)).toBe(130);
       expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
 
+      // why: 30 rows from the end is farther than 20, so the list asks for nothing yet.
+      await feed(page).evaluate((box, top) => box.scrollTo({ top }), 85 * ROW_PX);
+      await expect.poll(() => rowOffset(page, "evt_0090").catch(() => undefined)).toBeDefined();
+      await page.waitForTimeout(300);
+      expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
+
       await feed(page).evaluate((box, top) => box.scrollTo({ top }), 100 * ROW_PX);
       await expect.poll(() => rowOffset(page, "evt_0101").catch(() => undefined)).toBeDefined();
       const inView = await rowOffset(page, "evt_0101");
@@ -427,6 +433,9 @@ test.describe("the Activity page", () => {
       queries = await stubEvents(page, () => ({ events: stubbedRange(1, 10_000) }));
       await page.reload();
       await expect(page.getByText("Showing the newest 10,000 events.")).toBeVisible();
+      await feed(page).focus();
+      await page.keyboard.press("End");
+      await page.waitForTimeout(300);
       expect(older(queries)).toEqual([]);
 
       queries = await stubEvents(page, (query) =>
@@ -459,6 +468,46 @@ test.describe("the Activity page", () => {
       await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
       expect(older(queries)).toEqual(["?before=evt_0100&limit=100"]);
       expect(await eventsHeld(page)).toBe(100);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the real daemon answers the older page: the events before the oldest held join the list once, and the history starts", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await lease(host, "console-e2e-older-a");
+      await lease(host, "console-e2e-older-b");
+      const queries: string[] = [];
+      let all: Array<Envelope & { readonly seq: number }> = [];
+      await page.route(
+        (url) => url.pathname === "/v1/events",
+        async (route: Route) => {
+          const { search } = new URL(route.request().url());
+          if (!search.startsWith("?since=")) {
+            queries.push(search);
+            await route.fallback();
+            return;
+          }
+          // why: the page holds only the newest two events, so the rest must come from the daemon's older page.
+          const body = (await (await route.fetch()).json()) as {
+            events: Array<Envelope & { readonly seq: number }>;
+          };
+          all = body.events.toSorted((a, b) => b.seq - a.seq);
+          await route.fulfill({ json: { events: all.slice(0, 2) } });
+        },
+      );
+      await openEvents(page, host);
+      await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
+      expect(all.length).toBeGreaterThan(3);
+      expect(queries).toEqual([`?before=${encodeURIComponent(all[1]!.id)}&limit=100`]);
+      await expect.poll(() => eventsHeld(page)).toBe(all.length);
+      const oldest = all.at(-1)!;
+      await expect(
+        page.getByText(`Start of the history (${localMinute(oldest.timestamp)})`),
+      ).toBeVisible();
     } finally {
       await host.dispose();
     }
