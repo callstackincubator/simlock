@@ -2060,8 +2060,10 @@ describe("gateway.alerts.destinations", () => {
     expect(destination.shape.format.options).toEqual([...ALERT_FORMATS]);
   });
 
-  it("config.get's schema keeps every field of a loaded destination", async () => {
-    const config = await loadDestinations([validDestination]);
+  it("config.get's schema keeps every field of a loaded destination, a slack one without a secret", async () => {
+    const { secret: _secret, ...slack } = { ...validDestination, name: "chat", format: "slack" };
+    const config = await loadDestinations([validDestination, slack]);
+    expect(config.gateway.alerts.destinations[1]).toEqual(slack);
     const parsed = configSchema.parse(config);
     expect(parsed.gateway.alerts).toEqual(config.gateway.alerts);
   });
