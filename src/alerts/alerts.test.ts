@@ -412,6 +412,71 @@ describe("alerts", () => {
     );
   });
 
+  it("escapes every variable part of every message that carries one", async () => {
+    const x = "<x>";
+    const h = harness([
+      slackDestination({
+        events: [
+          "worker.connected",
+          "worker.disconnected",
+          "worker.rejected",
+          "device.quarantine-abandoned",
+          "device.quarantine-stranded",
+          "device.recovery-failed",
+          "device.stalled-transition-detected",
+          "component.install-failed",
+        ],
+      }),
+    ]);
+    const w = { workerId: "wrk_0" };
+    const cases: [EventName, Record<string, unknown>, string][] = [
+      ["worker.connected", { ...w, version: x }, "🟢 Worker wrk_0 connected (simlock &lt;x&gt;)."],
+      [
+        "worker.disconnected",
+        { ...w, leaseCount: x },
+        "🔴 Worker wrk_0 disconnected while holding &lt;x&gt; leases.",
+      ],
+      [
+        "worker.rejected",
+        { reason: x, workerId: x },
+        "⛔ A worker was refused (&lt;x&gt;): &lt;x&gt;.",
+      ],
+      [
+        "device.quarantine-abandoned",
+        { ...w, deviceId: x, attempts: x },
+        "⚠️ Device &lt;x&gt; on wrk_0 was retired after &lt;x&gt; failed clean-ups.",
+      ],
+      [
+        "device.quarantine-stranded",
+        { ...w, deviceId: x, attempts: x, error: x },
+        "🛑 Device &lt;x&gt; on wrk_0 could not be cleaned up or deleted after &lt;x&gt; tries: &lt;x&gt;. It needs a person.",
+      ],
+      [
+        "device.recovery-failed",
+        { ...w, deviceId: x, leaseId: x, reason: x },
+        "⚠️ Device &lt;x&gt; on wrk_0 crashed during lease &lt;x&gt; and could not be brought back: &lt;x&gt;.",
+      ],
+      [
+        "device.stalled-transition-detected",
+        { ...w, deviceId: x, state: x, ageMs: 1000 },
+        "⏳ Device &lt;x&gt; on wrk_0 has been &lt;x&gt; for 1 s.",
+      ],
+      [
+        "component.install-failed",
+        { ...w, platform: x, componentId: x, error: x },
+        "❌ Installing &lt;x&gt; &lt;x&gt; on wrk_0 failed: &lt;x&gt;.",
+      ],
+    ];
+    for (const [event, payload] of cases) {
+      h.emit(event, payload as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      cases.map(([, , text]) => text),
+    );
+  });
+
   it("a relayed payload with missing fields posts the text the Known gap names", async () => {
     const h = harness([
       slackDestination({
