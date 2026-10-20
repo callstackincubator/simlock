@@ -321,6 +321,29 @@ test.describe("the workers page", () => {
     }
   });
 
+  test("clicking a row opens /fleet/<id> with the worker's name as the page heading, its state word and system beside it, and the Devices tab selected", async ({
+    daemon,
+    page,
+  }) => {
+    const host = found((await workerList(daemon))[0], "the host's worker");
+    const { os, osVersion } = (await status(daemon)).host;
+
+    await openConsole(page, daemon);
+    await row(page, host.label ?? host.id)
+      .getByRole("link")
+      .click();
+
+    await expect(page).toHaveURL(new RegExp(`/fleet/${encodeURIComponent(host.id)}$`));
+    await expect(
+      page.getByRole("heading", { level: 1, name: host.label ?? host.id, exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".worker-line")).toHaveText(`connected · ${os} ${osVersion}`);
+    await expect(page.getByRole("tab", { name: "Devices" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   test("an incompatible worker shows both protocol ranges", async ({ page }) => {
     const gateway = await startDaemon("gateway");
     let hangUp = () => {};
