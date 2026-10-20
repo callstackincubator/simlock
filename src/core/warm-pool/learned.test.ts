@@ -105,4 +105,26 @@ describe("LearnedKinds", () => {
       ["iPhone 16", "slim", T0 + 5],
     ]);
   });
+
+  it("keeps at most 32 kinds per platform, dropping the oldest by last lease with its lease rows, and counts the other platform apart", async () => {
+    const leaseRows = (state: Awaited<ReturnType<typeof open>>["state"]): number =>
+      Number(state.database.prepare("SELECT COUNT(*) AS n FROM warm_kind_leases").get()?.n);
+    const { kinds, state } = await open();
+    for (let index = 0; index < 32; index += 1) {
+      kinds.learn(spec(`Phone ${String(index)}`), `lease-${String(index)}`, T0 + index);
+    }
+    kinds.learn(spec("Pixel", { platform: "android" }), "lease-pixel", T0 + 40);
+
+    expect(kinds.kinds(T0 + 50)).toHaveLength(33);
+    expect(leaseRows(state)).toBe(33);
+
+    kinds.learn(spec("Phone 32"), "lease-32", T0 + 41);
+
+    const after = kinds.kinds(T0 + 50);
+    expect(after).toHaveLength(33);
+    expect(after.some((kind) => kind.spec.model === "Phone 0")).toBe(false);
+    expect(after.some((kind) => kind.spec.model === "Phone 1")).toBe(true);
+    expect(after.some((kind) => kind.spec.platform === "android")).toBe(true);
+    expect(leaseRows(state)).toBe(33);
+  });
 });
