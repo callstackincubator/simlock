@@ -6,7 +6,7 @@ import { figuresOf, waitTile } from "../../model/figures";
 import { statsOf } from "../../model/test-support";
 import { chooseWaiting, type WaitingRequest, waitingTable } from "../../model/waiting";
 import type { WaitingPage } from "../../state/waiting";
-import { WaitingBody } from ".";
+import { DrawerBody, QueueBody } from ".";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 
@@ -36,14 +36,21 @@ const PAGING: Paging = {
 function pageOf(requests: readonly WaitingRequest[], id?: string): WaitingPage {
   const table = waitingTable(requests, [], NOW);
   return {
-    ...chooseWaiting(table.rows, id, table.rows),
-    count: table.rows.length,
+    ...chooseWaiting(table.rows, id),
     meta: table.meta,
-    named: id !== undefined,
     paging: { ...PAGING, total: table.rows.length },
     rows: table.rows,
+    urlId: id,
     wait: { kind: "loading" },
   };
+}
+
+function table(page: WaitingPage): string {
+  return renderToStaticMarkup(<QueueBody page={page} />);
+}
+
+function drawer(page: WaitingPage): string {
+  return renderToStaticMarkup(<DrawerBody page={page} />);
 }
 
 function text(html: string): string {
@@ -53,39 +60,38 @@ function text(html: string): string {
     .trim();
 }
 
-describe("the Waiting screen", () => {
-  it("leads each row with its place, then the requester, the time waited, the device and the stage", () => {
-    const html = renderToStaticMarkup(<WaitingBody page={pageOf([request()])} />);
+describe("the Queue table", () => {
+  it("leads each row with its place, then the requester, the device, the stage, why and the time waited", () => {
+    const html = table(pageOf([request({ reason: "device-limit" } as Partial<WaitingRequest>)]));
 
-    expect(html).toContain('<ul class="list" aria-label="Waiting requests">');
     expect(html).toContain('href="/queue/req_1"');
-    expect(text(html)).toContain("#1 agent-b 1 min 15 s iOS iPhone 16 queued");
+    expect(text(html)).toContain("Place Requester Device Stage Why Waited");
+    expect(text(html)).toContain("#1 agent-b iOS iPhone 16 queued Full: device limit 1 min 15 s");
     expect(html).toContain('aria-label="queued"');
   });
 
-  it("marks the first row as the chosen one when the URL names none, and the named one otherwise", () => {
-    const two = [request({ id: "a" }), request({ id: "b", requesterId: "agent-c" })];
+  it("shows a request with no place in the queue as a dash", () => {
+    const starting = request({ stage: "starting" });
+    delete (starting as { queuePosition?: number }).queuePosition;
 
-    const first = renderToStaticMarkup(<WaitingBody page={pageOf(two)} />);
-    const second = renderToStaticMarkup(<WaitingBody page={pageOf(two, "b")} />);
-
-    expect(first.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(first).toMatch(/aria-current="page"[^>]*>.*?agent-b/);
-    expect(second).toMatch(/aria-current="page"[^>]*>.*?agent-c/);
-    expect(second).toContain("focus-detail");
-    expect(first).toContain("focus-list");
+    expect(text(table(pageOf([starting])))).toContain("— agent-b");
   });
 
-  it("titles the inspector with the requester and says what it wants, with three cards and the facts", () => {
-    const html = renderToStaticMarkup(<WaitingBody page={pageOf([request()])} />);
+  it("says so when nothing is waiting", () => {
+    expect(text(table(pageOf([])))).toContain("No requests are waiting.");
+  });
+});
 
-    expect(html).toMatch(/<h2[^>]*>agent-b<\/h2>/);
-    expect(text(html)).toContain("wants iOS iPhone 16");
-    expect(text(html)).toContain("Waiting 1 min 15 s");
-    expect(text(html)).toContain("Place 1 of 1");
-    expect(text(html)).toContain("Stage queued");
-    expect(text(html)).toContain("Request req_1");
-    expect(text(html)).toContain("Created 2026-10-02 11:58:45 UTC");
+describe("the Queue drawer", () => {
+  it("says how long the request waited, its place, stage, device and queue, then the request and when it was created", () => {
+    const html = text(drawer(pageOf([request()], "req_1")));
+
+    expect(html).toContain("Waiting 1 min 15 s");
+    expect(html).toContain("Place 1 of 1");
+    expect(html).toContain("Stage queued");
+    expect(html).toContain("Device iOS iPhone 16");
+    expect(html).toContain("Request req_1");
+    expect(html).toContain("Created 2026-10-02 11:58:45 UTC");
   });
 
   it("shows a Why fact after Queue with the reason's text, and none for a request that is starting", () => {
@@ -95,8 +101,8 @@ describe("the Waiting screen", () => {
     const starting = request({ stage: "starting" });
     delete (starting as { queuePosition?: number }).queuePosition;
 
-    const withReason = text(renderToStaticMarkup(<WaitingBody page={pageOf([queued])} />));
-    const without = text(renderToStaticMarkup(<WaitingBody page={pageOf([starting])} />));
+    const withReason = text(drawer(pageOf([queued], "req_1")));
+    const without = text(drawer(pageOf([starting], "req_1")));
 
     expect(withReason).toContain("Queue the gateway&#x27;s queue Why Full: running limit for iOS");
     expect(without).toContain("Stage starting");
@@ -104,21 +110,13 @@ describe("the Waiting screen", () => {
   });
 
   it("links the worker whose queue holds the request, names the gateway's queue when none does, and the raw id of a worker it cannot see", () => {
-    const onWorker = renderToStaticMarkup(
-      <WaitingBody
-        page={{
-          ...pageOf([request()]),
-          chosen: {
-            ...pageOf([request()]).rows[0]!,
-            queue: { kind: "worker", name: "worker-a", to: "/fleet/wrk_1" },
-          },
-        }}
-      />,
-    );
-    const onGateway = renderToStaticMarkup(<WaitingBody page={pageOf([request()])} />);
-    const unseen = renderToStaticMarkup(
-      <WaitingBody page={pageOf([request({ workerId: "wrk_gone" })])} />,
-    );
+    const base = pageOf([request()], "req_1");
+    const onWorker = drawer({
+      ...base,
+      chosen: { ...base.rows[0]!, queue: { kind: "worker", name: "worker-a", to: "/fleet/wrk_1" } },
+    });
+    const onGateway = drawer(base);
+    const unseen = drawer(pageOf([request({ workerId: "wrk_gone" })], "req_1"));
 
     expect(onWorker).toContain('<a href="/fleet/wrk_1">worker-a</a>');
     expect(text(onGateway)).toContain("Queue the gateway&#x27;s queue");
@@ -126,44 +124,20 @@ describe("the Waiting screen", () => {
     expect(unseen).not.toContain("/fleet/");
   });
 
-  it("shows a request with no place in the queue as a dash in both the row and the card", () => {
-    const starting = request({ stage: "starting" });
-    delete (starting as { queuePosition?: number }).queuePosition;
-
-    const html = renderToStaticMarkup(<WaitingBody page={pageOf([starting])} />);
-
-    expect(text(html)).toContain("— agent-b");
-    expect(text(html)).toContain("Place —");
-  });
-
   it("says the request is in the physical queue when it is", () => {
     const physical = request({
       spec: { model: "iPhone 15 Pro", physical: true, platform: "ios" },
     } as unknown as Partial<WaitingRequest>);
 
-    const html = renderToStaticMarkup(<WaitingBody page={pageOf([physical])} />);
-
-    expect(text(html)).toContain("physical queue");
+    expect(text(drawer(pageOf([physical], "req_1")))).toContain("physical queue");
   });
 
-  it("says so when nothing is waiting, and shows no inspector", () => {
-    const html = renderToStaticMarkup(<WaitingBody page={pageOf([])} />);
-
-    expect(text(html)).toContain("No requests are waiting.");
-    expect(text(html)).toContain("0 waiting");
-    expect(html).not.toContain("<h2");
-  });
-
-  it("says a named request is not waiting, with a link back to the list", () => {
-    const html = renderToStaticMarkup(<WaitingBody page={pageOf([request()], "granted")} />);
-
-    expect(text(html)).toContain("Request not waiting.");
-    expect(html).toContain('<a href="/queue">Back to Queue</a>');
-    expect(html).not.toContain("<h2");
+  it("says a named request that no longer waits is not waiting", () => {
+    expect(text(drawer(pageOf([request()], "granted")))).toContain("Request not waiting.");
   });
 });
 
-describe("the Waiting inspector on a gateway", () => {
+describe("the Queue drawer on a gateway", () => {
   it("shows one row per worker, labelled by the worker's name, with the reason's text", () => {
     const queued = request({
       workers: [
@@ -188,16 +162,15 @@ describe("the Waiting inspector on a gateway", () => {
       NOW,
     );
     const page: WaitingPage = {
-      ...chooseWaiting(table.rows, undefined, table.rows),
-      count: 1,
+      ...chooseWaiting(table.rows, queued.id),
       meta: table.meta,
-      named: false,
       paging: PAGING,
       rows: table.rows,
+      urlId: queued.id,
       wait: { kind: "loading" },
     };
 
-    const body = text(renderToStaticMarkup(<WaitingBody page={page} />));
+    const body = text(drawer(page));
 
     expect(body).toContain("mac-mini-1 Drained");
     expect(body).toContain("wrk_2 Full: running limit for iOS");
@@ -210,7 +183,7 @@ describe("the Waiting inspector on a gateway", () => {
       wait: { data: waitTile(stats, "1h"), kind: "ready" },
     } as const;
 
-    const html = renderToStaticMarkup(<WaitingBody page={page} />);
+    const html = table(page);
 
     const shown = text(html);
     expect(shown).toContain("Wait p95 38 s last hour");
@@ -225,10 +198,10 @@ describe("the Waiting inspector on a gateway", () => {
       wait: { kind: "refused", message: "The stats are not allowed." },
     } as const;
 
-    const shown = text(renderToStaticMarkup(<WaitingBody page={page} />));
+    const shown = text(table(page));
 
     expect(shown).toContain("The stats are not allowed.");
-    expect(shown).toContain("#1 agent-b 1 min 15 s iOS iPhone 16 queued");
+    expect(shown).toContain("#1 agent-b iOS iPhone 16 queued — 1 min 15 s");
     expect(shown).not.toContain("Wait p95");
   });
 });

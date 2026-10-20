@@ -22,9 +22,9 @@ export type { WaitingQueue, WaitingRow } from "../model/waiting";
 export interface WaitingPage extends WaitingChoice {
   readonly meta: string;
   readonly rows: readonly WaitingRow[];
-  readonly count: number;
   readonly paging: Paging;
-  readonly named: boolean;
+  // why: the id in the URL stands even before the list has loaded, so the drawer can ask for it.
+  readonly urlId: string | undefined;
   readonly wait: LoadView<FigureTile>;
 }
 
@@ -40,25 +40,19 @@ export function useWaiting(): LoadView<WaitingPage> {
     sizes: TABLE_SIZES,
     total: table.kind === "ready" ? table.data.rows.length : undefined,
   });
-  return mapView(table, (all) => {
-    const rows = all.rows
-      .slice((paging.page - 1) * paging.size, paging.page * paging.size)
-      .map((row) => ({ ...row, to: row.to + keep }));
-    return {
-      ...chooseWaiting(all.rows, id, rows),
-      count: all.rows.length,
-      meta: all.meta,
-      named: id !== undefined,
-      paging,
-      rows,
-      wait:
-        figures.kind === "ready"
-          ? {
-              data: figures.data.wait,
-              kind: "ready",
-              ...(figures.refusal === undefined ? {} : { refusal: figures.refusal }),
-            }
-          : figures,
-    };
-  });
+  return mapView(table, (all) => ({
+    ...chooseWaiting(all.rows, id),
+    meta: all.meta,
+    paging,
+    rows: all.rows.map((row) => ({ ...row, to: row.to + keep })),
+    urlId: id,
+    wait:
+      figures.kind === "ready"
+        ? {
+            data: figures.data.wait,
+            kind: "ready",
+            ...(figures.refusal === undefined ? {} : { refusal: figures.refusal }),
+          }
+        : figures,
+  }));
 }

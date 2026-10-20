@@ -1,70 +1,71 @@
 import "./queue.css";
 
 import {
-  Card,
-  Empty,
+  type Column,
+  DataTable,
+  Drawer,
   Facts,
-  Grid,
+  focusAfterClosing,
   Id,
-  Inspector,
-  InspectorEmpty,
   Link,
-  List,
-  ListPane,
-  ListRow,
   Loaded,
-  MasterDetail,
-  Pager,
+  Page,
   Refusal,
   StatRow,
   StatTile,
   Status,
   StatusDot,
 } from "../../ds";
+import { useListDrawer } from "../../state/drawer";
 import {
+  useWaiting,
   type WaitingPage,
   type WaitingQueue,
   type WaitingRow,
-  useWaiting,
 } from "../../state/waiting";
 
 export function QueueScreen() {
   const view = useWaiting();
-  return <Loaded view={view}>{(page) => <WaitingBody page={page} />}</Loaded>;
+  const urlId = view.kind === "ready" ? view.data.urlId : undefined;
+  const { close, fromList } = useListDrawer("/queue", urlId);
+  return (
+    <Page
+      title="Queue"
+      actions={view.kind === "ready" ? <span className="muted">{view.data.meta}</span> : null}
+    >
+      <Loaded view={view}>
+        {(page) => (
+          <>
+            <QueueBody page={page} />
+            {urlId === undefined ? null : (
+              <Drawer
+                key={urlId}
+                title={page.chosen?.requester ?? "Request"}
+                onClose={close}
+                finalFocus={() =>
+                  focusAfterClosing({
+                    fromList,
+                    links: "main tbody a",
+                    path: `/queue/${encodeURIComponent(urlId)}`,
+                  })
+                }
+              >
+                <DrawerBody page={page} />
+              </Drawer>
+            )}
+          </>
+        )}
+      </Loaded>
+    </Page>
+  );
 }
 
-export function WaitingBody({ page }: { readonly page: WaitingPage }) {
-  const { chosen, gone, named, rows } = page;
+export function QueueBody({ page }: { readonly page: WaitingPage }) {
   return (
-    <MasterDetail
-      focus={named ? "detail" : "list"}
-      wide
-      list={
-        <ListPane
-          title="Queue"
-          meta={page.meta}
-          footer={
-            page.paging.total > page.paging.size ? (
-              <Pager label="Waiting requests" paging={page.paging} />
-            ) : undefined
-          }
-        >
-          <WaitTile wait={page.wait} />
-          {rows.length === 0 ? (
-            <Empty>No requests are waiting.</Empty>
-          ) : (
-            <div className="waiting-list">
-              <List label="Waiting requests">
-                {rows.map((row) => (
-                  <WaitingListRow key={row.key} row={row} selected={row === chosen} />
-                ))}
-              </List>
-            </div>
-          )}
-        </ListPane>
-      }
-      detail={detailOf(chosen, gone)}
-    />
+    <>
+      <WaitTile wait={page.wait} />
+      <QueueTable page={page} />
+    </>
   );
 }
 
@@ -82,82 +83,65 @@ function WaitTile({ wait }: { readonly wait: WaitingPage["wait"] }) {
   );
 }
 
-function detailOf(chosen: WaitingRow | undefined, gone: boolean) {
-  if (gone) {
-    return (
-      <InspectorEmpty>
-        Request not waiting. <Link to="/queue">Back to Queue</Link>
-      </InspectorEmpty>
-    );
-  }
-  return chosen === undefined ? (
-    <InspectorEmpty>Nothing to show.</InspectorEmpty>
-  ) : (
-    <WaitingInspector key={chosen.key} row={chosen} />
-  );
-}
+const COLUMNS: readonly Column<WaitingRow>[] = [
+  { cell: (row) => row.place, header: "Place", mono: true },
+  { cell: (row) => <Link to={row.to}>{row.requester}</Link>, header: "Requester", mono: true },
+  { cell: (row) => row.device, header: "Device" },
+  {
+    cell: (row) => (
+      <span className="queue-stage">
+        <StatusDot tone={row.stage.tone} label={row.stage.word} />
+        {row.stage.word}
+      </span>
+    ),
+    header: "Stage",
+  },
+  { cell: (row) => row.why ?? "—", header: "Why" },
+  { cell: (row) => row.waited, header: "Waited", mono: true },
+];
 
-function WaitingListRow({
-  row,
-  selected,
-}: {
-  readonly row: WaitingRow;
-  readonly selected: boolean;
-}) {
+function QueueTable({ page }: { readonly page: WaitingPage }) {
   return (
-    <ListRow
-      to={row.to}
-      selected={selected}
-      mono
-      lead={<span className="waiting-place">{row.place}</span>}
-      title={row.requester}
-      aside={row.waited}
-      sub={row.device}
-      trail={
-        <span className="waiting-stage">
-          <StatusDot tone={row.stage.tone} label={row.stage.word} />
-          {row.stage.word}
-        </span>
-      }
+    <DataTable
+      label="Waiting requests"
+      rows={page.rows}
+      columns={COLUMNS}
+      rowId={(row) => row.key}
+      rowTo={(row) => row.to}
+      empty="No requests are waiting."
+      paging={page.paging}
     />
   );
 }
 
-function WaitingInspector({ row }: { readonly row: WaitingRow }) {
+export function DrawerBody({ page }: { readonly page: WaitingPage }) {
+  const { chosen, gone } = page;
+  if (gone || chosen === undefined)
+    return <p className="muted queue-drawer">Request not waiting.</p>;
   return (
-    <Inspector
-      crumbs={[{ label: "Queue", to: "/queue" }, { label: row.id }]}
-      title={row.requester}
-      mono
-      line={`wants ${row.device}`}
-    >
-      <Grid min="sm">
-        <Card>
-          <p className="waiting-card-label">Waiting</p>
-          <p className="waiting-card-value">{row.waited}</p>
-        </Card>
-        <Card>
-          <p className="waiting-card-label">Place</p>
-          <p className="waiting-card-value">{row.placeOf}</p>
-          {row.physicalQueue ? <p className="waiting-card-note">physical queue</p> : null}
-        </Card>
-        <Card>
-          <p className="waiting-card-label">Stage</p>
-          <p className="waiting-card-value waiting-card-word">
-            <Status tone={row.stage.tone}>{row.stage.word}</Status>
-          </p>
-        </Card>
-      </Grid>
+    <div className="queue-drawer">
       <Facts
         facts={[
-          { label: "Request", value: <Id>{row.id}</Id> },
-          { label: "Created", value: row.created },
-          { label: "Queue", value: <QueueValue queue={row.queue} /> },
-          ...(row.why === undefined ? [] : [{ label: "Why", value: row.why }]),
-          ...(row.workers ?? []).map((worker) => ({ label: worker.name, value: worker.text })),
+          { label: "Waiting", value: chosen.waited },
+          {
+            label: "Place",
+            value: (
+              <>
+                {chosen.placeOf}
+                {chosen.physicalQueue ? <span className="muted"> · physical queue</span> : null}
+              </>
+            ),
+          },
+          { label: "Stage", value: <Status tone={chosen.stage.tone}>{chosen.stage.word}</Status> },
+          { label: "Device", value: chosen.device },
+          { label: "Queue", value: <QueueValue queue={chosen.queue} /> },
+          ...(chosen.why === undefined ? [] : [{ label: "Why", value: chosen.why }]),
+          ...(chosen.workers ?? []).map((worker) => ({ label: worker.name, value: worker.text })),
+          { label: "Request", value: <Id>{chosen.id}</Id> },
+          { label: "Created", value: chosen.created },
         ]}
       />
-    </Inspector>
+    </div>
   );
 }
 

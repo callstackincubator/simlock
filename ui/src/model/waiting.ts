@@ -213,14 +213,10 @@ export interface WaitingChoice {
   readonly gone: boolean;
 }
 
-// why: with no id in the URL a wide screen shows the first row of the page; an id that matches no
-// waiting request is "gone", whatever page it would have been on.
-export function chooseWaiting(
-  all: readonly WaitingRow[],
-  id: string | undefined,
-  pageRows: readonly WaitingRow[],
-): WaitingChoice {
-  if (id === undefined) return { chosen: pageRows[0], gone: false };
+// why: the drawer opens only for an id in the URL; an id that matches no waiting request is
+// "gone", whatever page it would have been on.
+export function chooseWaiting(all: readonly WaitingRow[], id: string | undefined): WaitingChoice {
+  if (id === undefined) return { chosen: undefined, gone: false };
   const chosen = all.find((row) => row.id === id);
   return { chosen, gone: chosen === undefined };
 }

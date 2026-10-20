@@ -46,7 +46,10 @@ async function untilTheDaemonSays(
 async function openWaiting(page: Page, daemon: RunningDaemon, path = "/queue"): Promise<void> {
   await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
+  // why: a drawer over the page hides the page's heading from the accessibility tree.
+  if (new URL(path, daemon.url).pathname === "/queue") {
+    await expect(page.getByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
+  } else await expect(page.getByRole("dialog")).toBeVisible();
 }
 
 function row(page: Page, requester: string): Locator {
@@ -137,13 +140,14 @@ test.describe("the Queue page", () => {
 
       await openWaiting(page, gateway);
 
-      await row(page, "local-b").click();
-      const local = inspectorOf(page, "local-b");
+      await row(page, "local-b").getByRole("link").click();
+      const local = drawerOf(page, "local-b");
       await expect(local.getByRole("link", { name: "worker-a" })).toBeVisible();
       await expect(local).toContainText("1 of 1");
+      await page.keyboard.press("Escape");
 
-      await row(page, "fleet-c").click();
-      const fleet = inspectorOf(page, "fleet-c");
+      await row(page, "fleet-c").getByRole("link").click();
+      const fleet = drawerOf(page, "fleet-c");
       await expect(fleet).toContainText("the gateway's queue");
       await expect(fleet).toContainText("iOS iPhone 16, runtime 18.4");
       await expect(fleet).toContainText("queued");
@@ -154,7 +158,7 @@ test.describe("the Queue page", () => {
     }
   });
 
-  test("a waiting request leaves the list within a second of being granted, and its own page says it is not waiting", async ({
+  test("a request that is granted while its drawer is open leaves the list within a second, and the drawer says Request not waiting", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -163,8 +167,8 @@ test.describe("the Queue page", () => {
       const waiter = host.cliBackground([...LEASE, "--agent-id", "agent-b"]);
       await untilTheDaemonSays(host, (requests) => requests.length === 1);
       await openWaiting(page, host);
-      await row(page, "agent-b").click();
-      await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
+      await row(page, "agent-b").getByRole("link").click();
+      await expect(drawerOf(page, "agent-b")).toBeVisible();
 
       expect((await host.cli(["release", held])).code).toBe(0);
       const grant = JSON.parse(await waiter.firstStdoutLine(10_000)) as {
@@ -173,14 +177,12 @@ test.describe("the Queue page", () => {
       expect(grant.lease.requesterId).toBe("agent-b");
       await untilTheDaemonSays(host, (requests) => requests.length === 0);
 
-      await expect(row(page, "agent-b")).toHaveCount(0, { timeout: 1_000 });
-      await expect(page.getByText("No requests are waiting.")).toBeVisible();
-      await expect(page.getByText("Request not waiting.")).toBeVisible();
-
-      await page.getByRole("link", { name: "Back to Queue" }).click();
+      await expect(page.getByText("Request not waiting.")).toBeVisible({ timeout: 1_000 });
+      await page.keyboard.press("Escape");
       expect(new URL(page.url()).pathname).toBe("/queue");
-      await expect(page.getByText("Request not waiting.")).toHaveCount(0);
-      await expect(page.getByRole("heading", { level: 2 })).toHaveCount(0);
+      await expect(row(page, "agent-b")).toHaveCount(0);
+      await expect(page.getByText("No requests are waiting.")).toBeVisible();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
     } finally {
       await host.dispose();
     }
@@ -191,14 +193,13 @@ test.describe("the Queue page", () => {
     try {
       await openWaiting(page, host, "/queue/req_none");
 
-      await expect(page.getByText("Request not waiting.")).toBeVisible();
-      await expect(page.getByRole("link", { name: "Back to Queue" })).toBeVisible();
+      await expect(page.getByRole("dialog").getByText("Request not waiting.")).toBeVisible();
     } finally {
       await host.dispose();
     }
   });
 
-  test("the Waiting page has no horizontal scroll at 360px wide", async ({ page }) => {
+  test("the Queue page has no horizontal scroll at 360px wide", async ({ page }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       await holdTheDevice(host, "holder");
@@ -214,12 +215,10 @@ test.describe("the Queue page", () => {
 
       await openWaiting(page, host);
 
-      await expect(
-        page.getByRole("list", { name: "Waiting requests" }).getByRole("link"),
-      ).toHaveCount(1);
+      await expect(page.locator("main tbody tr")).toHaveCount(1);
       expect(await hasHorizontalScroll(page)).toBe(false);
-      await page.getByRole("list", { name: "Waiting requests" }).getByRole("link").click();
-      await expect(page.getByRole("heading", { level: 2 })).toBeVisible();
+      await page.locator("main tbody tr").getByRole("link").click();
+      await expect(page.getByRole("dialog")).toBeVisible();
       await settled(page);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
@@ -227,7 +226,7 @@ test.describe("the Queue page", () => {
     }
   });
 
-  test("the Waiting page is usable with the keyboard alone", async ({ browserName, page }) => {
+  test("the Queue page is usable with the keyboard alone", async ({ browserName, page }) => {
     // why: Safari moves focus to links with Option-Tab; plain Tab reaches only form controls there.
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -249,12 +248,12 @@ test.describe("the Queue page", () => {
       await page.keyboard.press("Enter");
       await expect(page.getByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
 
-      await follow(row(page, "agent-b"));
-      await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
+      await follow(row(page, "agent-b").getByRole("link"));
+      await expect(drawerOf(page, "agent-b")).toBeVisible();
       expect(new URL(page.url()).pathname).toMatch(/^\/queue\/.+/);
 
       // why: The request's worker opens that worker's page.
-      await follow(inspectorOf(page, "agent-b").getByRole("link").last());
+      await follow(drawerOf(page, "agent-b").getByRole("link").last());
       expect(new URL(page.url()).pathname).toMatch(/^\/fleet\/.+/);
     } finally {
       await host.dispose();

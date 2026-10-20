@@ -161,16 +161,16 @@ describe("the waiting table", () => {
 describe("choosing a waiting request", () => {
   const rows = waitingTable([request({ id: "a" }), request({ id: "b" })], [], NOW).rows;
 
-  it("chooses the first row of the page when the URL names none", () => {
-    expect(chooseWaiting(rows, undefined, rows.slice(1))).toEqual({ chosen: rows[1], gone: false });
+  it("chooses nothing when the URL names none, so the drawer stays shut", () => {
+    expect(chooseWaiting(rows, undefined)).toEqual({ chosen: undefined, gone: false });
   });
 
-  it("chooses the request the URL names, even from another page", () => {
-    expect(chooseWaiting(rows, "a", rows.slice(1))).toEqual({ chosen: rows[0], gone: false });
+  it("chooses the request the URL names, whatever page it is on", () => {
+    expect(chooseWaiting(rows, "a")).toEqual({ chosen: rows[0], gone: false });
   });
 
   it("calls a named request that is no longer waiting gone, and chooses nothing", () => {
-    expect(chooseWaiting(rows, "granted", rows)).toEqual({ chosen: undefined, gone: true });
+    expect(chooseWaiting(rows, "granted")).toEqual({ chosen: undefined, gone: true });
   });
 });
 
