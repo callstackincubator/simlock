@@ -2521,4 +2521,70 @@ describe("Registry: state.db rows", () => {
       { ttl_deadline: 9_000, ttl_ms: 8_000 },
     ]);
   });
+
+  it("a grant writes the lease, the device's move to leased and the request's granted result in one transaction", async () => {
+    const { clock, state } = await world();
+    const timing = {
+      estimatedBootMs: 2,
+      estimatedProvisionMs: 1,
+      estimatedReadyMs: 4,
+      estimatedReclaimMs: 3,
+    };
+    let failWrites = false;
+    const failing: DeviceDataTable = {
+      ...fakeDeviceDataTable,
+      write: (database, deviceId, driverData) => {
+        if (failWrites) throw new Error("table refused the write");
+        fakeDeviceDataTable.write(database, deviceId, driverData);
+      },
+    };
+    const registry = await Registry.load({
+      clock,
+      deviceData: new Map([["ios", failing]]),
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "x" },
+      state,
+    });
+    const device = await registry.registerDevice({
+      driverData: { fakeDeviceId: "fk-grant" },
+      driverDeviceId: "drv-grant",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    await registry.createLeaseRequest({
+      id: "req_grant",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+
+    failWrites = true;
+    await expect(
+      registry.createLease({
+        deviceId: device.id,
+        ownerId: "agent-1",
+        request: { environment: {}, id: "req_grant", timing },
+        requesterId: "agent-1",
+        ttlDeadline: 5_000,
+        ttlMs: 4_000,
+      }),
+    ).rejects.toThrow("table refused the write");
+
+    const restarted = await Registry.load({
+      clock,
+      deviceData: new Map([["ios", fakeDeviceDataTable]]),
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "y" },
+      state,
+    });
+    for (const view of [registry, restarted]) {
+      expect(view.snapshot.leases).toEqual([]);
+      expect(view.snapshot.devices.map((record) => record.state)).toEqual(["ready"]);
+      expect(view.leaseRequests().map((request) => request.state)).toEqual(["open"]);
+    }
+  });
 });
