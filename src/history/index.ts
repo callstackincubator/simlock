@@ -5,7 +5,9 @@ import {
   type Clock,
   type Filesystem,
   isMissingPathError,
+  isLockError,
   type Logger,
+  passesQuickCheck,
   type SqliteDatabase,
   type SqliteOpener,
   SqliteUnavailableError,
@@ -15,8 +17,6 @@ import {
   configureDatabase,
   envelopeSize,
   INSERT_EVENT_SQL,
-  isLockError,
-  passesQuickCheck,
   selectEventsSince,
 } from "./database.js";
 import { HISTORY_DB_NAME } from "./names.js";

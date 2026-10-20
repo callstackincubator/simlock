@@ -19,6 +19,12 @@ export interface SqliteDatabase {
   close(): void;
 }
 
+export interface SqliteSchemaOwner {
+  readonly name: string;
+  readonly version: number;
+  readonly migrations: readonly string[];
+}
+
 export interface SqliteOpener {
   open(path: string, options: { readonly readOnly: boolean }): Promise<SqliteDatabase>;
 }
@@ -35,7 +41,7 @@ export class NodeSqliteOpener implements SqliteOpener {
     }
     // why: SQLite creates a missing file 0644 (less the umask) and gives -wal and -shm the main
     // file's mode, so creating it 0600 first keeps all three owner-only, like the other local state.
-    if (!options.readOnly) closeSync(openSync(path, "a", 0o600));
+    if (!options.readOnly && path !== ":memory:") closeSync(openSync(path, "a", 0o600));
     return new engine.DatabaseSync(path, { readOnly: options.readOnly });
   }
 }
@@ -52,4 +58,22 @@ export function filterSqliteExperimentalWarning(): void {
     if (name === "ExperimentalWarning" && message.startsWith(SQLITE_WARNING_PREFIX)) return;
     (emit as (...args: unknown[]) => void)(warning, ...rest);
   }) as typeof process.emitWarning;
+}
+
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+
+export function passesQuickCheck(database: SqliteDatabase): boolean {
+  const rows = database.prepare("PRAGMA quick_check").all();
+  return rows.length === 1 && Object.values(rows[0] ?? {})[0] === "ok";
+}
+
+export function isLockError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { errcode, message } = error as { errcode?: unknown; message?: unknown };
+  if (typeof errcode === "number") {
+    const primary = errcode & 0xff;
+    return primary === SQLITE_BUSY || primary === SQLITE_LOCKED;
+  }
+  return typeof message === "string" && /database (table )?is locked|busy/i.test(message);
 }

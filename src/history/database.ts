@@ -4,9 +4,6 @@ import type { SqliteDatabase } from "../ports/index.js";
 
 export const BUSY_TIMEOUT_MS = 5_000;
 
-const SQLITE_BUSY = 5;
-const SQLITE_LOCKED = 6;
-
 export const INSERT_EVENT_SQL =
   "INSERT OR IGNORE INTO events (id, timestamp, seq, size, envelope) VALUES (?, ?, ?, ?, ?)";
 
@@ -51,21 +48,6 @@ export function inTransaction<T>(database: SqliteDatabase, work: () => T): T {
     }
     throw error;
   }
-}
-
-export function passesQuickCheck(database: SqliteDatabase): boolean {
-  const rows = database.prepare("PRAGMA quick_check").all();
-  return rows.length === 1 && Object.values(rows[0] ?? {})[0] === "ok";
-}
-
-export function isLockError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const { errcode, message } = error as { errcode?: unknown; message?: unknown };
-  if (typeof errcode === "number") {
-    const primary = errcode & 0xff;
-    return primary === SQLITE_BUSY || primary === SQLITE_LOCKED;
-  }
-  return typeof message === "string" && /database (table )?is locked|busy/i.test(message);
 }
 
 export function envelopeSize(json: string): number {
