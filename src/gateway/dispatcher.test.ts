@@ -961,6 +961,12 @@ describe("GatewayDispatcher", () => {
         "Content-Type": "application/json",
         "User-Agent": "simlock/9.9.9",
       });
+
+      const other = harness({ alertDestinations: [generic] });
+      other.poster.respond = () => Promise.resolve({ status: 204 });
+      await expect(
+        other.dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+      ).resolves.toEqual({ destination: "ops", status: 204 });
     });
 
     it("alerts.test fails with ALERT_SEND_FAILED on a non-2xx status, a rejection and no answer within 10 s, and tries once", async () => {
@@ -969,6 +975,7 @@ describe("GatewayDispatcher", () => {
       });
       const cases = [
         [() => Promise.resolve({ status: 404 }), "ops answered HTTP 404", { status: 404 }],
+        [() => Promise.resolve({ status: 199 }), "ops answered HTTP 199", { status: 199 }],
         [() => Promise.resolve({ status: 301 }), "ops answered HTTP 301", { status: 301 }],
         [() => Promise.resolve({ status: 503 }), "ops answered HTTP 503", { status: 503 }],
         [
@@ -1040,6 +1047,9 @@ describe("GatewayDispatcher", () => {
       await expect(
         harness().dispatcher.dispatch("alerts.test", { destination: "nope" }, session()),
       ).rejects.toMatchObject(unknown);
+      await expect(
+        configured.dispatcher.dispatch("alerts.test", { destination: "o" }, session()),
+      ).rejects.toMatchObject({ code: "UNKNOWN_ALERT_DESTINATION", details: { destination: "o" } });
 
       expect(configured.poster.requests).toHaveLength(1);
     });
