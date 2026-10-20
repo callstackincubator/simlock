@@ -85,6 +85,7 @@ import {
   NodeBytePipeLauncher,
   NodeTcpProbe,
   NodeTcpStreamConnector,
+  daemonDataDirectory,
   resolveDaemonSocketPath,
   readPackageVersion,
   resolveSimlockHome,
@@ -158,7 +159,8 @@ export interface StartDaemonOptions {
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
-  const dataDirectory = options.dataDirectory ?? resolveSimlockHome();
+  const role = options.role ?? "worker";
+  const dataDirectory = options.dataDirectory ?? daemonDataDirectory(resolveSimlockHome(), role);
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
   const systemStats = options.systemStats ?? new NodeSystemStats();
@@ -180,6 +182,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       ...moduleConfig,
     })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
+    role,
     systemStats,
     warn: (message) => configWarnings.push(message),
   });
@@ -229,7 +232,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
   // through the worker's composition below.
-  if (config.mode === "gateway") {
+  if (role === "gateway") {
     return startGatewayDaemon({
       auth,
       clock,
@@ -1447,36 +1450,49 @@ export function eventBusLogger(logger: Logger): EventBusLogger {
   };
 }
 
+export function parseDaemonArgv(argv: readonly string[]): DaemonMode | undefined {
+  if (argv.length === 0) return "worker";
+  if (argv.length === 1 && argv[0] === "--gateway") return "gateway";
+  return undefined;
+}
+
 /**
- * Best-effort logger for the fatal startup handler below. It cannot depend on the
+ * why: best-effort logger for the fatal startup handler below. It cannot depend on the
  * daemon's own `Config` — that is exactly what may have failed to load — so it always
- * writes to the default log location at a fixed level.
+ * writes to the daemon's own folder at a fixed level.
  */
-function createFatalLogger(): Logger {
+function createFatalLogger(role: DaemonMode | undefined): Logger {
   return new JsonLinesLogger({
     clock: new SystemClock(),
     level: "error",
     module: "daemon",
-    sink: new NodeFileLogSink({ path: join(resolveSimlockHome(), "daemon.log") }),
+    sink: new NodeFileLogSink({
+      path: join(daemonDataDirectory(resolveSimlockHome(), role ?? "worker"), "daemon.log"),
+    }),
   });
+}
+
+function logFatalStart(role: DaemonMode | undefined, message: string, extra: object): void {
+  try {
+    createFatalLogger(role).error("Daemon failed to start", { message, ...extra });
+  } catch {
+    // why: logging itself failed (e.g. an unwritable data directory), so the failure goes to the console rather than being swallowed.
+    console.error(message);
+  }
+  process.exitCode = 1;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   filterSqliteExperimentalWarning();
-  void startDaemon().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : undefined;
-    try {
-      createFatalLogger().error("Daemon failed to start", { message, stack });
-    } catch {
-      // Logging itself failed (e.g. an unwritable data directory) -- fall back to
-      // the original behavior so the failure is not silently swallowed.
-      console.error(error);
-    }
-    process.exitCode = 1;
-  });
-}
-
-export function parseDaemonArgv(_argv: readonly string[]): DaemonMode | undefined {
-  return undefined;
+  const argv = process.argv.slice(2);
+  const role = parseDaemonArgv(argv);
+  if (role === undefined) {
+    logFatalStart(undefined, "Unknown daemon arguments", { argv });
+  } else {
+    void startDaemon({ role }).catch((error: unknown) => {
+      logFatalStart(role, error instanceof Error ? error.message : String(error), {
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    });
+  }
 }

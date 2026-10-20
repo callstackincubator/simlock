@@ -33,7 +33,7 @@ async function httpDaemon(mode: "worker" | "gateway"): Promise<HttpDaemon> {
   const { env, port } = await withHttpDaemon((port) => {
     const http = { enabled: true, host: "127.0.0.1", port };
     return mode === "gateway"
-      ? { configOverrides: { http, mode: "gateway" }, driver: "none" }
+      ? { configOverrides: { http }, driver: "none", role: "gateway" as const }
       : { configOverrides: { http } };
   });
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -96,7 +96,9 @@ describe("GET /v1/tokens", () => {
     const daemon = await httpDaemon("worker");
     const operator = await mint(daemon.env, "operator");
     const agent = await mint(daemon.env, "agent", "ci-runner-3");
-    const stored = JSON.parse(await readFile(join(daemon.env.home, "tokens.json"), "utf8")) as {
+    const stored = JSON.parse(
+      await readFile(join(daemon.env.dataDirectory, "tokens.json"), "utf8"),
+    ) as {
       hash: string;
     }[];
     expect(stored).toHaveLength(2);

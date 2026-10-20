@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,8 @@ import type { RecordedEvent } from "./helpers/events.js";
 
 async function gatewayWithWorker() {
   const { env: gateway, port } = await withHttpDaemon((port) => ({
-    configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { host: "127.0.0.1", port } },
+    role: "gateway",
     driver: "none",
   }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -198,7 +199,9 @@ describe("gateway event relay", () => {
     const { gateway, worker } = await gatewayWithWorker();
     const gate = await gateReplay(gateway.socketPath);
     try {
-      const adminToken = (await readFile(join(gateway.home, "admin.token"), "utf8")).trim();
+      const adminToken = (
+        await readFile(join(gateway.dataDirectory, "admin.token"), "utf8")
+      ).trim();
       const follower = gateway.cliBackground(["events", "--follow", "--since", "1h"], {
         env: { SIMLOCK_ADMIN_TOKEN: adminToken, SIMLOCK_HOME: gate.home },
       });
@@ -248,6 +251,10 @@ describe("gateway event relay", () => {
  */
 async function gateReplay(upstreamSocket: string) {
   const home = await mkdtemp(join(tmpdir(), "sl-gate-"));
+  // why: the follower runs with `--gateway`, which looks for a gateway folder under this root.
+  const gatewayFolder = join(home, "gateway");
+  await mkdir(gatewayFolder);
+  await writeFile(join(gatewayFolder, "config.json"), "{}");
   let held: (() => void) | undefined;
   let released = false;
   const pushed: RecordedEvent[] = [];
@@ -286,7 +293,7 @@ async function gateReplay(upstreamSocket: string) {
     client.on("error", () => upstream.destroy());
     upstream.on("error", () => client.destroy());
   });
-  await new Promise<void>((resolve) => server.listen(join(home, "daemon.sock"), resolve));
+  await new Promise<void>((resolve) => server.listen(join(gatewayFolder, "daemon.sock"), resolve));
   return {
     home,
     replayHeld: () => held !== undefined,

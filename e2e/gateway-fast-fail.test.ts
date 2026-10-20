@@ -28,7 +28,8 @@ interface WorkerView {
 async function startGateway() {
   // `driver: "none"`: a gateway starts no drivers (ADR 0005 §2).
   const { env: gateway, port } = await withHttpDaemon((port) => ({
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    role: "gateway",
     driver: "none",
   }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);

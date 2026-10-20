@@ -1,7 +1,7 @@
 # stdio MCP server
 
 Does: one agent session over stdin/stdout — its tools, a renew timer, lazy reconnect.
-Entry: `main.ts` → `runMcpStdio()`; `simlock mcp` loads it on demand (`src/cli/commands/mcp.ts`).
+Entry: `main.ts` → `runMcpStdio({ gateway })`; `simlock mcp` loads it on demand (`src/cli/commands/mcp.ts`).
 Uses: client, lease-policy, agent-identity, contract, ports. Never imports: core, daemon, drivers, http.
 Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
 
@@ -20,7 +20,11 @@ Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
 ## How it works
 
 1. **Start** — requester id from `resolveRequesterId(env, "mcp:<pid>")`. It is the
-   principal; no credential, so the session is `agent`.
+   principal; no credential, so the session is `agent`. `simlock --gateway mcp` runs the
+   session on the gateway: every connect (a tool call's and a renew's) asks
+   `resolveDaemonHome` again, so a gateway started mid-session is found, and with none
+   present the connect throws `GATEWAY_NOT_PRESENT` before it connects, which the tool
+   reports as `{ code, message }`.
 2. **Tools** (`server.ts`), each one call on the typed client:
    - `lease_simulator` → `lease.request`. Input: the contract's lease fields minus
      `requesterId`, `fleetRequestId`, `requires`. Progress goes out as

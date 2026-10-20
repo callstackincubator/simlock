@@ -494,7 +494,8 @@ interface Fleet {
 
 async function fleetWithPhysicalWorker(physical: readonly PhysicalSeed[]): Promise<Fleet> {
   const { env: gateway, port } = await withHttpDaemon((port) => ({
-    configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { host: "127.0.0.1", port } },
+    role: "gateway",
     driver: "none",
   }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);

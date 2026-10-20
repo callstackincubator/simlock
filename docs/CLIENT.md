@@ -890,6 +890,10 @@ neither of which changes a call's shape:
   uplink. Treat it as you would `DAEMON_CONNECTION_LOST` for that one lease:
   the lease is not necessarily gone, you simply cannot reach it right now,
   and it runs on the worker's TTL either way.
+- The error code `GATEWAY_NOT_PRESENT` (`kind: "domain"`) never comes back
+  from a daemon. The CLI and `simlock --gateway mcp` raise it themselves when
+  this machine has no gateway to connect to, so a client that connects to a
+  socket never sees it.
 
 The fleet methods on the admin client work against a single host too, which
 answers as a fleet of one:

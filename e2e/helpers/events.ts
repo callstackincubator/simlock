@@ -14,9 +14,10 @@ export async function events(
   env: NodeJS.ProcessEnv,
   since = "1h",
   timeout?: number,
+  cliPrefix: readonly string[] = [],
 ): Promise<RecordedEvent[]> {
   const result = await cli(
-    ["events", "--since", since],
+    [...cliPrefix, "events", "--since", since],
     env,
     timeout === undefined ? {} : { timeout },
   );
@@ -39,11 +40,12 @@ export async function expectEvents(
   env: NodeJS.ProcessEnv,
   expectedNames: readonly string[],
   options: { readonly since?: string; readonly timeout?: number } = {},
+  cliPrefix: readonly string[] = [],
 ): Promise<RecordedEvent[]> {
   let recorded: RecordedEvent[] = [];
   await waitFor(
     async () => {
-      recorded = await events(env, options.since);
+      recorded = await events(env, options.since, undefined, cliPrefix);
       return containsOrderedSubsequence(
         recorded.map((entry) => entry.event),
         expectedNames,

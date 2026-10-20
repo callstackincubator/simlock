@@ -63,7 +63,8 @@ async function startFleet(specs: readonly WorkerSpec[], agentId: string): Promis
   // config (ADR 0005 §2), so it gets no fake-driver wiring and no capacity seeding.
   const { env: gateway, port } = await withHttpDaemon((port) => ({
     agentId,
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    role: "gateway",
     driver: "none",
   }));
 

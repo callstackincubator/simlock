@@ -140,12 +140,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     gatewayPort = await freeLoopbackPort();
     const daemon = await startDaemon({
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
         ...(alerts.destinations === undefined
           ? {}
           : { gateway: { alerts: { destinations: alerts.destinations } } }),
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo(GATEWAY_HOST),
@@ -177,9 +177,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     restartGatewayPort = await freeLoopbackPort();
     const daemon = await startDaemon({
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem,
       logger: new NoopLogger(),
@@ -501,9 +501,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     daemons.splice(daemons.indexOf(firstGateway), 1);
     const restartedGateway = await startDaemon({
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem,
       logger: new NoopLogger(),

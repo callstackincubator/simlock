@@ -236,7 +236,7 @@ The daemon block carries `health` (`starting`/`running`) and **`mode`**
 daemon answered:
 
 ```json
-{ "daemon": { "health": "running", "mode": "worker", "consoleUrl": "http://127.0.0.1:4700/" } }
+{ "daemon": { "health": "running", "mode": "worker", "consoleUrl": "http://127.0.0.1:4701/" } }
 ```
 
 **`consoleUrl`** is the web console's address (see [CONSOLE.md](CONSOLE.md)):

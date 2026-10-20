@@ -598,7 +598,8 @@ describe("device add over HTTP", () => {
 describe("device add through a gateway", () => {
   async function fleet(): Promise<{ gateway: TestEnv; worker: TestEnv; workerId: string }> {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);

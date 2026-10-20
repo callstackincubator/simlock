@@ -7,7 +7,11 @@ import { agentDeviceModule } from "./definition.js";
 
 const configPath = "/home/agent/.simlock/config.json";
 
-async function loadWith(contents: unknown, warn?: (message: string) => void): Promise<Config> {
+async function loadWith(
+  contents: unknown,
+  warn?: (message: string) => void,
+  role?: "gateway",
+): Promise<Config> {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp("/home/agent/.simlock");
   await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
@@ -15,6 +19,7 @@ async function loadWith(contents: unknown, warn?: (message: string) => void): Pr
     configPath,
     filesystem,
     modules: [{ ...agentDeviceModule.config, name: agentDeviceModule.name }],
+    ...(role === undefined ? {} : { role }),
     systemStats: new FakeSystemStats({ cpuCount: 4, totalRamBytes: 16 * 1024 ** 3 }),
     ...(warn === undefined ? {} : { warn }),
   });
@@ -115,17 +120,14 @@ describe("agent-device's definition: capabilities.agent-device config", () => {
     const config = await loadWith(
       {
         capabilities: { "agent-device": { enabled: true, leaseTtlCapMs: 10_000 } },
-        mode: "gateway",
       },
       warn,
+      "gateway",
     );
     expect(section(config)).toMatchObject({ enabled: true, leaseTtlCapMs: 10_000 });
     expect(warn).not.toHaveBeenCalled();
 
-    await loadWith(
-      { capabilities: { "agent-device": { command: "elsewhere" } }, mode: "gateway" },
-      warn,
-    );
+    await loadWith({ capabilities: { "agent-device": { command: "elsewhere" } } }, warn, "gateway");
     expect(warn).toHaveBeenCalledWith(
       'Ignoring "capabilities.agent-device.command": it configures a worker, and this daemon runs in gateway mode.',
     );

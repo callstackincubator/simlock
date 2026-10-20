@@ -496,6 +496,16 @@ export function isSimlockError(error: unknown): error is AnySimlockError {
   return error instanceof SimlockError;
 }
 
+/** why: the CLI and MCP raise this one error from two places, so the wording lives once. */
+export function gatewayNotPresentError(): SimlockError<"GATEWAY_NOT_PRESENT"> {
+  return new SimlockError(
+    "GATEWAY_NOT_PRESENT",
+    "domain",
+    "No gateway on this machine. Start one with: simlock --gateway daemon start",
+    {},
+  );
+}
+
 /**
  * Builds a typed `SimlockError` from a raw wire `{code, message}` (and optional already-parsed
  * `details`), the client-side half of ADR §7's forward-compatibility rule: a `code` this

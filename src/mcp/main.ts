@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { resolveRequesterId } from "../agent-identity/index.js";
 import type { SimlockClient } from "../client/index.js";
+import { gatewayNotPresentError } from "../contract/index.js";
 import {
   NodeDaemonLauncher,
+  NodeFilesystem,
   NodeIpcTransport,
+  resolveDaemonHome,
   resolveDaemonSocketPath,
   resolveSimlockHome,
   SystemClock,
@@ -78,7 +81,7 @@ export async function startMcpStdio(
   // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
   // loop must not be able to disagree about what time it is (architecture rule 9).
   const clock = environment.clock ?? new SystemClock();
-  const defaults = defaultEnvironment(requesterId, clock);
+  const defaults = defaultEnvironment(requesterId, clock, environment.gateway === true);
   const session = new McpSession({
     clock,
     connect: environment.connect ?? defaults.connect,
@@ -159,45 +162,50 @@ export async function startMcpStdio(
 function defaultEnvironment(
   requesterId: string,
   clock: Clock,
+  gateway: boolean,
 ): Required<Pick<McpStdioEnvironment, "connect" | "connectForRenew" | "createTransport">> {
-  const dataDirectory = resolveSimlockHome();
+  const root = resolveSimlockHome();
+  const filesystem = new NodeFilesystem();
   const ipc = new NodeIpcTransport();
-  const logPath = join(dataDirectory, "daemon.log");
+  // why: resolved on every connect, so a gateway started after this session began is found, and
+  // a throw (an over-long `SIMLOCK_HOME`, a missing gateway) is a tool error rather than a dead
+  // server and a raw stack trace on the stdio channel an MCP client is speaking protocol over.
+  const daemonHome = async () => {
+    const home = await resolveDaemonHome({ root, gateway, filesystem });
+    if (gateway && !home.gatewayPresent) throw gatewayNotPresentError();
+    return home.dataDirectory;
+  };
   return {
     // The tool-call trigger: auto-launches a daemon that is not running, exactly as the CLI
     // does. ADR 0004 §2/§4: the session keeps its lease alive with its own `lease.renew` timer
     // and releases explicitly when the agent goes away (stdin EOF -> session.close()), so it
     // declares no daemon-initiated heartbeat -- there is none left to declare.
-    connect: () =>
-      connectWithAutoLaunch({
+    connect: async () => {
+      const dataDirectory = await daemonHome();
+      return connectWithAutoLaunch({
         clock,
         ipc,
         launcher: new NodeDaemonLauncher({
-          args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
+          args: [
+            join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
+            ...(gateway ? ["--gateway"] : []),
+          ],
           command: process.execPath,
-          logPath,
-          simlockHome: dataDirectory,
+          logPath: join(dataDirectory, "daemon.log"),
+          simlockHome: root,
         }),
         principal: requesterId,
-        // Resolved inside `connect` rather than during construction for the same reason as
-        // the CLI's: it throws for an over-long `SIMLOCK_HOME`, and out here that throw
-        // escaped before the server could report it, leaving a dead server and a raw stack
-        // trace on the stdio channel an MCP client is trying to speak protocol over.
         socketPath: resolveDaemonSocketPath(dataDirectory),
-      }),
+      });
+    },
     // The renew timer's trigger: connects to a daemon that is already listening and never
     // launches one, so an operator's `simlock daemon stop` is not undone by an idle session
     // (ADR 0004 §2).
-    connectForRenew: () =>
+    connectForRenew: async () =>
       connectToRunningDaemon({
         ipc,
         principal: requesterId,
-        // Resolved here rather than hoisted into a shared `const`, for the same reason
-        // `connect` resolves it inline above: `resolveDaemonSocketPath` throws for an over-long
-        // `SIMLOCK_HOME`, and a throw during construction escapes before the server can report
-        // it -- leaving a dead server and a raw stack trace on the stdio channel an MCP client
-        // is trying to speak protocol over.
-        socketPath: resolveDaemonSocketPath(dataDirectory),
+        socketPath: resolveDaemonSocketPath(await daemonHome()),
       }),
     createTransport: () => new StdioServerTransport(),
   };

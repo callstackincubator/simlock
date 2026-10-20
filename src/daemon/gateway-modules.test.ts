@@ -66,8 +66,8 @@ function gatewayOptions(
     configOverrides: {
       capabilities: Object.fromEntries(on.map((name) => [name, { enabled: true }])),
       http: { enabled: true, host: "127.0.0.1", port },
-      mode: "gateway",
     },
+    role: "gateway",
     dataDirectory: directory,
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,

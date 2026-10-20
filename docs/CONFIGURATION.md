@@ -1,7 +1,8 @@
 # Configuration
 
 Simlock reads `~/.simlock/config.json` and merges it over built-in
-defaults. Only the keys below are recognized; unknown keys are ignored with
+defaults. A gateway reads `~/.simlock/gateway/config.json` instead (see
+[Gateway and worker modes](#gateway-and-worker-modes)). Only the keys below are recognized; unknown keys are ignored with
 a warning. Inspect the effective, merged configuration at any time with
 `simlock config`.
 
@@ -12,7 +13,6 @@ edit yourself keeps the mode you give it until the next `config set`; run
 
 | Property                          | Description                                                                                                                                                                                                                  | Default                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `mode`                            | Which shape this daemon runs as: `worker` (owns devices on this machine) or `gateway` (owns none, fronts the workers that join it). See [Modes: gateway and worker](#modes-gateway-and-worker).                              | `worker`                                                        |
 | `capacity.strategy`               | Which policy decides how many devices may exist and run at once: `resource` or `fixed`. The options under `capacity.config` are that strategy's own -- see [Capacity strategies](#capacity-strategies).                     | `resource`                                                      |
 | `idle.shutdownAfterMs`            | How long an unused device sits idle before Simlock shuts it down (tier 1, reclaims RAM). Devices that a `warmPool.targets` entry keeps ready ignore it; a device that never served a lease and that no target keeps is shut down once it has been ready this long.                                                                                                                                     | `10 minutes`                                                    |
 | `idle.deleteAfterMs`              | How long a shut-down device sits idle before Simlock deletes it (tier 2, reclaims disk). Idle counts from the end of the device's last lease, or, for a device that never served one (one the pool created for a `warmPool.targets` entry that was later lowered or removed, say), from when it was shut down.                                                                                                                                     | `1 hour`                                                        |
@@ -51,7 +51,7 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** How long the gateway waits on a forwarded `lease.request` before giving up on that worker for this request, answering `WORKER_UNREACHABLE`. Bounds the one uplink call that otherwise had no timeout of its own, so a wedged worker cannot park a request where neither a deadline nor `lease.cancel` could ever reach it again. Generous against a cold device provision-plus-boot; well below `gateway.execTimeoutMs`, since granting a lease should never take as long as a command run against the device afterward. | `5 minutes`                                                      |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)) and the web console served beside it (see [CONSOLE.md](CONSOLE.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
-| `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
+| `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`. 4700 for a gateway, 4701 for a worker, so both can listen on one machine.                                                                                                                                                                 | `4700` gateway, `4701` worker |
 | `http.proxyAuth` | Sign-in through a proxy in front of Simlock (Cloudflare Access, for one). Not set: proxy sign-in is off. Set the four required keys together, as one JSON object, because each `config set` checks the whole file; one key alone is refused, naming the first missing key (`expected set with the other http.proxyAuth keys`). `signOutUrl` alone counts as an incomplete set. Read in both modes; takes effect on daemon restart. | not set |
 | `http.proxyAuth.header` | Required. The request header carrying the proxy's signed JWT, e.g. `cf-access-jwt-assertion`. 1-64 letters, digits or `-`; matched without regard to case. With `authorization`, only a `Bearer` value that does not start `slk_` is taken as the JWT. | — |
 | `http.proxyAuth.jwksUrl` | Required. Where the proxy publishes its public keys. An `https://` URL, or `http://` on `127.0.0.1`, `::1` or `localhost`. The daemon fetches it (5 s limit, no redirects, at most 64 KiB) and keeps the keys 10 minutes. | — |
@@ -83,10 +83,10 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `health.maxConcurrentRecoveries`  | Cap on simultaneous recovery reboots, so a machine wake (every device reads `stopped` at once) cannot start a boot storm.                                                                                                   | `1`                                                               |
 | `stalledTransition.thresholdMultiplier` | Factor applied to a driver's own `provision + boot` (for `provisioning`) or `reclaim` (for `reclaiming`) estimate to get the stall threshold: past it, `simlock doctor` reports a `stalled-transition` finding and `simlock status` marks the device `stalled`. | `3`                                                               |
 | `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
-| `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
+| `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `~/.simlock/devices/ios`                                    |
 | `drivers.ios.screenCaptureCommand` | The program that captures a simulator's screen for `capabilities.stream.enabled`. Unset, the one `pnpm build` put beside the daemon. | unset |
 | `drivers.ios.deviceCaptureCommand` | The program that captures a physical iPhone's screen for `capabilities.stream.enabled`. Unset, the one `pnpm build` put beside the daemon. | unset |
-| `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
+| `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `~/.simlock/devices/android`                                |
 | `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
 | `ios.defaultMode`                 | The device mode an iOS lease request gets when it names none: `slim` or `full`. Every worker makes both kinds whatever this says. See [Device mode: slim and full](#device-mode-slim-and-full).                             | `full`                                                           |
 | `ios.slim.categories`             | Which daemon categories a slim iOS device has disabled. Omitted means every category the driver knows.                                                                                                                       | every known category                                             |
@@ -108,7 +108,7 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `stalledTransition.minimumThresholdMs` must be a non-negative number.
 `http.enabled` is a boolean, `http.host` a string, and `http.port` an
 integer in `1`-`65535`.
-`mode` is `worker` or `gateway`; `gateway.url`, `gateway.token` and
+`gateway.url`, `gateway.token` and
 `gateway.label` are strings, and `gateway.disconnectedRetentionMs`,
 `gateway.execTimeoutMs`, and `gateway.leaseRequestTimeoutMs` positive
 numbers.
@@ -120,19 +120,18 @@ non-empty string. Any other value is rejected at load, and the error names the
 key. Simlock does not check that a `gpu` string names a mode the emulator
 knows: a mode the emulator rejects fails that device's next boot, not the
 config load.
-`mode` must be exactly `"worker"` or `"gateway"`. `gateway.url` must be an
+`gateway.url` must be an
 absolute `ws`/`wss` URL — `http`/`https` are rejected — and `gateway.token`
-a non-empty string; **in `mode: "worker"`**, setting either without the other
+a non-empty string; **on a worker**, setting either without the other
 is rejected at load and the daemon does not start, because a half-configured
 uplink would otherwise come up looking like an ordinary standalone worker. That rule does
-not apply in `mode: "gateway"`, where both keys are worker-side and are
-warned about and ignored like every other worker key — a gateway is not
-misconfigured by leftovers from the config it was flipped out of.
+not apply to a gateway, where both keys are worker-side and are
+warned about and ignored like every other worker key.
 `gateway.label` is a non-empty string, `gateway.routing` one of the
 registered routing policies, `gateway.alerts.destinations` the list described under [Alerts](#alerts), and `exec.timeoutMs`, `gateway.execTimeoutMs`,
 `gateway.leaseRequestTimeoutMs`, and `gateway.disconnectedRetentionMs`
 positive numbers.
-**`mode: "gateway"` with `http.enabled: false` is rejected at load**, naming the key: a
+**A gateway with `http.enabled: false` is rejected at load**, naming the key: a
 gateway is the fleet's contact point over HTTP, so one nothing can reach has
 no safe reading.
 `lease.identity.ios` and `lease.identity.android` must each be `reusable` or
@@ -158,9 +157,14 @@ See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 
 ## Gateway and worker modes
 
-`mode` selects what `simlock daemon start` starts. The default, `worker`, is what
-every simlock daemon has always been. `gateway` is a daemon that owns no
-devices and fronts the workers connected to it.
+The folder a daemon lives in decides what it is: `~/.simlock` is a worker and
+`~/.simlock/gateway` is a gateway. No config key names the role. A worker is
+what every simlock daemon has always been; a gateway is a daemon that owns no
+devices and fronts the workers connected to it. `simlock --gateway daemon start`
+starts the gateway (creating it on the first start), and plain `simlock daemon
+start` starts the worker; both run on one machine, each with its own config,
+state, socket and log. A `config.json` that still sets `mode` is refused at
+load, with a message that says to remove the key.
 
 **Joining a fleet takes two keys on the worker**, and they are required
 together: `gateway.url` (the gateway's base URL) and `gateway.token` (a join
@@ -173,7 +177,7 @@ reconnect loop. Nothing else about the worker changes: it keeps serving its
 local agents whether or not its gateway is reachable, and `http.enabled` stays
 off by default.
 
-**A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
+**A gateway reads a deliberately small slice of this file**: `http.*`,
 `log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*`, `gateway.*` and
 `capabilities.*` (`enabled`, and `leaseTtlCapMs` for agent-device). Every other key —
 capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
@@ -182,16 +186,15 @@ gateway's config is reported with a warning and ignored, the same treatment an
 unknown key gets. The worker-side `gateway.url`/`token`/`label`,
 `capabilities.agent-device.command` and `capabilities.stream.fps`/`maxDimension`/`bitrateKbps`
 are warned about there too. Nothing is stripped: the same file can be copied between a
-worker and a gateway with only `mode` differing, and the warning is what makes
+worker and a gateway, and the warning is what makes
 the difference visible rather than silent.
 
-**`http.enabled` is not optional for a gateway.** It defaults to `true` in
-gateway mode (it stays `false` for a worker), and an explicit `false` fails the
+**`http.enabled` is not optional for a gateway.** It defaults to `true` for a
+gateway (it stays `false` for a worker), and an explicit `false` fails the
 start naming the key. HTTP is how agents reach a fleet *and* what the worker
 uplink upgrades from, so a gateway without it is a process nothing can reach
 and no worker can join — quietly overriding the operator's value would be
-worse than refusing it. Switching a daemon between modes is therefore a
-two-key edit, `mode` and (if it was set) `http.enabled`.
+worse than refusing it.
 
 The gateway keeps one small file of its own beside `tokens.json`:
 `workers.json`, owner-only, holding the ids of workers an operator has
@@ -220,12 +223,14 @@ this setting, and it is the one in the table above.
 
 ## Modes: gateway and worker
 
-`mode` decides what the daemon this config belongs to *is*, so it also
-decides which of the keys above mean anything. One daemon runs exactly one
-mode; `simlock daemon start` starts whichever is configured, and switching is
-`simlock config set mode gateway` followed by a restart.
+The folder a daemon lives in decides what the daemon *is*, so it also decides
+which of the keys above mean anything. One daemon runs exactly one role. The
+daemon in `~/.simlock` is a worker; the daemon in `~/.simlock/gateway` is a
+gateway, started and reached with the global `--gateway` flag. A worker and a
+gateway on one machine are two daemons, each reading the `config.json` in its
+own folder.
 
-**A worker (`mode: "worker"`, the default) reads every key in this
+**A worker (the daemon in `~/.simlock`) reads every key in this
 document.** It is today's simlock, unchanged. Joining a fleet adds exactly
 two keys — `gateway.url` and `gateway.token` — plus the optional
 `gateway.label`, and changes nothing else about it: same drivers, same
@@ -233,12 +238,11 @@ registry, same capacity limits, same local unix socket, and its own local
 agents keep leasing from it as before. `http.enabled` is *not* required for a
 worker, because the uplink is outbound.
 
-**A gateway (`mode: "gateway"`) owns no devices**, so most of this document
+**A gateway (the daemon in `~/.simlock/gateway`) owns no devices**, so most of this document
 does not apply to it. It reads:
 
 | Key group | Why |
 |---|---|
-| `mode` | to be a gateway at all |
 | `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
 | `gateway.alerts.destinations` | where to send fleet events |
 | `http.*` | it is the fleet's contact point |
@@ -280,11 +284,11 @@ Everything else — `capacity.*`, `idle.*`, `warmPool.*`, `health.*`,
 `downloads.*`, and the worker-side `gateway.url`/`gateway.token`/
 `gateway.label`/`exec.timeoutMs` — is **ignored with a warning**, exactly as
 an unknown key is. That is deliberately the softer treatment: a gateway's
-config file is usually a worker's config file with `mode` flipped, and a
+config file is usually a copy of a worker's config file, and a
 warning names each key that stopped mattering rather than refusing to start
 over a leftover.
 
-There is one hard failure: **`mode: "gateway"` with `http.enabled: false` is
+There is one hard failure: **a gateway with `http.enabled: false` is
 rejected at load and the daemon does not start**, naming the key. A gateway
 with no HTTP listener is unreachable by definition — no worker could open an
 uplink to it and no agent could lease through it — so there is no safe way to
@@ -293,26 +297,31 @@ above `lease.maxTtlMs`.
 
 The `gateway.*` block reads in both directions on purpose: on a worker it
 says *which gateway to join*, on a gateway it says *how to be one*. The table
-above marks which is which, and each key is only ever read in one mode.
+above marks which is which, and each key is only ever read by one role.
 
 A machine that should both front a fleet and own devices runs **two daemons**:
 one gateway, one worker, the worker joining the gateway over localhost. There
-is no hybrid mode. What the two need to keep apart is smaller than it looks,
-because only one of them owns anything:
+is no hybrid mode. Start the gateway with `simlock --gateway daemon start`;
+the worker starts as it always did. What the two need to keep apart is smaller
+than it looks, because only one of them owns anything:
 
-- **Distinct `SIMLOCK_HOME`s.** That is what gives them separate config,
-  state, sockets, logs, instance ids, and token stores — and the separate
-  instance ids are what make the worker a distinct member of the fleet.
+- **Separate folders.** That is what gives them separate config, state,
+  sockets, logs, instance ids, and token stores — and the separate instance
+  ids are what make the worker a distinct member of the fleet. Set the
+  gateway's keys with `simlock --gateway config set`.
 - **Only the gateway needs `http.enabled`** (and must have it). The worker
   dials out, so it needs no listener of its own; leave its `http.enabled`
   off unless you also want to reach that one worker directly.
-- **Distinct `http.port`s, if you do enable HTTP on both.** A port is
-  machine-global and `SIMLOCK_HOME` cannot isolate it.
+- **Distinct `http.port`s, if you do enable HTTP on both.** A gateway
+  listens on 4700 and a worker on 4701 unless told otherwise, so the
+  defaults never collide; a port is machine-global, so two daemons that are
+  given the same one cannot both start.
 - **The worker keeps its `drivers.*` block** — device roots, adb server
   port, the lot. It owns the devices; the gateway has no drivers to
-  configure. Two *workers* on one machine would additionally need distinct
-  `drivers.android.adbServerPort` values (see below), but a gateway plus a
-  worker is one driver set, so there is nothing to split.
+  configure.
+
+A second worker for the same user cannot start: the running worker's socket
+refuses it.
 
 ## Alerts
 
@@ -466,8 +475,7 @@ outside it.
     └── simlock_<n>.avd/
 ```
 
-Both roots default under `SIMLOCK_HOME`, so pointing `SIMLOCK_HOME` somewhere
-else moves the devices with it. Override a single platform when its data
+Both roots default under `~/.simlock`. Override a single platform when its data
 belongs on another volume — device data runs to tens of gigabytes:
 
 ```json
@@ -494,7 +502,7 @@ that owns it. Simlock creates the marker **only** for a root it creates empty
 itself, and refuses any existing root that is unmarked, marked for another
 instance, symlinked, or wrongly owned or permissioned. It never adopts a
 directory it did not create. The instance identity lives in
-`${SIMLOCK_HOME}/instance.json`, written once on first start.
+`~/.simlock/instance.json`, written once on first start.
 
 A root that fails validation stops that platform's driver at startup — Simlock
 fails closed rather than falling back to the default device location. `simlock
@@ -534,10 +542,6 @@ set drivers.android.adbServerPort <port>`.
 Consequence worth knowing: your own `adb` will not see Simlock's emulators.
 A lease hands you the port to use — see
 [CLI.md](CLI.md#reaching-a-leased-device).
-
-Running two Simlock instances on one machine now needs distinct
-`drivers.android.adbServerPort` values as well as distinct `SIMLOCK_HOME`
-values.
 
 ## Device mode: slim and full
 
@@ -878,11 +882,11 @@ those settings would have no effect.
 
 ## Signing in through a proxy
 
-`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. Set it as one object:
+`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. It is an `http` key, so a gateway reads it from `~/.simlock/gateway/config.json`; the commands below set it there with `--gateway`. Drop `--gateway` to set it on the worker. Set it as one object:
 
 ```
-simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://team.cloudflareaccess.com","audience":"4f1c…"}'
-simlock daemon stop && simlock daemon start
+simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://team.cloudflareaccess.com","audience":"4f1c…"}'
+simlock --gateway daemon stop && simlock --gateway daemon start
 ```
 
 Setting one key alone fails the whole-file check: `Invalid config after setting http.proxyAuth.header: Invalid config value for "http.proxyAuth.jwksUrl": expected set with the other http.proxyAuth keys`. See [HTTP-API.md](HTTP-API.md#signing-in-through-a-proxy) for how a request is checked.

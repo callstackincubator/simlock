@@ -66,8 +66,9 @@ simlock config set http.enabled true
 simlock daemon stop && simlock daemon start
 ```
 
-`http.host` and `http.port` decide where it listens, `127.0.0.1:4700` by
-default (see [CONFIGURATION.md](CONFIGURATION.md)).
+`http.host` and `http.port` decide where it listens, `127.0.0.1:4701` by
+default for a worker and `127.0.0.1:4700` for a gateway (see
+[CONFIGURATION.md](CONFIGURATION.md)).
 
 ## Open it
 
@@ -75,14 +76,14 @@ default (see [CONFIGURATION.md](CONFIGURATION.md)).
 
 ```
 Daemon running
-Console: http://127.0.0.1:4700/
+Console: http://127.0.0.1:4701/
 ```
 
 `simlock status` prints it after the daemon's health and mode:
 
 ```
 Daemon: running (worker)
-Console: http://127.0.0.1:4700/
+Console: http://127.0.0.1:4701/
 ...
 ```
 
@@ -93,7 +94,7 @@ Open that address in a browser. `simlock status --json` has it as
 When `http.host` is `0.0.0.0` or `::`, the daemon listens on every interface
 and the address says `localhost`. From another machine, use this host's name
 or address instead. An IPv6 host is shown in brackets, as a browser expects:
-`http://[::1]:4700/`.
+`http://[::1]:4701/`.
 
 The console uses the HTTP listener and nothing else. To reach it from another
 machine, use the same tunnel you use for the HTTP API (Tailscale, cloudflared,

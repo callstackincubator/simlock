@@ -15,9 +15,9 @@ async function startGateway(maxPerRequester: number) {
     configOverrides: {
       http: { enabled: true, host: "127.0.0.1", port },
       lease: { maxPerRequester },
-      mode: "gateway",
     },
     driver: "none",
+    role: "gateway",
   }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);

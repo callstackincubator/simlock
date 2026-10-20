@@ -11,7 +11,7 @@ async function httpDaemon(mode: "worker" | "gateway"): Promise<HttpDaemon> {
   const { env, port } = await withHttpDaemon((port) => {
     const http = { enabled: true, host: "127.0.0.1", port };
     return mode === "gateway"
-      ? { agentId: "claude-1", configOverrides: { http, mode: "gateway" }, driver: "none" }
+      ? { agentId: "claude-1", configOverrides: { http }, driver: "none", role: "gateway" as const }
       : { agentId: "claude-1", configOverrides: { http } };
   });
   const baseUrl = `http://127.0.0.1:${port}`;

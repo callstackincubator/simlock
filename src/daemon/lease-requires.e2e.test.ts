@@ -59,7 +59,8 @@ describe("lease.request requires, through a gateway", () => {
     directories.push(directory);
     const port = await freeLoopbackPort();
     const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),

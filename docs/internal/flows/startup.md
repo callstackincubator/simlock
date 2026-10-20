@@ -10,7 +10,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
    `createAuth` then builds the token store and the admin secret (hash in memory), once, for both modes.
-5. `config.mode: gateway` → the gateway section. Otherwise go on.
+5. Started with `--gateway` (role `gateway`, data directory `<root>/gateway`) → the gateway section. Otherwise go on.
 
 ## Worker: build (before the claim)
 

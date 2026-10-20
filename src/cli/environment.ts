@@ -187,6 +187,7 @@ export function buildCliEnvironment(
       configPath,
       filesystem,
       modules: await moduleConfigEntries(),
+      role: daemonHome.role,
       systemStats,
     });
   };
@@ -262,6 +263,7 @@ export function buildCliEnvironment(
         filesystem: new MemoryFilesystem(),
         modules: await moduleConfigEntries(),
         overrides: merged as ConfigOverrides,
+        role: daemonHome.role,
         systemStats,
         warn: (message) => {
           if (message.startsWith("Unknown config key:")) unknownKeyWarnings.push(message);

@@ -145,6 +145,8 @@ describe("MCP stdio lifecycle", () => {
     // The connection dies with no tool call in sight, and the renew timer comes due.
     toolCallClient.emitConnectionLost();
     clock.advance(4_115);
+    // why: the renew connect looks the daemon's folder up on disk first, which takes more than microtasks.
+    await vi.waitFor(() => expect(connectToRunningDaemon).toHaveBeenCalledTimes(1));
     for (let index = 0; index < 10; index += 1) await Promise.resolve();
 
     expect(embedderConnects, "the timer did not reach for the connect it was not given").toBe(1);

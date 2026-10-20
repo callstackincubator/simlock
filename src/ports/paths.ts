@@ -70,14 +70,44 @@ export interface DaemonHome {
   readonly gatewayPresent: boolean;
 }
 
-export function daemonDataDirectory(root: string, _role: DaemonRole): string {
-  return root;
+export function daemonDataDirectory(root: string, role: DaemonRole): string {
+  return role === "gateway" ? join(root, "gateway") : root;
 }
 
-export function resolveDaemonHome(options: {
+/** why: `exists` treats only a missing path as absent; a root whose `gateway` is a file is just as absent. */
+async function existsOrAbsent(
+  filesystem: Pick<Filesystem, "exists">,
+  path: string,
+): Promise<boolean> {
+  try {
+    return await filesystem.exists(path);
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOTDIR"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+// why: the one place the folder choice lives (ADR 0034); the daemon never calls it, it derives its folder from its role.
+export async function resolveDaemonHome({
+  filesystem,
+  gateway,
+  root,
+}: {
   readonly root: string;
   readonly gateway: boolean;
   readonly filesystem: Pick<Filesystem, "exists">;
 }): Promise<DaemonHome> {
-  return Promise.resolve({ role: "worker", dataDirectory: options.root, gatewayPresent: false });
+  const role: DaemonRole = gateway ? "gateway" : "worker";
+  const gatewayFolder = daemonDataDirectory(root, "gateway");
+  const gatewayPresent =
+    (await existsOrAbsent(filesystem, join(gatewayFolder, "instance.json"))) ||
+    (await existsOrAbsent(filesystem, join(gatewayFolder, "config.json")));
+  return { role, dataDirectory: daemonDataDirectory(root, role), gatewayPresent };
 }

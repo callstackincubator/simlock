@@ -135,7 +135,8 @@ describe("gateway fleet", () => {
     // `driver: "none"`: a gateway starts no drivers and warns about every worker-only key in
     // its config (ADR 0005 §2), so it gets no fake-driver wiring and no capacity seeding.
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
 
@@ -280,7 +281,8 @@ describe("gateway fleet", () => {
 
   it("shows each worker's own pairings, other names, and images in the worker list and their union in the catalog", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -396,7 +398,8 @@ describe("gateway fleet", () => {
 
   it("shows each worker's own custom models in the worker list, and marks a model custom in the catalog when any worker does", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -450,7 +453,8 @@ describe("gateway fleet", () => {
 
   it("gives a request with a mode that mode on either worker, and a request with none the default of the worker it landed on", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -526,7 +530,8 @@ describe("gateway fleet", () => {
 
   it("grants --device 'iphone 16 pro' and --device pixel_7 through a gateway by the worker's own names", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -573,7 +578,8 @@ describe("gateway fleet", () => {
 
   it("grants an Android --class phone request on the worker holding a warm Pixel, not on one with free capacity", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -649,7 +655,8 @@ describe("gateway fleet", () => {
 
   it("grants --class phone with --os '>=18' through a gateway on a worker whose runtime is in the range, and nothing else", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -696,7 +703,8 @@ describe("gateway fleet", () => {
 
   it("refuses an uplink whose token is not a worker join token", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     // An operator token is a real credential that opens no uplink (ADR 0005 §25). The worker
@@ -729,7 +737,8 @@ describe("gateway fleet", () => {
 
   it("through a gateway, a caller-chosen lease ID comes back with no worker prefix, renews and releases by that ID, and a second request for it is LEASE_ID_TAKEN", async () => {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const { secret } = (await gateway.cli(["token", "create", "--role", "worker"])).json as {

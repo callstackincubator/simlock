@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -108,15 +108,21 @@ export interface WithDaemonOptions {
   readonly configOverrides?: Record<string, unknown>;
   readonly agentId?: string;
   /**
-   * "fake" (default) wires `SIMLOCK_DRIVERS_MODULE` at the scriptable out-of-process
+   * why: "fake" (default) wires `SIMLOCK_DRIVERS_MODULE` at the scriptable out-of-process
    * fake driver. "real" leaves driver discovery alone -- the daemon finds the real
    * iOS/Android drivers exactly as it would in production -- for the slow, real-SDK
    * lane; `driverScript`/`driverLog` are inert in that mode (nothing reads them).
    * "none" wires no driver and seeds no driver-shaped config at all: what a
-   * `mode: "gateway"` daemon needs, since it starts no drivers and warns about every
+   * gateway needs, since it starts no drivers and warns about every
    * worker-only key it is given (ADR 0005 §2).
    */
   readonly driver?: "fake" | "real" | "none";
+  /**
+   * why: "gateway" makes this env's daemon the gateway of its home: it lives in `<home>/gateway`,
+   * and every CLI call the env makes puts `--gateway` first (ADR 0034). Omitted, the daemon is
+   * the home's worker.
+   */
+  readonly role?: "gateway";
   /**
    * Written to the fake driver's script file before the daemon starts, so the daemon's very
    * first driver calls already see it. Setting `driverScript` after `withDaemon()` returns is
@@ -132,6 +138,7 @@ export interface WithDaemonOptions {
 
 export interface TestEnv {
   readonly home: string;
+  readonly dataDirectory: string;
   /**
    * The port this env's Simlock runs its own adb server on, in the real-SDK lane. A TCP
    * port is machine-global, so `SIMLOCK_HOME` alone no longer isolates two Simlocks and a
@@ -224,9 +231,11 @@ async function buildEnv(
   options: WithDaemonOptions,
 ): Promise<{ testEnv: TestEnv; state: TeardownState }> {
   const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
-  const socketPath = join(home, "daemon.sock");
-  const logPath = join(home, "daemon.log");
-  const configPath = join(home, "config.json");
+  const gatewayFlag: readonly string[] = options.role === "gateway" ? ["--gateway"] : [];
+  const dataDirectory = options.role === "gateway" ? join(home, "gateway") : home;
+  const socketPath = join(dataDirectory, "daemon.sock");
+  const logPath = join(dataDirectory, "daemon.log");
+  const configPath = join(dataDirectory, "config.json");
   const scriptPath = join(home, "fake-driver-script.json");
   const logCallPath = join(home, "fake-driver-calls.jsonl");
 
@@ -235,6 +244,7 @@ async function buildEnv(
   const adbServerPort = options.driver === "real" ? await freeLoopbackPort() : undefined;
   const seededConfig = seedConfig(options, adbServerPort);
   if (seededConfig !== undefined) {
+    await mkdir(dataDirectory, { recursive: true });
     await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
   }
 
@@ -244,27 +254,31 @@ async function buildEnv(
   const testEnv: TestEnv = {
     adbServerPort,
     home,
+    dataDirectory,
     socketPath,
     logPath,
     configPath,
     env,
     driverScript: driverScriptControl(scriptPath),
     driverLog: driverLogControl(logCallPath),
-    cli: (args, cliOptions) => cli(args, env, cliOptions),
+    cli: (args, cliOptions) => cli([...gatewayFlag, ...args], env, cliOptions),
     cliBackground: (args, cliOptions) => {
-      const handle = cliBackground(args, env, cliOptions);
+      const handle = cliBackground([...gatewayFlag, ...args], env, cliOptions);
       backgroundProcesses.add(handle);
       return handle;
     },
     mcpClient: async (mcpOptions) => {
-      const handle = await mcpClient(env, mcpOptions);
+      const handle = await mcpClient(env, {
+        ...mcpOptions,
+        ...(options.role === "gateway" ? { gateway: true } : {}),
+      });
       mcpClients.add(handle);
       return handle;
     },
-    events: (since, timeout) => events(env, since, timeout),
-    expectEvents: (names, expectOptions) => expectEvents(env, names, expectOptions),
+    events: (since, timeout) => events(env, since, timeout, gatewayFlag),
+    expectEvents: (names, expectOptions) => expectEvents(env, names, expectOptions, gatewayFlag),
     async startDaemon() {
-      const started = await cli(["daemon", "start"], env);
+      const started = await cli([...gatewayFlag, "daemon", "start"], env);
       // `daemon start` exits once the daemon answers `status.get`, which it does from its socket
       // claim on, but the daemon writes `admin.token` only after that claim (ADR 0003 §5). A CLI
       // that reads the file before it lands connects as agent, so an admin command run next
@@ -272,7 +286,7 @@ async function buildEnv(
       // waiting for the file orders later CLI calls after the write; after a restart the previous
       // run's file may still be there and passes the wait at once.
       if (started.code === 0) {
-        await waitFor(() => existsSync(join(home, "admin.token")), {
+        await waitFor(() => existsSync(join(dataDirectory, "admin.token")), {
           label: "admin.token written",
         });
       }
@@ -284,7 +298,7 @@ async function buildEnv(
       // can land slightly before the process fully drains its event loop. Starting
       // a new daemon while the old one is still mid-exit leaks daemon processes.
       const pidsBeforeStop = await pidsHoldingSocket(socketPath);
-      await cli(["daemon", "stop"], env);
+      await cli([...gatewayFlag, "daemon", "stop"], env);
       await waitFor(() => !existsSync(socketPath), {
         timeout: 10_000,
         label: "daemon socket removed",
@@ -345,7 +359,9 @@ async function buildEnv(
     testEnv,
     state: {
       backgroundProcesses,
+      dataDirectory,
       env,
+      gatewayFlag,
       home,
       mcpClients,
       realDrivers: options.driver === "real",
@@ -368,7 +384,7 @@ export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise
   const { testEnv, state } = await buildEnv(options);
   const restartSteps = async (): Promise<void> => {
     const pids = await pidsHoldingSocket(state.socketPath);
-    await cli(["daemon", "stop"], state.env, { timeout: 30_000 });
+    await cli([...state.gatewayFlag, "daemon", "stop"], state.env, { timeout: 30_000 });
     await waitFor(
       async () => !(await Promise.all(pids.map((pid) => isProcessAlive(pid)))).some(Boolean),
       { timeout: 30_000, label: "previous daemon process exited" },
@@ -408,8 +424,8 @@ export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise
     },
     async teardown() {
       // why: read before teardown deletes the home.
-      const pid = await readAgentDevicePid(state.home);
-      const resolved = await realpath(state.home).catch(() => state.home);
+      const pid = await readAgentDevicePid(state.dataDirectory);
+      const resolved = await realpath(state.dataDirectory).catch(() => state.dataDirectory);
       try {
         await teardown(state);
       } finally {
@@ -421,7 +437,9 @@ export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise
 
 interface TeardownState {
   readonly backgroundProcesses: ReadonlySet<CliBackgroundHandle>;
+  readonly dataDirectory: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly gatewayFlag: readonly string[];
   readonly home: string;
   readonly mcpClients: ReadonlySet<McpClientHandle>;
   /**
@@ -433,7 +451,8 @@ interface TeardownState {
 }
 
 async function teardown(state: TeardownState): Promise<void> {
-  const { backgroundProcesses, env, home, mcpClients, realDrivers, socketPath } = state;
+  const { backgroundProcesses, env, gatewayFlag, home, mcpClients, realDrivers, socketPath } =
+    state;
   for (const client of mcpClients) {
     await client.close().catch(() => undefined);
   }
@@ -449,7 +468,7 @@ async function teardown(state: TeardownState): Promise<void> {
   // socket file still there" after `daemon stop` would miss a process that
   // unlinked its socket on the way out but never actually terminated.
   const pidsBeforeStop = await pidsHoldingSocket(socketPath);
-  await cli(["daemon", "stop"], env).catch(() => undefined);
+  await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
   // why: a daemon a test SIGKILLed leaves its socket file behind, and nobody will remove it.
   if (pidsBeforeStop.length > 0) {
     await waitFor(() => !existsSync(socketPath), { timeout: 5_000 }).catch(() => undefined);

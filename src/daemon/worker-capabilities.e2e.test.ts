@@ -47,7 +47,8 @@ describe("a worker's capabilities through a gateway", () => {
     directories.push(gatewayDirectory);
     const port = await freeLoopbackPort();
     const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       dataDirectory: gatewayDirectory,
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo({ arch: "x64", os: "Linux", osVersion: "6.8.0" }),
