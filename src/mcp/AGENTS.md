@@ -1,6 +1,6 @@
 # stdio MCP server
 
-Does: one agent session over stdin/stdout — four tools, a renew timer, lazy reconnect.
+Does: one agent session over stdin/stdout — its tools, a renew timer, lazy reconnect.
 Entry: `main.ts` → `runMcpStdio()`; `simlock mcp` loads it on demand (`src/cli/commands/mcp.ts`).
 Uses: client, lease-policy, agent-identity, contract, ports. Never imports: core, daemon, drivers, http.
 Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).

@@ -20,7 +20,7 @@ command of their own: they take every command from here.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm lint`, `pnpm lint:comments`,
+`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
@@ -43,16 +43,19 @@ list and this one the same.
 
 ## Mutation testing
 
-Not part of delivery. The weekly `harden-tests` routine runs
-`pnpm mutate <base> --max-lines 1500` on `main` for the source lines
-changed since `<base>`, newest files first up to that many lines, kills
-the survivors that change behaviour a caller or user can see, and opens
-one tests-only PR.
+Not part of delivery. The weekly `harden-tests` routine runs `pnpm mutate
+<base> --max-lines 1500` on `main` for the source lines changed since
+`<base>`, newest files first up to that many lines, kills the survivors that
+change behaviour a caller or user can see, and opens one tests-only PR. The
+script first runs only the test files that import a changed file, or reach
+it through their own module's `index.ts`, or that the branch changed; a
+mutant those leave alive gets a second run with every related test file.
 
 ## Routines
 
-Claude Code routines run these skills on a schedule, each opening one PR
-that goes through the reviews its diff's kind gets and the merge gate:
+Claude Code routines run these skills on a schedule, each but one opening
+one PR that goes through the reviews its diff's kind gets and the merge
+gate:
 
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
@@ -60,6 +63,34 @@ that goes through the reviews its diff's kind gets and the merge gate:
 | Test audit         | `audit-tests`       | weekly |
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
+| Recurring findings | `recurring-findings` | weekly |
+
+`recurring-findings` opens draft task issues instead of a PR, and skips
+the ending below. Every other routine ends the same way; its skill adds
+only what it changes:
+
+1. `reviewer` with the PR number, round 1. Fix each Fix line yourself,
+   within the routine's kind of edit, then the check its `Rerun` names:
+   `reviewer` with that round, `previous <Commit>` and the complete
+   resolution ledger. `Rerun: none` with findings open: leave the PR in
+   draft and report them.
+2. Add the `## Review` section as the `deliver` skill's step 4 shapes it,
+   `skipped` for each review the diff's kind left out.
+3. `gh pr ready <M>`, then `.agents/scripts/merge-pr.sh <M>`. Anything but
+   a merge: leave the PR open and report.
+
+In a cloud session, edit a PR body with
+`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`
+(`gh pr edit` is GraphQL, which the cloud refuses), and when `gh pr ready`
+fails with a 403 naming the proxy's ready-for-review route, call that route.
+
+## The real-proxy lane
+
+`pnpm test:real-proxy` runs Simlock behind oauth2-proxy and Dex (both in
+Docker, host networking) and signs a person in through them in Chromium. Linux
+with Docker only; agents never run it, CI does (the "Real proxy" workflow, on a
+pull request that changes source, and weekly). One run per machine: ports 4180,
+5556 and 4700 are fixed, and the setup fails naming one that is busy.
 
 ## The screen capture programs
 
@@ -157,11 +188,24 @@ the tool's docs alone.
 - **Contract shapes.** Every change to a contract shape bumps
   `DAEMON_PROTOCOL_VERSION` by one in the same PR (a spec's "protocol +1 at
   merge" means this too), so two tasks that change contract shapes
-  overlap even when they touch different files.
+  overlap even when they touch different files. The push hook and CI run
+  `.agents/scripts/protocol-bump-check.mjs`: a contract shape change with
+  no bump, or a bump with no shape change, fails. A contract edit that
+  changes no wire shape (a refactor, a client-only error code) carries the
+  commit trailer `Protocol-bump: none (<reason>)`.
 
 ## Review measurement
 
-`node .agents/scripts/review-metrics.mjs <ledger.json>` validates and
-summarizes per-PR invocation records. Use the template and evaluation
-procedure in [REVIEW.md](../REVIEW.md). This is reporting, not a broad
-project check. Preserve unknown usage/cost as null.
+Every prompt a delivery stage or review lens is started with begins with
+this line, `-` for a key that does not apply yet:
+
+```
+ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> round=<1|2|fix-check> role=<implementer|reviewer|spec|code|claims|hardware-verifier> lens=<behaviour|tests|both>
+```
+
+`node .agents/scripts/review-metrics.mjs --pr <M> --issue <N> [--findings
+<file>]` reads the runs so tagged from Claude Code's transcripts on this
+machine and prints their models, seconds, tokens and cost, and with
+`--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
+what goes in the findings file and where the result is posted. It reports,
+it checks nothing.

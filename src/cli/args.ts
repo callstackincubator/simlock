@@ -42,7 +42,7 @@ export function subcommand(
   return { command: argv[0], flagArgs: argv.slice(1) };
 }
 
-/** why: four parents answer a bare word or a `--help` in the subcommand's position by printing
+/** why: five parents (`component`, `device`, `token`, `worker`, `alerts`) answer a bare word or a `--help` in the subcommand's position by printing
  * their own usage and exiting 0, so the answer lives here once instead of in each parent
  * (architecture rule 10); a parent whose bare word means something else (`config` prints the
  * config, `daemon` answers its own usage below) reads `subcommand` and decides itself. */

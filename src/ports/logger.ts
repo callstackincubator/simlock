@@ -1,18 +1,7 @@
-import {
-  closeSync,
-  existsSync,
-  fstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, fstatSync, mkdirSync, openSync, renameSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { type Clock, SystemClock } from "./clock.js";
+import type { Clock } from "./clock.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -128,87 +117,32 @@ export class MemoryLogSink implements LogSink {
 }
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
-/** Enough to hold the last line of any record this tool writes; a generation is never read whole. */
-const TAIL_BYTES = 64 * 1024;
-
-function readTail(file: string): string {
-  const fd = openSync(file, "r");
-  try {
-    const size = fstatSync(fd).size;
-    const length = Math.min(size, TAIL_BYTES);
-    const buffer = Buffer.alloc(length);
-    readSync(fd, buffer, 0, length, size - length);
-    return buffer.toString("utf8");
-  } finally {
-    closeSync(fd);
-  }
-}
-
 // why: Owner-only, like the other files that hold secrets or state (`config.json`,
 // `state.json`, `tokens.json`, `admin.token`): the trust boundary is the OS user, and a shared
-// runner's other users have no business reading a daemon's log or event stream. Set at each
+// runner's other users have no business reading a daemon's log. Set at each
 // `open`, never a later `chmod`, so no generation is ever born world-readable.
 const FILE_MODE = 0o600;
 
 export interface NodeFileLogSinkOptions {
-  /** One generation: the size at which the current file rotates. */
   readonly maxBytes?: number;
   readonly path: string;
-  /**
-   * With `retentionMs` or `totalMaxBytes`, rotation keeps numbered generations (`<path>.1`
-   * newest, upward) and sweeps them; without both, exactly one generation is kept.
-   */
-  readonly retentionMs?: number;
-  readonly totalMaxBytes?: number;
-  /** Judges a generation's age; the system clock when absent. */
-  readonly clock?: Clock;
 }
 
-/**
- * Appends to `path` via a held file descriptor, tracking bytes written. Once a write
- * would push the file past `maxBytes`, the current file is renamed to `<path>.1`
- * (replacing any existing generation) and a fresh file is opened. Exactly one rotated
- * generation is kept -- unless `retentionMs` or `totalMaxBytes` is given: then existing
- * generations shift up one number, and the sweep deletes (only ever `<path>.N` beside this
- * sink's own path) every generation whose newest line is older than `retentionMs`, then the
- * oldest until the generations plus the current file fit `totalMaxBytes`. The current file is
- * never deleted. The same sweep runs once when the sink opens. A generation's age is the
- * `timestamp` of its last line when that line is JSON carrying one, else the file's mtime.
- *
- * Writes are synchronous (`writeSync`), deliberately, not by oversight: this keeps
- * records strictly ordered without a write queue, guarantees a line is never split
- * across an interleaved write to the same fd (`NodeDaemonLauncher` hands the child an
- * inherited append fd on this same path for uncaught fatal output -- see below), and is
- * the only kind of write that reliably lands from a handler where the process is about
- * to exit. The cost is that every line blocks its caller on a disk write, and volume is
- * no longer low: `daemon.log` gets a line per operation, and at `debug` a line per device
- * command; `events.jsonl` a line per business event. Accepted as long as a line stays one
- * small `writeSync`.
- *
- * `#bytesWritten` only counts what this sink itself writes. The daemon launcher's
- * inherited fd can append a fatal crash dump to the same file without going through
- * this class, so the cap is a soft bound -- "one crash dump" -- not a hard guarantee
- * that the file never exceeds `maxBytes`.
- */
+// why: writes are synchronous so records stay strictly ordered, a line is never split across a write to the
+// same fd (the daemon launcher hands the child an inherited append fd on this path), and a write lands from a
+// handler where the process is about to exit; the cap is soft because that inherited fd bypasses `#bytesWritten`.
 export class NodeFileLogSink implements LogSink {
   readonly #path: string;
   readonly #maxBytes: number;
-  readonly #retentionMs: number | undefined;
-  readonly #totalMaxBytes: number | undefined;
-  readonly #clock: Clock;
   #fd: number;
   #bytesWritten: number;
 
   constructor(options: NodeFileLogSinkOptions) {
     this.#path = options.path;
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-    this.#retentionMs = options.retentionMs;
-    this.#totalMaxBytes = options.totalMaxBytes;
-    this.#clock = options.clock ?? new SystemClock();
     mkdirSync(dirname(this.#path), { recursive: true });
     this.#fd = openSync(this.#path, "a", FILE_MODE);
     this.#bytesWritten = fstatSync(this.#fd).size;
-    this.#sweep();
   }
 
   write(line: string): void {
@@ -221,86 +155,14 @@ export class NodeFileLogSink implements LogSink {
     this.#bytesWritten += size;
   }
 
-  /**
-   * Not called anywhere in production: `startDaemon` builds its sinks (`daemon.log`,
-   * `events.jsonl`) once at startup and never tears them down, relying on the fd closing at process exit. Deliberate --
-   * threading a close-on-shutdown path through `main.ts` would couple the daemon's
-   * shutdown sequence to this specific adapter for no real benefit. Kept as a public
-   * method purely so tests can close and reopen deterministically.
-   */
   close(): void {
     closeSync(this.#fd);
   }
 
   #rotate(): void {
     closeSync(this.#fd);
-    if (this.#retentionMs !== undefined || this.#totalMaxBytes !== undefined) {
-      this.#shiftGenerations();
-    }
     renameSync(this.#path, `${this.#path}.1`);
     this.#fd = openSync(this.#path, "a", FILE_MODE);
     this.#bytesWritten = 0;
-    this.#sweep();
-  }
-
-  /** `<path>.N` -> `<path>.N+1`, highest first, so no generation overwrites another. */
-  #shiftGenerations(): void {
-    let highest = 0;
-    while (existsSync(`${this.#path}.${highest + 1}`)) highest += 1;
-    for (let generation = highest; generation >= 1; generation -= 1) {
-      renameSync(`${this.#path}.${generation}`, `${this.#path}.${generation + 1}`);
-    }
-  }
-
-  #sweep(): void {
-    const sizes: number[] = [];
-    while (existsSync(`${this.#path}.${sizes.length + 1}`)) {
-      sizes.push(statSync(`${this.#path}.${sizes.length + 1}`).size);
-    }
-    // Generations get older with their number, so what is past retention, or over the cap, is
-    // a suffix; keeping the survivors contiguous is what lets a reader stop at the first
-    // missing one.
-    const keep = this.#fitSize(sizes, this.#withinRetention(sizes.length));
-    for (let generation = sizes.length; generation > keep; generation -= 1) {
-      unlinkSync(`${this.#path}.${generation}`);
-    }
-  }
-
-  /** How many of the `count` generations are not past `retentionMs`. */
-  #withinRetention(count: number): number {
-    // No retention: nothing is ever older than the cutoff.
-    const cutoff = this.#clock.now() - (this.#retentionMs ?? Number.POSITIVE_INFINITY);
-    let keep = count;
-    while (keep > 0 && this.#newestLine(`${this.#path}.${keep}`) < cutoff) keep -= 1;
-    return keep;
-  }
-
-  /** How many of the first `keep` generations fit `totalMaxBytes` beside the current file. */
-  #fitSize(sizes: readonly number[], keep: number): number {
-    const cap = this.#totalMaxBytes ?? Number.POSITIVE_INFINITY;
-    // The current file is counted at its full size, not what it holds now: it is about to
-    // fill, and the cap is a promise about the total once it has.
-    let total = sizes.slice(0, keep).reduce((sum, size) => sum + size, 0);
-    total += Math.max(this.#bytesWritten, this.#maxBytes);
-    let kept = keep;
-    while (kept > 0 && total > cap) {
-      kept -= 1;
-      total -= sizes[kept] ?? 0;
-    }
-    return kept;
-  }
-
-  /** The time of a generation's newest line: its `timestamp` field, else the file's mtime. */
-  #newestLine(file: string): number {
-    const tail = readTail(file).trimEnd();
-    try {
-      const parsed: unknown = JSON.parse(tail.slice(tail.lastIndexOf("\n") + 1));
-      // A `null` line throws here and is caught, like any other line that is not an object.
-      const timestamp = (parsed as { timestamp?: unknown }).timestamp;
-      if (typeof timestamp === "number") return timestamp;
-    } catch {
-      // Not JSON: fall through to the file's own time.
-    }
-    return statSync(file).mtimeMs;
   }
 }

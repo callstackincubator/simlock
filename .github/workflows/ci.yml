@@ -251,3 +251,25 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Fallow analysis
         run: pnpm fallow --ci
+
+  # why: checked on the PR's merge commit, so a PR whose bump main has already taken (two PRs
+  # moving 34 to 35) fails here although its own branch passes.
+  protocol-bump:
+    name: Protocol bump
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Contract shape and protocol range change together
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node .agents/scripts/protocol-bump-check.mjs --base "origin/$BASE_REF"

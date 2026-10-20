@@ -1,6 +1,5 @@
 import type { Page } from "@playwright/test";
 
-import { waitFor } from "../helpers/wait.js";
 import {
   expect,
   NAV,
@@ -26,13 +25,6 @@ async function takeLease(host: RunningDaemon, agent: string): Promise<string> {
   const granted = await host.cli([...LEASE, "--agent-id", agent, "--detach"]);
   expect(granted.code, granted.stderr).toBe(0);
   return (granted.json as { lease: { id: string } }).lease.id;
-}
-
-async function leasesHeld(host: RunningDaemon): Promise<number> {
-  const response = await fetch(new URL("/v1/leases", host.url), {
-    headers: { Authorization: `Bearer ${host.tokens.operator}` },
-  });
-  return ((await response.json()) as { leases: unknown[] }).leases.length;
 }
 
 async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly pages: Pages }> {
@@ -133,6 +125,7 @@ test.describe("every view", () => {
       }
 
       await visit(page, host, "/");
+      await expect(page.locator("#main .chart")).toHaveCount(3);
       const chart = page.locator(".chart [tabindex='0']").first();
       await chart.focus();
       await page.keyboard.press("ArrowLeft");
@@ -162,12 +155,15 @@ test.describe("every view", () => {
     const { host } = await hostWithLease();
     try {
       await openSignedIn(page, host);
-      for (const [path, title] of [
-        ["/", "Leases held, last hour"],
-        ["/events", "Events"],
+      for (const [path, title, index] of [
+        ["/", "Leases held, last hour", 0],
+        ["/", "Requests in the queue, last hour", 1],
+        ["/", "Device slots in use, last hour", 2],
+        ["/events", "Events", 0],
       ] as const) {
         await visit(page, host, path);
-        const chart = page.locator("#main .chart").first();
+        if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(3);
+        const chart = page.locator("#main .chart").nth(index);
         const heading = page.getByRole("heading", { name: title, exact: true });
         const ring = () => chart.evaluate((element) => getComputedStyle(element).outlineStyle);
         const focused = () =>
@@ -214,12 +210,13 @@ test.describe("every view", () => {
       await expect(tabs.locator("[aria-current='page']")).toHaveText(entry.label);
     }
 
+    const [before, last] = NAV.slice(-2);
     await page.goBack();
-    await expect(page).toHaveURL(/\/attention$/);
-    await expect(tabs.locator("[aria-current='page']")).toHaveText(/^Attention/);
+    await expect(page).toHaveURL(new RegExp(`${before?.path}$`));
+    await expect(tabs.locator("[aria-current='page']")).toHaveText(new RegExp(`^${before?.label}`));
     await page.goForward();
-    await expect(page).toHaveURL(/\/events$/);
-    await expect(tabs.locator("[aria-current='page']")).toHaveText("Events");
+    await expect(page).toHaveURL(new RegExp(`${last?.path}$`));
+    await expect(tabs.locator("[aria-current='page']")).toHaveText(last?.label ?? "");
   });
 
   test("no view reports a Content-Security-Policy violation", async ({ page }) => {
@@ -289,13 +286,30 @@ test.describe("every view", () => {
       await openSignedIn(page, host);
 
       await expect
-        .poll(tiles)
+        .poll(async () => (await tiles()).slice(0, 4))
         .toEqual([
           `Utilisation | ${Math.round((100 * 1) / limit)} | %`,
           `Leases | 1 | of ${limit}`,
           "Waiting | 0 | none",
           "Workers | 1 | of 1 up",
-          "Granted | 1 | last hour",
+        ]);
+      const stats = (await (
+        await fetch(new URL("/v1/stats?since=1h", host.url), {
+          headers: { Authorization: `Bearer ${host.tokens.operator}` },
+        })
+      ).json()) as { totals: { granted: number; wait: { p95: number | null } } };
+      const wait = stats.totals.wait.p95;
+      await expect
+        .poll(async () => (await tiles()).slice(4))
+        .toEqual([
+          `Granted | ${stats.totals.granted} | last hour`,
+          `Wait p95 | ${
+            wait === null
+              ? "—"
+              : wait < 1_000
+                ? `${Math.round(wait)} ms`
+                : `${Math.floor(wait / 1_000)} s`
+          } | last hour`,
         ]);
       await page.getByRole("link", { name: /^Leases 1/ }).click();
       await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
@@ -323,32 +337,6 @@ test.describe("every view", () => {
         }));
         expect(shape, `${width}px`).toEqual({ lines: 1, readable: true });
       }
-    } finally {
-      await host.dispose();
-    }
-  });
-
-  test("a lease taken with the CLI raises the lease chart within a second", async ({ page }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await openSignedIn(page, host);
-      const summary = page.locator(".chart-summary");
-      const area = page.locator(".chart .recharts-area-curve");
-      await expect(summary).toHaveText(/^Now 0;/);
-      const before = await area.getAttribute("d");
-
-      await takeLease(host, "chart-riser");
-      await waitFor(async () => (await leasesHeld(host)) === 1, {
-        interval: 20,
-        label: "the daemon's own lease list",
-        timeout: 10_000,
-      });
-
-      // Now is the lease; the minute before, walked back through its lease.granted, had none.
-      await expect(summary).toHaveText(/^Now 1; highest 1 at \d\d:\d\d; lowest 0 at /, {
-        timeout: 1_000,
-      });
-      await expect(area).not.toHaveAttribute("d", before ?? "", { timeout: 1_000 });
     } finally {
       await host.dispose();
     }

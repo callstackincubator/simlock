@@ -1,4 +1,5 @@
 import type { EventBus } from "../bus/index.js";
+import { quarantineCauseMessage } from "../contract/index.js";
 import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import {
@@ -7,6 +8,7 @@ import {
   mayBeGranted,
   type PhysicalDevice,
   type Platform,
+  type QuarantineCause,
   type VirtualDevice,
 } from "./domain.js";
 import { type Driver, toDriverDevice } from "./driver.js";
@@ -20,7 +22,11 @@ export interface QuarantineDriverCatalog {
 
 export interface QuarantineRegistry {
   readonly snapshot: { readonly devices: readonly DeviceRecord[] };
-  enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord>;
+  enterQuarantine(
+    deviceId: string,
+    nextRetryAt: number,
+    cause: QuarantineCause,
+  ): Promise<DeviceRecord>;
   recordQuarantineRetryFailure(
     deviceId: string,
     attempts: number,
@@ -34,6 +40,7 @@ export interface QuarantineRegistry {
 export interface QuarantinePurgeFailure {
   readonly deviceId: string;
   readonly leaseId?: string | undefined;
+  readonly kind: "purge-failed" | "shutdown-failed" | "delete-failed";
   readonly attemptedStrategy: "erase" | "snapshot" | "wipe" | "delete" | "uninstall";
   readonly duration: number;
   readonly error: string;
@@ -74,7 +81,16 @@ export class QuarantineCoordinator {
   async enter(failure: QuarantinePurgeFailure): Promise<void> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     await this.options.decisions.run(async () => {
-      await this.options.registry.enterQuarantine(failure.deviceId, nextRetryAt);
+      const message = quarantineCauseMessage(failure.error);
+      const cause: QuarantineCause = {
+        kind: failure.kind,
+        ...(message === undefined ? {} : { message }),
+      };
+      const entered = await this.options.registry.enterQuarantine(
+        failure.deviceId,
+        nextRetryAt,
+        cause,
+      );
       if (failure.leaseId !== undefined) {
         this.options.eventBus.emit(
           "device.purge-failed",
@@ -90,7 +106,13 @@ export class QuarantineCoordinator {
       }
       this.options.eventBus.emit(
         "device.quarantined",
-        { deviceId: failure.deviceId, maxRetries: this.options.config.maxRetries, nextRetryAt },
+        {
+          deviceId: failure.deviceId,
+          maxRetries: this.options.config.maxRetries,
+          nextRetryAt,
+          platform: entered.spec.platform,
+          ...cause,
+        },
         "quarantine-coordinator",
       );
     });
@@ -101,23 +123,35 @@ export class QuarantineCoordinator {
    * why: the claim is taken here and released on every exit, so a reclaim the watcher has just started is never quarantined under it.
    * Answers whether it entered: a caller handing a device over needs to know when one was already claimed or had moved on.
    */
-  async enterFromStalledTransition(deviceId: string, findingState?: DeviceState): Promise<boolean> {
+  async enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     const entered = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.devices.find(
         (candidate) => candidate.id === deviceId,
       );
-      if (findingState !== undefined && current?.state !== findingState) return false;
+      if (current?.state !== findingState) return false;
       const claim = this.options.claims.tryClaim(deviceId, "reclaim");
       if (claim === undefined) return false;
+      // why: a transition the watcher found stalled is `stalled`; any other state is a lease-engine hand-over after a failed destroy.
+      const cause: QuarantineCause =
+        findingState === "provisioning" || findingState === "reclaiming"
+          ? { kind: "stalled", stalledState: findingState }
+          : { kind: "delete-failed" };
+      let entered: DeviceRecord;
       try {
-        await this.options.registry.enterQuarantine(deviceId, nextRetryAt);
+        entered = await this.options.registry.enterQuarantine(deviceId, nextRetryAt, cause);
       } finally {
         claim.release();
       }
       this.options.eventBus.emit(
         "device.quarantined",
-        { deviceId, maxRetries: this.options.config.maxRetries, nextRetryAt },
+        {
+          deviceId,
+          maxRetries: this.options.config.maxRetries,
+          nextRetryAt,
+          platform: entered.spec.platform,
+          ...cause,
+        },
         "quarantine-coordinator",
       );
       return true;
@@ -226,6 +260,7 @@ export class QuarantineCoordinator {
         attempts,
         deviceId: device.id,
         strategy: result.strategy,
+        platform: device.spec.platform,
         ...(result.missingApps === undefined ? {} : { missingApps: result.missingApps }),
       },
       "quarantine-coordinator",
@@ -336,7 +371,12 @@ export class QuarantineCoordinator {
       claim.release();
       this.options.eventBus.emit(
         "device.quarantine-stranded",
-        { attempts, deviceId: device.id, error: stableError(error) },
+        {
+          attempts,
+          deviceId: device.id,
+          error: stableError(error),
+          platform: device.spec.platform,
+        },
         "quarantine-coordinator",
       );
       return;
@@ -363,7 +403,7 @@ export class QuarantineCoordinator {
     claim.release();
     this.options.eventBus.emit(
       "device.quarantine-abandoned",
-      { attempts, deviceId: device.id },
+      { attempts, deviceId: device.id, platform: device.spec.platform },
       "quarantine-coordinator",
     );
     this.options.notifyAvailability();

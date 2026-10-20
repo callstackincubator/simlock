@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConsoleEvent } from "./events";
-import { eventsPerMinute, extremes, HISTORY_MINUTES, leaseHistory, minuteLabel } from "./history";
+import { eventsPerMinute, extremes, HISTORY_MINUTES } from "./history";
 
 const MINUTE = 60_000;
 const NOW = Date.parse("2026-10-02T12:00:30Z");
@@ -16,48 +16,6 @@ function event(name: string, timestamp: number): ConsoleEvent {
 function byMinutesAgo(minutes: readonly { at: number; count: number }[]): Map<number, number> {
   return new Map(minutes.map((minute) => [(CURRENT - minute.at) / MINUTE, minute.count]));
 }
-
-describe("the lease history", () => {
-  it("the lease history counts back from today's leases through granted, released and expired events", () => {
-    const events = [
-      event("lease.granted", NOW + 45_000),
-      event("lease.granted", NOW - 10_000),
-      event("device.ready", NOW - 15_000),
-      event("lease.released", CURRENT - 3 * MINUTE + 5_000),
-      event("lease.expired", CURRENT - 5 * MINUTE + 5_000),
-      event("lease.requested", CURRENT - 10 * MINUTE + 5_000),
-      event("lease.granted", CURRENT - 20 * MINUTE + 5_000),
-    ];
-
-    const minutes = leaseHistory(3, events, NOW);
-
-    expect(minutes).toHaveLength(HISTORY_MINUTES);
-    expect(minutes[0]?.at).toBe(CURRENT - 59 * MINUTE);
-    expect(minutes.at(-1)?.at).toBe(CURRENT);
-    expect(minutes.at(-1)?.label).toBe(minuteLabel(CURRENT));
-    const counts = byMinutesAgo(minutes);
-    expect(counts.get(0)).toBe(3);
-    expect(counts.get(1)).toBe(1);
-    expect(counts.get(2)).toBe(1);
-    expect(counts.get(3)).toBe(1);
-    expect(counts.get(4)).toBe(2);
-    expect(counts.get(5)).toBe(2);
-    expect(counts.get(6)).toBe(3);
-    expect(counts.get(10)).toBe(3);
-    expect(counts.get(20)).toBe(3);
-    expect(counts.get(21)).toBe(2);
-    expect(counts.get(59)).toBe(2);
-  });
-
-  it("the lease history never counts below zero when the events granted more leases than are held now", () => {
-    const events = [event("lease.granted", NOW - 10_000), event("lease.granted", NOW - 20_000)];
-
-    const counts = byMinutesAgo(leaseHistory(1, events, NOW));
-
-    expect(counts.get(0)).toBe(1);
-    expect(counts.get(1)).toBe(0);
-  });
-});
 
 describe("events per minute", () => {
   it("events per minute counts each held event in its minute", () => {

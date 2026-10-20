@@ -34,8 +34,15 @@ export interface ErrorDetailsMap {
   DAEMON_STARTUP_FAILED: Record<string, never>;
   DAEMON_CONNECTION_LOST: Record<string, never>;
 
-  NO_CAPACITY: Record<string, never>;
+  NO_CAPACITY: {
+    readonly capacityReason?:
+      | "device-limit"
+      | "ram-budget"
+      | "global-running-limit"
+      | "platform-running-limit";
+  };
   QUEUE_TIMEOUT: { readonly requestId: string };
+  PROVISION_FAILED: Record<string, never>;
   REQUESTER_ALREADY_LEASED: { readonly requesterId: string; readonly existingLeaseId?: string };
   /** `lease.request` repeated an `idempotencyKey` its requester already used for a different
    * device or a different `leaseId` (a missing one on either side counts as different). The
@@ -94,6 +101,8 @@ export interface ErrorDetailsMap {
   UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
   EXEC_TIMEOUT: Record<string, never>;
   DOCTOR_UNAVAILABLE: Record<string, never>;
+  HISTORY_NOT_KEPT: { readonly oldestTs: number };
+  HISTORY_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
   INTERNAL: Record<string, never>;
 
@@ -120,6 +129,20 @@ export interface ErrorDetailsMap {
    * throws it, once there is a lease to forward.
    */
   WORKER_UNREACHABLE: { readonly workerId: string };
+
+  /** why: `alerts.test` naming a destination the gateway's config does not list, or a gateway with none. */
+  UNKNOWN_ALERT_DESTINATION: { readonly destination: string };
+
+  /**
+   * why: `alerts.test`: the receiver did not take the sample. `status` is a non-2xx answer; `error` is
+   * `timeout`, a network code such as `ECONNREFUSED`, or `network-error`. Never the error's own
+   * message, which can hold the destination's URL.
+   */
+  ALERT_SEND_FAILED: {
+    readonly destination: string;
+    readonly status?: number;
+    readonly error?: string;
+  };
 
   /** ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
@@ -148,6 +171,7 @@ type CodeWithDeclaredDetails = {
 const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true> = {
   PROTOCOL_VERSION_UNSUPPORTED: true,
   QUEUE_TIMEOUT: true,
+  NO_CAPACITY: true,
   REQUESTER_ALREADY_LEASED: true,
   LEASE_ID_TAKEN: true,
   NO_DRIVER: true,
@@ -155,6 +179,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   RELAY_TARGET_MISSING: true,
   RUNTIME_MISSING: true,
   UNKNOWN_MODEL: true,
+  HISTORY_NOT_KEPT: true,
   INSUFFICIENT_DISK_SPACE: true,
   LICENSE_NOT_ACCEPTED: true,
   DOWNLOAD_TIMEOUT: true,
@@ -171,6 +196,8 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   WORKER_CONNECTED: true,
   UNKNOWN_WORKER: true,
   WORKER_UNREACHABLE: true,
+  ALERT_SEND_FAILED: true,
+  UNKNOWN_ALERT_DESTINATION: true,
   UNKNOWN_DAEMON_ERROR: true,
 };
 
@@ -225,6 +252,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   },
   NO_CAPACITY: { code: "NO_CAPACITY", kind: "domain", cliExitCode: 11, httpStatus: 503 },
   QUEUE_TIMEOUT: { code: "QUEUE_TIMEOUT", kind: "domain", cliExitCode: 10, httpStatus: 500 },
+  PROVISION_FAILED: { code: "PROVISION_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
   REQUESTER_ALREADY_LEASED: {
     code: "REQUESTER_ALREADY_LEASED",
     kind: "domain",
@@ -342,6 +370,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 503,
   },
   NUKE_UNAVAILABLE: { code: "NUKE_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
+  HISTORY_NOT_KEPT: { code: "HISTORY_NOT_KEPT", kind: "domain", cliExitCode: 12, httpStatus: 422 },
+  HISTORY_UNAVAILABLE: {
+    code: "HISTORY_UNAVAILABLE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
   INTERNAL: { code: "INTERNAL", kind: "domain", cliExitCode: 1, httpStatus: 500 },
   // 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
   // simply does not implement that operation, which is exactly what "Not Implemented" says.
@@ -373,6 +408,20 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "transport",
     cliExitCode: 1,
     httpStatus: 503,
+  },
+  // why: exit 12 beside `UNKNOWN_WORKER`: what you named does not exist.
+  UNKNOWN_ALERT_DESTINATION: {
+    code: "UNKNOWN_ALERT_DESTINATION",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 404,
+  },
+  // why: 502, the gateway worked and the receiver it called did not take the sample.
+  ALERT_SEND_FAILED: {
+    code: "ALERT_SEND_FAILED",
+    kind: "transport",
+    cliExitCode: 1,
+    httpStatus: 502,
   },
   UNKNOWN_DAEMON_ERROR: {
     code: "UNKNOWN_DAEMON_ERROR",

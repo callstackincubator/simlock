@@ -48,6 +48,7 @@ import {
   isSimlockError,
   requestedClass,
   requestedDevice,
+  capacityReasonSchema,
   type AnySimlockError,
   type Platform,
 } from "../contract/index.js";
@@ -85,11 +86,41 @@ import {
   type RoutableRequest,
   type RoutingDecision,
   type RoutingPolicy,
+  type WorkerExplanation,
 } from "./routing.js";
-import { type Rejection, viewLoadKey } from "./routing/index.js";
+import {
+  type CapacityReason,
+  type Rejection,
+  viewLoadKey,
+  type WorkerReason,
+} from "./routing/index.js";
 
-/** The only worker error codes that mean "this worker cannot serve this request" and so send it to
- * another worker (ADR 0009 §5). Any other code is final. */
+type WorkerEntry = WorkerReason & { readonly workerId: string };
+
+// why: the gateway adds this to the leasing module's entry; the contract's schema is its wire shape.
+export type FleetWaitingRequest = WaitingRequest & { readonly workers?: WorkerEntry[] };
+
+interface Refusal {
+  readonly key: string;
+  readonly capacityReason?: CapacityReason;
+  readonly provisionFailure?: DispatchError;
+}
+
+const CANNOT_SERVE_REASONS: Readonly<Record<string, WorkerReason["reason"]>> = {
+  CAPABILITY_MISSING: "capability-missing",
+  NO_DRIVER: "no-driver",
+  RUNTIME_MISSING: "runtime-missing",
+  UNKNOWN_MODEL: "unknown-model",
+};
+
+// why: the filters that hold a worker back only for now (it is full, busy, not ready or unhealthy), so it could take the request later; any other reason (drained, disconnected, a missing driver, runtime, model or capability) means it will not take it by waiting.
+const COULD_TAKE_LATER: ReadonlySet<WorkerReason["reason"]> = new Set([
+  "busy",
+  "full",
+  "not-ready",
+  "unhealthy",
+]);
+
 const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "UNKNOWN_MODEL",
   "RUNTIME_MISSING",
@@ -165,7 +196,8 @@ export class FleetLeaseCoordinator {
   /** A `WeakMap` so a waiter that never dispatches (rejected, cancelled, timed out) leaks no entry. */
   readonly #createdAt = new WeakMap<FleetWaiter, number>();
   /** A `WeakMap` so the memo dies with the waiter. */
-  readonly #refusals = new WeakMap<FleetWaiter, Map<string, string>>();
+  readonly #refusals = new WeakMap<FleetWaiter, Map<string, Refusal>>();
+  readonly #workerReasons = new WeakMap<FleetWaiter, readonly WorkerEntry[]>();
   /** A `WeakMap` so the memo dies with the waiter. */
   readonly #cannotServe = new WeakMap<FleetWaiter, Map<string, DispatchError>>();
   #dispatchDepth = 0;
@@ -205,8 +237,15 @@ export class FleetLeaseCoordinator {
     this.#emit("queue.changed", { depth: this.#queue.depth });
   }
 
-  waitingRequests(): readonly WaitingRequest[] {
-    return this.requests.waiting(this.#queue.places());
+  waitingRequests(): readonly FleetWaitingRequest[] {
+    const queued = new Map(this.#queue.list().map((waiter) => [waiter.id, waiter]));
+    return this.requests.waiting(this.#queue.places()).map((entry) => {
+      const waiter = queued.get(entry.id);
+      const workers = waiter === undefined ? undefined : this.#workerReasons.get(waiter);
+      return entry.stage === "queued" && workers !== undefined
+        ? { ...entry, workers: [...workers] }
+        : entry;
+    });
   }
 
   // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option (`authorizeLookups.ownerId`); the audit cannot follow a call through a structural type.
@@ -736,23 +775,112 @@ export class FleetLeaseCoordinator {
     const refusals = this.#cannotServe.get(waiter);
     // A worker claimed this pass or one that answered `NO_CAPACITY` is busy, not unable, so it
     // stays in the table's view.
-    const views = this.options.views
-      .routingViews()
-      .filter((worker) => refusals?.has(worker.id) !== true);
+    const allViews = this.options.views.routingViews();
+    const views = allViews.filter((worker) => refusals?.has(worker.id) !== true);
     const request = routable(waiter);
     const verdict = this.options.routing.assess(request, views);
     if (verdict.kind === "reject") {
       this.#rejectUnservable(waiter, verdict, refusals);
       return false;
     }
+    const reasons = this.#reasonsFor(waiter, request, allViews, {
+      claimed: (workerId) => claimedThisPass.has(claimKey(workerId)),
+    });
+    this.#workerReasons.set(waiter, reasons);
     const eligibleWorkers = views.filter(
       (worker) => !claimedThisPass.has(claimKey(worker.id)) && !this.#refused(waiter, worker),
     );
     const decision = this.options.routing.select(request, eligibleWorkers);
-    if (decision === undefined) return false;
+    if (decision === undefined) {
+      this.#rejectIfEveryWorkerFailedProvisioning(waiter, request, views);
+      return false;
+    }
     claimedThisPass.add(claimKey(decision.workerId));
     this.#beginAttempt(waiter, decision, forwardedModel(request, eligibleWorkers, decision));
     return true;
+  }
+
+  // why: the first failing check wins, in the order the spec lists: a filter reason, an unreachable target, a cannot-serve memo, a refusal at the current view, a claim this pass, a rank zero reason, else not-chosen.
+  #reasonsFor(
+    waiter: FleetWaiter,
+    request: RoutableRequest,
+    views: readonly WorkerView[],
+    options: {
+      readonly claimed?: (workerId: string) => boolean;
+      readonly unreachable?: string;
+    } = {},
+  ): readonly WorkerEntry[] {
+    const explained = new Map(
+      this.options.routing.explain(request, views).map((entry) => [entry.workerId, entry]),
+    );
+    return views.map(
+      (view): WorkerEntry => ({
+        ...this.#reasonFor(waiter, view, explained.get(view.id), options),
+        workerId: view.id,
+      }),
+    );
+  }
+
+  #reasonFor(
+    waiter: FleetWaiter,
+    view: WorkerView,
+    entry: WorkerExplanation | undefined,
+    options: { readonly claimed?: (workerId: string) => boolean; readonly unreachable?: string },
+  ): WorkerReason {
+    if (entry?.filter !== undefined) return entry.filter;
+    if (options.unreachable === view.id) return { reason: "disconnected" };
+    const claimed = options.claimed?.(view.id) === true;
+    return (
+      this.#cannotServeReason(waiter, view.id) ??
+      this.#refusedReason(waiter, view, entry?.zero) ??
+      passedOver(claimed, entry?.zero)
+    );
+  }
+
+  #cannotServeReason(waiter: FleetWaiter, workerId: string): WorkerReason | undefined {
+    const code = this.#cannotServe.get(waiter)?.get(workerId)?.code;
+    const reason = code === undefined ? undefined : CANNOT_SERVE_REASONS[code];
+    return reason === undefined ? undefined : { reason };
+  }
+
+  #refusedReason(
+    waiter: FleetWaiter,
+    view: WorkerView,
+    zero: WorkerReason | undefined,
+  ): WorkerReason | undefined {
+    if (!this.#refused(waiter, view)) return undefined;
+    const refusal = this.#refusals.get(waiter)?.get(view.id);
+    // why: a failed provision is no capacity refusal; the worker lists as one that passed every check.
+    if (refusal?.provisionFailure !== undefined) return undefined;
+    const capacityReason = refusal?.capacityReason ?? zero?.capacityReason;
+    return capacityReason === undefined ? { reason: "full" } : { capacityReason, reason: "full" };
+  }
+
+  // why: a second failed provision walks on like a cannot-serve code, and only when every worker that could take the request failed so does it end with the last answer; a worker held back only for now (full, busy, not ready, unhealthy) could take it later, so it keeps the request queued.
+  #rejectIfEveryWorkerFailedProvisioning(
+    waiter: FleetWaiter,
+    request: RoutableRequest,
+    views: readonly WorkerView[],
+  ): void {
+    const refusals = this.#refusals.get(waiter);
+    if (refusals === undefined) return;
+    const open = this.options.routing
+      .explain(request, views)
+      .filter((entry) => entry.filter === undefined || COULD_TAKE_LATER.has(entry.filter.reason))
+      .map((entry) => entry.workerId);
+    const failed = [...refusals]
+      .filter(([workerId]) => open.includes(workerId))
+      .flatMap(([workerId, refusal]) =>
+        refusal.provisionFailure === undefined
+          ? []
+          : [{ failure: refusal.provisionFailure, workerId }],
+      );
+    const last = failed.at(-1);
+    if (last === undefined || failed.length < open.length) return;
+    this.#reject(waiter, last.failure, "worker-failed", {
+      code: last.failure.code,
+      worker: last.workerId,
+    });
   }
 
   /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and
@@ -828,7 +956,7 @@ export class FleetLeaseCoordinator {
     if (client === undefined) {
       // The view named a worker that is no longer reachable by the time we got here -- the same
       // "stale, not wrong" story as a worker's own `NO_CAPACITY`, just discovered a step earlier.
-      this.#staleView(waiter, workerId);
+      this.#staleView(waiter, workerId, { unreachable: true });
       return;
     }
 
@@ -923,7 +1051,9 @@ export class FleetLeaseCoordinator {
       // work already started means the request was this worker's (§11's own wording). Re-queuing
       // it anyway silently reversed a dispatch the caller had already been told about.
       if (isSimlockError(error) && error.code === "NO_CAPACITY" && !announced) {
-        this.#rememberRefusal(waiter, workerId);
+        this.#rememberRefusal(waiter, workerId, {
+          capacityReason: refusedCapacityReason(error.details),
+        });
         if (waiter.options.noWait === true) {
           this.#refreshView(workerId);
           // ADR 0009 §5: one more walk, with this worker left out until its view changes. A
@@ -935,9 +1065,15 @@ export class FleetLeaseCoordinator {
         this.#staleView(waiter, workerId);
         return;
       }
-      // ADR 0009 §5: the worker says it cannot serve this request at all, before any device work.
-      // Another worker may, so the request goes back to the walk without this one. After a
-      // progress push the failure falls through to the terminal branch below, as today.
+      // why: a provision failure before the worker's progress push did no device work, so another worker may serve it and the walk goes on without this one; after a progress push it falls through to the terminal branch below, as today.
+      if (isSimlockError(error) && error.code === "PROVISION_FAILED" && !announced) {
+        this.#rememberRefusal(waiter, workerId, {
+          provisionFailure: this.#classifyRelayedError(error, workerId),
+        });
+        this.#refreshView(workerId);
+        this.#admit(waiter);
+        return;
+      }
       if (isSimlockError(error) && CANNOT_SERVE_CODES.has(error.code) && !announced) {
         this.#rememberCannotServe(waiter, workerId, this.#classifyRelayedError(error, workerId));
         this.#refreshView(workerId, { includeCatalog: true });
@@ -1014,7 +1150,21 @@ export class FleetLeaseCoordinator {
    * this from a target that turned out unreachable, and from a grant whose id was not the one
    * asked for (`noWait` included, in both); a `noWait` caller refused with `NO_CAPACITY` is
    * settled in `#attempt` instead (ADR 0009 §5). */
-  #staleView(waiter: FleetWaiter, workerId: string): void {
+  #staleView(
+    waiter: FleetWaiter,
+    workerId: string,
+    options: { readonly unreachable?: boolean } = {},
+  ): void {
+    // why: the walk that picked this worker ran before its answer; the entries must say what is true now.
+    this.#workerReasons.set(
+      waiter,
+      this.#reasonsFor(
+        waiter,
+        routable(waiter),
+        this.options.views.routingViews(),
+        options.unreachable === true ? { unreachable: workerId } : {},
+      ),
+    );
     this.#enqueue(waiter);
     this.#refreshView(workerId);
   }
@@ -1035,18 +1185,33 @@ export class FleetLeaseCoordinator {
     this.#cannotServe.set(waiter, refusals);
   }
 
-  #rememberRefusal(waiter: FleetWaiter, workerId: string): void {
+  #rememberRefusal(
+    waiter: FleetWaiter,
+    workerId: string,
+    detail: {
+      readonly capacityReason?: CapacityReason | undefined;
+      readonly provisionFailure?: DispatchError;
+    } = {},
+  ): void {
     const view = this.options.views.views().find((worker) => worker.id === workerId);
     if (view === undefined) return;
-    const refusals = this.#refusals.get(waiter) ?? new Map<string, string>();
-    refusals.set(workerId, viewLoadKey(view));
+    const refusals = this.#refusals.get(waiter) ?? new Map<string, Refusal>();
+    // why: delete first so the map's order is the order the workers answered in; the last failure ends the request.
+    refusals.delete(workerId);
+    refusals.set(workerId, {
+      key: viewLoadKey(view),
+      ...(detail.capacityReason === undefined ? {} : { capacityReason: detail.capacityReason }),
+      ...(detail.provisionFailure === undefined
+        ? {}
+        : { provisionFailure: detail.provisionFailure }),
+    });
     this.#refusals.set(waiter, refusals);
   }
 
   /** Whether `worker` refused `waiter` and its view has not changed since. */
   #refused(waiter: FleetWaiter, worker: WorkerView): boolean {
     const refusals = this.#refusals.get(waiter);
-    const key = refusals?.get(worker.id);
+    const key = refusals?.get(worker.id)?.key;
     if (key === undefined) return false;
     if (key === viewLoadKey(worker)) return true;
     // why: a device unplugged and plugged back in returns the view to the key it was refused at; the refusal must end at the first change.
@@ -1316,6 +1481,21 @@ function forwardedModel(
   if (request.model === undefined || request.physical === true) return {};
   const view = views.find((worker) => worker.id === decision.workerId);
   return { model: (view === undefined ? undefined : matchRequest(view, request)) ?? request.model };
+}
+
+// why: a relayed error's details are a claim; only a value of the contract's enum is kept.
+function refusedCapacityReason(details: unknown): Refusal["capacityReason"] {
+  const parsed = capacityReasonSchema.safeParse(
+    typeof details === "object" && details !== null && "capacityReason" in details
+      ? details.capacityReason
+      : undefined,
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+// why: a worker claimed earlier in the walk, or one nothing else names, lost to the worker picked.
+function passedOver(claimed: boolean, zero: WorkerReason | undefined): WorkerReason {
+  return claimed || zero === undefined ? { reason: "not-chosen" } : zero;
 }
 
 function leaseIdTaken(leaseId: string): DispatchError {

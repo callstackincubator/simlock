@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { waitingRequestSchema } from "../../../src/contract/index";
 import {
   chooseWaiting,
   requestedDevice,
@@ -170,5 +171,133 @@ describe("choosing a waiting request", () => {
 
   it("calls a named request that is no longer waiting gone, and chooses nothing", () => {
     expect(chooseWaiting(rows, "granted", rows)).toEqual({ chosen: undefined, gone: true });
+  });
+});
+
+describe("why a request waits", () => {
+  const withReason = (reason: string, platform: "ios" | "android" = "ios") =>
+    rowOf({
+      reason,
+      spec: { model: "Device", platform },
+    } as unknown as Partial<WaitingRequest>);
+  const whyOf = (row: WaitingRow) => (row as { why?: string }).why;
+
+  it.each([
+    ["behind-earlier-request", "ios", "Behind an earlier request"],
+    ["device-limit", "ios", "Full: device limit"],
+    ["ram-budget", "ios", "Full: RAM budget"],
+    ["global-running-limit", "ios", "Full: running limit"],
+    ["platform-running-limit", "ios", "Full: running limit for iOS"],
+    ["platform-running-limit", "android", "Full: running limit for Android"],
+    ["waiting-for-device", "ios", "A matching device is starting"],
+    ["no-free-physical", "ios", "Every matching device is leased or absent"],
+  ] as const)("is the text for %s on %s: %s", (reason, platform, text) => {
+    expect(whyOf(withReason(reason, platform))).toBe(text);
+  });
+
+  it("is the raw word for a reason a newer daemon sends, and absent for a request with no reason", () => {
+    expect(whyOf(withReason("hibernating"))).toBe("hibernating");
+    expect(whyOf(rowOf())).toBeUndefined();
+  });
+
+  it("has a text for every reason the contract's enum lists", () => {
+    const field = (waitingRequestSchema.shape as Record<string, unknown>)["reason"];
+    expect(field).toBeDefined();
+    const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
+
+    expect(listed).toHaveLength(7);
+    for (const reason of listed) {
+      const why = whyOf(withReason(reason));
+      expect(why).toBeDefined();
+      expect(why).not.toBe(reason);
+    }
+  });
+});
+
+describe("the waiting table on a gateway", () => {
+  const gatewayWorkers: NonNullable<WaitingRequest["workers"]> = [
+    { reason: "drained", workerId: "wrk_1" },
+    { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_2" },
+    { reason: "busy", workerId: "wrk_gone" },
+  ];
+
+  it("gives one Why row per worker, named by its label, else its id, else the raw id of a worker it has no view of", () => {
+    const row = rowOf({ workers: gatewayWorkers }, [
+      worker({ id: "wrk_1", label: "mac-mini-1" }),
+      worker({ id: "wrk_2" }),
+    ]);
+
+    expect(row.workers).toEqual([
+      { name: "mac-mini-1", text: "Drained" },
+      { name: "wrk_2", text: "Full: running limit for iOS" },
+      { name: "wrk_gone", text: "Busy with its own queue" },
+    ]);
+  });
+
+  it("writes the platform of the request into the running limit and the driver", () => {
+    const android = { spec: { model: "Pixel 8", platform: "android" as const } };
+
+    expect(
+      rowOf({
+        ...android,
+        workers: [
+          { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_1" },
+          { reason: "no-driver", workerId: "wrk_2" },
+        ],
+      }).workers?.map((entry) => entry.text),
+    ).toEqual(["Full: running limit for Android", "No Android support"]);
+  });
+
+  it.each([
+    ["disconnected", undefined, "Not connected"],
+    ["incompatible", undefined, "Protocol mismatch"],
+    ["not-ready", undefined, "Not ready yet"],
+    ["unhealthy", undefined, "Not running"],
+    ["drained", undefined, "Drained"],
+    ["busy", undefined, "Busy with its own queue"],
+    ["no-driver", undefined, "No iOS support"],
+    ["unknown-model", undefined, "Model not offered"],
+    ["runtime-missing", undefined, "OS not installed"],
+    ["capability-missing", undefined, "Missing capability"],
+    ["full", undefined, "Full"],
+    ["full", "device-limit", "Full: device limit"],
+    ["full", "ram-budget", "Full: RAM budget"],
+    ["full", "global-running-limit", "Full: running limit"],
+    ["no-free-physical", undefined, "Every matching device is leased or absent"],
+    ["not-chosen", undefined, "Not chosen this time"],
+  ] as const)("writes %s with capacity reason %s as '%s'", (reason, capacityReason, text) => {
+    const entry = { ...(capacityReason === undefined ? {} : { capacityReason }), reason };
+
+    expect(rowOf({ workers: [{ ...entry, workerId: "wrk_1" }] }).workers).toEqual([
+      { name: "wrk_1", text },
+    ]);
+  });
+
+  it("has a text for every gateway reason the contract's enum lists", () => {
+    const field = (waitingRequestSchema.shape as Record<string, unknown>)["workers"];
+    expect(field).toBeDefined();
+    const listed = (
+      field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
+    ).unwrap().element.shape.reason.options;
+
+    expect(listed).toHaveLength(13);
+    for (const reason of listed) {
+      const text = rowOf({ workers: [{ reason, workerId: "wrk_1" } as never] }).workers?.[0]?.text;
+      expect(text).toMatch(/^[A-Z]/);
+      expect(text).not.toContain("-");
+    }
+  });
+
+  it("shows a reason it has no text for as the word the daemon sent", () => {
+    const row = rowOf({ workers: [{ reason: "from-the-future", workerId: "wrk_1" } as never] });
+
+    expect(row.workers?.[0]?.text).toBe("from-the-future");
+  });
+
+  it("keeps a single-host entry's one Why row and gives it no worker rows", () => {
+    const row = rowOf({ reason: "ram-budget" });
+
+    expect(row.why).toBe("Full: RAM budget");
+    expect(row.workers).toBeUndefined();
   });
 });

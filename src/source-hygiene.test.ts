@@ -54,12 +54,21 @@ function sha256Sums(name: string): [string, string][] {
 
 /**
  * why: a committed binary is never searched as text -- built fixtures the e2e lane installs, and
- * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (a packed server APK). Both kinds hold raw NUL bytes by nature, which is what makes them unsearchable: that
+ * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (a packed server APK), and
+ * the website's fonts and images. All of them hold raw NUL bytes by nature, which is what makes them unsearchable: that
  * is a claim about their contents, so for `vendor/` the test that compares this list against the
  * files in `vendor/` that actually carry a NUL is what makes the skip mean something.
  */
 const isCommittedBinary = (name: string): boolean =>
-  name.startsWith("e2e/fixtures/") || pinnedVendoredArtifacts.has(name);
+  name.startsWith("e2e/fixtures/") || pinnedVendoredArtifacts.has(name) || isWebsiteAsset(name);
+
+/**
+ * why: the website ships its own fonts and the images `pnpm og` renders (the social card, the
+ * README banner, the icons); they are pictures and type, never searched as text. Only those
+ * kinds under `website/` are skipped, so a NUL in any of its code still fails.
+ */
+const isWebsiteAsset = (name: string): boolean =>
+  /^website\/(public|src\/fonts)\/[^/]+\.(woff2|png|jpg)$/.test(name);
 
 /**
  * why: a raw NUL byte in a text file makes `grep` and `ripgrep` classify the whole file as
@@ -70,8 +79,8 @@ const isCommittedBinary = (name: string): boolean =>
  * Enumerated from `git ls-files` rather than a directory walk so the check sees every
  * tracked file in the repository (testing rule 4), not just the directories this test
  * happened to name. The exceptions are the committed binaries `isCommittedBinary` names:
- * built binaries committed for tests, and the vendored third-party artifacts, none of
- * which is ever searched as text. Untracked and ignored files are out of scope:
+ * built binaries committed for tests, the vendored third-party artifacts, and the
+ * website's fonts and images, none of which is ever searched as text. Untracked and ignored files are out of scope:
  * they are not part of what anyone clones or searches.
  */
 describe("tracked files", () => {
@@ -95,6 +104,8 @@ describe("tracked files", () => {
 
   it("hold no committed binary and still hold e2e/appduct-fixtures.test.ts", () => {
     expect(trackedFiles.filter(isCommittedBinary)).toEqual([]);
+    expect(isWebsiteAsset("website/src/fonts/Switzer-Regular.woff2")).toBe(true);
+    expect(isWebsiteAsset("website/src/site/content.ts")).toBe(false);
     expect(trackedFiles).toContain("e2e/appduct-fixtures.test.ts");
   });
 

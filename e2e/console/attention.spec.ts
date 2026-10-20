@@ -374,6 +374,9 @@ test.describe("the attention view", () => {
       expect(quarantined?.id).toBeTruthy();
       expect(stalled?.id).toBeTruthy();
 
+      await item(page, "quarantined", `iPhone 16 on ${name}`).click();
+      await expect(facts(page)).toContainText(/Cause\s*Purge failed: Error: erase failed/);
+
       await item(page, "over RAM budget", name).click();
       await expect(facts(page)).toContainText(/Used\s*\d+\.\d\d GiB/);
       await expect(facts(page)).toContainText(/Limit\s*\d+\.\d\d GiB/);

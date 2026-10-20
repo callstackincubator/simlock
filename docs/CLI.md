@@ -3,7 +3,7 @@
 Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status`, `catalog`, and
+agents are the primary audience. `status`, `catalog`, `stats`, `whoami`, and
 `daemon <start|stop|status|logs>` are the exception: they default to a
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
@@ -19,7 +19,8 @@ On failure, every command writes one structured line to stderr:
 
 `code` is the daemon's own error code where the failure came from the
 daemon, or a stable CLI-level code otherwise: `USAGE` for bad flags/missing
-arguments/unknown commands, `INTERNAL` for anything unexpected. An unknown
+arguments/unknown commands, `DAEMON_STARTUP_FAILED` for a failed auto-start,
+`INTERNAL` for anything unexpected. An unknown
 command or a missing required argument gets a `message` that ends with a
 pointer to `simlock --help`, so a human hitting one from a terminal isn't
 stranded with only a JSON blob — the full command banner itself is no
@@ -78,13 +79,16 @@ command starts it again) to bring the platform up.
 |---|---|---|
 | 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
-| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout |
+| 1 | `DAEMON_STARTUP_FAILED` | the daemon was started but did not accept connections before the startup timeout, or answered the handshake then closed before the CLI's startup status probe answered |
+| 1 | `PROVISION_FAILED` | creating a device for the request failed twice; the message is the driver's error |
+| 1 | `HISTORY_UNAVAILABLE` | `stats` while `history.db` could not be opened, so the usage figures cannot be read; the daemon's log says why |
 | 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down), or a worker named with `component install --worker` cannot be asked |
+| 1 | `ALERT_SEND_FAILED` | `alerts test`: the receiver answered with a status that is not `2xx`, could not be reached, or did not answer within 10 seconds; the message says which |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker, or for `component install` name the workers with `--worker` or `--all-workers` |
-| 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers (`worker drain`, `undrain`, `remove`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
+| 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers or alert destinations (`worker drain`, `undrain`, `remove`, `alerts test`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — usually a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb`/`devicectl` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
@@ -103,19 +107,21 @@ command starts it again) to bring the platform up.
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` or `component install --worker` naming a worker the gateway does not know |
+| 12 | `UNKNOWN_ALERT_DESTINATION` | `alerts test` naming a destination the gateway's `gateway.alerts.destinations` does not list, or a gateway with none |
 | 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
 | 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
 | 12 | `DEVICE_NOT_ENROLLABLE` | `device add` of a device that cannot be enrolled; the message says why |
 | 12 | `UNKNOWN_DEVICE` | `device remove` of an ID that is not an enrolled device |
+| 12 | `HISTORY_NOT_KEPT` | `stats` for a window that ends before the oldest usage figure the history holds; the message names when the figures start |
 | 12 | `COMPONENT_IN_USE` | `component remove` of a component a device uses, Simlock's or your own |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds `lease.maxPerRequester` leases (default 1) or has a pending request; release the named lease first |
 | 13 | `LEASE_ID_TAKEN` | `lease --lease-id` named an ID an active lease or a waiting request already holds |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 | 15 | — | `component install --worker`/`--all-workers` on a gateway only: at least one worker did not end `installed` or `already-installed` (it refused, failed, was skipped, or its result is unknown) |
 
-Every row but 14 and 15 matches the `cliExitCode` column of the contract's
+Every row but the dash rows matches the `cliExitCode` column of the contract's
 error table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does
-not maintain a second mapping. 14 and 15 are not daemon error codes but
+not maintain a second mapping. The dash rows 14 and 15 are not daemon error codes but
 outcomes of a command that succeeded: 14 of a `lease` that stays alive, so it
 lives beside the table's other `lease` outcome, 0; 15 of an install on
 several workers, whose per-worker report on stdout says which worker ended
@@ -125,7 +131,7 @@ surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
 exception, and exits `14`.
 
-The six fleet codes are placed on existing numbers rather than new
+The fleet codes are placed on existing numbers rather than new
 ones, and the numbers are fixed by the contract's error table in the PRs that
 implement them:
 
@@ -951,6 +957,7 @@ catalog has not arrived, is neither.
 | A known worker could serve it, but none that takes requests can | `NO_CAPACITY` (exit 11) at once |
 | The request requires capabilities (programmatic client only), and no connected worker that could serve it has all of them available | `CAPABILITY_MISSING` (exit 12) at once; `capabilities` names the required ones |
 | A worker that takes requests can serve it but is busy | Waits in the queue; `NO_CAPACITY` only with `--no-wait` |
+| A worker fails to create a device for it twice (`PROVISION_FAILED`), before it reported any progress | The gateway asks the next worker; when every worker that could take it has failed so, the request fails with `PROVISION_FAILED` (exit 1) and the last worker's message, and a request that was waiting is rejected the same way. A worker that is only full, busy, not ready or unhealthy keeps it waiting. After the worker reported progress, `PROVISION_FAILED` reaches you as it is and the next worker is not asked |
 
 "At once" holds with and without `--no-wait` and `--timeout`, and the same
 requester can ask again right away. The table also applies to a request that is
@@ -1076,7 +1083,7 @@ install <apk>` and `devicectl device install app <path>` resolve their path on t
 artifact has to be there already (a shared volume, a CI checkout on that
 machine).
 
-**Seven commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
+**These commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
 2): `simlock nuke`, `simlock cleanup`, `simlock doctor`, `simlock component
 list`, `simlock component remove`, `simlock device add` and `simlock device
 remove`. The first five act on one machine's devices or components as a
@@ -1303,6 +1310,43 @@ token on the gateway with `simlock token create --role worker`, put it in the
 worker's `gateway.token` alongside `gateway.url`, and start it. `simlock
 token revoke <token-id>` closes any uplink that token opened.
 
+## `simlock alerts test <destination> [--json]`
+
+Sends one sample message to one of the gateway's alert destinations
+(`gateway.alerts.destinations`, see the configuration reference) and says
+whether the receiver took it, so a wrong URL or secret shows before an outage,
+not during one. It needs the `admin` role and a gateway: a single host answers
+`UNSUPPORTED_IN_WORKER_MODE` (exit 2). `<destination>` is a destination's
+`name`, 1 to 32 characters.
+
+```
+$ simlock alerts test ops-slack
+Sent a test message to ops-slack: HTTP 200
+
+$ simlock alerts test ops-slack --json
+{"destination":"ops-slack","status":200}
+```
+
+The command makes one try and waits at most 10 seconds for the answer. Any
+`2xx` status is success. It fails with `ALERT_SEND_FAILED` (exit 1) when the
+receiver answers another status (a redirect is not followed), when it cannot be
+reached (the message names the network code, for example `ECONNREFUSED`, never
+the URL), or when it does not answer in time:
+
+```
+{"error":{"code":"ALERT_SEND_FAILED","message":"ops-slack answered HTTP 404"}}
+{"error":{"code":"ALERT_SEND_FAILED","message":"ops-slack could not be reached: ECONNREFUSED"}}
+{"error":{"code":"ALERT_SEND_FAILED","message":"ops-slack did not answer within 10 s"}}
+```
+
+A name the gateway has not configured, or a gateway with no destinations, fails
+with `UNKNOWN_ALERT_DESTINATION` (exit 12). The sample goes out at once, beside
+the destination's own queue: it does not wait for a message that is retrying,
+and it is not retried. A message already being sent may reach the receiver at
+the same time, in either order. `simlock alerts` and `simlock alerts --help`
+print the usage and exit 0; a missing name or an unknown subcommand is a usage
+error (exit 2).
+
 ## `simlock mcp`
 
 Start Simlock's local stdio MCP server. It accepts no flags. Standard output is
@@ -1370,6 +1414,22 @@ under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
 `allowDownload`, `requesterId`, ...); those did not change shape, only their
 schema's source of truth.
 
+## `simlock whoami [--json]`
+
+Prints who Simlock thinks you are, for this CLI's own session: the principal,
+the name to show, the role and how you signed in. Like every command it
+starts the daemon when none runs.
+
+```
+$ simlock whoami
+Principal: claude-1
+Name:      claude-1
+Role:      admin
+Via:       socket
+```
+
+`--json` prints `{"principal","name","role","via"}` as one object.
+
 ## `simlock status`
 
 In `status --json`, an enrolled physical device's entry carries `driverDeviceId`,
@@ -1414,6 +1474,16 @@ threshold (see `simlock doctor` below): it stays visible in `status` and
 the background (a physical device included, which is unenrolled, never destroyed, when its
 retries run out), and is never handed to a new requester.
 
+A quarantined device says what failed. `status` ends its marker with `;` and the
+cause, for example `(purge retry 0, next retry at 1760619150000; purge failed:
+DriverCrashError: simctl erase exited 164)`. The cause is `purge failed`,
+`shutdown failed` or `delete failed` followed by the tool's error message (cut to
+300 characters), or `stalled while provisioning` or `stalled while reclaiming`,
+which has no message. `status --json` and `list --devices` carry it as
+`quarantineCause` (`kind`, and `stalledState` or `message`). A device quarantined
+before the cause was recorded shows none. The cause goes when the device leaves
+quarantine. A caller with an agent role sees the kind but not the message.
+
 A device currently `provisioning` or `reclaiming` carries a derived
 `transitionAgeMs` — how long it has been in that state — visible in `status`
 and `list --devices` well before it crosses the threshold that would make
@@ -1442,6 +1512,22 @@ first 15 seconds after a start. A part that could not be read says
 `unavailable`. `pressure` is shown where the operating system reports one
 (macOS). Until the first reading finishes the line is absent, and `--json`
 carries no `load`.
+
+Once startup has finished, `status` adds a `History:` line when the event
+history needs attention, and nothing when it is healthy. If the history is not
+being written (a write failed, or the file could not be opened), it says
+`History: the event history is not being written; see daemon.log.` If this
+start found `history.db` damaged and renamed it aside, it says `History: the
+event history was damaged and set aside at 2026-10-16 09:12; a fresh one was
+started.` (local time); the damaged file stays beside the new one as
+`history.db.damaged-<epoch ms>`. If a start found the usage figures kept
+beside the events out of shape and rebuilt them from the event history, it says
+`History: figures were rebuilt from the event history at 2026-10-16 09:12.`
+(local time); if that rebuild failed, `History: figures could not be rebuilt;
+see daemon.log.` The lines can appear together. In `--json` the block is
+`history`: `opened`, `writing` and, after a set-aside, `setAsideAt` (epoch ms),
+after a rebuild `rebuiltAt` (epoch ms), after a failed one `rebuildFailed:
+true`; the daemon sends it while starting too.
 
 `--json` prints the answer as the daemon sent it, with `devices`, `leases`,
 `capacity`, `queueDepth` and `physicalQueueDepth` absent. On a gateway, a worker that is still starting
@@ -1564,7 +1650,8 @@ configuration, and a gateway runs no reaper.
 rather than JSON:
 
 ```
-Request req_7: agent-b, ios iPhone 16 18.4 mode slim, queued at 2, waiting 12s
+Request req_7: agent-b, ios iPhone 16 18.4 mode slim, queued at 2, waiting 12s — full: running limit for iOS
+Request req_8: agent-c, ios iPhone 16, queued at 3, waiting 8s — behind an earlier request
 Request req_9: local-agent on 2b026432-7743-4a08-98fc-ce494d11866f, ios iPhone 16, starting, waiting 3s
 ```
 
@@ -1576,7 +1663,13 @@ of it that are already starting included. It counts within the request's own
 line: a physical request, which the line marks `physical`, waits apart from
 simulator and emulator requests. `starting` means the daemon is working
 on it: placing it as it arrives, or finding, creating, booting or downloading
-a device for it. With nothing waiting it prints
+a device for it. A `queued` line ends with ` — ` and the reason the daemon's
+latest attempt to place the request stopped, when it has one: `behind an
+earlier request`, `full: device limit`, `full: RAM budget`, `full: running
+limit`, `full: running limit for iOS` (or `Android`), `a matching device is starting`, or `every
+matching device is leased or absent`. The reason is the daemon's latest attempt, so it can change
+while the request waits; a `starting` line has none. On a gateway, a worker's
+own queued entries keep their reason. With nothing waiting it prints
 `No requests are waiting.` A granted, failed or cancelled request is not
 listed.
 
@@ -1586,6 +1679,30 @@ agents, with ` on <workerId>`. A request the gateway has sent to a worker is
 listed once, as the gateway's. A disconnected worker's requests are not
 listed. A worker's request is stamped by that worker's clock, so if that
 clock is off, its time waited is off by as much.
+
+A request waiting in the gateway's own queue also says why each worker the
+gateway knows cannot take it now: one line under the request per worker, two
+spaces, the worker's label (its id when it has none), a colon and the reason.
+Only the first letter of the reason is lower-cased:
+
+```
+Request req_3: ci, ios iPhone 16, queued at 1, waiting 42s
+  wrk_a: drained
+  wrk_b: full: running limit for iOS
+  wrk_c: oS not installed
+  wrk_d: busy with its own queue
+```
+
+The reasons are `not connected`, `protocol mismatch` (the worker and the
+gateway share no protocol version), `not ready yet`, `not running`, `drained`,
+`busy with its own queue`, `no iOS support` (or `Android`), `model not
+offered`, `oS not installed`, `missing capability`, `full` (with `: device
+limit`, `: RAM budget`, `: running limit` or `: running limit for iOS`/`Android`
+when the worker said which), `every matching device is leased or absent`, and
+`not chosen this time` (the worker could take it, and the gateway picked or
+kept another). The lines are from the gateway's latest look at the request and
+change while it waits. A `starting` request has none, and neither does a
+request in a worker's own queue, which keeps its one reason after ` — `.
 
 ## `simlock catalog [--platform <ios|android>] [--json]`
 
@@ -2238,16 +2355,18 @@ history from before the upgrade that added it is not shown.
   (`eventBuffer.capacity`, 1000 by default), which start empty after a
   restart.
 - `--since 1h` reaches further back. Every event is also written to
-  `~/.simlock/events.jsonl`, which survives restarts and crashes, so
+  `~/.simlock/history.db`, which survives restarts and crashes, so
   `--since` returns events from before the last restart and beyond the
-  in-memory limit, across every generation of the file, back to the oldest
-  event it still holds. Durations take `ms`, `s`, `m`, `h` and `d` units
+  in-memory limit, back to the oldest event it still holds. Durations take `ms`, `s`, `m`, `h` and `d` units
   (`--since 2d`); a bare number is milliseconds. The history is kept for
   `eventLog.retention` (seven days by default), with `eventLog.maxBytes` as
   a size backstop (see [CONFIGURATION.md](CONFIGURATION.md)); the oldest
   events go first.
-- `--since` without `--follow`, with no daemon running, reads the file
-  directly and does not start a daemon. `--follow` starts one as usual.
+- `--since` without `--follow`, with no daemon running, reads `history.db`
+  directly and does not start a daemon. With no `history.db` it prints
+  nothing and exits 0; with one it cannot read it prints one JSON error line
+  on stderr and exits 1. `--follow` starts a daemon as usual. An
+  `events.jsonl` left by an earlier version is never read.
 - `--follow` keeps streaming live events. With `--since`, it prints that
   history first and then streams, with no event missing or printed twice
   where the two meet.
@@ -2260,7 +2379,7 @@ the payload, interleaved with the gateway's own `worker.connected` /
 `worker.rejected` is how you find out why a machine never appeared in
 `simlock worker list` at all — it reports an uplink refused at the door,
 which nothing else records. The gateway writes these relayed events to its
-own `events.jsonl` along with its own, so `--since` reaches back across a
+own `history.db` along with its own, so `--since` reaches back across a
 gateway restart. It holds only what arrived while the gateway was up — a
 worker's events from before its uplink connected are not backfilled.
 
@@ -2273,7 +2392,77 @@ gateway's order. A replay (`simlock events`, `--since`) prints events by
 millisecond. `--follow` prints each live push as it arrives, so a relayed event
 from a worker whose clock is behind prints after a later gateway event.
 
+## `simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]`
+
+Print how the fleet was used over a window: requests, how each grant was
+served, waits, held time, rejections, incidents and use per platform, per
+worker and per requester. Run against a gateway it reports the whole fleet,
+with one row per worker; run against a single host it reports that host as
+one worker.
+
+```
+$ simlock stats --since 30d          # a host upgraded yesterday
+Usage from 2026-09-16T12:00:00.000Z to 2026-10-16T13:04:12.345Z
+Figures cover from 2026-10-15T09:12:00.000Z: the history does not reach back to the start of the window.
+
+Totals
+  Requests:     214 (209 granted, 5 rejected)
+  Granted:      warm 160, booted 41, provisioned 8
+  Rejected:     no-wait 3, timeout 2
+  Wait:         p50 400ms, p95 38s, max 2m 10s (214 samples)
+  ...
+```
+
+- With no flag the window is the last 24 hours. `--since 7d` is that long
+  back from now. `--from` and `--to` name the ends as ISO 8601 times with a
+  `Z` or an offset (`2026-10-15T00:00Z`, `2026-10-15T00:00:00+02:00`); without
+  `--to` the window ends now. `--since` with `--from`, `--to` without `--from`,
+  a `--from` that is not earlier than the end, a time with no zone or one that
+  names a day the month lacks, and a duration that is not one are usage errors
+  (exit 2).
+- A window is at most 90 days (`BAD_REQUEST`, exit 2, when longer). The
+  window printed starts at the start of the series bucket that holds `--from`
+  (1 minute to 1 day wide, picked so a window has at most 200 points) and ends
+  at the moment asked.
+- The figures come from rows Simlock keeps in `history.db`, not from the
+  events, so they reach back as far as `metrics.retention` (90 days by
+  default) and stay after the events are pruned. A host that has kept them for
+  less than the window says where they start (`Figures cover from ...`) and
+  counts only from there.
+- A request counts in the window its request time falls in; a grant, a
+  rejection or a release after the window's end is not seen, so a lease
+  still open at the end counts as a request and a grant with no held time.
+  Slot, queue and RAM figures cover whole minutes: the minute still running at
+  the end of the window is left out, so a restart does not change them.
+- A window that ends before the oldest figure the history holds exits 12 with
+  `HISTORY_NOT_KEPT`; the message says when the figures start. While
+  `history.db` could not be opened, the command exits 1 with
+  `HISTORY_UNAVAILABLE`.
+- `--json` prints the answer as one JSON object (the same `usage` the
+  [programmatic client](CLIENT.md) returns), with a series of up to 200 points
+  for charting.
+- `--csv` writes one row per lease request in the window instead of the
+  figures, a file a spreadsheet opens: a header row, then `requestId`,
+  `requester`, `label`, `platform`, `model`, `workerId`, `source`,
+  `requestedAt`, `grantedAt`, `rejectedAt`, `endedAt`, `waitMs`, `heldMs`,
+  `turnaroundMs`, `outcome`, `probe`, `reason`, `endReason`. Rows end in CRLF;
+  times are ISO 8601 in UTC, durations whole milliseconds, an absent value an
+  empty cell. A cell that starts with `=`, `+`, `-` or `@` gets a leading `'`
+  so a spreadsheet does not run it. The ledger holds the newest 100,000
+  requests of the window; a longer window is cut and a notice on stderr says
+  so (exit 0). `--csv` with `--json` is a usage error (exit 2).
+
 ## `simlock daemon <start|stop|status|logs [--follow]>`
+
+If a command auto-starts a daemon and it answers the handshake but closes
+before the CLI's startup status probe answers, the command reports
+`DAEMON_STARTUP_FAILED` (exit 1). The probe shares the launch timeout and runs
+before the command's operation, including after a rejected credential falls
+back to an agent session. Once status answers (even `starting`), later deaths
+report `DAEMON_CONNECTION_LOST`, including while a lease request queues or
+boots, during a held lease, or during an operation on the same connection. An
+unanswered probe times out with `DAEMON_STARTUP_FAILED`. A connection to an
+already listening daemon keeps the usual `DAEMON_CONNECTION_LOST` behavior.
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
@@ -2407,6 +2596,11 @@ under `capacity.config` — see
 is running, both a global and a per-platform running limit must have room
 before Simlock provisions or boots a shutdown device.
 
+`simlock config set` also removes `eventLog.rotateBytes` from `config.json`
+when it holds one: that key no longer exists (the event history is one SQLite
+file, not rotated generations). The command then prints `Removed
+eventLog.rotateBytes from <config path>: it is no longer used.` on stderr, once.
+
 `simlock config set mode gateway` turns this daemon into a **gateway** — one
 that owns no devices and fronts the workers that join it — and `simlock
 config set mode worker` turns it back. Like every `config set`, it is a
@@ -2416,6 +2610,8 @@ running daemon keeps running in the mode it started in until
 `gateway.url` and `gateway.token` to join a fleet. See
 [CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for which keys
 each mode reads.
+
+An object value takes JSON: `simlock config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://…","issuer":"https://…","audience":"…"}'`. Each `config set` checks the whole file, so the four required `http.proxyAuth` keys go in together as one object; one alone is refused (see [CONFIGURATION.md](CONFIGURATION.md#signing-in-through-a-proxy)).
 
 Switching to `gateway` is **two keys, not one**: `mode` and `http.enabled`.
 A gateway is the fleet's contact point, so it must listen on HTTP — workers
@@ -2515,7 +2711,7 @@ fleet; `simlock worker remove` then forgets its view.
 ### `SIMLOCK_HOME`
 
 Overrides the data directory the CLI, MCP server, and daemon all use for
-`config.json`, `state.json`, `daemon.sock`, `daemon.log`, `events.jsonl`, and — unless
+`config.json`, `state.json`, `daemon.sock`, `daemon.log`, `history.db`, and — unless
 overridden — the device roots themselves under `devices/`. Defaults to
 `~/.simlock`. Because devices live under it, it needs a local volume with tens
 of gigabytes free. All three frontends resolve it through the same function

@@ -25,7 +25,7 @@ describe("disposeAgentDeviceEdge", () => {
 
     expect(linkDisposed).toBe(1);
     const context = {
-      map: { get: () => ({ endedAt: undefined, identity: { requesterId: "a" }, ttlMs: 30_000 }) },
+      map: { get: () => ({ endedAt: undefined, identity: { principal: "a" }, ttlMs: 30_000 }) },
     };
     renewals.begin(context as never, "lease", "a", 60_000);
     expect(clock.pendingTimerCount).toBe(0);

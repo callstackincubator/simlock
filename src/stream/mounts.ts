@@ -6,7 +6,7 @@ import { handleStreamRequest, leaseIdOf, type StreamServiceOptions } from "./ser
 export interface StreamMount {
   handle(
     request: Request,
-    identity: { readonly requesterId: string; readonly role: string },
+    identity: { readonly principal: string; readonly role: string },
   ): Promise<Response>;
 }
 
@@ -21,7 +21,7 @@ export function createStreamMount(options: StreamServiceOptions): StreamMount {
         options,
         request,
         {
-          principal: identity.requesterId,
+          principal: identity.principal,
           role: identity.role === "operator" ? "operator" : "agent",
         },
         leaseIdOf(new URL(request.url).pathname),

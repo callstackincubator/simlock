@@ -119,6 +119,7 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
+const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
@@ -240,12 +241,6 @@ interface DeviceState {
    * started may still run the AVD, so `destroy` looks for one.
    */
   restored?: boolean;
-  /**
-   * why: Set when the last readiness wait found another AVD's emulator answering on this device's
-   * serial, cleared when one finds the device's own: while set, nothing is sent to the serial,
-   * because whoever answers it is not this device.
-   */
-  serialHeldByAnother?: boolean;
 }
 
 interface SystemImage {
@@ -1021,6 +1016,14 @@ export class AndroidDriver implements Driver {
         return { state: "shutdown", strategy: "wipe" };
       }
 
+      // why: After a restart the serial is from the registry and may answer as another device's
+      // emulator (#284), so the snapshot load goes only to an emulator proved to be this one's.
+      if (!(await this.#serialIsOwn(data))) {
+        await this.#shutdown(data, state);
+        state.needsWipe = true;
+        state.baselineCaptured = false;
+        return { state: "shutdown", strategy: "wipe" };
+      }
       const restored = await this.#runOrThrow(this.#sdk.adb, [
         "-s",
         data.serial,
@@ -1903,24 +1906,49 @@ export class AndroidDriver implements Driver {
    * port is already held exits without answering, so the one that answers is whoever holds
    * the port -- another device, another Simlock instance, the user's own emulator. Refusing
    * here, before a mark or a baseline capture touches it, is what keeps a port collision from
-   * readying a device at another device's address; `serialHeldByAnother` then keeps the
-   * shutdown and destroy that follow a failed boot from sending it `emu kill`. The reported
+   * readying a device at another device's address; `#serialIsOwn` then keeps the
+   * shutdown and destroy that follow a failed boot from sending it `emu kill`, by asking the
+   * serial again each time. The reported
    * path is compared whole, and through `realpath` when the two spellings differ (an ancestor
    * symlink such as macOS's `/var` -> `/private/var`); anything unreadable fails closed.
    */
   async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
-    const state = this.#stateFor(data);
-    state.serialHeldByAnother = true;
     const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
     const result = await this.#runOrThrow(this.#sdk.adb, ["-s", data.serial, "emu", "avd", "path"]);
     const answered = answeredAvdPath(result.stdout);
-    if (answered === expected || (await this.#sameDirectory(answered, expected))) {
-      state.serialHeldByAnother = false;
+    if (await this.#isOwnAvdPath(answered, expected)) {
       return;
     }
     throw new DriverCrashError(
       `Refusing to ready ${data.avdName}: the emulator answering on ${data.serial} runs ${JSON.stringify(answered)}, not ${expected} -- another emulator holds its console port`,
     );
+  }
+
+  /**
+   * why: The gate before any emulator mutation (`emu kill`, snapshot load): asks the emulator on the
+   * serial for its AVD path, bounded by a timeout, on every call -- the answer is never kept,
+   * because the serial can change hands between calls. An unreachable, timed-out or unreadable
+   * answer is "not ours" (fail closed), so nothing is sent.
+   */
+  async #serialIsOwn(data: AndroidDriverData): Promise<boolean> {
+    try {
+      const result = await this.#processRunner.run(
+        this.#sdk.adb,
+        ["-s", data.serial, "emu", "avd", "path"],
+        { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+      );
+      if (result.code !== 0) return false;
+      return await this.#isOwnAvdPath(
+        answeredAvdPath(result.stdout),
+        `${this.#deviceRoot}/${data.avdName}.avd`,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async #isOwnAvdPath(answered: string, expected: string): Promise<boolean> {
+    return answered === expected || (await this.#sameDirectory(answered, expected));
   }
 
   async #sameDirectory(left: string, right: string): Promise<boolean> {
@@ -2052,7 +2080,7 @@ export class AndroidDriver implements Driver {
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    if (data.port > 0 && state.serialHeldByAnother !== true) {
+    if (data.port > 0 && (await this.#serialIsOwn(data))) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
         env: this.#env(),
       });

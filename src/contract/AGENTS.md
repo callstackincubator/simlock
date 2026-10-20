@@ -5,7 +5,7 @@ Entry: `index.ts` → `OPERATIONS`, `PUSH_SCHEMAS`, `ERROR_TABLE`, `PROTOCOL_VER
 OS range helpers and `parseDurationMs`.
 Uses: zod only. Never imports: anything outside `src/contract/` (`.dependency-cruiser.mjs`,
 rule `contract-imports-nothing`).
-Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, bus.
+Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, history.
 
 ## Files
 
@@ -15,7 +15,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, bus
 | `schemas.ts`     | Wire shapes, re-declared by hand from core; `fit*` bounders                   |
 | `roles.ts`       | `Role`, `AuthorizeContext`, `ownsLease`                                       |
 | `errors.ts`      | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`             |
-| `pushes.ts`      | `PUSH_SCHEMAS`: the nine push kinds                                           |
+| `pushes.ts`      | `PUSH_SCHEMAS`: every push kind                                               |
 | `protocol.ts`    | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                        |
 | `worker-view.ts` | `workerViewFields`, view refresh interval and events                          |
 | `os-range.ts`    | OS constraint grammar: parse, `satisfies`, `compareVersions`                  |
@@ -55,9 +55,11 @@ Three identities:
 
 ## Protocol version
 
-- Now `{ min: 39, max: 39 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 51, max: 51 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
-  a compatibility path stays side by side.
+  a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
+  it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
+  helpers its `NOT_SHAPES` lists. A new helper that carries no wire shape goes in that list.
 - `hello` picks the highest overlap. None → `PROTOCOL_VERSION_UNSUPPORTED` with both ranges.
   A protocol-2 daemon is mapped by `mapLegacyProtocolMismatch`.
 - `daemon.stop` is accepted at any version, so the upgrade path exists.
@@ -66,10 +68,15 @@ Three identities:
 
 - `SimlockErrorCode` is a closed union (`ErrorDetailsMap`). `ERROR_TABLE` gives each code
   `kind` (`transport` | `protocol` | `domain`), `cliExitCode` and `httpStatus`.
+- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface.
 - `fromWireError` wraps an unknown code as `UNKNOWN_DAEMON_ERROR`. That code and `CANCELLED`
   are built client side only.
 - `CODES_WITH_DECLARED_DETAILS`: codes whose `details` are contract. The compiler keeps it
-  in step with `ErrorDetailsMap`.
+  in step with `ErrorDetailsMap`. `NO_CAPACITY` declares `capacityReason` (one of the four
+  capacity refusals), set by the worker dispatcher only when a capacity check refused.
+- `waitingRequestSchema.reason` is allowed on a `queued` entry only. `workers` (a gateway's
+  `queued` entries: one reason per worker) refuses a `capacityReason` with any reason but `full`
+  and a `workerId` twice.
 
 ## Pushes
 

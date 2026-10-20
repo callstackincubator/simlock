@@ -2,8 +2,8 @@
 
 Does: the network API — `/v1` routes, bearer token → session, SSE, lease-request resources, console files.
 Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway`
-(`server.ts`) and `TokenStore` (`token-store.ts`).
-Uses: contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
+(`server.ts`).
+Uses: auth, contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
 bus, core (types), ports. Never imports: drivers, gateway.
 Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.md).
 
@@ -12,14 +12,13 @@ Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.
 | File                    | Role                                                             |
 | ----------------------- | ---------------------------------------------------------------- |
 | `app.ts`                | Every `/v1` route, error boundary, request log line              |
-| `auth.ts`               | `requireAuth`: bearer token → `TokenIdentity`                    |
+| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403       |
 | `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession` |
 | `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources               |
 | `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls        |
 | `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response        |
 | `sse.ts`                | `pipeSse`: ordered writes, keepalive                             |
 | `errors.ts`             | `HttpApiError`, `mapError`: error → status and body              |
-| `token-store.ts`        | `TokenStore`: hashed tokens in `tokens.json`                     |
 | `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`     |
 | `test-fakes.ts`         | Fakes for this module's tests                                    |
 
@@ -30,10 +29,13 @@ Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.
    falls back to `index.html`. An unbuilt console answers 404 and logs one warning.
 2. Log middleware — one `request` line per answer (method, path, status, `durationMs`,
    `requesterId`). Not for `/v1/healthz`.
-3. `requireAuth` on every route but `GET /v1/healthz`. No or unknown token → 401
-   `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
+3. `requireAuth` on every route but `GET /v1/healthz`. It asks `src/auth` with the request's
+   headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
+   Neither valid → 401 `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
+   A proxy-signed (`ambient`) identity on any method but GET, HEAD or OPTIONS needs
+   `Sec-Fetch-Site: same-origin` exactly, else 403 `FORBIDDEN` (mounts included). Tokens are exempt.
 4. Body — strict zod schema (`jsonBody`), else 400 `BAD_REQUEST`.
-5. `buildHttpSession` — principal = token id; `operator` → `admin`, `agent` → `agent`.
+5. `buildHttpSession` — principal = the identity's (a token's id, or `proxy:<iss>#<sub>`); `operator` → `admin`, `agent` → `agent`.
 6. `deps.dispatch` — the daemon's own dispatcher, in process: `DaemonServer.dispatch`.
    Role check, `authorize` and readiness parking run there.
 7. `app.onError` → `mapError` → `{ error: { code, message, ...details } }`. `NO_CAPACITY`
@@ -58,9 +60,11 @@ agent-device front and the stream (`/v1/stream`).
 
 ## Streams
 
-- `pipeSse` writes events in order, `: keepalive` every 15 s, unsubscribes on abort.
+- `pipeSse` writes events in order, `: keepalive` every 15 s, unsubscribes on abort. A stream
+  opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`).
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.
+- `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).
 - `GET /v1/leases/{id}/events` — the lease's notices; ends on `lease_lost`.
 - `POST /v1/leases/{id}/exec` → `device.exec`. The stream opens on `onStarted`; a failure
   before that is a plain error response. Events: `output`, then `exit` or `error`.
@@ -89,8 +93,8 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
   convergence. Early requests park in the dispatcher. On a gateway the worker uplink
   upgrades on the same listener (`onServerCreated`).
 - `tokens.json` (data directory): `{ id: "tok_…", hash, role, label?, createdAt }`, written
-  atomically, mode `0600`. The dispatcher's `token.*` handlers write it through the same `TokenStore`.
-  `verify` reads the file on every call. The secret is shown once, by `token.create`.
+  atomically, mode `0600`. `src/auth` owns it: the dispatcher's `token.*` handlers write it through `Auth.tokens`,
+  and every verify re-reads the file. The secret is shown once, by `token.create`.
 - `LeaseNoticeBuffer` is memory only. `HttpGateway.stop` closes the server and destroys
   every open socket.
 

@@ -54,7 +54,13 @@ interface Resource {
   again: boolean;
 }
 
+// why: in a proxy session a loss may be the proxy's own session ending, which only the session can
+// tell: `reconnect` (still the proxy's person), `backoff` (Simlock is unreachable) or `stop` (the
+// session ended and the session handles it).
+export type LostAnswer = "reconnect" | "backoff" | "stop";
+
 export interface LiveConnectionOptions {
+  readonly whenLost?: () => Promise<LostAnswer>;
   readonly api: LiveApi;
   readonly clock: Clock;
   readonly visibility: Visibility;
@@ -68,6 +74,7 @@ export class LiveConnection {
   readonly #api: LiveApi;
   readonly #clock: Clock;
   readonly #visibility: Visibility;
+  readonly #whenLost: (() => Promise<LostAnswer>) | undefined;
   readonly #resources = new Map<ApiPath, Resource>();
   readonly #stateListeners = new Set<() => void>();
   readonly #eventListeners = new Set<(event: StreamEvent) => void>();
@@ -90,6 +97,7 @@ export class LiveConnection {
     this.#api = options.api;
     this.#clock = options.clock;
     this.#visibility = options.visibility;
+    this.#whenLost = options.whenLost;
     this.#stopWatchingVisibility = this.#visibility.subscribe(() => this.#visibilityChanged());
     if (!this.#visibility.hidden()) {
       this.#openStream();
@@ -374,7 +382,28 @@ export class LiveConnection {
     this.#closeStream();
     this.#setState("disconnected");
     this.#healthAttempt = 0;
-    if (!this.#visibility.hidden()) this.#scheduleHealthCheck();
+    if (this.#visibility.hidden()) return;
+    if (this.#whenLost === undefined) this.#scheduleHealthCheck();
+    else void this.#askWhenLost(this.#whenLost);
+  }
+
+  async #askWhenLost(whenLost: () => Promise<LostAnswer>): Promise<void> {
+    let answer: LostAnswer;
+    try {
+      answer = await whenLost();
+    } catch {
+      answer = "backoff";
+    }
+    // why: a tab shown meanwhile asks `/v1/healthz` itself.
+    if (this.#disposed || this.#visibility.hidden() || this.#state.phase !== "disconnected") return;
+    if (answer === "reconnect") this.#reconnect();
+    else if (answer === "backoff") this.#scheduleHealthCheck();
+  }
+
+  #reconnect(): void {
+    this.#setState("starting");
+    this.#refetchScreen();
+    this.#openStream();
   }
 
   #scheduleHealthCheck(): void {
@@ -401,9 +430,7 @@ export class LiveConnection {
       this.#scheduleHealthCheck();
       return;
     }
-    this.#setState("starting");
-    this.#refetchScreen();
-    this.#openStream();
+    this.#reconnect();
   }
 
   #visibilityChanged(): void {

@@ -1,5 +1,5 @@
 import type { HttpDispatch } from "../http/dispatcher-session.js";
-import type { TokenIdentity } from "../http/token-store.js";
+import type { Identity } from "../auth/index.js";
 import type { FleetLease, GatewayContext, GatewayModule, WorkerView } from "../modules/index.js";
 import type { AgentDeviceModuleConfig } from "./definition.js";
 import {
@@ -149,7 +149,7 @@ export function createGateway(ctx: Context): GatewayModule {
           ? {}
           : { leaseTtlCapMs: ctx.config.leaseTtlCapMs }),
       });
-      return (request, identity) => front.handle(request, identity as TokenIdentity);
+      return (request, identity) => front.handle(request, identity as Identity);
     },
   };
 }

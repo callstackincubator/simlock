@@ -151,6 +151,34 @@ function deviceFacts(
     ...(since === undefined
       ? []
       : [{ label: "In this state for", value: formatDuration(now - since) }]),
+    ...causeFacts(item.device),
+  ];
+}
+
+const CAUSE_TEXT = {
+  "purge-failed": "Purge failed",
+  "shutdown-failed": "Shutdown failed",
+  "delete-failed": "Delete failed",
+} as const;
+
+function causeFacts(device: {
+  readonly state: string;
+  readonly quarantineCause?:
+    | {
+        readonly kind: keyof typeof CAUSE_TEXT | "stalled";
+        readonly stalledState?: string | undefined;
+        readonly message?: string | undefined;
+      }
+    | undefined;
+}): readonly AttentionFact[] {
+  const cause = device.quarantineCause;
+  if (device.state !== "quarantined" || cause === undefined) return [];
+  if (cause.kind === "stalled") {
+    return [{ label: "Cause", value: `Stalled while ${cause.stalledState ?? ""}` }];
+  }
+  const text = CAUSE_TEXT[cause.kind];
+  return [
+    { label: "Cause", value: cause.message === undefined ? text : `${text}: ${cause.message}` },
   ];
 }
 

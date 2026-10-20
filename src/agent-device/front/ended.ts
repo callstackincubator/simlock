@@ -1,4 +1,4 @@
-import type { TokenIdentity } from "../../http/token-store.js";
+import type { Identity } from "../../auth/index.js";
 import { leaseIdOf } from "../shared/rpc.js";
 import { asRecord } from "../shared/selectors.js";
 import type { FrontContext } from "./context.js";
@@ -43,7 +43,7 @@ function endedLeaseIds(text: string): string[] {
 // why: the daemon no longer sends a release after it ends a lease, so the front ends the simlock lease from the command's reply; a copy is read so the CLI's reply goes out untouched.
 export function releaseEndedLeases(
   context: FrontContext,
-  identity: TokenIdentity,
+  identity: Identity,
   response: Response,
 ): void {
   if (!(response.headers.get("content-type") ?? "").includes("json")) return;

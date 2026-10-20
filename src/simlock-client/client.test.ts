@@ -72,6 +72,12 @@ describe("connectSimlock: handshake", () => {
     await expect(client.removeDevice({ id: "UDID-1" })).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
     });
+    await expect(client.usage({ from: 0, to: 60_000 })).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
+    await expect(client.testAlertDestination({ destination: "ops" })).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
     expect(connection.sent).toHaveLength(before);
 
     const stopPromise = client.stopDaemon();
@@ -204,6 +210,23 @@ describe("connectSimlock: handshake", () => {
     await expect(callPromise).resolves.toEqual(answer);
   });
 
+  it("identity() sends identity.get and returns its output", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+    const answer = { name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" };
+
+    const callPromise = client.identity();
+    await flushMicrotasks();
+    const call = connection.lastSentOf("identity.get")!;
+    expect(call.payload).toEqual({});
+    connection.reply(call.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+  });
+
   it("removes a component from an admin client with component.remove, sending the input and returning the daemon's answer", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
@@ -219,6 +242,35 @@ describe("connectSimlock: handshake", () => {
     connection.reply(call.id, answer);
 
     await expect(callPromise).resolves.toEqual(answer);
+  });
+
+  it("the admin client's testAlertDestination sends alerts.test and returns its output", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+
+    const callPromise = client.testAlertDestination({ destination: "ops-slack" });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("alerts.test")!;
+    expect(call.payload).toEqual({ destination: "ops-slack" });
+    connection.reply(call.id, { destination: "ops-slack", status: 204 });
+
+    await expect(callPromise).resolves.toEqual({ destination: "ops-slack", status: 204 });
+
+    const failing = client.testAlertDestination({ destination: "ops-slack" });
+    await flushMicrotasks();
+    connection.fail(
+      connection.lastSentOf("alerts.test")!.id,
+      "ALERT_SEND_FAILED",
+      "ops-slack answered HTTP 404",
+      { destination: "ops-slack", status: 404 },
+    );
+    await expect(failing).rejects.toMatchObject({
+      code: "ALERT_SEND_FAILED",
+      details: { destination: "ops-slack", status: 404 },
+    });
   });
 
   it("enrolls a device from an admin client with device.add and removes it with device.remove, sending the input and returning the daemon's answer", async () => {
@@ -251,6 +303,59 @@ describe("connectSimlock: handshake", () => {
     expect(removeCall.payload).toEqual({ id: "UDID-1" });
     connection.reply(removeCall.id, { driverDeviceId: "UDID-1", id: "UDID-1" });
     await expect(removePromise).resolves.toEqual({ driverDeviceId: "UDID-1", id: "UDID-1" });
+  });
+
+  it("asks usage.get for a window from an admin client and returns the daemon's answer, refusing a window the contract bounds before sending it", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const none = { count: 0, max: null, p50: null, p95: null };
+    const figures = {
+      boot: none,
+      bySource: { booted: 0, provisioned: 0, warm: 0 },
+      declined: 0,
+      failures: { byEvent: {} },
+      granted: 0,
+      held: none,
+      incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+      provisioning: none,
+      queue: { meanDepth: null, peakDepth: null },
+      rejected: { byReason: {}, total: 0 },
+      requests: 0,
+      turnaround: none,
+      utilisation: { slots: { max: null, mean: null, peak: null } },
+      wait: none,
+    };
+    const answer = {
+      bucketMs: 60_000,
+      coversFrom: 1_000,
+      partial: false,
+      platforms: { android: figures, ios: figures },
+      requesters: [],
+      series: [],
+      totals: figures,
+      window: { from: 1_000, to: 3_601_000 },
+      workers: [],
+    };
+
+    const callPromise = client.usage({ from: 1_000, to: 3_601_000 });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("usage.get")!;
+    expect(call.payload).toEqual({ from: 1_000, to: 3_601_000 });
+    connection.reply(call.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+
+    const sentBefore = connection.sent.length;
+    const refused = client.usage({ from: 5, to: 5 }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await flushMicrotasks();
+    expect(connection.sent).toHaveLength(sentBefore);
+    expect(await refused).toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {

@@ -15,7 +15,9 @@ const noTiming = {
 
 const statePath = "/home/agent/.simlock/state.json";
 
-async function createHarness(options: { readonly filesystem?: Filesystem } = {}) {
+async function createHarness(
+  options: { readonly filesystem?: Filesystem; readonly platform?: "ios" | "android" } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   let nextId = 0;
@@ -30,7 +32,10 @@ async function createHarness(options: { readonly filesystem?: Filesystem } = {})
     driverData: {},
     driverDeviceId: "driver_1",
     provisionDuration: 0,
-    spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    spec:
+      options.platform === "android"
+        ? { physical: false, model: "Pixel 8", osVersion: "35", platform: "android" }
+        : { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
   });
   await registry.transitionDevice(device.id, "ready", {
     event: "device.ready",
@@ -74,6 +79,27 @@ describe("LeaseLifecycle", () => {
       }),
     );
   });
+
+  it.each(["ios", "android"] as const)(
+    "lease.granted carries the device's own platform, for an %s device",
+    async (platform) => {
+      const harness = await createHarness({ platform });
+
+      const grant = await harness.lifecycle.grant({
+        environment: {},
+        timing: noTiming,
+        requestId: "req_1",
+        source: "warm",
+        deviceId: harness.device.id,
+        requesterId: "agent",
+        ownerId: "agent",
+      });
+
+      expect(
+        harness.eventBus.replay().find((event) => event.event === "lease.granted")?.payload,
+      ).toMatchObject({ leaseId: grant.lease.id, platform });
+    },
+  );
 
   it("grants a lease at the width the request asked for, and stores that instead", async () => {
     const harness = await createHarness();

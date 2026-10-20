@@ -1512,7 +1512,7 @@ describe("Doctor", () => {
       ttlMs: 60_000,
     });
     await registry.beginRelease(lease.id);
-    await registry.enterQuarantine(device.id, 10_100);
+    await registry.enterQuarantine(device.id, 10_100, { kind: "purge-failed" });
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
     const listed = {
       devices: [
@@ -3233,6 +3233,7 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     eventBuffer: { capacity: 10 },
@@ -3267,10 +3268,10 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
+    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,

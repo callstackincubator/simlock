@@ -1,4 +1,9 @@
 export {
+  ALERT_EVENTS,
+  ALERT_FORMATS,
+  type AlertDestination,
+  type AlertEventName,
+  type AlertFormatName,
   type Config,
   type ConfigOverrides,
   // fallow-ignore-next-line unused-type -- public Config surface (config.mode, ADR 0005 §1); every in-tree reader gets it structurally off `Config`
@@ -31,6 +36,7 @@ export {
 export {
   buildCapacityFigures,
   CapacityCoordinator,
+  type CapacityRefusalReason,
   capacityDevice,
   capacityDevices,
   type CapacityReservation,
@@ -208,3 +214,4 @@ export {
   type IdleVictimScope,
 } from "./idle-order.js";
 export { ReclaimCoordinator } from "./reclaim-coordinator.js";
+export { createUsageReader, type UsageReader } from "./usage/index.js";

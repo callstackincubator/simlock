@@ -11,4 +11,9 @@ export const ramBudget: RankStage = {
     return worker.capacity?.[request.platform].atRamBudget === true ? 0 : 1;
   },
   settles: false,
+  zeroReason(worker, request) {
+    return worker.capacity?.[request.platform].atRamBudget === true
+      ? { capacityReason: "ram-budget", reason: "full" }
+      : undefined;
+  },
 };

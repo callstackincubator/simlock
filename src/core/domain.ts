@@ -205,6 +205,12 @@ export type PhysicalState = SharedState | "absent" | "deleted";
 export type AbsentReason = "locked" | "untrusted" | "not-present";
 export type DeviceState = VirtualState | PhysicalState;
 
+export interface QuarantineCause {
+  readonly kind: "purge-failed" | "shutdown-failed" | "delete-failed" | "stalled";
+  readonly stalledState?: "provisioning" | "reclaiming" | undefined;
+  readonly message?: string | undefined;
+}
+
 interface DeviceRecordFields {
   readonly id: string;
   readonly driverDeviceId: string;
@@ -225,6 +231,7 @@ interface DeviceRecordFields {
   readonly quarantineAttempts?: number;
   /** When the next purge retry is armed for, so a restarted daemon can re-arm it faithfully. */
   readonly quarantineNextRetryAt?: number;
+  readonly quarantineCause?: QuarantineCause;
   /**
    * The driver-reported address (see `DriverDevice.address`), current as of this device's
    * last `ready` transition. Undefined for a device still `provisioning` (never made ready

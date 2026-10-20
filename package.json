@@ -53,8 +53,10 @@
     "test:e2e:physical": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --no-file-parallelism --reporter=default --reporter=./e2e/progress-reporter.ts --tags-filter='physical'",
     "test:e2e:physical-manual": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --no-file-parallelism --reporter=default --reporter=./e2e/progress-reporter.ts --tags-filter='physical-manual'",
     "test:console": "pnpm run build && pnpm run build:e2e && playwright test",
+    "test:real-proxy": "pnpm run build && pnpm run build:e2e && playwright test --config playwright.real-proxy.config.ts",
     "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc/src.tsbuildinfo && tsc -p ui/tsconfig.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/ui.tsbuildinfo",
-    "typecheck:e2e": "pnpm run build && tsc -p e2e/tsconfig.typecheck.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e.tsbuildinfo",
+    "typecheck:e2e": "pnpm run build:ui && pnpm run build:capture && pnpm run typecheck:e2e:types",
+    "typecheck:e2e:types": "pnpm run build:daemon && tsc -p e2e/tsconfig.typecheck.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e.tsbuildinfo",
     "lint": "oxlint src e2e ui && depcruise src e2e ui --ignore-known",
     "lint:comments": "node .agents/scripts/comment-lint.mjs --base origin/main",
     "fallow": "fallow",
@@ -71,6 +73,7 @@
     "@hono/zod-validator": "^0.9.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "hono": "^4.13.5",
+    "jose": "6.2.9",
     "ws": "8.18.3",
     "zod": "^3.25.76"
   },
@@ -111,7 +114,7 @@
     }
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "release-it": {
     "git": {

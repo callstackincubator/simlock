@@ -2,7 +2,7 @@
 
 Does: the `simlock` command surface over `simlock/admin` — parse, render, hold a lease while alive.
 Entry: `main.ts` (the `simlock` bin) → `index.ts` `runCli(argv)`.
-Uses: admin, client (types), agent-identity, lease-policy, bus (event file reader), core
+Uses: admin, bus (event key, type), client (types), agent-identity, lease-policy, history (reader), core
 (`loadConfig` only), contract, ports, module-registry (`optionalModules` only); mcp, loaded on
 demand. Never imports: daemon, drivers, gateway, http.
 
@@ -54,9 +54,15 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
    `SIMLOCK_ADMIN_TOKEN` → `admin.token` in the data directory (3 reads, 50 ms apart).
    None, or a rejected one → an `agent` session and one stderr `notice` line.
-3. **Auto-launch** (`AutoLaunchIpcConnector`) — when nothing listens: load the config
+3. **Auto-launch** (`AutoLaunchAdminConnector`) — when nothing listens: load the config
    first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
-   for `DAEMON_STARTUP_TIMEOUT_MS`.
+   for `DAEMON_STARTUP_TIMEOUT_MS`. After a launch, `status.get` probes the connection
+   before handing it to a command, within that same deadline. A connection loss during this
+   probe becomes `DAEMON_STARTUP_FAILED`; a silent probe times out with that code and starts closing
+   its client without waiting for the daemon to end its side. An answered probe ends the window, including a `starting` status: subsequent
+   command failures retain their original codes even while a lease queues or boots.
+   The connector retains the launch deadline across a rejected credential and agent fallback.
+   A pre-existing daemon is never probed or reclassified; other daemon errors keep their codes.
 4. **`simlock lease`** — `requestLease`; progress pushes as JSON lines on stderr; one result
    line on stdout, with the session's `role` (`--export-env`: shell lines). `--agent-id`
    sets the requester. Then, unless `--detach`:
@@ -71,7 +77,10 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
      `PASSTHROUGH_REFUSED` and `UNKNOWN_PASSTHROUGH_TOOL` become usage errors (exit 2).
 6. **`simlock events --follow`** — subscribe, then replay, then print buffered pushes not
    already replayed (by `eventKey`). `--since` without `--follow` never launches a daemon;
-   with none running it reads `events.jsonl` itself.
+   with none running it reads `history.db` itself (read-only; no file is empty, an unreadable
+   one is an error, exit 1). `simlock status` adds a `History:` line for a history that is not
+   written, one for a set-aside file, one after a rebuild of the usage figures and one after a failed rebuild. `simlock config set` drops `eventLog.rotateBytes` and says so on stderr.
+   6a. **`simlock stats`** — `usageWindow` (contract) turns `--since`, `--from`, `--to` into a window; each refusal is a usage error (exit 2) worded here. Asks `usage.get` and prints `formatUsage` (`stats.ts`) or the answer as `--json`; computes no figure. `--csv` asks with `includeLedger` and writes `ledgerCsv` (`csv.ts`, RFC 4180, CRLF, a leading `'` before `=`, `+`, `-`, `@`); `--csv` with `--json` is a usage error; a `ledgerTruncated` answer adds a stderr notice.
 7. **`simlock daemon logs --follow`** — `followLog` polls every 250 ms from a byte offset.
    A new identity on `daemon.log.1` is a rotation: print its rest, restart at offset 0.
 8. **`simlock config set`** — validates the merged file with `loadConfig`, writes

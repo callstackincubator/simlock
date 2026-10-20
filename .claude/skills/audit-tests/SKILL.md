@@ -1,6 +1,6 @@
 ---
 name: audit-tests
-description: Weekly routine — have a cheap model read the test files main changed since the last run for tests that repeat another's claim, test only a log line, should be one table, or cannot fail for the reason their title gives (testing rules 7 to 10); have a stronger model verify each finding against the code; apply the confirmed ones and land one tests-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "audit tests".
+description: Weekly routine — find tests main changed that repeat a claim, test only a log line, should be a table, or cannot fail for their stated reason; verify, fix, and land one tests-only PR. Use when a routine or the user says "audit tests".
 model: sonnet
 effort: medium
 ---
@@ -90,10 +90,8 @@ with its reason, the findings the verifiers rejected (count per sign), any
 
 ## 5. Review and merge
 
-As `harden-tests` step 4: `reviewer` with the PR number, round 1; fix each
-Fix line yourself, tests only; the `## Review` section with `Spec review:
-skipped.`; `gh pr ready`; `.agents/scripts/merge-pr.sh <M>`. A `bugs:` line
-from an applier is a real defect: leave the PR open and report it.
+As `toolchain.md` "Routines" says, tests only. A `bugs:` line from an
+applier is a real defect: leave the PR open and report it.
 
 ## Report
 

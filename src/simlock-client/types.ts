@@ -55,8 +55,11 @@ export type SimlockConfig = OpOutput<"config.get">;
 export type DaemonStopOutput = OpOutput<"daemon.stop">;
 export type EventsReplayInput = OpInput<"events.replay">;
 export type EventsReplayOutput = OpOutput<"events.replay">;
+export type UsageGetInput = OpInput<"usage.get">;
+export type UsageGetOutput = OpOutput<"usage.get">;
 export type EventsSubscribeOutput = OpOutput<"events.subscribe">;
 export type EventsUnsubscribeOutput = OpOutput<"events.unsubscribe">;
+export type IdentityOutput = OpOutput<"identity.get">;
 export type TokenCreateInput = OpInput<"token.create">;
 export type TokenCreateOutput = OpOutput<"token.create">;
 export type TokenListOutput = OpOutput<"token.list">;
@@ -78,6 +81,9 @@ export type WorkerDrainInput = OpInput<"worker.drain">;
 export type WorkerDrainOutput = OpOutput<"worker.drain">;
 export type WorkerUndrainOutput = OpOutput<"worker.undrain">;
 export type WorkerRemoveOutput = OpOutput<"worker.remove">;
+
+export type AlertsTestInput = OpInput<"alerts.test">;
+export type AlertsTestOutput = OpOutput<"alerts.test">;
 
 export type ComponentInstallInput = OpInput<"component.install">;
 export type ComponentInstallOutput = OpOutput<"component.install">;

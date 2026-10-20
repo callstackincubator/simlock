@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { AdminAuthenticationFailedError } from "../auth/index.js";
 import { ComponentInstallerClosedError, UnsupportedRequestOptionError } from "../core/index.js";
-import { LeaseIdTakenError, NoCapacityError, ReplayedLeaseRequestError } from "../leasing/index.js";
+import {
+  LeaseIdTakenError,
+  NoCapacityError,
+  ProvisionFailedError,
+  ReplayedLeaseRequestError,
+} from "../leasing/index.js";
 import { classifyError, describeLeaseRequestFailure } from "./error-code.js";
 
 describe("describeLeaseRequestFailure", () => {
@@ -10,6 +16,12 @@ describe("describeLeaseRequestFailure", () => {
       code: "NO_CAPACITY",
       message: "No device capacity is currently available",
     });
+  });
+
+  it("stores a twice-failed provision as PROVISION_FAILED with the driver's message", () => {
+    expect(
+      describeLeaseRequestFailure(new ProvisionFailedError(new Error("simulator exited"))),
+    ).toEqual({ code: "PROVISION_FAILED", message: "simulator exited" });
   });
 
   it("stores an unclassified failure as INTERNAL without its own message", () => {
@@ -53,5 +65,11 @@ describe("classifyError on a request option the driver does not have", () => {
 describe("classifyError on a lease ID that is in use", () => {
   it("answers LEASE_ID_TAKEN for LeaseIdTakenError", () => {
     expect(classifyError(new LeaseIdTakenError("ad-7f3a"))).toBe("LEASE_ID_TAKEN");
+  });
+});
+
+describe("classifyError on a rejected admin credential", () => {
+  it("answers ADMIN_AUTHENTICATION_FAILED for the error src/auth throws", () => {
+    expect(classifyError(new AdminAuthenticationFailedError())).toBe("ADMIN_AUTHENTICATION_FAILED");
   });
 });

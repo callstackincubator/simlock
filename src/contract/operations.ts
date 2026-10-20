@@ -25,6 +25,7 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   hostFactsSchema,
+  historyStatusSchema,
   hostLoadSchema,
   imageTagSchema,
   leaseGrantSchema,
@@ -41,6 +42,8 @@ import {
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  usageOutputSchema,
+  usageWindowSchema,
   waitingRequestSchema,
   capabilityListSchema,
   workerViewSchema,
@@ -117,6 +120,7 @@ export const statusGet = defineOperation({
     }),
     host: hostFactsSchema,
     load: hostLoadSchema.optional(),
+    history: historyStatusSchema.optional(),
     queueDepth: z.number().optional(),
     physicalQueueDepth: z.number().optional(),
     installs: statusInstallsSchema.optional(),
@@ -645,6 +649,15 @@ export const eventsReplay = defineOperation({
   output: z.array(eventEnvelopeSchema),
 });
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const usageGet = defineOperation({
+  name: "usage.get",
+  role: "admin",
+  effect: "read",
+  input: usageWindowSchema,
+  output: usageOutputSchema,
+});
+
 // ---- events.subscribe ---------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -1015,7 +1028,36 @@ export const relayCancel = defineOperation({
   output: z.object({}),
 });
 
+/**
+ * why: ADR 0035 §1: asks the gateway to post one sample message to one of its alert destinations,
+ * once, outside the destination's queue. `destination` is only looked up by name among the
+ * configured ones, never used in a URL.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const alertsTest = defineOperation({
+  name: "alerts.test",
+  role: "admin",
+  effect: "write",
+  input: z.object({ destination: z.string().min(1).max(32) }),
+  output: z.object({ destination: z.string(), status: z.number() }),
+});
+
+const identityGet = defineOperation({
+  name: "identity.get",
+  role: "agent",
+  effect: "read",
+  input: z.object({}),
+  output: z.object({
+    principal: z.string(),
+    name: z.string(),
+    role: z.enum(["admin", "agent"]),
+    via: z.enum(["token", "proxy", "socket", "uplink"]),
+    signOutUrl: z.string().optional(),
+  }),
+});
+
 export const OPERATIONS = {
+  "identity.get": identityGet,
   "catalog.get": catalogGet,
   "status.get": statusGet,
   "lease.request": leaseRequest,
@@ -1035,6 +1077,7 @@ export const OPERATIONS = {
   "events.replay": eventsReplay,
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
+  "usage.get": usageGet,
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,
@@ -1050,6 +1093,7 @@ export const OPERATIONS = {
   "device.remove": deviceRemove,
   "relay.request": relayRequest,
   "relay.cancel": relayCancel,
+  "alerts.test": alertsTest,
 } as const;
 
 export type OperationName = keyof typeof OPERATIONS;

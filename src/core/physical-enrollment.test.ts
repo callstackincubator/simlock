@@ -70,7 +70,7 @@ async function quarantine(harness: Harness, deviceId: string): Promise<void> {
     ttlMs: 60_000,
   });
   await harness.registry.beginRelease(lease.id);
-  await harness.registry.enterQuarantine(deviceId, 9_000);
+  await harness.registry.enterQuarantine(deviceId, 9_000, { kind: "purge-failed" });
 }
 
 function holdInspection(driver: FakeDriver, callNumber: number) {

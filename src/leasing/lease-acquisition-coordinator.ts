@@ -64,6 +64,7 @@ import {
   type AcquisitionPlan,
   type AcquisitionPlanner,
   type PhysicalPlanInput,
+  type WaitingReason,
 } from "./acquisition-planner.js";
 import { emitLeaseRefusal } from "./lease-refusal.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
@@ -81,9 +82,16 @@ import {
 export type { LeaseRequestOptions } from "./wait-queue.js";
 
 export class NoCapacityError extends Error {
-  constructor() {
+  constructor(readonly reason?: WaitingReason) {
     super("No device capacity is currently available");
     this.name = "NoCapacityError";
+  }
+}
+
+export class ProvisionFailedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ProvisionFailedError";
   }
 }
 
@@ -616,7 +624,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         | undefined;
       if (waiter === undefined) return "not-found";
       if (waiter.state !== "queued" && waiter.request.physical !== true) return "not-cancellable";
+      const holdsClaim = waiter.state === "processing";
       this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
+      // why: a waiter mid presence read holds a grant claim, and its own wake follows the release.
+      if (!holdsClaim) this.#wakeQueue();
       return "cancelled";
     });
   }
@@ -719,7 +730,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       snapshot: this.options.registry.snapshot,
     });
     if (plan.kind !== "grant-physical") {
-      this.#defer(waiter);
+      this.#defer(waiter, blockedReason(plan));
       return undefined;
     }
     if (!this.options.queue.markProcessing(waiter)) {
@@ -776,7 +787,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         await this.#grant(waiter, current, plan.kind);
       } catch (error: unknown) {
         this.#logFailure("granting a physical device failed", waiter, device, "grant", error);
-        this.#defer(waiter);
+        this.#defer(waiter, "no-free-physical");
       } finally {
         claim.release();
       }
@@ -806,10 +817,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     if (action.kind === "evict-running") {
-      await this.#evictRunning(waiter, action.device, action.claim);
+      await this.#evictRunning(waiter, action.device, action.claim, action.reason);
       return;
     }
-    await this.#evictManaged(waiter, action.device, action.claim);
+    await this.#evictManaged(waiter, action.device, action.claim, action.reason);
   }
 
   async #provision(waiter: AcquisitionWaiter, reservation: CapacityReservation): Promise<void> {
@@ -849,18 +860,19 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           this.options.queue.markNew(waiter);
           return true;
         }
-        // ADR 0021 §1: a probe is never queued on a worker. It is declined instead, and its
-        // caller (the gateway) walks on to another worker.
-        if (waiter.options.fleetRequestId !== undefined) {
-          this.#reject(waiter, new NoCapacityError(), "no-wait");
-          return false;
-        }
-        this.#enqueue(waiter);
+        // why: ADR 0021 §1 declines a probe instead of rejecting it, and its caller (the gateway) reads the code.
+        this.#reject(
+          waiter,
+          new ProvisionFailedError(error),
+          waiter.options.fleetRequestId === undefined ? "unresolvable-spec" : "no-wait",
+        );
         return false;
       });
       if (retry) {
         this.#driving.delete(waiter);
         await this.#drive(waiter);
+      } else {
+        this.#wakeQueue();
       }
       return;
     }
@@ -888,13 +900,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         await this.#grant(waiter, plan.device, plan.kind);
       } catch (error: unknown) {
         this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
-        this.#defer(waiter);
+        this.#defer(waiter, "waiting-for-device");
       }
       return undefined;
     }
     const operation = operationPlan(plan);
     if (operation === undefined) {
-      this.#defer(waiter);
+      this.#defer(waiter, blockedReason(plan));
       return undefined;
     }
     // why: a refusal means the queue has just rejected this waiter at its deadline, so the device
@@ -912,11 +924,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
-    if (this.options.queue.head !== undefined && this.options.queue.head !== waiter) {
-      return waiter.options.noWait ? { kind: "no-capacity" } : { kind: "wait" };
+    const head = this.options.queue.head;
+    if (head !== undefined && head !== waiter) {
+      const reason = "behind-earlier-request";
+      return waiter.options.noWait ? { kind: "no-capacity", reason } : { kind: "wait", reason };
     }
     return this.options.planner.plan({
-      failures: waiter.failures,
       noWait: waiter.options.noWait ?? false,
       owner: waiter.id,
       snapshot: this.options.registry.snapshot,
@@ -955,6 +968,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     waiter: AcquisitionWaiter,
     device: VirtualDevice,
     claim: DeviceOperationClaim,
+    reason: WaitingReason,
   ): Promise<void> {
     try {
       const shutdown = await this.options.lifecycle.shutdown(
@@ -975,7 +989,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       );
       await this.options.decisions.run(async () => {
         claim.release();
-        this.#defer(waiter);
+        this.#defer(waiter, reason);
       });
       return;
     }
@@ -986,6 +1000,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     waiter: AcquisitionWaiter,
     device: VirtualDevice,
     claim: DeviceOperationClaim,
+    reason: WaitingReason,
   ): Promise<void> {
     try {
       const deleted = await this.options.lifecycle.dispose(
@@ -999,7 +1014,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#logFailure("deleting an eviction target failed", waiter, device, "delete", error);
       await this.options.decisions.run(async () => {
         claim.release();
-        this.#defer(waiter);
+        this.#defer(waiter, reason);
       });
       return;
     }
@@ -1110,12 +1125,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);
   }
 
-  #defer(waiter: AcquisitionWaiter): void {
+  #defer(waiter: AcquisitionWaiter, reason: WaitingReason): void {
     if (waiter.options.noWait) {
-      this.#reject(waiter, new NoCapacityError(), "no-wait");
+      this.#reject(waiter, new NoCapacityError(reason), "no-wait");
       return;
     }
-    this.#enqueue(waiter);
+    this.#enqueue(waiter, reason);
     this.#notifyReclaimWait(waiter);
   }
 
@@ -1172,7 +1187,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           "grant",
           error,
         );
-        this.#defer(waiter);
+        this.#defer(waiter, "waiting-for-device");
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
@@ -1181,9 +1196,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     this.#wakeQueue();
   }
 
-  #enqueue(waiter: AcquisitionWaiter): void {
+  #enqueue(waiter: AcquisitionWaiter, reason: WaitingReason): void {
     const alreadyQueued = this.options.queue.isQueued(waiter);
-    if (this.options.queue.enqueue(waiter) && !alreadyQueued) {
+    if (this.options.queue.enqueue(waiter, reason) && !alreadyQueued) {
       this.options.eventBus.emit(
         "lease.queued",
         {
@@ -1303,6 +1318,10 @@ function releasePlanResources(plan: OperationPlan): void {
     plan.capacityReservation.release();
     plan.claim.release();
   } else plan.claim.release();
+}
+
+function blockedReason(plan: AcquisitionPlan): WaitingReason {
+  return "reason" in plan ? plan.reason : "no-free-physical";
 }
 
 function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {

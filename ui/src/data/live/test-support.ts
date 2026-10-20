@@ -1,7 +1,13 @@
 import { vi } from "vitest";
 
 import { type ApiPath, type ApiResponse } from "../api";
-import { type Clock, LiveConnection, type LiveApi, type Visibility } from "./connection";
+import {
+  type Clock,
+  LiveConnection,
+  type LiveApi,
+  type LiveConnectionOptions,
+  type Visibility,
+} from "./connection";
 
 const fakeClock: Clock = {
   now: () => Date.now(),
@@ -132,7 +138,7 @@ class FakeVisibility implements Visibility {
   }
 }
 
-export function connect(): {
+export function connect(whenLost?: LiveConnectionOptions["whenLost"]): {
   readonly connection: LiveConnection;
   readonly daemon: FakeDaemon;
   readonly visibility: FakeVisibility;
@@ -141,7 +147,12 @@ export function connect(): {
   vi.setSystemTime(new Date("2026-10-02T12:00:00Z"));
   const daemon = new FakeDaemon();
   const visibility = new FakeVisibility();
-  const connection = new LiveConnection({ api: daemon, clock: fakeClock, visibility });
+  const connection = new LiveConnection({
+    api: daemon,
+    clock: fakeClock,
+    visibility,
+    ...(whenLost === undefined ? {} : { whenLost }),
+  });
   return { connection, daemon, visibility };
 }
 

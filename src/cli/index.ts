@@ -14,11 +14,13 @@ export { buildCliEnvironment } from "./environment.js";
 const USAGE = `Usage: simlock <command> [options]
 
 Commands:
-  lease, release, status, list, catalog, cleanup, doctor, nuke, events,
-  daemon, config, token
+  lease, release, status, list, catalog, cleanup, doctor, nuke, events, stats,
+  daemon, config, token, whoami
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway; on a
                               single host, list shows the host itself
+  alerts test <destination> [--json]
+                              Send one sample message to a gateway's alert destination
   component install <ios|android> <version> [--worker <id>... | --all-workers]
                               Install a simulator runtime or system image
   component list [--platform <ios|android>]

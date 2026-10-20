@@ -44,11 +44,11 @@ terminal state. No route blocks on device work in flight.
 
 ## Authentication
 
-Every route requires `Authorization: Bearer slk_<secret>` except two: `GET
+Every route requires `Authorization: Bearer slk_<secret>` (or, with `http.proxyAuth` set, a request that passes through the sign-in proxy: see [Signing in through a proxy](#signing-in-through-a-proxy)) except two: `GET
 /v1/healthz`, and the web console's own files, which the daemon serves at
 every path outside `/v1` (see [CONSOLE.md](CONSOLE.md)). They hold no data;
 the console reads everything it shows from the routes below, with the
-operator's token. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
+operator's token or, signed in through the proxy, without one. A request with neither a recognized token nor a trusted proxy JWT is `401 UNAUTHENTICATED`.
 
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
@@ -57,10 +57,46 @@ the daemon is the only process that reads or writes `tokens.json`, so unlike
 is
 `{ id, role, label?, createdAt }`, hashed at rest in `~/.simlock/tokens.json`
 (SHA-256; the plaintext secret is shown exactly once, at `create`, and never
-persisted). The token id doubles as the requester identity over HTTP: unlike
+persisted). For a request signed in by a token, the token id is the requester identity over HTTP (a proxy sign-in uses the principal below): unlike
 the CLI's `--agent-id`/`SIMLOCK_AGENT_ID`, identity is never client-declared
 here, so the one-lease-per-requester rule keys off which token authenticated
 the request, not anything the request body says.
+
+### Signing in through a proxy
+
+With `http.proxyAuth` set (see [CONFIGURATION.md](CONFIGURATION.md#signing-in-through-a-proxy)), a request that passes through the sign-in proxy is signed in as the person the proxy names, with no Simlock token. Simlock reads the JWT the proxy adds in the configured header and checks its signature against the keys the proxy publishes at `jwksUrl`, then its issuer, audience and time window, before it believes a word of it. The daemon itself fetches those keys from `jwksUrl` (5 s limit, no redirects, at most 64 KiB), keeps them 10 minutes, and refetches at most once per 30 s for a key id it does not know. RS256 and ES256 are accepted; a JWT may be up to 8 KiB, and `exp` and `nbf` are allowed 60 s of slack.
+
+A person is a verified JWT whose `sub` is a non-empty string of at most 120 characters and whose `email` is a non-empty string. They are an `operator`: principal `proxy:<iss>#<sub>`, name the `name` claim when it is a non-empty string, else `email`, `via: "proxy"`. A verified JWT that is not a person (a service token has no `email`) is judged by its Simlock token instead. A Simlock token wins when both are sent.
+
+A JWT Simlock cannot trust is `401 UNAUTHENTICATED` with a `reason` beside `code` and `message`:
+
+```json
+{"error":{"code":"UNAUTHENTICATED","message":"Sign-in proxy identity refused: expired","reason":"expired"}}
+```
+
+| `reason` | Cause |
+|---|---|
+| `expired` | `exp` more than 60 s past |
+| `not-yet-valid` | `nbf` more than 60 s ahead |
+| `wrong-issuer` | `iss` is not the configured issuer |
+| `wrong-audience` | `aud` does not hold the configured audience |
+| `algorithm` | not RS256 or ES256 (HS256, `none`) |
+| `unknown-key` | signed by a key the key URL does not publish |
+| `bad-signature` | the signature does not match |
+| `keys-unavailable` | the key URL is down, slow, redirects, answers more than 64 KiB or no key set, and no keys were fetched in the last 10 minutes |
+| `malformed` | not a JWT, over 8 KiB, no `exp`, or a `sub` over 120 characters |
+
+A follow stream (`GET /v1/events/stream`, `GET /v1/leases/{id}/events`, `GET /v1/lease-requests/{id}/events`) opened by a person ends when their JWT expires (`exp` plus 60 s), or after 2^31-1 ms if that is sooner; the client reconnects with a fresh JWT. Command streams (exec, component install) are not ended.
+
+A request signed in by the proxy (not by a token) that is not `GET`, `HEAD` or `OPTIONS` must carry `Sec-Fetch-Site: same-origin`, which the browser sets itself; any other value, or none, is refused before anything runs:
+
+```json
+{"error":{"code":"FORBIDDEN","message":"Cross-site request refused: a request signed in through a sign-in proxy must come from the console"}}
+```
+
+Requests signed in by a token are not affected. Browsers send `Sec-Fetch-Site` only to an `https://` address or to loopback, so serve the proxy over HTTPS (or on loopback): behind plain `http://` on a network name every changing request signed in through the proxy is `403`.
+
+The proxy must let `/v1/uplink` and `/v1/healthz` through: a worker joins with its join token and a health probe sends no credential, and neither carries a proxy JWT.
 
 Three roles:
 
@@ -140,6 +176,25 @@ ignores every one of them keeps working against a gateway unchanged.
 
 Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 
+### `GET /v1/identity`
+
+Role: `agent`. Who Simlock thinks the caller is: `principal` (the token's id, or
+`proxy:<iss>#<sub>` for a person signed in through the proxy), `name` (the token's
+label, or its id when it has none; a person's `name` claim or `email`), `role`
+(`admin` for an operator token or a person, `agent` for an agent token), `via`
+(`token` or `proxy`) and, when one is configured, `signOutUrl`. A `worker`
+token is refused with `403`, as on every route.
+
+```json
+{"principal":"tok_9f2c","name":"ci-runner","role":"agent","via":"token"}
+```
+
+Signed in through the proxy:
+
+```json
+{"principal":"proxy:https://idp.example#u1","name":"Ada","role":"admin","via":"proxy","signOutUrl":"https://idp.example/logout"}
+```
+
 ### `GET /v1/status`
 
 Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
@@ -156,14 +211,23 @@ nothing for, `short` — one of `disabled`, `no-driver`, `runtime-missing`,
 `short: "disabled"`. A gateway's own `warmPool` is empty and off; each worker's
 is on its entry in `workers`.
 
+`history` says how the event history is doing: `opened` (the daemon has
+opened `history.db`), `writing` (events are being written to it) and, only
+when this start found `history.db` damaged and renamed it aside,
+`setAsideAt` (epoch ms), when this start rebuilt the usage figures from the
+event history, `rebuiltAt` (epoch ms), and when that rebuild failed,
+`rebuildFailed: true`. The daemon sends it, on a worker and on a gateway,
+in the `starting` answer too.
+
 While the daemon is starting (`daemon.health` is `starting`), the answer is
-`200` with the `daemon` block, `host` and, once read, `load` only: it has not yet checked what it
+`200` with the `daemon` block, `history`, `host` and, once read, `load` only: it has not yet checked what it
 holds, so `capabilities`, `devices`, `leases`, `capacity`, `queueDepth`, `physicalQueueDepth`, `installs`,
 `waiting`, `warmPool` and `workers` are absent, not empty. They are all there once `health` is
 `running`, and also when it is `failed`.
 
 ```json
 { "daemon": { "health": "starting", "mode": "worker" },
+  "history": { "opened": false, "writing": false },
   "host": { "os": "macOS", "osVersion": "15.5", "arch": "arm64", "tools": [] } }
 ```
 
@@ -287,6 +351,12 @@ past its threshold with nothing working on it also carries
 **`stalled: true`**: the same devices `simlock doctor` reports as stalled (see
 `stalledTransition.*` in [CONFIGURATION.md](CONFIGURATION.md)). Every other
 device has no `stalled` field, and an older daemon sends none.
+
+A `quarantined` device in `devices` carries **`quarantineCause`**: `kind` (`purge-failed`,
+`shutdown-failed`, `delete-failed` or `stalled`), `stalledState` (`provisioning` or
+`reclaiming`) on `stalled` alone, and `message`, the tool's error text of at most 300
+characters, on the other three. An agent token gets the cause without `message`; an operator
+token gets it whole. A device quarantined before the cause was recorded has none.
 
 Every device in `devices` carries **`servesDefaultMode`**, a boolean: whether
 its pool is the one a lease request with no `mode` draws from on this daemon
@@ -474,7 +544,15 @@ platform by `device` (ignoring letter case), `class` and `os`; `os` is exact,
 so `"18"` matches no device on `18.4.1` and "any 18.x" is `">=18 <19"`, and on
 Android it is the API level (`"34"`). A request no enrolled device could match
 fails at once with `422 UNKNOWN_MODEL`. One that could match a device that is
-leased or being reclaimed waits, or is `503 NO_CAPACITY` with `noWait`.
+leased or being reclaimed waits, or is `503 NO_CAPACITY` with `noWait`. When a
+worker's capacity check refused it, the error body's `details.capacityReason` names the
+check: `device-limit`, `ram-budget`, `global-running-limit` or `platform-running-limit`.
+A refusal for another cause, the answer to a repeat of a refused request, and a
+gateway's own `NO_CAPACITY` (no worker can serve the request) have no `details`.
+A gateway relays a worker's `NO_CAPACITY` with its `details` only once that worker has
+reported progress on the request. Before that, the gateway queues the request again, or
+with `noWait` tries the other workers and answers with its own `NO_CAPACITY`, which has
+no `details`.
 `physical` with `mode` or `imageTag`, or with `allowDownload: true`, is
 `400 BAD_REQUEST` naming the field. The lease's `device` then has no `mode`. A
 request without `physical` never gets a physical device. A physical request
@@ -559,6 +637,7 @@ known and a reconnecting one stays known from its last catalog.
 | A known worker could serve it, but none that takes requests can | `503 NO_CAPACITY` |
 | The request requires capabilities (not a body field; the programmatic client sends it), and no connected worker that could serve it has all of them available | `422 CAPABILITY_MISSING`, with `capabilities` naming the required ones |
 | A worker that takes requests can serve it but is busy | queues; `503 NO_CAPACITY` only with `noWait: true` |
+| A worker fails to create a device for it twice (`PROVISION_FAILED`), before it reported any progress | The gateway asks the next worker. When every worker that could take it has failed so, the request fails with `500 PROVISION_FAILED` and the last worker's message, also when it was already queued; a worker that is only full, busy, not ready or unhealthy keeps it queued. After the worker reported progress, `PROVISION_FAILED` is returned as it is and the next worker is not asked |
 
 A request that is already waiting is held to the same table: when the only
 worker able to serve it is drained or disconnects, the request ends `failed`
@@ -1473,7 +1552,7 @@ take the host out of rotation or forget it.
 
 ### Operator routes
 
-Role: `operator` for all six. `GET /v1/leases` also answers an `agent`
+Role: `operator` for all seven. `GET /v1/leases` also answers an `agent`
 token, with only its own leases. `GET /v1/lease-requests` and `GET /v1/tokens`
 answer it `403 FORBIDDEN`.
 
@@ -1495,9 +1574,9 @@ an all-or-nothing that leaves the operator guessing.
   `transitionAgeMs` and `stalled` as [`GET /v1/status`](#get-v1status)
   describes them (`simlock list --devices`).
 - `GET /v1/events?since=<duration>` — replay business events newer than
-  `since` (`simlock events --since`). They come from the daemon's event file,
-  so they include events from before a daemon restart and beyond the 1000
-  held in memory, back to the oldest event the file still holds
+  `since` (`simlock events --since`). They come from the daemon's event history
+  (`history.db`), so they include events from before a daemon restart and
+  beyond the 1000 held in memory, back to the oldest event it still holds
   (`eventLog.retention` and `eventLog.maxBytes`). `since` takes `ms`, `s`,
   `m`, `h` and `d` units (`?since=2d`). Without `since`, the recent events held in
   memory. Every event carries an `id`, the same one after a daemon restart;
@@ -1506,6 +1585,29 @@ an all-or-nothing that leaves the operator guessing.
   the same millisecond. On a gateway, a worker's event keeps the `id` and
   `timestamp` it has on the worker and gains `payload.workerId`; its time is
   when it happened on the worker.
+- `GET /v1/stats` — how the fleet was used over a window: the figures
+  `simlock stats --json` prints, as one JSON object (`totals`, `platforms`,
+  `workers`, `requesters`, `series`, `window`, `coversFrom`, `partial`,
+  `bucketMs`). An operator token is required; an agent token gets
+  `403 FORBIDDEN`. With no parameter the window is the last 24 hours;
+  `since=<duration>` (`1h`, `7d`) is that long back from now;
+  `from=<time>` and `to=<time>` name the ends as ISO 8601 times with `Z` or an
+  offset (`2026-10-15T00:00Z`), and without `to` the window ends now. A `+` in
+  an offset must be sent as `%2B`. `ledger=1` adds `requests[]`, one entry per
+  lease request in the window, by request time then request id:
+  `requestId`, `requester`, `label`, `platform`, `model`, `workerId`, `source`,
+  `requestedAt`, `grantedAt`, `rejectedAt`, `endedAt`, `waitMs`, `heldMs`,
+  `turnaroundMs`, `outcome` (`granted`, `rejected`, `declined` for a probe a
+  worker declined, or `open`), `probe`, `reason`, `endReason`; a field with no
+  value is left out. The ledger holds the newest 100,000 requests of the
+  window; a longer window is cut and the answer carries
+  `"ledgerTruncated": true`. A grant, rejection or end after `to` is not seen.
+  Errors: `400 BAD_REQUEST` for `since` with `from`, `to` without `from`, a
+  `from` not earlier than `to` (or than now), a duration or time that does not
+  parse, a window over 90 days, or a `ledger` other than `1`;
+  `422 HISTORY_NOT_KEPT` (the body carries `oldestTs`) for a window that ends
+  before the oldest figure kept; `503 HISTORY_UNAVAILABLE` while `history.db`
+  could not be opened.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`). Each event carries the same `id` as in
   `GET /v1/events`, and a relayed one the same `timestamp` too. A worker event
@@ -1522,11 +1624,11 @@ an all-or-nothing that leaves the operator guessing.
   show a lease's holder by the token's `label`. The answer never carries a
   secret or a hash. `label` is absent from a token created without one.
 
-On a **gateway** the first five are fleet-wide, which is what makes a single
-console possible: `/v1/leases` and `/v1/devices` return every connected
+On a **gateway** the lease, device, lease-request and event routes are
+fleet-wide, which is what makes a single console possible: `/v1/leases` and `/v1/devices` return every connected
 worker's, each record carrying the `workerId` it lives on,
 `/v1/lease-requests` returns the gateway's queue and every connected
-worker's, and the two event routes carry the workers' republished events
+worker's, and the event routes carry the workers' republished events
 (also `workerId`-tagged) interleaved with the gateway's own `worker.*` and
 `request.dispatched` facts. `/v1/tokens` lists the daemon's own tokens: on a
 gateway, the gateway's, since tokens never cross machines.
@@ -1540,7 +1642,8 @@ Every request still waiting for a device, oldest first, whoever sent it. An
 { "requests": [
   { "id": "req_7", "requesterId": "agent-b",
     "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4", "mode": "slim" },
-    "createdAt": 1790864071200, "stage": "queued", "queuePosition": 1 },
+    "createdAt": 1790864071200, "stage": "queued", "queuePosition": 1,
+    "reason": "platform-running-limit" },
   { "id": "req_9", "requesterId": "local-agent",
     "spec": { "platform": "android", "model": "Pixel 8" },
     "createdAt": 1790864075000, "stage": "starting", "workerId": "3f81a2c4" }
@@ -1559,6 +1662,22 @@ Every request still waiting for a device, oldest first, whoever sent it. An
   line, simulator and emulator requests or physical requests, counting from 1,
   the requests ahead of it in that line that are already starting included. It
   is the request's place now, not the one its `queued` progress first reported.
+- `reason` is set only while `queued`, and only once the daemon has tried to place the
+  request: why its latest attempt stopped. One of `behind-earlier-request`, `device-limit`,
+  `ram-budget`, `global-running-limit`, `platform-running-limit`,
+  `waiting-for-device` or `no-free-physical`. It is replaced by each new attempt, and a
+  `starting` request has none. On a gateway, a worker's own entries keep theirs.
+- `workers` is set on a gateway's own `queued` entries (not on a worker's own, and not
+  while `starting`): one object per worker the gateway knows, connected or not, in
+  worker id order, saying why that worker cannot take the request now:
+  `{ "workerId": "wrk_a", "reason": "drained" }`. `reason` is one of `disconnected`,
+  `incompatible`, `not-ready`, `unhealthy`, `drained`, `busy`, `no-driver`,
+  `unknown-model`, `runtime-missing`, `capability-missing`, `full`, `no-free-physical`
+  or `not-chosen`. `full` may carry `capacityReason`, one of `device-limit`,
+  `ram-budget`, `global-running-limit` or `platform-running-limit`, when the worker or its
+  last-reported state says which. Each worker appears once. The entries are the gateway's
+  latest look at the request and are replaced by each new one; a gateway restart loses
+  them with the request. `GET /v1/status` `waiting` carries the same field.
 - A request leaves the list as soon as it is granted, fails or is cancelled.
   The request's idempotency key and owner are never listed.
 
@@ -1670,7 +1789,12 @@ agent-device session with an agent on a worker's own tokens. Through a gateway:
   `/rpc` answer carries `details.reason` `WORKER_UNREACHABLE`. Nothing is sent
   to the worker and the Simlock lease is untouched; once the worker is back and
   read, before the lease ran out, the next request works. A command running
-  when the connection drops answers the same. The same answer covers a lease
+  when the connection drops answers the same and stops its periodic lease
+  renewals, with one final renewal attempt when no other command is awaiting
+  a reply. This does not release the lease
+  or end the command on the worker. Other commands still awaiting replies
+  keep renewing; a later heartbeat can renew before the lease expires.
+  The same answer covers a lease
   the gateway does not know yet in the first 60 seconds after it starts.
 - **A gateway restart keeps the agent's device.** Once the worker reconnects,
   the agent's next request of any kind works on the same device, with no
@@ -1754,13 +1878,14 @@ Every failure is the same shape the daemon protocol uses:
 | HTTP | Codes |
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
-| 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
+| 401 | `UNAUTHENTICATED` (missing or unrecognized token, or a proxy JWT that is refused) |
 | 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid); also `GET /v1/stream/leases/{leaseId}` naming a lease unknown, released, or another requester's — a stream reveals no lease that asking could not already list), `UNKNOWN_DEVICE` (`DELETE /v1/devices/{id}` naming a device that is not enrolled) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `LEASE_ID_TAKEN` (a `leaseId` an active lease or a waiting request holds; body carries `leaseId`; on a gateway, one of the gateway's own leases or requests, or a worker that refused it), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device or `leaseId`), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`), `DEVICE_BUSY` (`POST /v1/devices`, `DELETE /v1/devices/{id}` of a leased, reclaiming or held device; body carries `id` and `reason`) |
-| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING` (a request required capabilities no worker able to serve it has available; body carries `capabilities`), `DEVICE_NOT_ENROLLABLE` (`POST /v1/devices`; body carries `id`, `platform`, `reason`, and `canonicalId` when known), `PASSTHROUGH_REFUSED` (a refused `exec` verb or `devicectl` command, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
+| 422 | `HISTORY_NOT_KEPT` (`GET /v1/stats` for a window that ends before the oldest figure kept; body carries `oldestTs`), `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING` (a request required capabilities no worker able to serve it has available; body carries `capabilities`), `DEVICE_NOT_ENROLLABLE` (`POST /v1/devices`; body carries `id`, `platform`, `reason`, and `canonicalId` when known), `PASSTHROUGH_REFUSED` (a refused `exec` verb or `devicectl` command, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
+| 500 | `PROVISION_FAILED` (creating a device for the request failed twice; the message is the driver's error) |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`, `POST /v1/devices`, `DELETE /v1/devices/{id}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
-| 503 | `NO_CAPACITY` (with `noWait: true`, or, on a gateway, when no worker that takes requests can serve the request; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
+| 503 | `HISTORY_UNAVAILABLE` (`GET /v1/stats` while `history.db` could not be opened), `NO_CAPACITY` (with `noWait: true`, or, on a gateway, when no worker that takes requests can serve the request; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
 Four notes on these codes.
@@ -1773,7 +1898,7 @@ behind this is not reachable right now" is the same answer in all four cases,
 and a client with one retry rule for `transport` should not need a second one
 because the unreachable thing happened to be a worker.
 
-`UNSUPPORTED_IN_GATEWAY_MODE` comes from five routes in this version,
+`UNSUPPORTED_IN_GATEWAY_MODE` comes from these routes in this version:
 `POST /v1/components/install` without `workers`, `GET /v1/components`,
 `DELETE /v1/components/{platform}/{version}`, `POST /v1/devices` and
 `DELETE /v1/devices/{id}` asked of a gateway — `nuke`,

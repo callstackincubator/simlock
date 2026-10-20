@@ -21,6 +21,8 @@
  * so it can flake under CPU contention alongside an unrelated file's own suite -- re-run this
  * file alone before treating a failure here as a real regression.
  */
+import { createHmac } from "node:crypto";
+import { createServer as createHttpServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -28,7 +30,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { PassthroughCommand } from "../core/index.js";
+import type { AlertDestination, PassthroughCommand } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import type { Filesystem, IpcConnector, IpcListenerFactory } from "../ports/index.js";
 import {
@@ -36,8 +38,11 @@ import {
   MemoryFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  resolveDaemonSocketPath,
   SystemClock,
 } from "../ports/index.js";
+import { FakeWebhookPoster } from "../ports/testing.js";
+import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -70,12 +75,18 @@ const gatewayUrl = (): string => `ws://127.0.0.1:${gatewayPort}`;
 const restartGatewayUrl = (): string => `ws://127.0.0.1:${restartGatewayPort}`;
 
 function adminSession(): DispatchSession {
-  return { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" };
+  return {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  };
 }
 
 function agentSession(overrides: Partial<DispatchSession> = {}): DispatchSession {
   return {
     manageEventSubscription: () => undefined,
+    via: "socket",
     principal: "fleet-agent-1",
     role: "agent",
     ...overrides,
@@ -121,7 +132,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     );
   });
 
-  async function startGateway(): Promise<DaemonServer> {
+  async function startGateway(
+    alerts: { destinations?: readonly AlertDestination[]; poster?: FakeWebhookPoster } = {},
+  ): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
     directories.push(directory);
     gatewayPort = await freeLoopbackPort();
@@ -129,6 +142,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       configOverrides: {
         mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
+        ...(alerts.destinations === undefined
+          ? {}
+          : { gateway: { alerts: { destinations: alerts.destinations } } }),
       },
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
@@ -136,6 +152,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       logger: new NoopLogger(),
       statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
+      ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
     });
     daemons.push(daemon);
     return daemon;
@@ -173,6 +190,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     return { daemon, filesystem, directory };
   }
 
+  // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to the daemon.
   async function startWorker(options: {
     readonly label: string;
     readonly model: string;
@@ -189,45 +207,48 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     readonly existing?: { readonly filesystem: Filesystem; readonly directory: string };
     /** The worker's own socket transport; omitted, the real one. */
     readonly ipc?: IpcConnector & IpcListenerFactory;
+    readonly alerts?: { destinations: readonly AlertDestination[]; poster: FakeWebhookPoster };
+    readonly onDriver?: (driver: FakeDriver) => void;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
       (await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`)));
     if (options.existing === undefined) directories.push(directory);
     const filesystem = options.existing?.filesystem ?? new MemoryFilesystem();
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.0"],
+      // why: a real command, so `device.exec` proves a real child process actually ran on
+      // *this* worker: it prints which worker answered and exits with a distinguishing
+      // code, both asserted below.
+      ...passthroughOptions({
+        args: ["-e", `process.stdout.write(${JSON.stringify(options.stdout)}); process.exit(7);`],
+        command: process.execPath,
+        env: {},
+      }),
+      clock: new SystemClock(),
+      knownModels: [options.model],
+      platform: "android",
+    });
+    options.onDriver?.(driver);
     const daemon = await startDaemon({
       configOverrides: {
         gateway: {
           url: options.gatewayUrl ?? gatewayUrl(),
           token: options.token,
           label: options.label,
+          ...(options.alerts === undefined
+            ? {}
+            : { alerts: { destinations: options.alerts.destinations } }),
         },
       },
       dataDirectory: directory,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["18.0"],
-          // A real command, so `device.exec` proves a real child process actually ran on
-          // *this* worker: it prints which worker answered and exits with a distinguishing
-          // code, both asserted below.
-          ...passthroughOptions({
-            args: [
-              "-e",
-              `process.stdout.write(${JSON.stringify(options.stdout)}); process.exit(7);`,
-            ],
-            command: process.execPath,
-            env: {},
-          }),
-          clock: new SystemClock(),
-          knownModels: [options.model],
-          platform: "android",
-        }),
-      ],
+      drivers: [driver],
       filesystem,
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
       logger: new NoopLogger(),
       statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
+      ...(options.alerts === undefined ? {} : { webhookPoster: options.alerts.poster }),
     });
     daemons.push(daemon);
     return { daemon, directory, filesystem };
@@ -567,4 +588,205 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       agentSession({ principal: "fleet-owner" }),
     );
   }, 55_000);
+
+  const destinationFor = (overrides: Partial<AlertDestination>): AlertDestination => ({
+    name: "audit",
+    format: "generic",
+    url: "https://alerts.example.com/hook",
+    events: ["component.install-failed"],
+    secret: "e2e-secret",
+    ...overrides,
+  });
+
+  async function workerToken(gateway: DaemonServer, label: string): Promise<string> {
+    const { secret } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label },
+      adminSession(),
+    );
+    return secret;
+  }
+
+  it("a worker with a destination posts nothing, while its gateway posts the relayed event", async () => {
+    const gatewayPoster = new FakeWebhookPoster();
+    const workerPoster = new FakeWebhookPoster();
+    const destinations = [destinationFor({})];
+    const gateway = await startGateway({ destinations, poster: gatewayPoster });
+    let driver: FakeDriver | undefined;
+    const worker = await startWorker({
+      label: "worker-a",
+      model: "Pixel-A",
+      token: await workerToken(gateway, "worker-a"),
+      stdout: "a",
+      alerts: { destinations, poster: workerPoster },
+      onDriver: (created) => {
+        driver = created;
+      },
+    });
+
+    await vi.waitFor(async () => {
+      const events = (await gateway.dispatch("events.replay", {}, adminSession())) as Array<{
+        readonly event: string;
+      }>;
+      expect(events.some((entry) => entry.event === "worker.connected")).toBe(true);
+    });
+    driver?.failOn("installComponent", 1, new Error("installer exited 1"));
+    await expect(
+      worker.daemon.dispatch(
+        "component.install",
+        { platform: "android", version: "35" },
+        adminSession(),
+      ),
+    ).rejects.toThrow();
+
+    await vi.waitFor(() => expect(gatewayPoster.requests).toHaveLength(1));
+    const body = JSON.parse(gatewayPoster.requests[0]?.body ?? "");
+    expect(body.event).toBe("component.install-failed");
+    expect(body.payload.workerId).toEqual(expect.any(String));
+    expect(workerPoster.requests).toEqual([]);
+  }, 30_000);
+
+  it("stopping a gateway sends no worker.disconnected and aborts a try in flight", async () => {
+    const poster = new FakeWebhookPoster();
+    poster.respond = (request) =>
+      request.url.includes("stuck") ? new Promise(() => {}) : Promise.resolve({ status: 200 });
+    const gateway = await startGateway({
+      destinations: [
+        destinationFor({
+          name: "quick",
+          url: "https://quick.example.com/x",
+          events: ["worker.disconnected"],
+        }),
+        destinationFor({
+          name: "stuck",
+          url: "https://stuck.example.com/x",
+          events: ["worker.connected"],
+        }),
+      ],
+      poster,
+    });
+    await startWorker({
+      label: "worker-a",
+      model: "Pixel-A",
+      token: await workerToken(gateway, "worker-a"),
+      stdout: "a",
+    });
+    await vi.waitFor(() => expect(poster.requests).toHaveLength(1));
+    const stuck = poster.requests[0];
+    expect(stuck?.url).toBe("https://stuck.example.com/x");
+
+    await gateway.stop("test");
+
+    expect(stuck?.signal.aborted).toBe(true);
+    expect(poster.requests.filter((request) => request.url.includes("quick"))).toEqual([]);
+  }, 30_000);
+
+  it("a worker joining a gateway with a generic destination makes a loopback receiver get one signed worker.connected naming that worker, and with a slack destination one message naming the worker's label", async () => {
+    const received: Array<{ url: string; headers: Record<string, unknown>; body: string }> = [];
+    const receiver: Server = createHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          url: request.url ?? "",
+          headers: request.headers,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+        response.writeHead(200).end();
+      });
+    });
+    await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (receiver.address() as { port: number }).port;
+      const gateway = await startGateway({
+        destinations: [
+          destinationFor({ url: `http://127.0.0.1:${port}/hook`, events: ["worker.connected"] }),
+          {
+            name: "chat",
+            format: "slack",
+            url: `http://127.0.0.1:${port}/slack`,
+            events: ["worker.connected"],
+          },
+        ],
+      });
+      await startWorker({
+        label: "worker-a",
+        model: "Pixel-A",
+        token: await workerToken(gateway, "worker-a"),
+        stdout: "a",
+      });
+
+      await vi.waitFor(() => expect(received).toHaveLength(2));
+      const message = received.find((each) => each.url === "/hook");
+      const chat = received.find((each) => each.url === "/slack");
+      expect(message?.headers["x-simlock-signature"]).toBe(
+        `sha256=${createHmac("sha256", "e2e-secret")
+          .update(message?.body ?? "")
+          .digest("hex")}`,
+      );
+      expect(message?.headers["x-simlock-event"]).toBe("worker.connected");
+      const body = JSON.parse(message?.body ?? "");
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      expect(body.payload.workerId).toBe(workers[0]?.id);
+      expect(body.payload.label).toBe("worker-a");
+      expect(JSON.parse(chat?.body ?? "")).toEqual({
+        text: "🟢 Worker worker-a connected (simlock 1.0.0-e2e).",
+      });
+    } finally {
+      receiver.closeAllConnections();
+      await new Promise<void>((resolve) => receiver.close(() => resolve()));
+    }
+  }, 30_000);
+
+  it("alerts.test over the gateway's real unix socket reaches a loopback receiver with the signed sample", async () => {
+    const received: Array<{ headers: Record<string, unknown>; body: string }> = [];
+    const receiver: Server = createHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({ headers: request.headers, body: Buffer.concat(chunks).toString("utf8") });
+        response.writeHead(200).end();
+      });
+    });
+    await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (receiver.address() as { port: number }).port;
+      const gateway = await startGateway({
+        destinations: [destinationFor({ name: "ops", url: `http://127.0.0.1:${port}/hook` })],
+      });
+      const { secret } = await gateway.dispatch(
+        "token.create",
+        { role: "operator", label: "alerts-test" },
+        adminSession(),
+      );
+      const client = await connectSimlockAdmin({
+        endpoint: resolveDaemonSocketPath(directories.at(-1) as string),
+        credential: secret,
+      });
+      try {
+        await expect(client.testAlertDestination({ destination: "ops" })).resolves.toEqual({
+          destination: "ops",
+          status: 200,
+        });
+      } finally {
+        await client.close();
+      }
+
+      expect(received).toHaveLength(1);
+      const body = received[0]?.body ?? "";
+      expect(JSON.parse(body)).toMatchObject({
+        seq: 0,
+        event: "alerts.test-sent",
+        payload: { destination: "ops" },
+        module: "alerts",
+      });
+      expect(received[0]?.headers["x-simlock-event"]).toBe("alerts.test-sent");
+      expect(received[0]?.headers["x-simlock-signature"]).toBe(
+        `sha256=${createHmac("sha256", "e2e-secret").update(body).digest("hex")}`,
+      );
+    } finally {
+      receiver.closeAllConnections();
+      await new Promise<void>((resolve) => receiver.close(() => resolve()));
+    }
+  }, 30_000);
 });

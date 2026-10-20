@@ -20,11 +20,17 @@ Arguments: an issue number, and a scope:
 - `task`: one task, read with its parent.
   Every category except overlap and shared-values.
 - `feature`: a feature with sub-issues, read with every open sub-issue.
-  Only contradiction between tasks, overlap, shared values, and whether the
-  tasks together deliver every Completion condition.
-- `closure`: one body and a list of finding lines a spec session fixed. Only
-  whether the body as posted closes each one; read only what that needs,
-  and skip steps 2 and 3.
+  Only contradiction between tasks, overlap, shared values, whether the
+  tasks together deliver every Completion condition, and the facts the
+  feature's ADRs state about code or another tool (an ADR at _Proposed_ is
+  not yet an authority).
+- `recheck`: the spec session sends you the diff of a body you checked.
+  Say whether the body as posted closes each blocking finding you
+  reported, then check only the changed lines and every line that cites
+  them, under every category in your scope. Reuse what you read; read only
+  what the diff needs. Skip steps 2 and 3. Started fresh, you get your
+  earlier report with the diff. A `feature` recheck also re-runs the
+  overlap search: other features may have posted tasks since.
 
 No scope given: `feature` for an issue with sub-issues, else `task`.
 
@@ -178,10 +184,11 @@ In `feature` scope, the categories it does not check are `n/a`. The
 verdict is `ready` when no finding is blocking; notes never make it `fix
 first`.
 
-In `closure` scope, the block is instead:
+In `recheck` scope, the block is instead:
 
 ```
-Issue: #N  Scope: closure  Open: n of m
+Issue: #N  Scope: recheck  Open: n of m  New: <b> blocking
 - closed | open: <the finding, quoted short> — <for open: what the body still leaves wrong>
+- [<category>] blocking #<issue> "<a changed line, quoted short>" — <what goes wrong>. Evidence: <...>
 Verdict: ready | fix first
 ```

@@ -1,4 +1,10 @@
+import type { ZodType } from "zod";
+
 import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
+import {
+  authStrategies as registeredAuthStrategies,
+  type AuthStrategyDefinition,
+} from "../auth/index.js";
 import {
   capacityStrategyNames,
   capacityStrategyValidator,
@@ -87,6 +93,139 @@ const DEFAULT_ROUTING_POLICY = "warm-then-free";
  * imported) instead of widening to a bare `string` the boundary between the two would otherwise
  * force. */
 type RoutingPolicyName = (typeof ROUTING_POLICIES)[number];
+
+export const ALERT_EVENTS = [
+  "worker.connected",
+  "worker.disconnected",
+  "worker.rejected",
+  "worker.drain-started",
+  "worker.drain-ended",
+  "device.quarantine-abandoned",
+  "device.quarantine-stranded",
+  "device.recovery-failed",
+  "device.stalled-transition-detected",
+  "disk.pressure-detected",
+  "component.install-failed",
+] as const;
+export type AlertEventName = (typeof ALERT_EVENTS)[number];
+
+/**
+ * why: re-declared in the contract's `configSchema`, which imports nothing from core; a test checks the two agree.
+ */
+export const ALERT_FORMATS = ["generic", "slack"] as const;
+export type AlertFormatName = (typeof ALERT_FORMATS)[number];
+
+/** why: checked at config load, which cannot import the alerts module. */
+const ALERT_FORMAT_SECRET: Record<AlertFormatName, "required" | "refused"> = {
+  generic: "required",
+  slack: "refused",
+};
+
+export interface AlertDestination {
+  readonly name: string;
+  readonly format: AlertFormatName;
+  readonly url: string;
+  readonly events: readonly AlertEventName[];
+  readonly secret?: string;
+}
+
+const MAX_ALERT_DESTINATIONS = 16;
+const ALERT_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+const ALERT_LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+const ALERT_URL_EXPECTED =
+  "an https:// URL, or an http:// URL to localhost, 127.0.0.1 or [::1], with no user name or password";
+
+function isAlertUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username !== "" || url.password !== "") return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && ALERT_LOCAL_HOSTS.includes(url.hostname);
+}
+
+const ALERT_KEYS = ["name", "format", "url", "events", "secret"];
+
+function checkAlertName(name: unknown, path: string, names: Set<string>): string {
+  if (typeof name !== "string" || !ALERT_NAME_PATTERN.test(name)) {
+    throw invalidValue(
+      `${path}.name`,
+      "a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters",
+    );
+  }
+  if (names.has(name)) throw invalidValue(`${path}.name`, "a name no other destination uses");
+  return name;
+}
+
+function checkAlertEvents(events: unknown, path: string): AlertEventName[] {
+  if (
+    !Array.isArray(events) ||
+    events.length === 0 ||
+    new Set(events).size !== events.length ||
+    !events.every((event) => (ALERT_EVENTS as readonly unknown[]).includes(event))
+  ) {
+    throw invalidValue(
+      `${path}.events`,
+      `a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`,
+    );
+  }
+  return events as AlertEventName[];
+}
+
+function checkAlertSecret(
+  format: AlertFormatName,
+  entry: Record<string, unknown>,
+  path: string,
+): string | undefined {
+  const { secret } = entry;
+  if (ALERT_FORMAT_SECRET[format] === "refused") {
+    if ("secret" in entry) {
+      throw invalidValue(`${path}.secret`, `no secret: a ${format} destination is not signed`);
+    }
+    return undefined;
+  }
+  if (typeof secret !== "string" || secret.length === 0) {
+    throw invalidValue(`${path}.secret`, `a non-empty secret for a ${format} destination`);
+  }
+  return secret;
+}
+
+function alertDestinationValidator(
+  names: Set<string>,
+): (value: unknown, path: string, warn: Warn) => AlertDestination {
+  return (value, path, warn) => {
+    const entry = requireObject(value, path);
+    for (const key of Object.keys(entry)) {
+      if (!ALERT_KEYS.includes(key)) warn(`Unknown config key: "${path}.${key}"`);
+    }
+    // why: the fields are checked in this order, so a destination with several bad ones reports the first.
+    const name = checkAlertName(entry.name, path, names);
+    const format = stringUnion(ALERT_FORMATS)(entry.format, `${path}.format`);
+    if (!isAlertUrl(entry.url)) throw invalidValue(`${path}.url`, ALERT_URL_EXPECTED);
+    const events = checkAlertEvents(entry.events, path);
+    const secret = checkAlertSecret(format, entry, path);
+    names.add(name);
+    return {
+      name,
+      format,
+      url: entry.url,
+      events,
+      ...(secret === undefined ? {} : { secret }),
+    };
+  };
+}
+
+function alertDestinationsValidator(value: unknown, path: string, warn: Warn): AlertDestination[] {
+  if (!Array.isArray(value) || value.length > MAX_ALERT_DESTINATIONS) {
+    throw invalidValue(path, `a list of at most ${MAX_ALERT_DESTINATIONS} destinations`);
+  }
+  const validate = alertDestinationValidator(new Set());
+  return value.map((entry, index) => validate(entry, `${path}[${index}]`, warn));
+}
 
 /**
  * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
@@ -195,21 +334,22 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
-  /**
-   * The event file (`events.jsonl`): `rotateBytes` is one generation's size before it rotates,
-   * `retention` how long (milliseconds) a generation is kept after its newest line, and
-   * `maxBytes` the total size of every generation, the backstop when events arrive faster than
-   * `retention` ages them out.
-   */
   readonly eventLog: {
-    readonly rotateBytes: number;
     readonly retention: number;
     readonly maxBytes: number;
   };
+  readonly metrics: { readonly retention: number };
   readonly http: {
     readonly enabled: boolean;
     readonly host: string;
     readonly port: number;
+    readonly proxyAuth?: {
+      readonly header: string;
+      readonly jwksUrl: string;
+      readonly issuer: string;
+      readonly audience: string;
+      readonly signOutUrl?: string;
+    };
   };
   readonly health: {
     readonly enabled: boolean;
@@ -316,6 +456,7 @@ export interface Config {
      * per-request choice. `"warm-then-free"` is the only value in v1 (`ROUTING_POLICIES` above).
      */
     readonly routing: RoutingPolicyName;
+    readonly alerts: { readonly destinations: readonly AlertDestination[] };
   };
   readonly stalledTransition: {
     /**
@@ -334,17 +475,25 @@ export interface Config {
 /** What `redactConfig` puts in place of a secret's value. */
 export const REDACTED_VALUE = "[redacted]";
 
-/**
- * The config with its secrets masked, for every place that writes the config somewhere other
- * than `config.json` and `config.get`: the `Daemon started` log line and the `daemon.started`
- * payload, which land in `daemon.log`, the event ring and `events.jsonl`. Masked rather than
- * deleted so the copy keeps `Config`'s keys and a reader can still tell "set" from "unset".
- * Returns a copy and never touches its input: the live config is what `config.get` answers
- * and what the uplink presents, so the masked copy must never be handed to either.
- */
+// why: masked rather than deleted, so the copy keeps `Config`'s keys and a reader can tell "set" from "unset"; a copy, because the live config is what `config.get` answers and the uplink presents.
 export function redactConfig(config: Config): Config {
-  if (config.gateway.token === undefined) return config;
-  return { ...config, gateway: { ...config.gateway, token: REDACTED_VALUE } };
+  const { token, alerts } = config.gateway;
+  if (token === undefined && alerts.destinations.length === 0) return config;
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      ...(token === undefined ? {} : { token: REDACTED_VALUE }),
+      alerts: {
+        ...alerts,
+        destinations: alerts.destinations.map((destination) => ({
+          ...destination,
+          url: REDACTED_VALUE,
+          ...(destination.secret === undefined ? {} : { secret: REDACTED_VALUE }),
+        })),
+      },
+    },
+  };
 }
 
 /**
@@ -368,6 +517,7 @@ export interface ModuleConfigEntry {
 }
 
 export interface LoadConfigOptions {
+  readonly authStrategies?: readonly AuthStrategyDefinition[];
   readonly modules?: readonly ModuleConfigEntry[];
   readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
@@ -379,6 +529,7 @@ export interface LoadConfigOptions {
 type Layer = Record<string, unknown>;
 
 export async function loadConfig({
+  authStrategies = registeredAuthStrategies,
   configPath = DEFAULT_CONFIG_PATH,
   filesystem,
   modules = [],
@@ -397,7 +548,7 @@ export async function loadConfig({
   // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
   // about.
   const mode = resolveMode([fromFile, fromOverrides]);
-  const validators = configValidators(strategy, modules);
+  const validators = configValidators(strategy, modules, authStrategies);
 
   const fileConfig = normalizeLayer(
     validateConfigLayer(fromFile, "", warn, validators),
@@ -410,12 +561,21 @@ export async function loadConfig({
     warn,
   );
 
-  const merged = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, mode, modules), fileConfig),
+  const mergedWithoutMetrics = mergeConfig(
+    mergeConfig(defaultConfig(systemStats, strategy, mode, modules, authStrategies), fileConfig),
     overrideConfig,
-  ) as unknown as Config;
+  ) as unknown as Omit<Config, "metrics"> & { readonly metrics?: Config["metrics"] };
+  const merged: Config = {
+    ...mergedWithoutMetrics,
+    metrics: {
+      retention:
+        mergedWithoutMetrics.metrics?.retention ??
+        Math.max(DEFAULT_METRICS_RETENTION_MS, mergedWithoutMetrics.eventLog.retention),
+    },
+  };
   validateLeaseTtls(merged);
   validateEventLogBounds(merged);
+  validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
   runModuleChecks(merged, modules);
   if (mode === "gateway") {
@@ -457,13 +617,19 @@ function validateLeaseTtls(config: Config): void {
   }
 }
 
-/**
- * Cross-field check: the size cap has to hold the current file and at least one full rotated
- * generation, or the sweep would delete the history the moment it rotates.
- */
+const DEFAULT_METRICS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+const MIN_EVENT_LOG_MAX_BYTES = 16 * 1024 * 1024;
+
 function validateEventLogBounds(config: Config): void {
-  if (config.eventLog.maxBytes < 2 * config.eventLog.rotateBytes) {
-    throw invalidValue("eventLog.maxBytes", "at least twice eventLog.rotateBytes");
+  if (config.eventLog.maxBytes < MIN_EVENT_LOG_MAX_BYTES) {
+    throw invalidValue("eventLog.maxBytes", "at least 16 MiB");
+  }
+}
+
+function validateMetricsRetention(config: Config): void {
+  if (config.metrics.retention < config.eventLog.retention) {
+    throw invalidValue("metrics.retention", "at least eventLog.retention");
   }
 }
 
@@ -480,6 +646,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "lease",
   "eventBuffer",
   "eventLog",
+  "metrics",
   "gateway",
   "capabilities",
 ];
@@ -708,7 +875,8 @@ function defaultConfig(
   strategy: CapacityStrategyName,
   mode: DaemonMode,
   modules: readonly ModuleConfigEntry[],
-): Config {
+  authStrategies: readonly AuthStrategyDefinition[],
+): Omit<Config, "metrics"> {
   return {
     mode,
     capabilities: Object.fromEntries(
@@ -754,14 +922,24 @@ function defaultConfig(
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
-      rotateBytes: 5 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
     // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
     // something every operator has to remember to switch on; a worker's HTTP gateway stays
     // opt-in exactly as before.
-    http: { enabled: mode === "gateway", host: "127.0.0.1", port: 4700 },
+    http: {
+      enabled: mode === "gateway",
+      host: "127.0.0.1",
+      port: 4700,
+      ...Object.fromEntries(
+        authStrategies.flatMap((definition) =>
+          definition.config === undefined
+            ? []
+            : [[definition.config.key, definition.config.defaults]],
+        ),
+      ),
+    },
     health: {
       enabled: true,
       probeIntervalMs: 30_000,
@@ -791,6 +969,7 @@ function defaultConfig(
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
       leaseRequestTimeoutMs: DEFAULT_LEASE_REQUEST_TIMEOUT_MS,
       routing: DEFAULT_ROUTING_POLICY,
+      alerts: { destinations: [] },
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -851,6 +1030,7 @@ const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 function configValidators(
   strategy: CapacityStrategyName,
   modules: readonly ModuleConfigEntry[],
+  authStrategies: readonly AuthStrategyDefinition[],
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
@@ -863,6 +1043,7 @@ function configValidators(
       execTimeoutMs: positiveNumber,
       leaseRequestTimeoutMs: positiveNumber,
       routing: stringUnion(ROUTING_POLICIES),
+      alerts: objectValidator({ destinations: alertDestinationsValidator }),
     }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
@@ -908,14 +1089,21 @@ function configValidators(
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
     eventLog: objectValidator({
-      rotateBytes: positiveInteger,
       retention: positiveInteger,
       maxBytes: positiveInteger,
     }),
+    metrics: objectValidator({ retention: positiveInteger }),
     http: objectValidator({
       enabled: booleanValue,
       host: stringValue,
       port: integerInRange(1, 65535),
+      ...Object.fromEntries(
+        authStrategies.flatMap((definition) =>
+          definition.config === undefined
+            ? []
+            : [[definition.config.key, schemaValidator(definition.config.schema)]],
+        ),
+      ),
     }),
     health: objectValidator({
       enabled: booleanValue,
@@ -946,6 +1134,21 @@ function configValidators(
       thresholdMultiplier: numberAtLeast(1),
       minimumThresholdMs: nonNegativeNumber,
     }),
+  };
+}
+
+function schemaValidator(schema: ZodType): Validator {
+  return (value, path) => {
+    const result = schema.safeParse(value);
+    if (result.success) return result.data;
+    const issue = result.error.issues[0];
+    if (issue === undefined) throw invalidValue(path, "a valid value");
+    const issuePath = [path, ...issue.path.map(String)].join(".");
+    // why: a strategy's own messages are lower-case phrases that finish "expected ..."; zod's built-in ones start with a capital.
+    const expected = /^[A-Z]/.test(issue.message)
+      ? `a valid value (${issue.message})`
+      : issue.message;
+    throw invalidValue(issuePath, expected);
   };
 }
 

@@ -1,5 +1,5 @@
 // why: nothing heavy is imported statically here -- `loadConfig`, the module registry, the
-// event-file reader and the admin client load inside the closures that use them, so building
+// event-history reader and the admin client load inside the closures that use them, so building
 // an environment costs what it always cost while loading this file costs almost nothing.
 import { join } from "node:path";
 
@@ -10,7 +10,6 @@ import type {
   Clock,
   DaemonLauncher,
   Filesystem,
-  IpcConnection,
   IpcConnector,
   ParentWatch,
   ParentWatchHandle,
@@ -20,17 +19,21 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
 
-class AutoLaunchIpcConnector implements IpcConnector {
+class AutoLaunchAdminConnector {
+  private startupDeadline: number | undefined;
+
   constructor(
-    private readonly ipc: IpcConnector,
+    private readonly connectClient: (
+      resolveCredential: () => Promise<string | undefined>,
+    ) => Promise<SimlockAdminClient>,
     private readonly clock: Clock,
     private readonly launcher: DaemonLauncher,
     private readonly checkConfig: () => Promise<void>,
   ) {}
 
-  async connect(endpoint: string): Promise<IpcConnection> {
+  async connect(resolveCredential: () => Promise<string | undefined>): Promise<SimlockAdminClient> {
     try {
-      return await this.ipc.connect(endpoint);
+      return await this.finishConnection(await this.connectClient(resolveCredential));
     } catch (error: unknown) {
       if (!(await isUnavailable(error))) throw error;
     }
@@ -39,10 +42,11 @@ class AutoLaunchIpcConnector implements IpcConnector {
     // why: the constant lives behind the ports barrel, which loads on the first connection that needs it.
     const { DAEMON_STARTUP_TIMEOUT_MS } = await import("../ports/index.js");
     const deadline = this.clock.now() + DAEMON_STARTUP_TIMEOUT_MS;
+    this.startupDeadline = deadline;
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
-        return await this.ipc.connect(endpoint);
+        return await this.finishConnection(await this.connectClient(resolveCredential));
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
@@ -56,6 +60,48 @@ class AutoLaunchIpcConnector implements IpcConnector {
       `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
       {},
     );
+  }
+
+  private async finishConnection(client: SimlockAdminClient): Promise<SimlockAdminClient> {
+    if (this.startupDeadline === undefined) return client;
+    const { isSimlockError, SimlockError } = await import("../contract/index.js");
+    const remainingMs = Math.max(0, this.startupDeadline - this.clock.now());
+    let timer: ReturnType<Clock["setTimer"]> | undefined;
+    let timedOut = false;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = this.clock.setTimer(remainingMs, () => {
+        timedOut = true;
+        reject(
+          new SimlockError(
+            "DAEMON_STARTUP_FAILED",
+            "transport",
+            "Timed out starting simlock daemon: the startup status probe was not answered",
+            {},
+          ),
+        );
+      });
+    });
+    try {
+      await Promise.race([client.getStatus(), timeout]);
+      this.startupDeadline = undefined;
+      return client;
+    } catch (error: unknown) {
+      // why: a daemon that went silent after `hello` never ends its side, so awaiting the close
+      // would hang the start this deadline bounds; other failures close against a live peer.
+      if (timedOut) void client.close().catch(() => undefined);
+      else await client.close();
+      if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
+        throw new SimlockError(
+          "DAEMON_STARTUP_FAILED",
+          "transport",
+          "The daemon closed its connection while starting, before answering the startup status probe",
+          {},
+        );
+      }
+      throw error;
+    } finally {
+      if (timer !== undefined) this.clock.cancel(timer);
+    }
   }
 }
 
@@ -132,9 +178,9 @@ export function buildCliEnvironment(
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
   const requesterId = resolveRequesterId(env, String(process.pid));
-  // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
-  // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
-  const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher, async () => {
+  const checkConfig = async (): Promise<void> => {
+    // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
+    // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
     const { loadConfig } = await import("../core/index.js");
     await loadConfig({
       configPath,
@@ -142,7 +188,7 @@ export function buildCliEnvironment(
       modules: await moduleConfigEntries(),
       systemStats,
     });
-  });
+  };
 
   const connect = async (
     connector: IpcConnector,
@@ -166,11 +212,18 @@ export function buildCliEnvironment(
     });
   };
 
+  const autoLaunch = new AutoLaunchAdminConnector(
+    (resolveCredential) => connect(ipc, resolveCredential),
+    clock,
+    launcher,
+    checkConfig,
+  );
+
   return {
     clock,
     configPath,
     requesterId,
-    connectAdmin: (resolveCredential) => connect(autoLaunchIpc, resolveCredential),
+    connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
@@ -225,9 +278,16 @@ export function buildCliEnvironment(
         write: (text: string) => (ports.stdout ?? process.stdout).write(text),
       });
     },
-    readEventFile: async (sinceTs) => {
-      const { EVENT_FILE_NAME, readEventFile } = await import("../bus/index.js");
-      return readEventFile(filesystem, join(dataDirectory, EVENT_FILE_NAME), { sinceTs });
+    readEventHistory: async (sinceTs) => {
+      const { openHistoryReader } = await import("../history/index.js");
+      const { filterSqliteExperimentalWarning, NodeSqliteOpener } =
+        await import("../ports/index.js");
+      filterSqliteExperimentalWarning();
+      return openHistoryReader({
+        dataDirectory,
+        filesystem,
+        sqlite: new NodeSqliteOpener(),
+      }).read({ sinceTs });
     },
     signals: ports.signals ?? process,
     stderr: ports.stderr ?? process.stderr,

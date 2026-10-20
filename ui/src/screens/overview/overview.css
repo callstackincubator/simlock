@@ -140,3 +140,15 @@
 .event-warn {
   color: var(--status-warn);
 }
+
+.overview-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.overview-range p {
+  margin: 0;
+  font-size: var(--text-sm);
+}

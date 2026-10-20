@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { type EventBus, type EventEnvelope, type EventHistory } from "../bus/index.js";
+import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import type { EventHistoryHandle } from "../history/index.js";
 import {
   type ComponentInstaller,
   type Config,
@@ -48,7 +49,12 @@ import {
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { ConnectionHost } from "./connection-host.js";
-import type { TokenStore } from "../http/token-store.js";
+import {
+  resolveAgentRole,
+  type Auth,
+  type SessionRoleResolver,
+  type TokenOperations,
+} from "../auth/index.js";
 import {
   Dispatcher,
   DispatchError,
@@ -56,8 +62,6 @@ import {
   type DispatcherOptions,
   type DispatchSession,
 } from "./dispatcher.js";
-import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
-import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
 import { RelayConnection, type RelayTargets } from "./relay.js";
@@ -142,7 +146,8 @@ export interface DaemonServerEngineOptions {
   readonly catalog: CatalogReader;
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly historyPath?: string;
   readonly leases: LeaseCommands;
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;
@@ -160,7 +165,7 @@ export interface DaemonServerEngineOptions {
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
-  readonly tokens?: TokenStore;
+  readonly tokens?: TokenOperations;
 }
 
 export interface DaemonServerCommonOptions {
@@ -184,7 +189,7 @@ export interface DaemonServerCommonOptions {
    * exercise the admin handshake at all -- `start()`/`#stop()` simply skip the persist/remove
    * calls below when it is absent, same style as `doctor`/`nuke`.
    */
-  readonly adminSecret?: AdminSecretManager;
+  readonly adminSecret?: Auth["adminSecret"];
   /**
    * why: Startup recovery work (doctor reconciliation, running-capacity convergence) run
    * *after* the socket is claimed, so reachability never depends on it. `hello` and
@@ -228,7 +233,7 @@ export interface DaemonServerCommonOptions {
    * otherwise there is nothing for a request to park against, it just gets connection-refused
    * the way it always did. Called synchronously right after `#readyPromise` is assigned (so any
    * request `dispatch()` serves as a result of this callback already parks correctly) and after
-   * the socket claim and the admin-secret write, but *before* awaiting convergence -- an
+   * the socket claim and the admin secret write, but *before* awaiting convergence -- an
    * auxiliary frontend started from here must not itself assume convergence is done. A no-op
    * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
    */
@@ -292,6 +297,7 @@ function buildDispatcher(
     errorCode: classifyError,
     eventBus: options.eventBus,
     eventHistory: options.eventHistory,
+    ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: hooks.health,
     hostFacts: options.hostFacts,
     ...(options.load === undefined ? {} : { load: options.load }),
@@ -537,9 +543,7 @@ export class DaemonServer {
       }),
     );
 
-    // why: Redacted: the payload lands in the ring and `events.jsonl`, and the log line in
-    // `daemon.log`, none of which is as guarded as `config.json`. `this.options.config` itself
-    // stays whole -- `config.get` answers from it.
+    // why: redacted because the payload lands in the ring and `history.db`, and the log line in `daemon.log`, none of which is as guarded as `config.json`; `this.options.config` stays whole for `config.get`.
     const configSnapshot = redactConfig(this.options.config);
     this.options.eventBus.emit(
       "daemon.started",
@@ -1078,6 +1082,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "usage.get":
+        return this.#dispatcher.dispatch(
+          "usage.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "events.subscribe":
         return this.#dispatcher.dispatch(
           "events.subscribe",
@@ -1113,6 +1123,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "identity.get":
+        return this.#dispatcher.dispatch(
+          "identity.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "token.create":
         return this.#dispatcher.dispatch("token.create", frame.payload, this.#session(connection));
       case "token.list":
@@ -1143,6 +1159,8 @@ export class DaemonServer {
         );
       case "worker.remove":
         return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
+      case "alerts.test":
+        return this.#dispatcher.dispatch("alerts.test", frame.payload, this.#session(connection));
       case "component.install":
         return this.#installComponent(connection, frame.id, "component.install", frame.payload);
       case "worker.install-component":
@@ -1198,6 +1216,7 @@ export class DaemonServer {
       principal: connection.principal,
       relays: connection.relays,
       role: connection.role,
+      via: connection.isGatewayUplink === true ? "uplink" : "socket",
     };
   }
 
