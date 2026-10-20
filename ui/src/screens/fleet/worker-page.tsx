@@ -26,13 +26,23 @@ import {
   type WarmRow,
   type WorkerPageView,
 } from "../../state/workers";
+import { DeviceDrawer } from "./device-drawer";
 
-export function WorkerPageScreen({ id }: { readonly id: string }) {
+export function WorkerPageScreen(props: {
+  readonly id: string;
+  readonly deviceId: string | undefined;
+}) {
+  const { deviceId, id } = props;
   const view = useWorkerPage(id);
   return (
-    <Loaded view={view}>
-      {(page) => (page === undefined ? null : <WorkerPageBody page={page} />)}
-    </Loaded>
+    <>
+      <Loaded view={view}>
+        {(page) => (page === undefined ? null : <WorkerPageBody page={page} />)}
+      </Loaded>
+      {deviceId === undefined ? null : (
+        <DeviceDrawer key={deviceId} workerId={id} deviceId={deviceId} />
+      )}
+    </>
   );
 }
 
@@ -113,6 +123,7 @@ function DevicesTab({ page }: { readonly page: WorkerPageView }) {
         rows={overview.devices ?? []}
         columns={DEVICE_COLUMNS}
         rowId={(device) => device.id}
+        rowTo={(device) => device.to}
         empty="No devices."
         paging={page.devicesPaging}
         wide
@@ -170,7 +181,8 @@ const DEVICE_COLUMNS: readonly Column<DeviceRow>[] = [
         <StatusDot tone={device.status.tone} label={device.status.word} />
         <span className="device-text">
           <span>
-            {device.model} <span className="mono muted">{device.runtime}</span>
+            <Link to={device.to}>{device.model}</Link>{" "}
+            <span className="mono muted">{device.runtime}</span>
           </span>
           <span className="device-sub">
             {device.platform} · <Id>{device.id}</Id>

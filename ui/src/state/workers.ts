@@ -2,14 +2,15 @@ import { useState } from "react";
 
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
-import type { LeaseList, TokenList } from "../model/leases";
+import type { LeaseDetails, LeaseList, TokenList } from "../model/leases";
 import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging";
-import { fleetAddress } from "../model/paths";
+import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
   searchWorkers,
   upMeta,
   type WorkerFilter,
+  type DeviceRow,
   type WorkerPage,
   type WorkerRow,
   type WorkerTab,
@@ -17,11 +18,11 @@ import {
   workerRow,
   writeWorkerTab,
 } from "../model/worker-page";
-import type { WorkerList } from "../model/workers";
+import { type WorkerList, workerPath } from "../model/workers";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { setSearch, usePath, useSearch } from "./router";
+import { navigate, setSearch, usePath, useSearch } from "./router";
 
 export type {
   CapabilityRow,
@@ -58,9 +59,10 @@ export interface FleetPage {
   readonly paging: Paging;
 }
 
-// why: the address names the worker whose page is open; with none the fleet's table shows.
-export function useFleetAddress(): { readonly workerId: string | undefined } {
-  return { workerId: fleetAddress(usePath()).workerId };
+// why: the address names the worker whose page is open, and the device whose drawer is open on it;
+// with no worker the fleet's table shows.
+export function useFleetAddress(): FleetAddress {
+  return fleetAddress(usePath());
 }
 
 export function useFleet(): LoadView<FleetPage> {
@@ -124,4 +126,26 @@ export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> 
       warmPaging,
     };
   });
+}
+
+// why: a device is gone once the worker no longer lists it, and the drawer says so; `undefined` is
+// that answer.
+export function useDeviceDrawer(
+  workerId: string,
+  deviceId: string,
+): { readonly view: LoadView<DeviceRow | undefined>; readonly close: () => void } {
+  const page = useWorkerPage(workerId);
+  const search = useSearch();
+  return {
+    // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept.
+    close: () => navigate(`${workerPath(workerId)}${search}`, { replace: true }),
+    view: mapView(page, (shown) => shown?.overview.devices?.find((row) => row.id === deviceId)),
+  };
+}
+
+// why: a leased device's UDID is known to the console only through its lease.
+export function useLeaseUdid(leaseId: string): string | undefined {
+  return useLiveResource<{ readonly lease: LeaseDetails }>(
+    `/v1/leases/${encodeURIComponent(leaseId)}`,
+  ).data?.lease.udid;
 }

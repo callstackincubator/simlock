@@ -116,3 +116,8 @@
   border-radius: var(--radius);
   font-size: var(--text-sm);
 }
+
+.device-drawer-body {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+}

@@ -23,8 +23,12 @@ import {
 import { WorkerPageScreen } from "./worker-page";
 
 export function FleetScreen() {
-  const { workerId } = useFleetAddress();
-  return workerId === undefined ? <FleetTable /> : <WorkerPageScreen id={workerId} />;
+  const { deviceId, workerId } = useFleetAddress();
+  return workerId === undefined ? (
+    <FleetTable />
+  ) : (
+    <WorkerPageScreen id={workerId} deviceId={deviceId} />
+  );
 }
 
 function FleetTable() {

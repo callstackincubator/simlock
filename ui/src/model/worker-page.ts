@@ -10,6 +10,7 @@ import {
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { holderOf, leasePath, type TokenRecord } from "./leases";
+import { devicePath } from "./paths";
 import { formatDuration } from "./time";
 import {
   connectionStatus,
@@ -254,6 +255,9 @@ function platformCards(worker: WorkerView): readonly PlatformCard[] {
 
 export interface DeviceRow {
   readonly id: string;
+  readonly to: string;
+  readonly lease?: { readonly id: string; readonly to: string };
+  readonly udid?: string;
   readonly model: string;
   readonly runtime: string;
   readonly platform: string;
@@ -281,6 +285,7 @@ function deviceRow(
   now: number,
   tokens: readonly TokenRecord[],
   leaseIds: ReadonlySet<string>,
+  search: string,
 ): DeviceRow {
   const entered = stateEnteredAt(device, worker);
   // why: a virtual device shows its mode only where it is not the one the worker serves by default,
@@ -293,8 +298,10 @@ function deviceRow(
     platform: platformName(device.spec.platform),
     runtime: device.spec.osVersion,
     status: deviceStateStatus(device.state),
+    to: `${devicePath(worker.id, device.id)}${writeWorkerTab(search, "devices")}`,
     ...leaseFacts(device, worker, now, tokens, leaseIds),
     ...defined({
+      udid: device.physical ? device.driverDeviceId : undefined,
       imageTag: virtual ? device.spec.imageTag : undefined,
       mode: virtual && !device.servesDefaultMode ? device.mode : undefined,
       since: entered === undefined ? undefined : formatDuration(now - entered),
@@ -308,16 +315,18 @@ function leaseFacts(
   now: number,
   tokens: readonly TokenRecord[],
   leaseIds: ReadonlySet<string>,
-): Pick<DeviceRow, "expires" | "holder" | "renewed"> {
+): Pick<DeviceRow, "expires" | "holder" | "lease" | "renewed"> {
   const lease = worker.leases?.find((candidate) => candidate.deviceId === device.id);
   if (lease === undefined) return {};
   const holder = holderOf(lease.requesterId, tokens);
+  const onPage = leaseIdOnPage(worker, lease.id, leaseIds);
   return {
+    lease: { id: onPage, to: leasePath(onPage) },
     expires: formatDuration(lease.ttlDeadline - now),
     holder: {
       id: holder.id,
       name: holder.label ?? holder.id,
-      to: leasePath(leaseIdOnPage(worker, lease.id, leaseIds)),
+      to: leasePath(onPage),
     },
     renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
   };
@@ -604,7 +613,9 @@ export function workerPageOf(input: {
       ...(starting
         ? {}
         : {
-            devices: (worker.devices ?? []).map((d) => deviceRow(d, worker, now, tokens, leaseIds)),
+            devices: (worker.devices ?? []).map((d) =>
+              deviceRow(d, worker, now, tokens, leaseIds, input.search ?? ""),
+            ),
           }),
     },
     tabs,

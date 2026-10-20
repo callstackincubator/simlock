@@ -19,17 +19,29 @@ export function itemIdFrom(section: Section, path: string): string | undefined {
 
 export interface FleetAddress {
   readonly workerId?: string;
+  readonly deviceId?: string;
 }
 
-// why: a worker's page is `/fleet/<workerId>`, the id encoded, so a slash inside an id cannot be
-// taken for a path separator; a malformed escape is kept as typed.
+function decoded(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+// why: a worker's page is `/fleet/<workerId>` and its device drawer `/fleet/<workerId>/<deviceId>`,
+// each id encoded on its own, so a slash inside an id cannot be taken for the separator; a malformed
+// escape is kept as typed.
 export function fleetAddress(path: string): FleetAddress {
   if (!path.startsWith("/fleet/")) return {};
-  const [worker] = path.slice("/fleet/".length).replace(/\/$/, "").split("/");
+  const [worker, device] = path.slice("/fleet/".length).replace(/\/$/, "").split("/");
   if (worker === undefined || worker === "") return {};
-  try {
-    return { workerId: decodeURIComponent(worker) };
-  } catch {
-    return { workerId: worker };
-  }
+  return device === undefined || device === ""
+    ? { workerId: decoded(worker) }
+    : { deviceId: decoded(device), workerId: decoded(worker) };
+}
+
+export function devicePath(workerId: string, deviceId: string): `/${string}` {
+  return `/fleet/${encodeURIComponent(workerId)}/${encodeURIComponent(deviceId)}`;
 }
