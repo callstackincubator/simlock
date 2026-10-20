@@ -314,7 +314,10 @@ function boots(
     const device = open()
       ? bootable.find(
           (candidate) =>
-            !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
+            !taken.has(candidate.id) &&
+            hasRoom(room, candidate) &&
+            serves(candidate, demand) &&
+            view.admit.boot(candidate) === undefined,
         )
       : undefined;
     if (device !== undefined) {
@@ -347,7 +350,7 @@ function boots(
     )
     .sort((left, right) => compareLeastRecentlyUsed(right, left));
   for (const device of recent) {
-    if (hasWarmRoom(room, held, device)) {
+    if (hasWarmRoom(room, held, device) && view.admit.boot(device) === undefined) {
       claim(room, device);
       started += 1;
       proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
