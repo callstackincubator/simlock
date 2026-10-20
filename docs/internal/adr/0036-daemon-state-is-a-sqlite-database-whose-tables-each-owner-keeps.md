@@ -1,6 +1,6 @@
 # 0036. Daemon state is a SQLite database, and each owner keeps its own tables
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-20
 - **Issue:** [#754](https://github.com/callstackincubator/simlock/issues/754)
 - **Supersedes:** the line in [ADR
