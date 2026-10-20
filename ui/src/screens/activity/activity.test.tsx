@@ -206,10 +206,11 @@ describe("the events page's inspector", () => {
     expect(drawer()).not.toContain("Open lease");
   });
 
-  it("says an event older than the hour is not there, and links back to the list", () => {
+  it("says an event that is not among those loaded is not, and where older ones come from", () => {
     const html = drawer({ chosen: { id: "evt_old", kind: "missing" } });
 
-    expect(text(html)).toContain("Event not in the last hour.");
-    expect(html).toContain('<a href="/activity">Back to Activity</a>');
+    expect(text(html)).toContain(
+      "This event is not among those loaded. Older events load as you scroll the list, or with Load older events.",
+    );
   });
 });

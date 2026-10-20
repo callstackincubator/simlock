@@ -9,7 +9,6 @@ import {
   Facts,
   Feed,
   focusAfterClosing,
-  Link,
   ListRow,
   Loaded,
   type LoadView,
@@ -225,7 +224,8 @@ export function DrawerBody({ page }: { readonly page: EventsPage }) {
   if (chosen.kind === "event") return <Detail detail={chosen.detail} />;
   return (
     <p className="muted event-drawer-body">
-      Event not in the last hour. <Link to="/activity">Back to Activity</Link>
+      This event is not among those loaded. Older events load as you scroll the list, or with Load
+      older events.
     </p>
   );
 }
