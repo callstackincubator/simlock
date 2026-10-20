@@ -126,6 +126,18 @@ async function answer(page: Page, pathname: string, body: () => unknown): Promis
   );
 }
 
+// why: a page before the last hour answers with no events, so the stubbed list ends where it did
+// before Activity scrolled back.
+async function answerEvents(page: Page, replay: readonly unknown[]): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/v1/events",
+    async (route: Route) => {
+      const since = new URL(route.request().url()).searchParams.has("since");
+      await route.fulfill({ json: { events: since ? replay : [] } });
+    },
+  );
+}
+
 /** `count` leases on the one host, `lse_0001` granted first. */
 function leases(count: number): unknown[] {
   const now = Date.now();
@@ -515,7 +527,7 @@ test.describe("the events feed", () => {
     page,
   }) => {
     const replay = events(10_000);
-    await answer(page, "/v1/events", () => ({ events: replay }));
+    await answerEvents(page, replay);
     await open(page, daemon, "/activity");
     await expect.poll(() => eventsHeld(page)).toBe(10_000);
 
@@ -544,7 +556,7 @@ test.describe("the events feed", () => {
         platform: "ios",
       });
       const replay = events(1_000);
-      await answer(page, "/v1/events", () => ({ events: replay }));
+      await answerEvents(page, replay);
       await open(page, host, "/activity");
       await expect.poll(() => eventsHeld(page)).toBe(1_000);
 
@@ -577,7 +589,7 @@ test.describe("the events feed", () => {
         platform: "ios",
       });
       const replay = events(1_000);
-      await answer(page, "/v1/events", () => ({ events: replay }));
+      await answerEvents(page, replay);
       await open(page, host, "/activity");
       await expect.poll(() => eventsHeld(page)).toBe(1_000);
       await scrollDown(page);
@@ -616,7 +628,7 @@ test.describe("the events feed", () => {
 
   test("choosing another filter starts the feed again at the top", async ({ daemon, page }) => {
     const replay = events(1_000);
-    await answer(page, "/v1/events", () => ({ events: replay }));
+    await answerEvents(page, replay);
     await open(page, daemon, "/activity");
     await expect.poll(() => eventsHeld(page)).toBe(1_000);
     await scrollDown(page);
