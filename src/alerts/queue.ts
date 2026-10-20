@@ -21,6 +21,7 @@ interface QueueOptions {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly version: string;
+  workerLabel(workerId: string): string;
 }
 
 function errorCode(error: unknown): string {
@@ -95,7 +96,7 @@ export class DestinationQueue {
         envelope,
         destination: this.#options.destination,
         version: this.#options.version,
-        workerLabel: (id) => id,
+        workerLabel: this.#options.workerLabel,
       });
     } catch {
       this.#fields("warn", "Alert send gave up", envelope, { attempt: 1, error: "build-failed" });

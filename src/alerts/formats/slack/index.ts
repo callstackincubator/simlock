@@ -4,11 +4,11 @@ import { SLACK_MESSAGES } from "./messages.js";
 
 export const slackFormat: AlertFormatDefinition = {
   name: "slack",
-  build({ envelope, version }) {
+  build({ envelope, version, workerLabel }) {
     const payload = envelope.payload as Record<string, unknown>;
     const message = SLACK_MESSAGES[envelope.event as AlertEventName];
     return {
-      body: JSON.stringify({ text: message(payload, String(payload.workerId)) }),
+      body: JSON.stringify({ text: message(payload, workerLabel(String(payload.workerId))) }),
       headers: { "Content-Type": "application/json", "User-Agent": `simlock/${version}` },
     };
   },

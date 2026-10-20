@@ -18,8 +18,10 @@ export function createAlerts(options: {
   workerLabel(workerId: string): string | undefined;
 }): Alerts {
   const { destinations, eventBus, poster, clock, logger, version } = options;
+  const workerLabel = (workerId: string): string => options.workerLabel(workerId) ?? workerId;
   const queues = destinations.map(
-    (destination) => new DestinationQueue({ destination, poster, clock, logger, version }),
+    (destination) =>
+      new DestinationQueue({ destination, poster, clock, logger, version, workerLabel }),
   );
 
   const unsubscribes = ALERT_EVENTS.filter((name) =>
