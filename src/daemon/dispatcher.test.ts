@@ -750,7 +750,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
-  it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
+  it("worker.drain, worker.undrain, worker.remove, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const install = vi.spyOn(components, "install");
     const calls = [
@@ -758,6 +758,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       ["worker.undrain", { workerId: "instance-1" }],
       ["worker.remove", { workerId: "instance-1" }],
       ["worker.install-component", { platform: "ios", version: "27.0", workers: "all" }],
+      ["alerts.test", { destination: "ops" }],
     ] as const;
 
     const refusals = await Promise.all(
@@ -783,6 +784,9 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(install).not.toHaveBeenCalled();
     expect(String((refusals[3] as { error?: unknown } | undefined)?.error)).toContain(
       "install on this host without naming workers",
+    );
+    expect((refusals[4] as { error?: Error } | undefined)?.error?.message).toBe(
+      "alerts.test sends to a gateway's alert destinations, and this daemon is not a gateway; run it against the gateway",
     );
   });
 });
