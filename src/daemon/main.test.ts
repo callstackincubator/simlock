@@ -1002,6 +1002,7 @@ describe("startDaemon wires core and leasing together", () => {
     await first.stop("test");
     // why: the history orders events by their time, and the second start's must follow the first's.
     clock.advance(1);
+    const secondRunStart = clock.now();
 
     const daemon = await startDaemon(options());
     runningDaemons.push(daemon);
@@ -1012,7 +1013,6 @@ describe("startDaemon wires core and leasing together", () => {
     for (const grant of grants) {
       expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
     }
-    const secondRunStart = clock.now();
     const secondRun = (
       await historyEventsWhen(directory, (all) =>
         all.some(
@@ -1027,7 +1027,8 @@ describe("startDaemon wires core and leasing together", () => {
     expect(secondRun.lastIndexOf("lease.released")).toBeLessThan(
       secondRun.indexOf("capacity.changed"),
     );
-  });
+    // why: two daemon starts and a history wait of up to 4 s outrun the 5 s default on a loaded CI runner (run 39454292501 timed out at 5015 ms, 59 ms locally).
+  }, 30_000);
 
   it("closes state.db on stop, and lists the same device and lease after a worker is stopped and started again", async () => {
     const clock = new FakeClock(1_000);
