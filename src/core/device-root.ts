@@ -327,8 +327,8 @@ async function discard(filesystem: Filesystem, path: string): Promise<void> {
     await filesystem.rm(path);
   } catch {
     // why: a staging directory left behind is untidy and harmless -- it is not the root, its
-    // name says what it is, and startup removes it once its writer's pid is dead. Reporting the cleanup's failure instead of the one that
-    // caused it would hide the thing worth fixing.
+    // name says what it is, and startup removes it once its writer's pid is dead. Reporting
+    // the cleanup's failure instead of the one that caused it would hide the thing worth fixing.
   }
 }
 

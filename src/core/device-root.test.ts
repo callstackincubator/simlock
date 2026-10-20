@@ -92,6 +92,28 @@ describe("ensureOwnedRoot", () => {
     await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
   });
 
+  it("names the writer's pid in the staging directory it assembles a new root in", async () => {
+    const staged: string[] = [];
+    class RecordingFilesystem extends MemoryFilesystem {
+      override async mkdir(path: string, options?: { readonly mode?: number }): Promise<void> {
+        staged.push(path);
+        await super.mkdir(path, options);
+      }
+    }
+
+    await ensureOwnedRoot({
+      filesystem: new RecordingFilesystem(undefined, uid),
+      idGenerator: { generate: () => "id-1" },
+      instanceId,
+      path: root,
+      pid: 4242,
+      platform: "ios",
+      uid,
+    });
+
+    expect(staged).toEqual([`${parent}/.ios.4242.id-1.staging`]);
+  });
+
   it("publishes a root and its marker in the same instant", async () => {
     // A root that becomes visible before its marker does is refused for ever after by
     // every later start, and a crash between the two steps makes that permanent.
