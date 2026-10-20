@@ -946,6 +946,39 @@ describe("warm pool policy", () => {
       ).toHaveLength(1);
     });
 
+    it("fills a target after the queue's devices within one cap, and keeps it waiting, not short, only behind a waiter the pass could not serve", () => {
+      const shut = ofKind("shut", "shutdown");
+      const phone = device("phone", "shutdown", { endedAgo: 20 * minute, spec: spec("iPhone 15") });
+      const head = modelDemand("iPad Pro");
+      const filling = { targets: [target(1)], waiting: [head] };
+
+      expect(plan(view([shut], { ...filling, maxConcurrentBoots: 2 })).proposals).toEqual([
+        { action: "boot", deviceId: "shut", reason: "target", target: kind },
+      ]);
+      const capped = plan(view([shut], { ...filling, maxConcurrentBoots: 1 }));
+      expect(capped.proposals).toEqual([]);
+      expect(capped.targets[0]).not.toHaveProperty("short");
+
+      expect(
+        evaluate(
+          view([phone, shut], {
+            maxConcurrentBoots: 2,
+            targets: [target(1)],
+            waiting: [classDemand()],
+          }),
+        ),
+      ).toEqual([
+        { action: "boot", deviceId: "phone", reason: "waiting-request" },
+        { action: "boot", deviceId: "shut", reason: "target", target: kind },
+      ]);
+
+      const unservable = plan(
+        view([shut], { ...filling, maxConcurrentBoots: 3, refuseProvision: "device-limit" }),
+      );
+      expect(unservable.proposals).toEqual([]);
+      expect(unservable.targets[0]).not.toHaveProperty("short");
+    });
+
     it("proposes a shutdown for a never-leased ready device no target counts once it has been ready longer than idle.shutdownAfterMs", () => {
       const stale = device("stale", "ready", { readyAt: now - shutdownAfterMs - 1 });
       const boundary = device("boundary", "ready", { readyAt: now - shutdownAfterMs });
