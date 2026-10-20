@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { NodeDaemonLauncher } from "./daemon-launcher.js";
+import { NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
 
 describe("NodeDaemonLauncher", () => {
   it("rejects asynchronous spawn failures", async () => {
@@ -92,5 +92,55 @@ describe("NodeDaemonLauncher", () => {
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
+  });
+});
+
+describe("startErrorFrom", () => {
+  it("names the last fatal line's message, else the exit code or signal", () => {
+    const fatal = (message: string): string =>
+      JSON.stringify({ message: "Daemon failed to start", fields: { message } });
+    const info = JSON.stringify({ message: "Daemon listening", fields: { message: "ready" } });
+    const exit1 = { code: 1, signal: null };
+    const cases = [
+      {
+        label: "the fatal line alone",
+        exit: exit1,
+        output: `${fatal("boom")}\n`,
+        error: "The daemon could not start: boom",
+      },
+      {
+        label: "the fatal line after other lines",
+        exit: exit1,
+        output: `${info}\n${fatal("boom")}\n`,
+        error: "The daemon could not start: boom",
+      },
+      {
+        label: "two fatal lines",
+        exit: exit1,
+        output: `${fatal("first")}\n${fatal("second")}\n`,
+        error: "The daemon could not start: second",
+      },
+      {
+        label: "no fatal line, code 1",
+        exit: exit1,
+        output: `${info}\n`,
+        error: "The daemon exited with code 1 while starting; see `simlock daemon logs`",
+      },
+      {
+        label: "no fatal line, SIGKILL",
+        exit: { code: null, signal: "SIGKILL" },
+        output: "",
+        error: "The daemon exited with code SIGKILL while starting; see `simlock daemon logs`",
+      },
+      {
+        label: "a non-JSON line before the fatal line",
+        exit: exit1,
+        output: `not json\n${fatal("boom")}\n`,
+        error: "The daemon could not start: boom",
+      },
+    ];
+    expect(cases.map((c) => ({ label: c.label, error: startErrorFrom(c.exit, c.output) }))).toEqual(
+      cases.map((c) => ({ label: c.label, error: c.error })),
+    );
   });
 });
