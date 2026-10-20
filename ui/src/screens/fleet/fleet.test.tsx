@@ -230,7 +230,7 @@ describe("a worker's page", () => {
     expect(shown).not.toContain("No devices.");
   });
 
-  it("shows an incompatible worker's protocol ranges on its overview", () => {
+  it("shows an incompatible worker's protocol ranges on its Host tab, and no devices or load", () => {
     const old: WorkerView = {
       connection: "incompatible",
       drained: false,
@@ -240,10 +240,12 @@ describe("a worker's page", () => {
       protocol: { gateway: { max: 35, min: 35 }, worker: { max: 30, min: 30 } },
     };
 
-    const shown = text(html(page(old)));
+    const devices = text(html(page(old)));
+    const host = text(html(page(old, "host")));
 
-    expect(shown).toContain("incompatible gateway 35–35, worker 30–30");
-    expect(shown).not.toContain("Read ");
+    expect(devices).toContain("No devices: the gateway cannot read this worker.");
+    expect(devices).not.toContain("Read ");
+    expect(host).toContain("incompatible gateway 35–35, worker 30–30");
   });
 });
 

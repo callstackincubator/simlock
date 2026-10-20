@@ -65,13 +65,7 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
 
 function Overview({ page }: { readonly page: WorkerPageView }) {
   const { overview } = page;
-  if (overview.incompatible) {
-    return (
-      <Panel title="Protocol">
-        <ProtocolFacts inspector={page} />
-      </Panel>
-    );
-  }
+  if (overview.incompatible) return null;
   return (
     <>
       <Grid min="sm" label="Load and leases">
@@ -106,6 +100,9 @@ function Overview({ page }: { readonly page: WorkerPageView }) {
 
 function DevicesTab({ page }: { readonly page: WorkerPageView }) {
   const { overview } = page;
+  if (overview.incompatible) {
+    return <p className="muted">No devices: the gateway cannot read this worker.</p>;
+  }
   if (overview.starting) {
     return <p className="muted">Devices, leases and capacity appear once startup finishes.</p>;
   }
