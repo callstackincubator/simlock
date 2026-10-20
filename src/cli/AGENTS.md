@@ -51,7 +51,7 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    line on stderr, `{ error: { code, message } }`. Exit code: `ERROR_TABLE` `cliExitCode`,
    2 for a usage error, else 1. `--gateway` makes `resolveDaemonHome` pick `<root>/gateway`
    (the launcher gets `--gateway`, with `SIMLOCK_HOME` still the root); with no gateway
-   present every command but `daemon start`, `config set` and `mcp` (and any `--help`)
+   present every command but `daemon start`, `config set` and `mcp` (and any `--help`, except after `adb`/`simctl`)
    stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects.
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →

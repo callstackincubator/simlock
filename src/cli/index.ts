@@ -135,9 +135,9 @@ async function refuseWhenNoGateway(
 ): Promise<void> {
   if (environment.daemonHome.gatewayPresent) return;
   if (GATEWAY_EXEMPT_PATHS.some((exempt) => exempt.join(" ") === path.join(" "))) return;
-  // why: `adb` and `simctl` hand every argument to the tool, so a `-h` after them is the tool's flag, not a help request.
+  // why: `adb` and `simctl` have no help of their own and hand every argument to the tool, so a `-h` after them is never a help request.
   const passthrough = path[0] === "adb" || path[0] === "simctl";
-  if (passthrough ? isHelp(rest[0]) : rest.some(isHelp)) return;
+  if (!passthrough && rest.some(isHelp)) return;
   const { gatewayNotPresentError } = await import("../contract/index.js");
   throw gatewayNotPresentError();
 }
