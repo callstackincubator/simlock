@@ -3784,6 +3784,7 @@ function testConfig(
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     exec: { timeoutMs: 600_000, ...execOverrides },

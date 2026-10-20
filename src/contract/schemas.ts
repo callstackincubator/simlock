@@ -1110,6 +1110,20 @@ export const configSchema = z.object({
      * header comment), gateway or worker alike. `"warm-then-free"` is the only policy in v1;
      * adding a second means adding it to both registries, exactly as a capacity strategy does. */
     routing: z.enum(["warm-then-free"]),
+    /**
+     * why: `format` and `events` are re-declared, not imported from core; a test checks `format` against core's list. `secret` is optional so a `slack` destination parses.
+     */
+    alerts: z.object({
+      destinations: z.array(
+        z.object({
+          name: z.string(),
+          format: z.enum(["generic"]),
+          url: z.string(),
+          events: z.array(z.string()),
+          secret: z.string().optional(),
+        }),
+      ),
+    }),
   }),
   stalledTransition: z.object({
     thresholdMultiplier: z.number(),

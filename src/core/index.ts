@@ -1,4 +1,10 @@
 export {
+  ALERT_EVENTS,
+  ALERT_FORMATS,
+  ALERT_FORMAT_SECRET,
+  type AlertDestination,
+  type AlertEventName,
+  type AlertFormatName,
   type Config,
   type ConfigOverrides,
   // fallow-ignore-next-line unused-type -- public Config surface (config.mode, ADR 0005 §1); every in-tree reader gets it structurally off `Config`

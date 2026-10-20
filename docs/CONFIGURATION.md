@@ -45,6 +45,7 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `capabilities.stream.bitrateKbps`              | **Worker side.** Target bitrate in kilobits per second, handed to the encoder as an average rather than a ceiling; a frame that needs more takes it. A whole number from `100` to `40000`; the iOS encoder takes nothing lower. | `1500` |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
 | `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1. Among the workers that can serve the request, in order: a worker whose health is not `running`, or that has requests of its own waiting, is left out; a worker holding a ready device that fits goes first (the device's mode must fit the request, a request with no mode fits a device that serves the worker's default mode, and its runtime must be the one requested or, with none requested, the one the worker would pick: the newest runtime the model pairs with); otherwise a worker with no free running slot for the platform or overall is left out (a running device that is not leased counts as free: the worker shuts it down to make room), a worker under its RAM budget for the platform is preferred over one at it (a worker at its budget is still asked when it is the only one left), and the one with the most free running capacity for the platform wins. A worker that is left out is busy, not unable: the request waits for it. Ties go to the lowest worker id. | `warm-then-free`                                                 |
+| `gateway.alerts.destinations`     | **Gateway side.** A list of at most 16 webhook destinations the gateway sends chosen fleet events to; see [Alerts](#alerts). A bad entry stops the daemon from starting, on a gateway and on a worker alike; a worker sends nothing whatever it lists. `simlock config` shows the URLs and secrets; the daemon log, the `daemon.started` event and the event history show `[redacted]`. | `[]` (no alerts) |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
 | `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up. A backstop for a worker that never answers at all — deliberately longer than the worker's own `exec.timeoutMs`, which is authoritative because that side owns the process and can kill it, so an ordinary timeout surfaces as the worker's `EXEC_TIMEOUT` rather than racing this one. | `11 minutes`                                                     |
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** How long the gateway waits on a forwarded `lease.request` before giving up on that worker for this request, answering `WORKER_UNREACHABLE`. Bounds the one uplink call that otherwise had no timeout of its own, so a wedged worker cannot park a request where neither a deadline nor `lease.cancel` could ever reach it again. Generous against a cold device provision-plus-boot; well below `gateway.execTimeoutMs`, since granting a lease should never take as long as a command run against the device afterward. | `5 minutes`                                                      |
@@ -128,7 +129,7 @@ not apply in `mode: "gateway"`, where both keys are worker-side and are
 warned about and ignored like every other worker key — a gateway is not
 misconfigured by leftovers from the config it was flipped out of.
 `gateway.label` is a non-empty string, `gateway.routing` one of the
-registered routing policies, and `exec.timeoutMs`, `gateway.execTimeoutMs`,
+registered routing policies, `gateway.alerts.destinations` the list described under [Alerts](#alerts), and `exec.timeoutMs`, `gateway.execTimeoutMs`,
 `gateway.leaseRequestTimeoutMs`, and `gateway.disconnectedRetentionMs`
 positive numbers.
 **`mode: "gateway"` with `http.enabled: false` is rejected at load**, naming the key: a
@@ -239,6 +240,7 @@ does not apply to it. It reads:
 |---|---|
 | `mode` | to be a gateway at all |
 | `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
+| `gateway.alerts.destinations` | where to send fleet events |
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
 | `log.*`, `eventBuffer.*`, `eventLog.*`, `metrics.*` | logging, the event history and the usage figures kept beside it, as anywhere |
@@ -311,6 +313,70 @@ because only one of them owns anything:
   configure. Two *workers* on one machine would additionally need distinct
   `drivers.android.adbServerPort` values (see below), but a gateway plus a
   worker is one driver set, so there is nothing to split.
+
+## Alerts
+
+A gateway can send chosen fleet events to a webhook, so n8n, Zapier or your own
+receiver hears about them without anyone watching the console. Set
+`gateway.alerts.destinations` to a list of destinations:
+
+```json
+{
+  "mode": "gateway",
+  "gateway": {
+    "alerts": {
+      "destinations": [
+        {
+          "name": "audit",
+          "format": "generic",
+          "url": "https://n8n.example.com/hook",
+          "secret": "a-long-random-string",
+          "events": ["worker.connected", "worker.disconnected"]
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field    | Rule |
+|---|---|
+| `name`   | Lowercase letters, digits and dashes, starting with a letter, at most 32 characters; no two destinations share one. |
+| `format` | `generic`, the only format so far. |
+| `url`    | `https://`, or `http://` to `localhost`, `127.0.0.1` or `[::1]`; no user name or password in it. |
+| `events` | A non-empty list, each event once, from: `worker.connected`, `worker.disconnected`, `worker.rejected`, `worker.drain-started`, `worker.drain-ended`, `device.quarantine-abandoned`, `device.quarantine-stranded`, `device.recovery-failed`, `device.stalled-transition-detected`, `disk.pressure-detected`, `component.install-failed`. |
+| `secret` | A non-empty string the gateway signs each message with. |
+
+An event a worker reports reaches the destination too, with `workerId` in its
+payload. A key not listed above is warned about and ignored, and
+`simlock config set` refuses it.
+
+**What the receiver gets.** One `POST` per event, with the event as the body: the
+same JSON `simlock events --json` prints (`id`, `seq`, `timestamp`, `event`,
+`payload`, `module`). Headers:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `User-Agent` | `simlock/<version>` |
+| `X-Simlock-Event` | the event name |
+| `X-Simlock-Delivery` | the event `id`; the same on every try, so a receiver can drop a repeat |
+| `X-Simlock-Signature` | `sha256=` and the hex HMAC-SHA256 of the raw body, keyed with the destination's `secret` |
+
+To check a message, compute the HMAC-SHA256 of the bytes you received with the
+secret and compare it to the header value in constant time. Use the raw body,
+not a re-serialised copy.
+
+**Delivery.** Each destination sends one message at a time, in the order the
+gateway saw the events, and a slow destination never delays another. A try
+ends after 10 seconds. A network error, a timeout, `429` or a `5xx` is tried
+again 1 second after the failed try, then 5 seconds after the second: three tries
+in all, then a warning in `daemon.log` ("Alert send gave up"). Any other status
+that is not `2xx`, a redirect included, gives up at once; a redirect is never
+followed. Up to 100 messages wait per destination; past that the oldest waiting
+one is dropped with a warning. Nothing is written to disk, so a gateway restart
+loses the waiting messages, and stopping the gateway abandons what is still
+being sent. The log names a destination and never its URL or secret.
 
 ## Downloads
 

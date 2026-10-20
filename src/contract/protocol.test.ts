@@ -47,7 +47,7 @@ describe("helloRequestSchema", () => {
 });
 
 describe("PROTOCOL_VERSION_RANGE", () => {
-  it("is one above #713's, for http.proxyAuth", () => {
-    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 48, min: 48 });
+  it("is one above the base branch's, for alerts destinations in config.get", () => {
+    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 49, min: 49 });
   });
 });

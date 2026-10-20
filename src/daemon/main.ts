@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { type Alerts, createAlerts } from "../alerts/index.js";
 import { EventBus, type EventBusLogger } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
@@ -92,6 +93,8 @@ import {
   type ProcessRunner,
   type ProcessSupervisor,
   type TcpProbe,
+  FetchWebhookPoster,
+  type WebhookPoster,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -145,6 +148,8 @@ export interface StartDaemonOptions {
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
+  /** why: test-only, replaces the poster a gateway's alerts send through. */
+  readonly webhookPoster?: WebhookPoster;
 }
 
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
@@ -241,6 +246,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       optionalModules: moduleDefinitions,
       socketPath,
       version: version,
+      ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
     });
   }
   // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
@@ -687,6 +693,7 @@ interface GatewayDaemonOptions {
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
   readonly version: string;
+  readonly webhookPoster?: WebhookPoster;
 }
 
 /**
@@ -822,6 +829,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       ? undefined
       : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
 
+  let alerts: Alerts | undefined;
+
   const gatewayDispatcher = new GatewayDispatcher({
     awaitReady: () => Promise.resolve(),
     clock,
@@ -882,6 +891,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await eventHistory.stop();
     },
     stopAuxiliary: async () => {
+      // why: before the HTTP gateway closes the worker uplinks, so this gateway's own stop sends no worker.disconnected (ADR 0035 §4).
+      alerts?.stop();
       await moduleHost.beforeDrain();
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
@@ -948,6 +959,18 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gateway.stop();
       app.dispose();
     };
+  }
+
+  // why: built before start(), whose converge opens the uplink listener, so no worker joins before alerts subscribes.
+  if (config.gateway.alerts.destinations.length > 0) {
+    alerts = createAlerts({
+      clock,
+      destinations: config.gateway.alerts.destinations,
+      eventBus,
+      logger: logger.child("alerts"),
+      poster: options.webhookPoster ?? new FetchWebhookPoster(),
+      version: options.version,
+    });
   }
 
   const daemonStarted = daemon.start().finally(() => {
