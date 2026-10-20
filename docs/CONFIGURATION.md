@@ -883,7 +883,7 @@ those settings would have no effect.
 
 ## Signing in through a proxy
 
-`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. It is an `http` key, so a gateway reads it from `~/.simlock/gateway/config.json`; the commands below set it there with `--gateway`. Drop `--gateway` to set it on the worker. Set it as one object:
+`http.proxyAuth` makes Simlock treat a person the sign-in proxy has signed in as an operator, with no Simlock token. It is an `http` key, so a gateway reads it from `~/.simlock/gateway/config.json`; the commands below set it there with `--gateway`. Without `--gateway`, `config set` writes the config of the daemon a plain command reaches: the worker's, or the gateway's on a machine with only a gateway. Set it as one object:
 
 ```
 simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://team.cloudflareaccess.com","audience":"4f1c…"}'
