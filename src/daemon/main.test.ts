@@ -1,5 +1,3 @@
-import { androidDeviceDataTable } from "../drivers/android/index.js";
-import { iosDeviceDataTable } from "../drivers/ios/index.js";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,7 +25,8 @@ import {
 } from "../core/testing.js";
 import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { androidDeviceDataTable } from "../drivers/android/index.js";
+import { IosSimctlDriver, iosDeviceDataTable } from "../drivers/ios/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";

@@ -18,7 +18,7 @@ function isAndroidDeviceData(value: unknown): value is AndroidDriverData {
   return (
     Object.keys(record).every((key) => KNOWN_KEYS.has(key)) &&
     STRING_KEYS.every((key) => typeof record[key] === "string") &&
-    typeof record.port === "number" &&
+    Number.isInteger(record.port) &&
     (record.imageIdentity === undefined || typeof record.imageIdentity === "string")
   );
 }

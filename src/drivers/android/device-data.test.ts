@@ -20,6 +20,8 @@ describe("androidDeviceDataTable write", () => {
     const cases: Record<string, unknown> = {
       "missing required key": missing,
       "required key of the wrong type": { ...base, port: "5554" },
+      "port that is not an integer": { ...base, port: 5554.5 },
+      "port that is NaN": { ...base, port: Number.NaN },
       "optional key of the wrong type": { ...base, imageIdentity: 5 },
       "extra key": { ...base, extra: "x" },
     };
