@@ -10,6 +10,7 @@ import {
   leasePath,
   leaseRows,
   leasesOnWorker,
+  searchLeaseRows,
   streamOffer,
   type TokenRecord,
 } from "./leases";
@@ -407,5 +408,30 @@ describe("a lease's events on a gateway", () => {
       "evt_3",
       "evt_1",
     ]);
+  });
+});
+
+describe("the lease search", () => {
+  const rows = leaseRows({
+    leases: [
+      lease({ id: "lse_alpha" }),
+      lease({ deviceId: "dev_a", id: "lse_beta", requesterId: "agent-7" }),
+    ],
+    now: NOW,
+    tokens: [TOKEN],
+    workers: [host()],
+  });
+
+  it("matches any part of the holder, the device model, the worker's name or the lease id, ignoring case", () => {
+    const found = (query: string) => searchLeaseRows(rows, query).map((row) => row.id);
+
+    expect(found("RUNNER")).toEqual(["lse_alpha"]);
+    expect(found("agent")).toEqual(["lse_beta"]);
+    expect(found("pixel")).toEqual(["lse_beta"]);
+    expect(found("iphone 1")).toEqual(["lse_alpha"]);
+    expect(found("Mini")).toEqual(["lse_alpha", "lse_beta"]);
+    expect(found("SE_BE")).toEqual(["lse_beta"]);
+    expect(found("")).toEqual(["lse_alpha", "lse_beta"]);
+    expect(found("nothing like it")).toEqual([]);
   });
 });

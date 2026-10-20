@@ -38,6 +38,7 @@ function row(overrides: Partial<LeaseRowView> = {}): LeaseRowView {
     holder: "ci-runner-3",
     id: "lse_1",
     key: " lse_1",
+    model: "iPhone 16",
     percent: 50,
     remaining: "2 min 5 s",
     sub: "iPhone 16 · mac-mini-1",

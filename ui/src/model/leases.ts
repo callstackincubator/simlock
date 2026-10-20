@@ -156,6 +156,8 @@ export interface LeaseRowView {
   readonly remaining: string;
   readonly expiring: boolean;
   readonly percent: number;
+  readonly model: string;
+  readonly worker?: string;
   readonly sub: string;
   readonly platform?: string;
 }
@@ -169,18 +171,20 @@ export function leaseRows(input: {
   const { leases, now, tokens, workers } = input;
   return inGrantOrder(leases).map((lease) => {
     const device = deviceOfLease(lease, workers);
-    const sub = [device?.spec.model ?? lease.deviceId, workerNameOfLease(lease, workers)]
-      .filter((part) => part !== undefined)
-      .join(" · ");
+    const model = device?.spec.model ?? lease.deviceId;
+    const worker = workerNameOfLease(lease, workers);
+    const sub = [model, worker].filter((part) => part !== undefined).join(" · ");
     return {
       expiring: isExpiring(lease.ttlDeadline, now),
       holder: holderTitle(holderOf(lease.requesterId, tokens)),
       id: lease.id,
       key: `${lease.workerId ?? ""} ${lease.id}`,
+      model,
       percent: percentLeft(lease.ttlDeadline, now, lease.ttlMs),
       remaining: formatDuration(lease.ttlDeadline - now),
       sub,
       to: leasePath(lease.id),
+      ...(worker === undefined ? {} : { worker }),
       ...(device === undefined ? {} : { platform: device.spec.platform }),
     };
   });
@@ -193,6 +197,13 @@ export function filterLeaseRows(
   if (filter === "all") return rows;
   if (filter === "expiring") return rows.filter((row) => row.expiring);
   return rows.filter((row) => row.platform === filter);
+}
+
+export function searchLeaseRows(
+  rows: readonly LeaseRowView[],
+  _query: string,
+): readonly LeaseRowView[] {
+  return rows;
 }
 
 export interface StreamOffer {
