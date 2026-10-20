@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -89,6 +89,38 @@ describe("NodeDaemonLauncher", () => {
         })
         .toEqual([2, 2]);
       expect(await readdir(directory)).toEqual(["daemon.log"]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("NodeDaemonLauncher's LaunchedDaemon", () => {
+  it("gives the exit code and only the log bytes written since the launch, across a rotation too", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+    const logPath = join(directory, "daemon.log");
+    const older = `${JSON.stringify({ message: "Daemon failed to start", fields: { message: "older" } })}\n`;
+    const launch = async (script: string) => {
+      await rm(logPath, { force: true });
+      await rm(`${logPath}.1`, { force: true });
+      await writeFile(logPath, older);
+      const launched = await new NodeDaemonLauncher({
+        args: ["-e", script, logPath],
+        command: process.execPath,
+        logPath,
+        simlockHome: directory,
+      }).launch();
+      return { exit: await launched.exited, output: await launched.readOutput() };
+    };
+    try {
+      const plain = await launch("console.log('newer'); process.exit(1)");
+      const rotated = await launch(
+        "const fs = require('node:fs'); const p = process.argv[1]; fs.renameSync(p, p + '.1'); console.log('tail'); fs.writeFileSync(p, 'fatal\\n'); process.exit(2)",
+      );
+      expect({ plain, rotated }).toEqual({
+        plain: { exit: { code: 1, signal: null }, output: "newer\n" },
+        rotated: { exit: { code: 2, signal: null }, output: "tail\nfatal\n" },
+      });
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

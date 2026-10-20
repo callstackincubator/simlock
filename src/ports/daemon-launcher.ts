@@ -92,7 +92,7 @@ export class NodeDaemonLauncher implements DaemonLauncher {
     } finally {
       await log.close();
     }
-    return { exited: new Promise<DaemonExit>(() => undefined), readOutput: async () => "" };
+    return { exited: Promise.resolve({ code: null, signal: null }), readOutput: async () => "" };
   }
 }
 
