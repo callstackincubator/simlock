@@ -11,7 +11,13 @@ import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { OptionalModuleDefinition, WorkerHooks } from "../modules/index.js";
 import { readHistoryEvents } from "../history/testing.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  IpcError,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 import { openRelay, openUplink, relayInput, settleWithin } from "./test-relay-support.js";
@@ -630,50 +636,69 @@ describe("optional modules: afterSocketClaimed", () => {
     expect(seen).toEqual([true]);
   });
 
-  it("never runs in a daemon that lost the socket race", async () => {
-    const claimed = vi.fn();
-    const filesystem = new MemoryFilesystem();
-    const directory = await mkdtemp(join(tmpdir(), "simlock-modules-race-"));
-    directories.push(directory);
-    const options = (modules: readonly OptionalModuleDefinition<unknown>[]) =>
-      ({
-        clock: new FakeClock(1_000),
-        configOverrides: { capabilities: { alpha: { enabled: true } } },
-        dataDirectory: directory,
-        drivers: [
-          new FakeDriver({
-            availableOsVersions: ["26.5"],
-            clock: new FakeClock(1_000),
-            platform: "ios",
-          }),
-        ],
-        filesystem,
-        logger: new JsonLinesLogger({
+  it.each([
+    // why: the loser refuses at the probe, before it opens state.db, so it builds no module at all
+    ["at the probe", undefined, 0],
+    // why: the loser's probe finds nothing answering, then its claim finds the address taken
+    [
+      "at the claim",
+      {
+        connect: () =>
+          Promise.reject(new IpcError("endpoint-not-found", "nothing answers", undefined)),
+        listen: () => Promise.reject(new IpcError("address-in-use", "address taken", undefined)),
+      } as StartDaemonOptions["ipc"],
+      1,
+    ],
+  ] as const)(
+    "never runs in a daemon that lost the socket race %s",
+    async (_where, loserIpc, created) => {
+      const claimed = vi.fn();
+      const filesystem = new MemoryFilesystem();
+      const directory = await mkdtemp(join(tmpdir(), "simlock-modules-race-"));
+      directories.push(directory);
+      const options = (
+        modules: readonly OptionalModuleDefinition<unknown>[],
+        ipc?: StartDaemonOptions["ipc"],
+      ) =>
+        ({
           clock: new FakeClock(1_000),
-          level: "debug",
-          sink: new MemoryLogSink(),
-        }),
-        optionalModules: modules,
-        deviceDataTables: fakeDeviceDataTables,
-        version: "1.2.3",
-      }) as StartDaemonOptions;
-    const first = await startDaemon(options([]));
-    daemons.push(first);
+          configOverrides: { capabilities: { alpha: { enabled: true } } },
+          dataDirectory: directory,
+          drivers: [
+            new FakeDriver({
+              availableOsVersions: ["26.5"],
+              clock: new FakeClock(1_000),
+              platform: "ios",
+            }),
+          ],
+          filesystem,
+          ...(ipc === undefined ? {} : { ipc }),
+          logger: new JsonLinesLogger({
+            clock: new FakeClock(1_000),
+            level: "debug",
+            sink: new MemoryLogSink(),
+          }),
+          optionalModules: modules,
+          deviceDataTables: fakeDeviceDataTables,
+          version: "1.2.3",
+        }) as StartDaemonOptions;
+      const first = await startDaemon(options([]));
+      daemons.push(first);
 
-    const loser = fakeModule({ hooks: { afterSocketClaimed: claimed }, name: "alpha" });
-    const second = await startDaemon(options(definitions(loser))).then(
-      () => "started",
-      () => "rejected",
-    );
-    await sleep(50);
+      const loser = fakeModule({ hooks: { afterSocketClaimed: claimed }, name: "alpha" });
+      const second = await startDaemon(options(definitions(loser), loserIpc)).then(
+        () => "started",
+        () => "rejected",
+      );
+      await sleep(50);
 
-    expect({ claimed: claimed.mock.calls.length, created: loser.creates, second }).toEqual({
-      claimed: 0,
-      // why: the loser refuses before it opens state.db, so it builds no module at all
-      created: 0,
-      second: "rejected",
-    });
-  });
+      expect({ claimed: claimed.mock.calls.length, created: loser.creates, second }).toEqual({
+        claimed: 0,
+        created,
+        second: "rejected",
+      });
+    },
+  );
 
   it.each([
     [

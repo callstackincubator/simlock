@@ -3717,7 +3717,7 @@ describe("startDaemon state.db", () => {
     const versions = () => queryState(directory, "SELECT owner, version FROM schema_versions");
     const before = await versions();
     const bytesBefore = await readFile(join(directory, "state.db"));
-    // why: a newer binary brings an owner the live daemon's state.db has not got; opening would migrate it in.
+    // why: a newer binary brings a newer version of an owner the live daemon's state.db has; opening would migrate it in.
     const newerTable = {
       ...fakeDeviceDataTable,
       migrations: [
