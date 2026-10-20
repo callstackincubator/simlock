@@ -399,6 +399,36 @@ test.describe("the leases page", () => {
     }
   });
 
+  test("the search sets ?q= without adding history entries, a lease opened from it keeps ?q=, and closing returns to the filtered table", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-needle");
+      await leaseOverSocket(host, "agent-hay");
+      const found = (await listLeases(host)).find((lease) => lease.requesterId === "agent-needle");
+      await openLeases(page, host, "/leases?page=2");
+      const entries = await page.evaluate(() => window.history.length);
+
+      await page.getByRole("searchbox", { name: "Search leases" }).pressSequentially("NEEDLE");
+
+      await expect(page.locator("main tbody tr")).toHaveCount(1);
+      expect(new URL(page.url()).search).toBe("?q=NEEDLE");
+      expect(await page.evaluate(() => window.history.length)).toBe(entries);
+
+      await leaseRow(page, found?.id ?? "").click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      expect(new URL(page.url()).search).toBe("?q=NEEDLE");
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      expect(new URL(page.url()).search).toBe("?q=NEEDLE");
+      await expect(page.locator("main tbody tr")).toHaveCount(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("a lease opens to its details on a gateway", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
