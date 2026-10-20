@@ -62,7 +62,7 @@ class Harness {
     await settle();
   }
 
-  failWith(kind: "refused" | "no-code" | 429 | 503): void {
+  failWith(kind: "refused" | "no-code" | 429 | 500 | 503): void {
     this.poster.respond = () => {
       if (kind === "refused") {
         return Promise.reject(
@@ -159,6 +159,11 @@ describe("alerts", () => {
     const h = harness([
       destination({ name: "one", url: "https://one.example.com/x", secret: "first" }),
       destination({ name: "two", url: "https://two.example.com/x", secret: "second" }),
+      destination({
+        name: "other",
+        url: "https://other.example.com/x",
+        events: ["worker.disconnected"],
+      }),
     ]);
     h.emit("worker.connected", connected());
     await settle();
@@ -191,6 +196,7 @@ describe("alerts", () => {
         field: { error: "network-error" },
       },
       { name: "429", kind: 429, endMs: 0, field: { status: 429 } },
+      { name: "500", kind: 500, endMs: 0, field: { status: 500 } },
       { name: "5xx", kind: 503, endMs: 0, field: { status: 503 } },
       { name: "a timeout", kind: "timeout", endMs: 10_000, field: { error: "timeout" } },
     ] as const;
@@ -374,14 +380,17 @@ describe("alerts", () => {
     const h = harness();
     const seen: string[] = [];
     h.eventBus.subscribe("worker.connected", (envelope) => seen.push(envelope.id));
+    const first = h.emit("worker.connected", connected("wrk_a"));
+    expect(h.poster.requests).toHaveLength(0);
+    await settle();
+    expect(h.poster.requests).toHaveLength(1);
+    expect(seen).toEqual([first.id]);
+
     h.poster.post = () => {
       throw new Error(`boom ${URL_TOKEN}`);
     };
-
     const envelope = h.emit("worker.connected", connected());
-
-    expect(h.poster.requests).toHaveLength(0);
-    expect(seen).toEqual([envelope.id]);
+    expect(seen).toEqual([first.id, envelope.id]);
     await settle();
     await h.advance(1_000);
     await h.advance(5_000);

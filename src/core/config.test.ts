@@ -1995,6 +1995,7 @@ describe("gateway.alerts.destinations", () => {
     ["url", bad("url", "n8n.example.com/x"), urlExpected],
     ["url", bad("url", "https://user:pw@host/x"), urlExpected],
     ["url", bad("url", "https://user@host/x"), urlExpected],
+    ["url", bad("url", "https://:pw@host/x"), urlExpected],
     ["url", bad("url", ""), urlExpected],
     ["url", without("url"), urlExpected],
     ["events", bad("events", []), eventsExpected],

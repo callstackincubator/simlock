@@ -18,8 +18,26 @@ afterEach(async () => {
   );
 });
 
-async function listen(handler: (url: string, response: ServerResponse) => void): Promise<string> {
-  const server = createServer((request, response) => handler(request.url ?? "", response));
+interface Seen {
+  method: string | undefined;
+  header: string | string[] | undefined;
+  body: string;
+}
+
+async function listen(
+  handler: (url: string, response: ServerResponse, seen: Seen) => void,
+): Promise<string> {
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () =>
+      handler(request.url ?? "", response, {
+        method: request.method,
+        header: request.headers["x-a"],
+        body: Buffer.concat(chunks).toString("utf8"),
+      }),
+    );
+  });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -32,8 +50,14 @@ describe("FetchWebhookPoster", () => {
     const closed = new Promise<void>((resolve) => {
       bodyClosed = resolve;
     });
-    const base = await listen((url, response) => {
+    const sent: Seen[] = [];
+    const base = await listen((url, response, seen) => {
       hits.push(url);
+      sent.push(seen);
+      if (url === "/moved-done") {
+        response.writeHead(301, { Location: "/target" }).end("moved");
+        return;
+      }
       if (url === "/moved") {
         response.writeHead(301, { Location: "/target" });
         response.write("x".repeat(1024));
@@ -49,9 +73,11 @@ describe("FetchWebhookPoster", () => {
       poster.post({ url: `${base}${path}`, headers: { "X-A": "1" }, body: "{}", signal });
 
     await expect(post("/ok")).resolves.toEqual({ status: 200 });
+    expect(sent[0]).toEqual({ method: "POST", header: "1", body: "{}" });
+    await expect(post("/moved-done")).resolves.toEqual({ status: 301 });
     await expect(post("/moved")).resolves.toEqual({ status: 301 });
     await closed;
-    expect(hits).toEqual(["/ok", "/moved"]);
+    expect(hits).toEqual(["/ok", "/moved-done", "/moved"]);
 
     const pending = post("/silent");
     controller.abort();
