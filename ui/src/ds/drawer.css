@@ -1,0 +1,99 @@
+/* The drawer: a modal panel at the right edge over a dim layer. It moves in once, when it opens;
+ * nothing replays it, since the animation belongs to the popup's first paint alone. */
+
+.drawer-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  width: 480px;
+  max-width: 100%;
+  overflow-y: auto;
+  border-left: 1px solid var(--border-strong);
+  background: var(--bg);
+  animation: drawer-in 200ms ease-out;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer {
+    animation: none;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .drawer {
+    width: 100%;
+    border-left: 0;
+  }
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.drawer-tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.drawer-tab-list {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-tab {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.drawer-tab[data-active] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.drawer-panel {
+  padding: var(--space-4) var(--space-6);
+}
+
+.drawer-panel[hidden] {
+  display: none;
+}

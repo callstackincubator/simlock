@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-table";
 import type { ReactNode } from "react";
 
+import { useNavigateTo } from "./link";
 import { Pager, type Paging } from "./pager";
 
 export interface Column<T> {
@@ -34,8 +35,11 @@ export function DataTable<T extends RowData>(props: {
   readonly paging: Paging;
   readonly wide?: boolean;
   readonly className?: string;
+  // why: a row that opens something is clicked anywhere; its first link stays the keyboard's way in.
+  readonly rowTo?: (row: T) => string;
 }) {
-  const { className, columns, empty, label, paging, rowId, rows, wide = false } = props;
+  const { className, columns, empty, label, paging, rowId, rowTo, rows, wide = false } = props;
+  const navigate = useNavigateTo();
   // why: `FlexRender` mounts a cell function as a component, and a view builds its columns anew on
   // every render, so each refresh would mount a new component, draw the cell's elements afresh and
   // take the keyboard's focus off a link in it. Each cell's function is called instead.
@@ -69,7 +73,19 @@ export function DataTable<T extends RowData>(props: {
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id}>
+            <tr
+              key={row.id}
+              className={rowTo === undefined ? undefined : "table-row-link"}
+              onClick={
+                rowTo === undefined
+                  ? undefined
+                  : (event) => {
+                      if ((event.target as HTMLElement).closest("a, button") === null) {
+                        navigate?.(rowTo(row.original));
+                      }
+                    }
+              }
+            >
               {row.getAllCells().map((cell) => {
                 const column = columns[Number(cell.column.id)];
                 return (

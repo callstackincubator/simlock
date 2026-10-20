@@ -32,9 +32,6 @@ export {
 export interface LeasesPage {
   readonly rows: readonly LeaseRowView[];
   readonly held: number;
-  // why: the id the inspector shows: the one the URL names, or on a wide screen with none, the
-  // first row of the list, without rewriting the URL.
-  readonly chosen: string | undefined;
 }
 
 export interface Leases {
@@ -42,7 +39,7 @@ export interface Leases {
   readonly filter: LeaseFilter;
   readonly choose: (filter: LeaseFilter) => void;
   readonly paging: Paging;
-  // why: the id in the URL stands even before the list has loaded, so the inspector can ask for it.
+  // why: the id in the URL stands even before the list has loaded, so the drawer can ask for it.
   readonly urlId: string | undefined;
 }
 
@@ -63,15 +60,10 @@ export function useLeases(): Leases {
     sizes: TABLE_SIZES,
     total: all.kind === "ready" ? shown.length : undefined,
   });
-  const start = (paging.page - 1) * paging.size;
   const keep = listSearch(useSearch());
-  const rows = shown
-    .slice(start, start + paging.size)
-    .map((row) => ({ ...row, to: row.to + keep }));
   const view = mapView(all, (every) => ({
-    chosen: urlId ?? rows[0]?.id,
     held: every.length,
-    rows,
+    rows: shown.map((row) => ({ ...row, to: row.to + keep })),
   }));
   return {
     choose: (next) => {

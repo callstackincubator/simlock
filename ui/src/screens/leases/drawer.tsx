@@ -1,58 +1,72 @@
 import { type ReactNode, useId } from "react";
 
-import { Facts, Id, Inspector, InspectorEmpty, Link, Loaded, Meter, Status } from "../../ds";
+import { Drawer, DrawerTabs, Facts, Id, Link, Loaded, Meter, Status } from "../../ds";
 import { type LeaseInspection, useLeaseInspection } from "../../state/leases";
 import { ScreenPanel } from "./screen-panel";
 
-export function LeaseInspector({ id }: { readonly id: string }) {
+// why: the drawer opens at once, named by the lease's id until the details arrive, and says so when
+// the lease is no longer held, so an address that outlives its lease still lands somewhere.
+export function LeaseDrawer(props: { readonly id: string; readonly onClose: () => void }) {
+  const { id, onClose } = props;
   const view = useLeaseInspection(id);
-  if (view.kind === "ready" && view.data === undefined) {
-    return (
-      <InspectorEmpty>
-        Lease not found. <Link to="/leases">All leases</Link>
-      </InspectorEmpty>
-    );
-  }
-  if (view.kind !== "ready") {
-    return (
-      <section className="inspector">
-        <Loaded view={view}>{() => null}</Loaded>
-      </section>
-    );
-  }
+  const lease = view.kind === "ready" ? view.data : undefined;
   return (
-    <Loaded view={view}>
-      {(inspection) => (inspection === undefined ? null : <LeaseDetail lease={inspection} />)}
-    </Loaded>
+    <Drawer title={lease === undefined ? "Lease" : <LeaseTitle lease={lease} />} onClose={onClose}>
+      {view.kind === "ready" && lease === undefined ? (
+        <p className="muted drawer-note">Lease not found.</p>
+      ) : (
+        <Loaded view={view}>
+          {(inspection) =>
+            inspection === undefined ? null : (
+              <DrawerTabs
+                defaultValue="details"
+                tabs={[
+                  {
+                    content: <LeaseDetail lease={inspection} />,
+                    label: "Details",
+                    value: "details",
+                  },
+                  {
+                    content: (
+                      <ScreenPanel
+                        leaseId={inspection.id}
+                        offered={inspection.stream.offered}
+                        reason={inspection.stream.reason}
+                      />
+                    ),
+                    keepMounted: true,
+                    label: "Screen",
+                    value: "screen",
+                  },
+                ]}
+              />
+            )
+          }
+        </Loaded>
+      )}
+    </Drawer>
+  );
+}
+
+export function LeaseTitle({ lease }: { readonly lease: LeaseInspection }) {
+  return (
+    <span className="lease-title">
+      {lease.title}
+      {lease.expiring ? <Status tone="warn">expiring</Status> : null}
+    </span>
   );
 }
 
 export function LeaseDetail({ lease }: { readonly lease: LeaseInspection }) {
   return (
-    <Inspector
-      crumbs={[{ label: "Leases", to: "/leases" }, { label: lease.id }]}
-      title={
-        <span className="lease-title">
-          {lease.title}
-          {lease.expiring ? <Status tone="warn">expiring</Status> : null}
-        </span>
-      }
-      mono
-      line={<LeaseLine lease={lease} />}
-    >
-      <div className="lease-body">
-        <div className="lease-cards">
-          <ExpiryCard lease={lease} />
-          <DeviceCard lease={lease} />
-          <LeaseFactsCard lease={lease} />
-        </div>
-        <ScreenPanel
-          leaseId={lease.id}
-          offered={lease.stream.offered}
-          reason={lease.stream.reason}
-        />
-      </div>
-    </Inspector>
+    <div className="lease-cards">
+      <p className="lease-line">
+        <LeaseLine lease={lease} />
+      </p>
+      <ExpiryCard lease={lease} />
+      <DeviceCard lease={lease} />
+      <LeaseFactsCard lease={lease} />
+    </div>
   );
 }
 

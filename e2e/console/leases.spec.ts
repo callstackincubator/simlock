@@ -117,11 +117,20 @@ async function untilTheDaemonSays(
 async function openLeases(page: Page, daemon: RunningDaemon, path = "/leases"): Promise<void> {
   await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
+  // why: the drawer hides the page behind it from assistive technology, so a direct load finds the heading by hidden role too.
+  await expect(
+    page.getByRole("heading", { includeHidden: true, level: 1, name: "Leases" }),
+  ).toBeVisible();
 }
 
 function leaseRow(page: Page, id: string): Locator {
-  return page.locator(`main a[href^="/leases/${encodeURIComponent(id)}/"]`);
+  return page
+    .locator("main tbody tr")
+    .filter({ has: page.locator(`a[href^="/leases/${encodeURIComponent(id)}/"]`) });
+}
+
+function rowLink(page: Page, id: string): Locator {
+  return leaseRow(page, id).locator("a").first();
 }
 
 function inspectorTitle(page: Page, name: string | RegExp): Locator {
@@ -169,9 +178,7 @@ test.describe("the leases page", () => {
 
       await openLeases(page, fleet.gateway);
 
-      await expect(page.getByRole("list", { name: "Leases" }).getByRole("listitem")).toHaveCount(
-        listed.length,
-      );
+      await expect(page.locator("main tbody tr")).toHaveCount(listed.length);
       await expect(page.getByText(`${listed.length} held`)).toBeVisible();
       for (const lease of listed) {
         const row = leaseRow(page, lease.id);
@@ -257,9 +264,6 @@ test.describe("the leases page", () => {
       await leaseRow(page, granted.id).click();
 
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
-      await expect(
-        page.getByRole("navigation", { name: "Breadcrumb" }).getByText(granted.id),
-      ).toBeVisible();
       await expect(fact(page, "Lease", "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
       await expect(fact(page, "Device", "Worker")).toHaveText("worker-a");
       await expect(fact(page, "Device", "Model")).toHaveText(granted.device);
@@ -274,6 +278,7 @@ test.describe("the leases page", () => {
       await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
 
       // A worker's own lease, which the gateway did not issue, opens too.
+      await page.keyboard.press("Escape");
       await leaseRow(page, local?.id ?? "").click();
       await expect(inspectorTitle(page, /local-agent/)).toBeVisible();
       await expect(fact(page, "Device", "Worker")).toHaveText("worker-b");
@@ -342,7 +347,7 @@ test.describe("the leases page", () => {
       await leaseOverSocket(host, "agent-2");
       const [released, kept] = (await listLeases(host)) as [ListedLease, ListedLease];
       await openLeases(page, host);
-      await expect(page.getByRole("list", { name: "Leases" }).getByRole("listitem")).toHaveCount(2);
+      await expect(page.locator("main tbody tr")).toHaveCount(2);
 
       expect((await host.cli(["release", released.id])).code).toBe(0);
       await untilTheDaemonSays(host, (leases) => leases.every((lease) => lease.id !== released.id));
@@ -432,6 +437,7 @@ test.describe("the leases page", () => {
       await leaseRow(page, granted.id).click();
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
       await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
+      await page.getByRole("tab", { name: "Screen" }).click();
       await expect(page.getByRole("button", { name: "Show screen" })).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
@@ -465,12 +471,9 @@ test.describe("the leases page", () => {
         page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Leases" }),
       );
       await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-      await follow(leaseRow(page, granted.id));
+      await follow(rowLink(page, granted.id));
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
-      await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(granted.id);
-      await follow(
-        page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Leases" }),
-      );
+      await page.keyboard.press("Escape");
       expect(new URL(page.url()).pathname).toBe("/leases");
     } finally {
       await host.dispose();

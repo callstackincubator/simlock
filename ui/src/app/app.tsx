@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 import type { ApiClient, Fetch } from "../data/api";
 import type { Preferences } from "../data/preferences";
 import type { Session } from "../data/session";
-import { NavigationProvider } from "../ds";
+import { DesignProvider, NavigationProvider } from "../ds";
 import { SignInEndedScreen, SignInScreen, SigningInScreen } from "../screens/sign-in";
 import { LiveProvider } from "../state/live";
 import { navigate } from "../state/router";
@@ -23,17 +23,19 @@ export function App(props: {
   return (
     <ConsoleProvider {...props}>
       <NavigationProvider navigate={navigate}>
-        {state.kind === "checking" ? (
-          <SigningInScreen />
-        ) : state.kind === "ended" ? (
-          <SignInEndedScreen />
-        ) : state.kind === "none" ? (
-          <SignInScreen />
-        ) : (
-          <LiveProvider>
-            <Shell />
-          </LiveProvider>
-        )}
+        <DesignProvider>
+          {state.kind === "checking" ? (
+            <SigningInScreen />
+          ) : state.kind === "ended" ? (
+            <SignInEndedScreen />
+          ) : state.kind === "none" ? (
+            <SignInScreen />
+          ) : (
+            <LiveProvider>
+              <Shell />
+            </LiveProvider>
+          )}
+        </DesignProvider>
       </NavigationProvider>
     </ConsoleProvider>
   );

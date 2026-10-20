@@ -8,8 +8,9 @@ import type { Session } from "../../data/session";
 import { ConsoleProvider } from "../../state/services";
 import type { LeaseInspection, LeaseRowView } from "../../state/leases";
 import type { Screen } from "../../state/screen";
-import { LeaseRows } from "./index";
-import { LeaseDetail } from "./inspector";
+import type { Paging } from "../../ds";
+import { LeaseDetail, LeaseTitle } from "./drawer";
+import { LeaseTable } from "./index";
 import { ScreenView } from "./screen-panel";
 
 // why: a panel rendered for a claim about its markup never talks to a daemon, so the services it
@@ -93,66 +94,60 @@ const IDLE: Screen = {
   width: 0,
 };
 
+const PAGING: Paging = {
+  go: () => undefined,
+  last: 1,
+  page: 1,
+  range: "1–1 of 1",
+  resize: () => undefined,
+  size: 25,
+  sizes: [25, 50, 100],
+  total: 1,
+};
+
+function table(rows: readonly LeaseRowView[], filter: "all" | "ios" = "all"): string {
+  return renderToStaticMarkup(<LeaseTable rows={rows} filter={filter} paging={PAGING} />);
+}
+
 describe("the lease list", () => {
   it("shows each lease's holder, time left, device and worker, and links to it", () => {
-    const html = renderToStaticMarkup(<LeaseRows rows={[row()]} chosen={undefined} filter="all" />);
+    const html = table([row()]);
 
-    expect(text(html)).toBe("ci-runner-3 2 min 5 s iPhone 16 · mac-mini-1");
+    expect(text(html)).toBe(
+      "Holder Device Expires in ci-runner-3 iPhone 16 · mac-mini-1 2 min 5 s",
+    );
     expect(html).toContain('href="/leases/lse_1/"');
   });
 
-  it("marks the chosen row as current, and no other", () => {
-    const html = renderToStaticMarkup(
-      <LeaseRows
-        rows={[row(), row({ id: "lse_2", key: " lse_2", to: "/leases/lse_2/" })]}
-        chosen="lse_2"
-        filter="all"
-      />,
-    );
-
-    const current = [...html.matchAll(/<a [^>]*>/g)]
-      .map(([tag = ""]) => tag)
-      .filter((tag) => tag.includes('aria-current="page"'));
-
-    expect(current).toHaveLength(1);
-    expect(current[0]).toContain('href="/leases/lse_2/"');
-  });
-
   it("says in words that a lease is expiring, not only in colour", () => {
-    const expiring = text(
-      renderToStaticMarkup(
-        <LeaseRows rows={[row({ expiring: true, remaining: "4 min" })]} chosen="x" filter="all" />,
-      ),
-    );
-    const fine = text(renderToStaticMarkup(<LeaseRows rows={[row()]} chosen="x" filter="all" />));
+    const expiring = text(table([row({ expiring: true, remaining: "4 min" })]));
+    const fine = text(table([row()]));
 
     expect(expiring).toContain("expiring, 4 min");
     expect(fine).not.toContain("expiring");
   });
 
   it("says there are no leases, or none matching the filter", () => {
-    expect(
-      text(renderToStaticMarkup(<LeaseRows rows={[]} chosen={undefined} filter="all" />)),
-    ).toBe("No leases.");
-    expect(
-      text(renderToStaticMarkup(<LeaseRows rows={[]} chosen={undefined} filter="ios" />)),
-    ).toBe("No leases match this filter.");
+    expect(text(table([]))).toBe("No leases.");
+    expect(text(table([], "ios"))).toBe("No leases match this filter.");
   });
 });
 
-describe("a lease's inspector", () => {
+describe("a lease's drawer", () => {
   it("shows the holder as its title with no expiring word while the lease has time", () => {
-    const html = inConsole(<LeaseDetail lease={inspection()} />);
+    const html = inConsole(<LeaseTitle lease={inspection()} />);
 
-    expect(html).toMatch(/<h2[^>]*>[^<]*<span class="lease-title">ci-runner-3<\/span>/);
-    expect(text(html)).toContain("iPhone 16 18.4 on mac-mini-1");
+    expect(html).toContain('<span class="lease-title">ci-runner-3</span>');
+    expect(text(inConsole(<LeaseDetail lease={inspection()} />))).toContain(
+      "iPhone 16 18.4 on mac-mini-1",
+    );
     expect(text(html)).not.toContain("expiring");
   });
 
   it("shows an expiring status next to the title once the lease is under 15 minutes from its end", () => {
-    const html = inConsole(<LeaseDetail lease={inspection({ expiring: true })} />);
+    const html = inConsole(<LeaseTitle lease={inspection({ expiring: true })} />);
 
-    expect(html).toMatch(/<h2[^>]*>.*ci-runner-3.*status-warn.*expiring/);
+    expect(html).toMatch(/ci-runner-3.*status-warn.*expiring/);
   });
 
   it("shows every fact the old details panel showed, in its cards", () => {

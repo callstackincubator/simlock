@@ -180,3 +180,11 @@
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
 }
+
+.table-row-link {
+  cursor: pointer;
+}
+
+.table-row-link:hover {
+  background: var(--surface);
+}

@@ -1,6 +1,7 @@
 import "./foundation.css";
 
 export { Button, ButtonLink } from "./button";
+export { Drawer, DrawerTabs } from "./drawer";
 export { MinuteChart, MinuteTable } from "./chart";
 export { ChoiceChips, Tabs } from "./choice";
 export { Feed } from "./feed";
@@ -11,9 +12,11 @@ export { Loaded, type LoadView, Refusal } from "./loaded";
 export { Inspector, InspectorEmpty, List, ListPane, ListRow, MasterDetail } from "./master-detail";
 export { Meter } from "./meter";
 export { Pager, type Paging } from "./pager";
+export { DesignProvider } from "./provider";
 export { Card, Empty, Grid, Id, Panel, Row } from "./panel";
 export { AppFrame, Page, Sidebar, Wordmark } from "./sidebar";
 export { ShareBar, SlotLegend, Slots } from "./slots";
 export { StatRow, StatTile } from "./stat";
 export { Status, StatusDot } from "./status";
 export { type Column, DataTable } from "./table";
+export { Toolbar } from "./toolbar";

@@ -2,89 +2,85 @@ import "./leases.css";
 
 import {
   ChoiceChips,
-  Empty,
-  InspectorEmpty,
-  List,
-  ListPane,
-  ListRow,
+  type Column,
+  DataTable,
+  Link,
   Loaded,
-  MasterDetail,
   Meter,
-  Pager,
+  Page,
+  type Paging,
+  Toolbar,
 } from "../../ds";
+import { navigate, useSearch } from "../../state/router";
 import { LEASE_FILTERS, type LeaseFilter, type LeaseRowView, useLeases } from "../../state/leases";
-import { LeaseInspector } from "./inspector";
+import { LeaseDrawer } from "./drawer";
 
 export function LeasesScreen() {
   const { choose, filter, paging, urlId, view } = useLeases();
-  const chosen = view.kind === "ready" ? view.data.chosen : urlId;
+  const search = useSearch();
   return (
-    <MasterDetail
-      focus={urlId === undefined ? "list" : "detail"}
-      list={
-        <ListPane
-          title="Leases"
-          meta={view.kind === "ready" ? `${view.data.held} held` : undefined}
-          toolbar={
-            <ChoiceChips
-              legend="Filter leases"
-              choices={LEASE_FILTERS}
-              value={filter}
-              onChange={choose}
-            />
-          }
-          footer={<Pager label="Leases" paging={paging} />}
-        >
-          <Loaded view={view}>
-            {(page) => <LeaseRows rows={page.rows} chosen={page.chosen} filter={filter} />}
-          </Loaded>
-        </ListPane>
-      }
-      detail={
-        chosen === undefined ? (
-          <InspectorEmpty>
-            {view.kind === "ready" ? "No leases." : "Select a lease."}
-          </InspectorEmpty>
-        ) : (
-          <LeaseInspector key={chosen} id={chosen} />
-        )
-      }
-    />
+    <Page
+      title="Leases"
+      actions={view.kind === "ready" ? <span className="muted">{view.data.held} held</span> : null}
+    >
+      <Toolbar
+        start={
+          <ChoiceChips
+            legend="Filter leases"
+            choices={LEASE_FILTERS}
+            value={filter}
+            onChange={choose}
+          />
+        }
+      />
+      <Loaded view={view}>
+        {(page) => <LeaseTable rows={page.rows} filter={filter} paging={paging} />}
+      </Loaded>
+      {urlId === undefined ? null : (
+        <LeaseDrawer key={urlId} id={urlId} onClose={() => navigate(`/leases${search}`)} />
+      )}
+    </Page>
   );
 }
 
-export function LeaseRows(props: {
+const COLUMNS: readonly Column<LeaseRowView>[] = [
+  {
+    cell: (row) => <Link to={row.to}>{row.holder}</Link>,
+    header: "Holder",
+    mono: true,
+  },
+  { cell: (row) => row.sub, header: "Device" },
+  {
+    cell: (row) => (
+      <>
+        <span className={row.expiring ? "lease-warn" : undefined}>
+          {row.expiring ? <span className="visually-hidden">expiring, </span> : null}
+          {row.remaining}
+        </span>
+        <span className="lease-meter">
+          <Meter percent={row.percent} tone={row.expiring ? "warn" : "neutral"} size="thin" />
+        </span>
+      </>
+    ),
+    header: "Expires in",
+  },
+];
+
+export function LeaseTable(props: {
   readonly rows: readonly LeaseRowView[];
-  readonly chosen: string | undefined;
   readonly filter: LeaseFilter;
+  readonly paging: Paging;
 }) {
-  const { chosen, filter, rows } = props;
-  if (rows.length === 0) {
-    return <Empty>{filter === "all" ? "No leases." : "No leases match this filter."}</Empty>;
-  }
+  const { filter, paging, rows } = props;
   return (
-    <List label="Leases">
-      {rows.map((row) => (
-        <ListRow
-          key={row.key}
-          to={row.to}
-          selected={row.id === chosen}
-          mono
-          title={row.holder}
-          aside={
-            <span className={row.expiring ? "lease-warn" : undefined}>
-              {row.expiring ? <span className="visually-hidden">expiring, </span> : null}
-              {row.remaining}
-            </span>
-          }
-          sub={row.sub}
-          trail={
-            <span className="lease-meter">
-              <Meter percent={row.percent} tone={row.expiring ? "warn" : "neutral"} size="thin" />
-            </span>
-          }
-        />
-      ))}
-    </List>
+    <DataTable
+      label="Leases"
+      rows={rows}
+      columns={COLUMNS}
+      rowId={(row) => row.key}
+      rowTo={(row) => row.to}
+      empty={filter === "all" ? "No leases." : "No leases match this filter."}
+      paging={paging}
+    />
   );
 }
