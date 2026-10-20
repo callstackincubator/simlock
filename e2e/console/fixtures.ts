@@ -117,13 +117,27 @@ export async function startDaemon(
     await waitFor(() => !existsSync(socketPath), { timeout: 10_000 }).catch(() => undefined);
   };
   const start = async () => {
+    const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
+    const before = (await readLog()).length;
     const started = await cli([...gatewayFlag, "daemon", "start"], env, { timeout: 30_000 });
-    if (started.code === 0) return;
+    // why: `daemon start` exits 0 once the daemon answers from its socket, which can come before
+    // the daemon fails to bind its HTTP port and stops (#553). So a clean exit is not yet a start:
+    // wait for this start's own "HTTP gateway listening" or `EADDRINUSE` line (the log keeps the
+    // earlier starts' lines), and fail on the latter.
+    if (started.code === 0) {
+      await waitFor(
+        async () => {
+          const added = (await readLog()).slice(before);
+          return added.includes("EADDRINUSE") || added.includes('"HTTP gateway listening"');
+        },
+        { label: "the daemon's HTTP listener" },
+      );
+      if (!(await readLog()).slice(before).includes("EADDRINUSE")) return;
+    }
     // why: a failed start reports only what the CLI saw while polling the socket, and `dispose`
     // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.
     // Read the tail here, before any caller's catch reaches `dispose`, and fail with both.
-    const log = await readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
-    const tail = log.split("\n").slice(-20).join("\n");
+    const tail = (await readLog()).split("\n").slice(-20).join("\n");
     expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
   };
   const dispose = async () => {
