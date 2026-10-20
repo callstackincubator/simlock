@@ -669,7 +669,8 @@ describe("optional modules: afterSocketClaimed", () => {
 
     expect({ claimed: claimed.mock.calls.length, created: loser.creates, second }).toEqual({
       claimed: 0,
-      created: 1,
+      // why: the loser refuses before it opens state.db, so it builds no module at all
+      created: 0,
       second: "rejected",
     });
   });
