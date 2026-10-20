@@ -2,6 +2,7 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createHmac } from "node:crypto";
+import { createServer } from "node:net";
 
 import { createAlerts } from "../alerts/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
@@ -19,7 +20,13 @@ import {
 } from "../history/testing.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
-import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  FetchWebhookPoster,
+  JsonLinesLogger,
+  MemoryLogSink,
+  type WebhookPoster,
+} from "../ports/index.js";
 import { FakeWebhookPoster } from "../ports/testing.js";
 import type { TokenOperations } from "../auth/index.js";
 import { GatewayDispatcher } from "./dispatcher.js";
@@ -171,6 +178,8 @@ function harness(
     readonly load?: ConstructorParameters<typeof GatewayDispatcher>[0]["load"];
     /** why: real alerts over a fake poster, wired as `testDestination`; none leaves the option out. */
     readonly alertDestinations?: readonly AlertDestination[];
+    /** why: replaces the fake poster behind `alertDestinations`, for a case that needs a real connection. */
+    readonly webhookPoster?: WebhookPoster;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -219,7 +228,7 @@ function harness(
           eventBus,
           idGenerator: { generate: () => "sample-id" },
           logger: new JsonLinesLogger({ clock, module: "alerts", sink: logSink }),
-          poster,
+          poster: options.webhookPoster ?? poster,
           version: "9.9.9",
           workerLabel: () => undefined,
         });
@@ -1036,6 +1045,49 @@ describe("GatewayDispatcher", () => {
       ).rejects.toMatchObject(unknown);
 
       expect(configured.poster.requests).toHaveLength(1);
+    });
+
+    it("a refused connection answers could not be reached with the network code, and neither the answer nor the failed call's operation log line holds the URL", async () => {
+      const closedPort = await new Promise<number>((resolve) => {
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => {
+          const { port } = server.address() as { port: number };
+          server.close(() => resolve(port));
+        });
+      });
+      const url = `http://127.0.0.1:${closedPort}/hook-token-xyz`;
+      const { dispatcher, logSink } = harness({
+        alertDestinations: [{ ...generic, url }],
+        webhookPoster: new FetchWebhookPoster(),
+      });
+
+      const failure = await dispatcher
+        .dispatch("alerts.test", { destination: "ops" }, session())
+        .then(
+          () => undefined,
+          (error: unknown) => error as { code: string; message: string; details: unknown },
+        );
+
+      expect(failure).toMatchObject({
+        code: "ALERT_SEND_FAILED",
+        message: "ops could not be reached: ECONNREFUSED",
+        details: { destination: "ops", error: "ECONNREFUSED" },
+      });
+      expect(
+        logSink.records
+          .filter((record) => record.message === "operation")
+          .map((record) => record.fields),
+      ).toMatchObject([
+        {
+          operation: "alerts.test",
+          code: "ALERT_SEND_FAILED",
+          message: "ops could not be reached: ECONNREFUSED",
+        },
+      ]);
+      for (const text of [JSON.stringify(failure), JSON.stringify(logSink.records)]) {
+        expect(text).not.toContain("hook-token-xyz");
+        expect(text).not.toContain(String(closedPort));
+      }
     });
 
     it("stop during a test answers DAEMON_STOPPING", async () => {
