@@ -6,6 +6,7 @@ import type { EventBus } from "../bus/index.js";
 import {
   type ComponentProgress,
   describeSchemaIssues,
+  eventsPageQuery,
   refuseModelWithClass,
   deviceClassSchema,
   leaseIdSchema,
@@ -694,10 +695,16 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
 
   app.get("/v1/events", agentAuth, async (c) => {
     const since = c.req.query("since");
+    const answer = eventsPageQuery({
+      before: c.req.query("before"),
+      limit: c.req.query("limit"),
+      since,
+    });
+    if ("refused" in answer) throw badRequest(answer.refused);
     const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);
     const events = await deps.dispatch(
       "events.replay",
-      sinceTs === undefined ? {} : { sinceTs },
+      sinceTs === undefined ? answer.page : { ...answer.page, sinceTs },
       buildHttpSession(c.get("identity")),
     );
     return c.json({ events });
