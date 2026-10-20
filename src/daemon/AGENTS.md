@@ -26,7 +26,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Composition (`main.ts`)
 
-Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway has no tables in it yet; closed last in `dispose`, or by `startDaemon` when the start fails after the open).
+Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway's holds the `tokens` table only; closed last in `dispose`, or by `startDaemon` when the start fails after the open).
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
@@ -98,7 +98,7 @@ Health: `starting` → `running`, or `failed`.
 Credential resolution (`resolveHelloRole` in `src/auth`), at `hello`:
 
 1. No credential → `agent`.
-2. An `operator` token in `tokens.json` → `admin`.
+2. An `operator` token in the `tokens` table → `admin`.
 3. The per-start admin secret → `admin`.
 4. Anything else → `ADMIN_AUTHENTICATION_FAILED`, connection closed.
 

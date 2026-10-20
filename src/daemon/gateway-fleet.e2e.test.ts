@@ -158,9 +158,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   }
 
   /**
-   * #119: a gateway that can be stopped and started again *as the same gateway* -- the same
+   * why: #119: a gateway that can be stopped and started again *as the same gateway* -- the same
    * `SIMLOCK_HOME` directory and the same `Filesystem` instance backing it, which is what
-   * `instance.json`/`tokens.json`/`workers.json` actually persisting across the restart depends
+   * `instance.json`, `workers.json` and the `tokens` table of `state.db` actually persisting across the restart depends
    * on (ADR §30, §8a). `startGateway` above deliberately hands each call a fresh
    * `MemoryFilesystem`, which is right for a test that starts one gateway once; this one needs
    * the state to survive the restart it is about to perform.
@@ -396,12 +396,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   }, 30_000);
 
   /**
-   * #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
+   * why: #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
    * rebuild, proved together over real processes and a real WebSocket restart -- not the
    * scripted uplink `fleet-coordinator.test.ts` and `dispatcher.test.ts` already cover each
    * piece of in isolation (including §27a's ownership round trip, pinned there too). What only
    * this shape of test can catch: the gateway's own persisted state (`instance.json`,
-   * `tokens.json`, `workers.json`) actually surviving a real `stop()`/`startDaemon()` cycle, and
+   * `workers.json`, and the join tokens in `state.db`) actually surviving a real `stop()`/`startDaemon()` cycle, and
    * a real worker's own `GatewayUplink` actually redialling and reconnecting on its own backoff
    * once the new process is listening again.
    */

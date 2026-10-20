@@ -23,6 +23,7 @@ import {
   fakeDeviceDataTables,
   loadTestRegistry,
 } from "../core/testing.js";
+import { seedTokensDatabase } from "../auth/testing.js";
 import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { androidDeviceDataTable } from "../drivers/android/index.js";
@@ -32,7 +33,6 @@ import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
-  CryptoTokenSecrets,
   FakeClock,
   FakeHostInfo,
   FakeHostLoadProbe,
@@ -1335,15 +1335,8 @@ describe("startDaemon HTTP gateway startup readiness", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
     const secret = "slk_test_agent";
-    await filesystem.mkdirp(directory);
-    await filesystem.writeFileAtomic(
-      join(directory, "tokens.json"),
-      JSON.stringify([
-        { id: "tok_agent", hash: secrets.hash(secret), role: "agent", createdAt: 0 },
-      ]),
-    );
+    await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
     const port = await freeLoopbackPort();
 
     const startPromise = startDaemon({
@@ -1724,15 +1717,10 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
-    await filesystem.mkdirp(directory);
-    await filesystem.writeFileAtomic(
-      join(directory, "tokens.json"),
-      JSON.stringify([
-        { id: "tok_agent", hash: secrets.hash("slk_cause_agent"), role: "agent", createdAt: 0 },
-        { id: "tok_op", hash: secrets.hash("slk_cause_operator"), role: "operator", createdAt: 0 },
-      ]),
-    );
+    await seedTokensDatabase(directory, [
+      ["tok_agent", "slk_cause_agent", "agent"],
+      ["tok_op", "slk_cause_operator", "operator"],
+    ]);
     const port = await freeLoopbackPort();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
@@ -3673,6 +3661,80 @@ describe("startDaemon state.db", () => {
       message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run \`simlock nuke --delete-devices\`; then remove ${oldFile} and start again. See "Breaking: state moves to state.db" in docs/CLI.md.`,
     });
     expect(existsSync(join(directory, "state.db"))).toBe(false);
+  });
+
+  it.each([
+    [
+      "worker",
+      "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.",
+    ],
+    [
+      "gateway",
+      "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.",
+    ],
+  ] as const)(
+    "a %s started with tokens.json in its folder refuses with the old-file message and its step",
+    async (role, step) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-old-tokens-"));
+      temporaryDirectories.push(directory);
+      const oldFile = join(directory, "tokens.json");
+      await writeFile(oldFile, "[]", "utf8");
+
+      await expect(start({ dataDirectory: directory, role })).rejects.toMatchObject({
+        message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${step.replace("<path>", oldFile)} See "Breaking: state moves to state.db" in docs/CLI.md.`,
+      });
+      expect(existsSync(join(directory, "state.db"))).toBe(false);
+    },
+  );
+
+  it("a token created, then the daemon restarted on the same state.db, verifies and lists with every field", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-token-restart-"));
+    temporaryDirectories.push(directory);
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "admin",
+      role: "admin",
+      via: "socket",
+    } as const;
+    const port = await freeLoopbackPort();
+    const launch = (now: number) =>
+      startDaemon({
+        clock: new FakeClock(now),
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [],
+        hostLoadProbe: null,
+        version: "1.2.3",
+      } as StartDaemonOptions);
+    type Created = { readonly secret: string; readonly token: Record<string, unknown> };
+    const first = await launch(1_000);
+    const labelled = (await first.dispatch(
+      "token.create",
+      { label: "ci", role: "agent" },
+      admin,
+    )) as Created;
+    const bare = (await first.dispatch("token.create", { role: "operator" }, admin)) as Created;
+    await first.stop();
+
+    const second = await launch(2_000);
+    runningDaemons.push(second);
+
+    const listed = (await second.dispatch("token.list", {}, admin)) as {
+      readonly tokens: readonly Record<string, unknown>[];
+    };
+    expect(listed.tokens).toEqual([labelled.token, bare.token]);
+    expect("label" in (listed.tokens[1] ?? {})).toBe(false);
+
+    const statusWith = async (secret: string) =>
+      (
+        await fetch(`http://127.0.0.1:${port}/v1/status`, {
+          headers: { authorization: `Bearer ${secret}` },
+        })
+      ).status;
+    expect(await statusWith(labelled.secret)).toBe(200);
+    expect(await statusWith(bare.secret)).toBe(200);
+    expect(await statusWith("slk_not-a-created-secret")).toBe(401);
   });
 
   it("a start that fails after state.db opened closes it before it throws", async () => {

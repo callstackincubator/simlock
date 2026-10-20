@@ -8,7 +8,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import { AuthError, createAuth, type Identity } from "./index.js";
+import { AuthError, createAuth, type Identity, tokensOwner } from "./index.js";
 import {
   authConfigWith,
   createTestKey,
@@ -21,6 +21,7 @@ import {
   type TestKey,
   unsigned,
   withAlteredSignature,
+  openMemoryStateDatabase,
 } from "./testing.js";
 
 const k1 = await createTestKey("ES256", "k1");
@@ -50,6 +51,7 @@ async function harness(
         ? { enabled: true, host: "127.0.0.1", port: 4700 }
         : authConfigWith(proxyAuth),
     dataDirectory: "/home/agent/.simlock",
+    database: (await openMemoryStateDatabase([tokensOwner])).database,
     filesystem,
     secrets: new CryptoTokenSecrets(),
     idGenerator: { generate: () => "id" },

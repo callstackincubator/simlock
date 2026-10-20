@@ -23,7 +23,7 @@ import {
   NoopLogger,
 } from "../ports/index.js";
 import type { Identity } from "../auth/index.js";
-import { createAuth } from "../auth/index.js";
+import { createAuth, tokensOwner } from "../auth/index.js";
 import type { Auth } from "../auth/index.js";
 import {
   fakeAuth,
@@ -34,6 +34,7 @@ import {
   personClaims,
   PROXY_NOW,
   proxyAuthConfig,
+  openMemoryStateDatabase,
 } from "../auth/testing.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
@@ -2487,6 +2488,7 @@ describe("a person the sign-in proxy signed in", () => {
     const auth = createAuth({
       config: authConfigWith(),
       dataDirectory: "/home/agent/.simlock",
+      database: (await openMemoryStateDatabase([tokensOwner])).database,
       filesystem: new MemoryFilesystem(),
       secrets: new CryptoTokenSecrets(),
       idGenerator: { generate: () => "id" },

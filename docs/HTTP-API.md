@@ -52,10 +52,10 @@ operator's token or, signed in through the proxy, without one. A request with ne
 
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
-the daemon is the only process that reads or writes `tokens.json`, so unlike
+the daemon is the only process that reads or writes the tokens, so unlike
 `config set` these do go through the daemon. Each token record
 is
-`{ id, role, label?, createdAt }`, hashed at rest in `~/.simlock/tokens.json`
+`{ id, role, label?, createdAt }`, hashed at rest in `~/.simlock/state.db`
 (SHA-256; the plaintext secret is shown exactly once, at `create`, and never
 persisted). For a request signed in by a token, the token id is the requester identity over HTTP (a proxy sign-in uses the principal below): unlike
 the CLI's `--agent-id`/`SIMLOCK_AGENT_ID`, identity is never client-declared

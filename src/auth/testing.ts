@@ -1,5 +1,16 @@
 import { base64url, exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 
+import {
+  CryptoTokenSecrets,
+  MemoryFilesystem,
+  NodeFilesystem,
+  NodeSqliteOpener,
+  NoopLogger,
+} from "../ports/index.js";
+import type { SqliteOpener, SqliteSchemaOwner } from "../ports/index.js";
+import { openStateDatabase, type StateDatabase } from "../state/index.js";
+import { tokensOwner } from "./token-store.js";
+import type { TokenRole } from "./tokens.js";
 import { type Auth, type AuthOptions, createAuthFrom } from "./index.js";
 import type { Identity } from "./identity.js";
 import { AuthError, type AuthConfig, type AuthStrategyDefinition } from "./strategy.js";
@@ -107,4 +118,51 @@ export function proxyRequest(jwt: string, header: string = proxyAuthConfig.heade
 
 export function authConfigWith(proxyAuth: Record<string, unknown> = proxyAuthConfig): AuthConfig {
   return { enabled: true, host: "127.0.0.1", port: 4700, proxyAuth } as AuthConfig;
+}
+
+// why: the real adapter on SQLite's in-memory database, whatever path the state module asks for.
+const memorySqlite: SqliteOpener = {
+  open: (_path, options) => new NodeSqliteOpener().open(":memory:", options),
+};
+
+export function openMemoryStateDatabase(
+  owners: readonly SqliteSchemaOwner[],
+): Promise<StateDatabase> {
+  return openStateDatabase({
+    dataDirectory: "/memory",
+    filesystem: new MemoryFilesystem(),
+    logger: new NoopLogger(),
+    oldFiles: [],
+    owners,
+    sqlite: memorySqlite,
+    upgradeStep: "",
+  });
+}
+
+/** why: the daemon opens `state.db` itself, so a test that starts one with known tokens writes them to the file first. */
+export async function seedTokensDatabase(
+  directory: string,
+  records: readonly (readonly [id: string, secret: string, role: TokenRole])[],
+): Promise<void> {
+  const hasher = new CryptoTokenSecrets();
+  const state = await openStateDatabase({
+    dataDirectory: directory,
+    filesystem: new NodeFilesystem(),
+    logger: new NoopLogger(),
+    oldFiles: [],
+    owners: [tokensOwner],
+    sqlite: new NodeSqliteOpener(),
+    upgradeStep: "",
+  });
+  try {
+    for (const [id, secret, role] of records) {
+      state.database
+        .prepare(
+          "INSERT OR REPLACE INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, NULL, 0)",
+        )
+        .run(id, hasher.hash(secret), role);
+    }
+  } finally {
+    state.close();
+  }
 }

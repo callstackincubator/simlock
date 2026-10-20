@@ -68,7 +68,7 @@ describe("HTTP API", () => {
     const baseUrl = `http://127.0.0.1:${port}`;
 
     // why: 1. Mint an agent token via the CLI: `token create` is a daemon operation, so this
-    //    round-trips to the daemon started above -- the token lands in the tokens.json that
+    //    round-trips to the daemon started above -- the token lands in the state.db that
     //    daemon owns, which is what this test's later calls authenticate against.
     const tokenResult = await env.cli(["token", "create", "--role", "agent"]);
     expect(tokenResult.code).toBe(0);
@@ -515,8 +515,6 @@ describe("HTTP API", () => {
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
     });
     const baseUrl = `http://127.0.0.1:${port}`;
-    // One at a time: the token file is read, extended and rewritten per create, so two creates
-    // at once can lose a token (#424).
     const tokens: string[] = [];
     for (const _ of [0, 1]) {
       const result = await env.cli(["token", "create", "--role", "agent"]);

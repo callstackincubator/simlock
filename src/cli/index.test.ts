@@ -30,7 +30,8 @@ import {
   type IpcConnector,
 } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
-import { type Auth, createAuth } from "../auth/index.js";
+import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
+import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import {
@@ -2978,7 +2979,7 @@ describe("CLI: --yes / confirm guards (safety rule 5)", () => {
   });
 });
 
-describe("CLI: token operations never write tokens.json directly", () => {
+describe("CLI: token operations go through the daemon", () => {
   it("token create/list/revoke all go through the client, not a local TokenStore", async () => {
     const calls: string[] = [];
     const client = fakeClient({
@@ -7307,6 +7308,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     clock,
     config: { enabled: false, host: "127.0.0.1", port: 4700 },
     dataDirectory: "/",
+    database: (await openMemoryStateDatabase([tokensOwner])).database,
     filesystem,
     idGenerator: sequence(),
     logger: new NoopLogger(),
@@ -7418,6 +7420,7 @@ async function startInMemoryDaemon(options: {
     clock,
     config: { enabled: false, host: "127.0.0.1", port: 4700 },
     dataDirectory: dirname(adminTokenPath),
+    database: (await openMemoryStateDatabase([tokensOwner])).database,
     filesystem,
     idGenerator: sequence(),
     logger: new NoopLogger(),

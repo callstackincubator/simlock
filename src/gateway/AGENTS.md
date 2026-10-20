@@ -119,7 +119,7 @@ views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.r
 | Link: channels per side, accept, stall | 64, 30 s, 60 s                           | `../link/` constants                                  |
 | Request records                        | 10 000, 10 min                           | `lease.maxRequestRecords`, `lease.requestRetentionMs` |
 
-Persisted: `workers.json` (drained ids), `tokens.json`, `instance.json`. Nothing else.
+Persisted: `workers.json` (drained ids), the `tokens` table of `state.db`, `instance.json`. Nothing else.
 
 ## Rules
 

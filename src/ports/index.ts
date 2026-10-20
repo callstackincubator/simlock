@@ -132,6 +132,7 @@ export {
 } from "./host-load.js";
 export {
   filterSqliteExperimentalWarning,
+  inTransaction,
   isLockError,
   NodeSqliteOpener,
   passesQuickCheck,

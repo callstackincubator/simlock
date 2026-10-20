@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import {
   type Filesystem,
+  inTransaction,
   isLockError,
   type Logger,
   passesQuickCheck,
@@ -123,22 +124,6 @@ function stateDatabase(database: SqliteDatabase): StateDatabase {
     database,
     transaction: (work) => inTransaction(database, work),
   };
-}
-
-function inTransaction<T>(database: SqliteDatabase, work: () => T): T {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    database.exec("COMMIT");
-    return result;
-  } catch (error: unknown) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {
-      // why: the connection may already have ended the transaction; the first error is the one to report
-    }
-    throw error;
-  }
 }
 
 function migrate(

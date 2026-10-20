@@ -1,135 +1,92 @@
-import { dirname } from "node:path";
-
-import type { Clock, Filesystem, IdGenerator, TokenSecrets } from "../ports/index.js";
+import {
+  inTransaction,
+  type Clock,
+  type IdGenerator,
+  type SqliteDatabase,
+  type SqliteSchemaOwner,
+  type TokenSecrets,
+} from "../ports/index.js";
 import type { TokenRecord, TokenRole } from "./tokens.js";
 
-const TOKEN_ROLES: readonly TokenRole[] = ["agent", "operator", "worker"];
+const TOKENS_V1 = `
+CREATE TABLE tokens (
+  id TEXT PRIMARY KEY,
+  hash TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL CHECK (role IN ('agent', 'operator', 'worker')),
+  label TEXT,
+  created_at INTEGER NOT NULL
+) STRICT;
+`;
+
+export const tokensOwner: SqliteSchemaOwner = {
+  migrations: [TOKENS_V1],
+  name: "tokens",
+  version: 1,
+};
 
 export interface TokenStoreOptions {
-  readonly filesystem: Filesystem;
+  readonly database: SqliteDatabase;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly secrets: TokenSecrets;
-  readonly path: string;
-}
-
-export class TokenStoreError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "TokenStoreError";
-  }
 }
 
 export class TokenStore {
-  readonly #filesystem: Filesystem;
+  readonly #database: SqliteDatabase;
   readonly #clock: Clock;
   readonly #idGenerator: IdGenerator;
   readonly #secrets: TokenSecrets;
-  readonly #path: string;
-  #mutation: Promise<void> = Promise.resolve();
 
   constructor(options: TokenStoreOptions) {
-    this.#filesystem = options.filesystem;
+    this.#database = options.database;
     this.#clock = options.clock;
     this.#idGenerator = options.idGenerator;
     this.#secrets = options.secrets;
-    this.#path = options.path;
   }
 
+  // why: each call is one synchronous transaction, so two at once never see each other half done.
   async create(role: TokenRole, label?: string): Promise<{ record: TokenRecord; secret: string }> {
-    return this.#mutate(async () => {
-      const secret = this.#secrets.generateSecret();
-      const record: TokenRecord = {
-        id: `tok_${this.#idGenerator.generate()}`,
-        hash: this.#secrets.hash(secret),
-        role,
-        ...(label === undefined ? {} : { label }),
-        createdAt: this.#clock.now(),
-      };
-
-      const records = await this.#readAll();
-      records.push(record);
-      await this.#writeAll(records);
-
-      return { record, secret };
+    const secret = this.#secrets.generateSecret();
+    const record: TokenRecord = {
+      id: `tok_${this.#idGenerator.generate()}`,
+      hash: this.#secrets.hash(secret),
+      role,
+      ...(label === undefined ? {} : { label }),
+      createdAt: this.#clock.now(),
+    };
+    inTransaction(this.#database, () => {
+      this.#database
+        .prepare("INSERT INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, ?, ?)")
+        .run(record.id, record.hash, record.role, record.label ?? null, record.createdAt);
     });
+    return { record, secret };
   }
 
   async list(): Promise<TokenRecord[]> {
-    return this.#readAll();
+    return this.#database.prepare("SELECT * FROM tokens ORDER BY rowid").all().map(toRecord);
   }
 
   async revoke(id: string): Promise<boolean> {
-    return this.#mutate(async () => {
-      const records = await this.#readAll();
-      const index = records.findIndex((record) => record.id === id);
-      if (index === -1) return false;
-
-      records.splice(index, 1);
-      await this.#writeAll(records);
-      return true;
-    });
-  }
-
-  // why: re-reading on every call is what lets a `token create`/`revoke` from another process take effect in the long-running daemon, which has no invalidation path.
-  async verify(secret: string): Promise<TokenRecord | undefined> {
-    const hash = this.#secrets.hash(secret);
-    return (await this.#readAll()).find((candidate) => candidate.hash === hash);
-  }
-
-  #mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#mutation.then(operation);
-    this.#mutation = result.then(
-      () => {},
-      () => {},
+    return inTransaction(
+      this.#database,
+      () => Number(this.#database.prepare("DELETE FROM tokens WHERE id = ?").run(id).changes) > 0,
     );
-    return result;
   }
 
-  async #readAll(): Promise<TokenRecord[]> {
-    if (!(await this.#filesystem.exists(this.#path))) return [];
-
-    const contents = await this.#filesystem.readFile(this.#path);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(contents) as unknown;
-    } catch (error: unknown) {
-      throw new TokenStoreError(
-        `Invalid JSON in token store: ${this.#path} (${errorMessage(error)})`,
-      );
-    }
-
-    if (!Array.isArray(parsed) || !parsed.every(isTokenRecord)) {
-      throw new TokenStoreError(`Invalid token store: ${this.#path}`);
-    }
-
-    return parsed;
-  }
-
-  async #writeAll(records: readonly TokenRecord[]): Promise<void> {
-    await this.#filesystem.mkdirp(dirname(this.#path));
-    await this.#filesystem.writeFileAtomic(this.#path, `${JSON.stringify(records, null, 2)}\n`, {
-      mode: 0o600,
-    });
+  async verify(secret: string): Promise<TokenRecord | undefined> {
+    const row = this.#database
+      .prepare("SELECT * FROM tokens WHERE hash = ?")
+      .get(this.#secrets.hash(secret));
+    return row === undefined ? undefined : toRecord(row);
   }
 }
 
-function isTokenRecord(value: unknown): value is TokenRecord {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.id === "string" &&
-    typeof record.hash === "string" &&
-    isTokenRole(record.role) &&
-    (record.label === undefined || typeof record.label === "string") &&
-    typeof record.createdAt === "number"
-  );
-}
-
-function isTokenRole(value: unknown): value is TokenRole {
-  return typeof value === "string" && (TOKEN_ROLES as readonly string[]).includes(value);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function toRecord(row: Record<string, unknown>): TokenRecord {
+  return {
+    id: row.id as string,
+    hash: row.hash as string,
+    role: row.role as TokenRole,
+    ...(row.label === null ? {} : { label: row.label as string }),
+    createdAt: Number(row.created_at),
+  };
 }

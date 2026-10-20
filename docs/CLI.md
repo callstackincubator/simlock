@@ -2627,6 +2627,14 @@ A daemon whose folder still holds `state.json` does not start. To upgrade:
 3. Start the new Simlock, then add physical devices again with
    `simlock device add`.
 
+Tokens move too. A worker and a gateway keep their tokens in `state.db`, one row
+per token, and a daemon whose folder still holds `tokens.json` does not start.
+Nothing is imported from `tokens.json`. After you remove it, create each token
+again with `simlock token create`. On a gateway, create each worker's join
+token again with `simlock --gateway token create --role worker` and set it as
+that worker's `gateway.token`: a worker still holding an old token is refused
+with 401 and keeps redialling.
+
 A daemon also does not start when `state.db` is damaged, when another Simlock
 daemon holds it locked for more than five seconds, or when it was written by a
 newer Simlock (the message names the file and what to do). The reason is
@@ -2762,7 +2770,7 @@ otherwise apply.
 
 Mint and manage bearer tokens for the HTTP API. `token.create|list|revoke`
 are daemon operations (admin role) — the daemon is the only process that
-ever reads or writes `tokens.json`; the CLI is a thin client over the same
+ever reads or writes the tokens in `state.db`; the CLI is a thin client over the same
 `simlock/admin` connection every other admin command uses.
 
 Three roles:

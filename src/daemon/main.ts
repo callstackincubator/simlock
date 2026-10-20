@@ -60,7 +60,7 @@ import {
   iosDeviceDataTable,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
-import { type Auth, createAuth } from "../auth/index.js";
+import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
@@ -245,8 +245,11 @@ async function composeDaemon(
     // why: node:sqlite writes the real disk, so the state never goes through a daemon's injected filesystem
     filesystem: new NodeFilesystem(),
     logger: logger.child("state"),
-    oldFiles: role === "gateway" ? [] : ["state.json"],
-    owners: role === "gateway" ? [] : [registryOwner, ...new Set(deviceDataTables.values())],
+    oldFiles: role === "gateway" ? ["tokens.json"] : ["state.json", "tokens.json"],
+    owners:
+      role === "gateway"
+        ? [tokensOwner]
+        : [registryOwner, tokensOwner, ...new Set(deviceDataTables.values())],
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
@@ -255,6 +258,7 @@ async function composeDaemon(
   const auth = createAuth({
     clock,
     config: config.http,
+    database: state.database,
     dataDirectory,
     filesystem,
     idGenerator,
