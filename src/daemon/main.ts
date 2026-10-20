@@ -161,8 +161,24 @@ export interface StartDaemonOptions {
 }
 
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
-// fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
+  let opened: StateDatabase | undefined;
+  try {
+    return await composeDaemon(options, (state) => {
+      opened = state;
+    });
+  } catch (error: unknown) {
+    // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
+    opened?.close();
+    throw error;
+  }
+}
+
+// fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
+async function composeDaemon(
+  options: StartDaemonOptions,
+  onStateOpened: (state: StateDatabase) => void,
+): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
   const role = options.role ?? "worker";
   const dataDirectory = options.dataDirectory ?? daemonDataDirectory(resolveSimlockHome(), role);
@@ -232,6 +248,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
+  onStateOpened(state);
   // why: both modes check the same credentials, so the checks are built once, before the mode branch.
   const auth = createAuth({
     clock,
@@ -695,10 +712,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // even if `stopAuxiliary`'s own path already ran one.
     await daemon.stop("http-start-failed").catch(() => undefined);
   }
-  if (daemonResult.status === "rejected") {
-    state.close();
-    throw daemonResult.reason;
-  }
+  if (daemonResult.status === "rejected") throw daemonResult.reason;
   if (gatewayResult.status === "rejected") throw gatewayResult.reason;
   return daemon;
 }

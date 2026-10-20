@@ -59,7 +59,7 @@ function open(dataDirectory: string, schemaOwners: readonly SqliteSchemaOwner[] 
 }
 
 describe("openStateDatabase", () => {
-  it("on an empty folder creates state.db mode 0600 and records each owner's version, and a second open runs no migration", async () => {
+  it("on an empty folder creates state.db mode 0600 and records each owner's version, sets WAL, busy_timeout 5000 and synchronous NORMAL, and a second open runs no migration", async () => {
     const directory = await newDirectory();
     const path = join(directory, STATE_DB_NAME);
 
@@ -73,6 +73,13 @@ describe("openStateDatabase", () => {
       { owner: "beta", version: 1 },
     ]);
     expect(first.database.prepare("SELECT step FROM runs").all()).toEqual([{ step: "alpha-1" }]);
+    expect(Object.values(first.database.prepare("PRAGMA journal_mode").get() ?? {})).toEqual([
+      "wal",
+    ]);
+    expect(Object.values(first.database.prepare("PRAGMA busy_timeout").get() ?? {})).toEqual([
+      5000,
+    ]);
+    expect(Object.values(first.database.prepare("PRAGMA synchronous").get() ?? {})).toEqual([1]);
     first.close();
 
     const second = await open(directory);
@@ -175,18 +182,18 @@ describe("openStateDatabase refusals", () => {
   });
 
   it(
-    "a lock held past 5 s at open, at the quick_check and at BEGIN IMMEDIATE gives the lock message, not the damage one",
+    "a lock held past 5 s at open, at the quick_check, at BEGIN IMMEDIATE and in a migration step gives the lock message, not the damage one",
     { timeout: 30_000 },
     async () => {
       const directory = await newDirectory();
       const path = join(directory, STATE_DB_NAME);
       const lockMessage = `${path} is locked by another process. Stop the other Simlock daemon using it, then start again.`;
       (await open(directory)).close();
-      const refusal = async (opener: SqliteOpener): Promise<string> => {
+      const refusal = async (opener: SqliteOpener, folder: string = directory): Promise<string> => {
         try {
           (
             await openStateDatabase({
-              dataDirectory: directory,
+              dataDirectory: folder,
               filesystem: new NodeFilesystem(),
               logger: new NoopLogger(),
               oldFiles: [],
@@ -211,6 +218,9 @@ describe("openStateDatabase refusals", () => {
 
       expect(await refusal(lockedAt("PRAGMA quick_check"))).toBe(lockMessage);
       expect(await refusal(lockedAt("BEGIN IMMEDIATE"))).toBe(lockMessage);
+      expect(await refusal(lockedAt("CREATE TABLE runs"), await newDirectory())).toBe(
+        `${join(directories.at(-1)!, STATE_DB_NAME)} is locked by another process. Stop the other Simlock daemon using it, then start again.`,
+      );
 
       const holder = await sqlite.open(path, { readOnly: false });
       holder.exec("PRAGMA locking_mode=EXCLUSIVE");

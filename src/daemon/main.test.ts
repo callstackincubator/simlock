@@ -1006,7 +1006,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
   });
 
-  it("lists the same device and lease after a worker is stopped and started again", async () => {
+  it("closes state.db on stop, and lists the same device and lease after a worker is stopped and started again", async () => {
     const clock = new FakeClock(1_000);
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
@@ -1029,6 +1029,8 @@ describe("startDaemon wires core and leasing together", () => {
       ).map((row) => row.id);
     const devicesBefore = await list(first, "devices");
     await first.stop("test");
+    // why: closing the last connection checkpoints and removes the WAL, so a stop that left state.db open leaves it.
+    expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
 
     const daemon = await startDaemon(options());
     runningDaemons.push(daemon);
@@ -3644,6 +3646,42 @@ describe("startDaemon state.db", () => {
       message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run \`simlock nuke --delete-devices\`; then remove ${oldFile} and start again. See "Breaking: state moves to state.db" in docs/CLI.md.`,
     });
     expect(existsSync(join(directory, "state.db"))).toBe(false);
+  });
+
+  it("a start that fails after state.db opened closes it before it throws", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-closes-state-"));
+    temporaryDirectories.push(directory);
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const previous = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "1" },
+      state,
+    });
+    await previous.registerDevice({
+      driverData: { fakeDeviceId: "fk-1" },
+      driverDeviceId: "drv-1",
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+    });
+    state.database.exec("DELETE FROM fake_device_data");
+    state.close();
+    expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
+
+    await expect(start({ dataDirectory: directory })).rejects.toMatchObject({
+      name: "RegistryLoadError",
+    });
+
+    expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
   });
 
   it("a SIMLOCK_DRIVERS_MODULE without a deviceDataTables export fails start naming it", async () => {

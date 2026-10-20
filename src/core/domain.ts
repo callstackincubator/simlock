@@ -297,20 +297,18 @@ export interface LeaseRecord {
   readonly deviceId: string;
   readonly requesterId: string;
   /**
-   * The session principal (ADR 0003 §4) that requested this lease -- the identity `renew`,
+   * why: The session principal (ADR 0003 §4) that requested this lease -- the identity `renew`,
    * `release`, and `list` compare against, not `requesterId` (which is attribution, defaults to
    * the principal, but a connection may set it to something else per request so one connection
-   * can hold many leases). A record written before this field existed loads with `ownerId` equal
-   * to `requesterId` -- see `parseLease` in `registry.ts`.
+   * can hold many leases). A request without a separate owner stores `requesterId` here.
    */
   readonly ownerId: string;
   readonly grantedAt: number;
   /**
-   * The width this lease was granted with, or last renewed with when a renew named one (ADR
+   * why: The width this lease was granted with, or last renewed with when a renew named one (ADR
    * 0004 §4). Stored, not derived: a `lease.renew` carrying no `ttlMs` re-applies exactly this,
    * rather than falling back to `lease.defaultTtlMs`, so a lease granted for four hours does
-   * not shrink to fifteen minutes the first time something renews it. A record written before
-   * ADR 0004 loads with `lease.defaultTtlMs` here -- see `parseLease` in `registry.ts`.
+   * not shrink to fifteen minutes the first time something renews it.
    */
   readonly ttlMs: number;
   readonly ttlDeadline: number;
