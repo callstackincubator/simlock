@@ -523,6 +523,7 @@ export interface LoadConfigOptions {
   readonly systemStats: SystemStats;
   readonly configPath?: string;
   readonly overrides?: ConfigOverrides;
+  readonly role?: DaemonMode;
   readonly warn?: Warn;
 }
 

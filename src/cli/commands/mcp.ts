@@ -9,7 +9,10 @@ async function loadDefaultMcpStdio(): Promise<McpStdioLauncher> {
   return (await import("../../mcp/main.js")).runMcpStdio;
 }
 
-async function run(argv: readonly string[], { environment }: CommandContext): Promise<number> {
+async function run(
+  argv: readonly string[],
+  { environment, gateway }: CommandContext,
+): Promise<number> {
   if (argv.length === 1 && isHelp(argv[0])) {
     environment.stdout.write("Usage: simlock mcp\n");
     return 0;
@@ -17,7 +20,7 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
   if (argv.length > 0) throw new UsageError("mcp accepts no arguments");
   const runMcpStdio =
     environment.runMcpStdio ?? (await (environment.loadMcpStdio ?? loadDefaultMcpStdio)());
-  await runMcpStdio();
+  await runMcpStdio({ gateway });
   return 0;
 }
 

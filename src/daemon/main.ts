@@ -15,6 +15,7 @@ import {
 import {
   type Config,
   type ConfigOverrides,
+  type DaemonMode,
   type DeviceClass,
   type DeviceMode,
   type Driver,
@@ -134,6 +135,7 @@ export interface StartDaemonOptions {
   /** why: test-only, replaces the registry of optional modules. */
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
+  readonly role?: DaemonMode;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
@@ -1473,4 +1475,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     }
     process.exitCode = 1;
   });
+}
+
+export function parseDaemonArgv(_argv: readonly string[]): DaemonMode | undefined {
+  return undefined;
 }

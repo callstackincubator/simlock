@@ -179,6 +179,75 @@ describe("CLI: exit codes", () => {
     expect(output.stderr).not.toContain("already");
   });
 
+  const NO_GATEWAY_MESSAGE =
+    "No gateway on this machine. Start one with: simlock --gateway daemon start";
+
+  it("a CLI error with code GATEWAY_NOT_PRESENT prints that code and exits 2", async () => {
+    const output = outputCapture();
+    let connected = false;
+
+    await expect(
+      runCli(
+        ["--gateway", "status"],
+        output.environmentWith({
+          connectAdmin: async () => {
+            connected = true;
+            return fakeClient();
+          },
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "GATEWAY_NOT_PRESENT", message: NO_GATEWAY_MESSAGE },
+    });
+    expect(connected).toBe(false);
+  });
+
+  it("simlock --help lists --gateway", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["--help"], output.environmentWith())).resolves.toBe(0);
+    expect(output.stdout).toContain(
+      "Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.",
+    );
+    const gatewayOutput = outputCapture();
+    await runCli(["--gateway", "--help"], gatewayOutput.environmentWith());
+    expect(gatewayOutput.stdout).toBe(output.stdout);
+  });
+
+  it.each([[["status", "--gateway", "--help"]], [["--gateway", "status", "-h"]]])(
+    "prints usage, not GATEWAY_NOT_PRESENT, when %j asks for help",
+    async (argv) => {
+      const output = outputCapture();
+
+      await expect(runCli(argv, output.environmentWith())).resolves.toBe(0);
+      expect(output.stderr).toBe("");
+    },
+  );
+
+  it("runs --gateway config set and a command on a present gateway", async () => {
+    const output = outputCapture();
+    const written: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["--gateway", "config", "set", "http.port", "4800"],
+        output.environmentWith({
+          writeConfigFile: async (contents) => void written.push(contents),
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(written).toEqual([{ http: { port: 4800 } }]);
+    await expect(
+      runCli(
+        ["status", "--gateway"],
+        output.environmentWith({
+          daemonHome: { role: "gateway", dataDirectory: "/simlock/gateway", gatewayPresent: true },
+        }),
+      ),
+    ).resolves.toBe(0);
+  });
+
   it("prints shell export lines instead of the JSON grant under --export-env", async () => {
     const output = outputCapture();
     const grant: LeaseGrant = {
@@ -1200,7 +1269,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       }),
       ipc: ipcTransport,
       launcher,
-      dataDirectory: "/simlock",
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1232,7 +1301,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       }),
       ipc: new MemoryIpcTransport(),
       launcher,
-      dataDirectory: "/simlock",
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
     expect(exitCode).toBe(1);
@@ -1262,7 +1331,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       }),
       ipc: ipcTransport,
       launcher,
-      dataDirectory: "/simlock",
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1304,7 +1373,7 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
           });
         });
       }),
-      dataDirectory: "/simlock",
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
     };
     return { clock, ports };
   }
@@ -1420,7 +1489,7 @@ describe("CLI: auto-launch's failed start (#672)", () => {
       systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
       ipc: new MemoryIpcTransport(),
       launcher,
-      dataDirectory: "/simlock",
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
     });
     let settled = false;
     const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
@@ -1472,7 +1541,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
         ipc: dyingDaemon,
         launcher,
-        dataDirectory: "/simlock",
+        daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       });
       let settled = false;
       const exitCode = runCli(
@@ -5941,6 +6010,38 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
 });
 
 describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
+  it.each([
+    [["--gateway", "mcp"], 0, true],
+    [["mcp", "--gateway"], 0, true],
+    [["mcp"], 0, false],
+    [["--gateway=yes", "mcp"], 2, undefined],
+  ] as const)(
+    "--gateway is taken from anywhere in the argv and reaches the command as context.gateway; --gateway=<x> is a usage error (%j)",
+    async (argv, exitCode, gateway) => {
+      const output = outputCapture();
+      const seen: boolean[] = [];
+
+      const code = await runCli(
+        argv,
+        output.environmentWith({
+          runMcpStdio: async (options) => {
+            seen.push(options.gateway);
+          },
+        }),
+      );
+
+      expect(code).toBe(exitCode);
+      if (gateway === undefined) {
+        expect(JSON.parse(output.stderr)).toMatchObject({
+          error: { code: "USAGE", message: expect.stringContaining("--gateway takes no value") },
+        });
+        expect(seen).toEqual([]);
+      } else {
+        expect(seen).toEqual([gateway]);
+      }
+    },
+  );
+
   it("does not load the MCP stdio module unless the mcp command runs", async () => {
     const output = outputCapture();
     let loaded = false;
@@ -6013,7 +6114,7 @@ describe("CLI: events history", () => {
     return {
       ...realCliEnvironmentPorts(new NodeFilesystem()),
       clock: new FakeClock(2 * hour),
-      dataDirectory: directory,
+      daemonHome: { role: "worker", dataDirectory: directory, gatewayPresent: false },
     };
   }
 
@@ -6481,7 +6582,7 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
   const tooDeep = `/tmp/${"d".repeat(120)}`;
   const ports = (): CliEnvironmentPorts => ({
     ...realCliEnvironmentPorts(),
-    dataDirectory: tooDeep,
+    daemonHome: { role: "worker", dataDirectory: tooDeep, gatewayPresent: false },
   });
 
   it("still prints help, which needs no socket at all", async () => {
@@ -6809,6 +6910,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
         return {
           clock: new FakeClock(0),
           configPath: "/simlock/config.json",
+          daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
           requesterId: "test-requester",
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
@@ -7083,7 +7185,7 @@ function realCliEnvironmentPorts(
     }),
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
-    dataDirectory: "/simlock",
+    daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
   };
 }
 

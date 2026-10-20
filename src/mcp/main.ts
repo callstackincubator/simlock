@@ -47,6 +47,7 @@ export interface McpStdioEnvironment {
   /** Source for `SIMLOCK_AGENT_ID` and the agent tool's session id (`resolveRequesterId`) when
    * `requesterId` is not given explicitly. */
   readonly env?: NodeJS.ProcessEnv;
+  readonly gateway?: boolean;
   readonly requesterId?: string;
   readonly signals?: Signals;
   /** The stdio transport currently does not surface stdin EOF as onclose. */

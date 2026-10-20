@@ -173,7 +173,8 @@ export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
 ): CliEnvironment {
-  const { clock, dataDirectory, filesystem, ipc, launcher, systemStats } = ports;
+  const { clock, daemonHome, filesystem, ipc, launcher, systemStats } = ports;
+  const { dataDirectory } = daemonHome;
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
@@ -222,6 +223,7 @@ export function buildCliEnvironment(
   return {
     clock,
     configPath,
+    daemonHome,
     requesterId,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),

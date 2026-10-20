@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
+import type { Filesystem } from "./filesystem.js";
+
 /**
  * Resolves simlock's data directory (config.json, state.json, daemon.sock, daemon.log,
  * and the device roots under `devices/`). `SIMLOCK_HOME` overrides the default
@@ -58,4 +60,24 @@ export function resolveDaemonSocketPath(
     throw new SocketPathTooLongError(socketPath, maxLength);
   }
   return socketPath;
+}
+
+export type DaemonRole = "worker" | "gateway";
+
+export interface DaemonHome {
+  readonly role: DaemonRole;
+  readonly dataDirectory: string;
+  readonly gatewayPresent: boolean;
+}
+
+export function daemonDataDirectory(root: string, _role: DaemonRole): string {
+  return root;
+}
+
+export function resolveDaemonHome(options: {
+  readonly root: string;
+  readonly gateway: boolean;
+  readonly filesystem: Pick<Filesystem, "exists">;
+}): Promise<DaemonHome> {
+  return Promise.resolve({ role: "worker", dataDirectory: options.root, gatewayPresent: false });
 }

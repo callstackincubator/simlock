@@ -2,7 +2,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { resolveDaemonSocketPath, resolveSimlockHome, SocketPathTooLongError } from "./paths.js";
+import { MemoryFilesystem } from "./filesystem.js";
+import {
+  daemonDataDirectory,
+  resolveDaemonHome,
+  resolveDaemonSocketPath,
+  resolveSimlockHome,
+  SocketPathTooLongError,
+} from "./paths.js";
 
 describe("resolveDaemonSocketPath", () => {
   it("places the socket under the data directory", () => {
@@ -75,5 +82,67 @@ describe("resolveSimlockHome", () => {
     expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home/../other-home" })).toBe(
       "/tmp/other-home",
     );
+  });
+});
+
+describe("daemonDataDirectory", () => {
+  it("puts the gateway in <root>/gateway and the worker in <root>", () => {
+    expect(daemonDataDirectory("/home/me/.simlock", "gateway")).toBe("/home/me/.simlock/gateway");
+    expect(daemonDataDirectory("/home/me/.simlock", "worker")).toBe("/home/me/.simlock");
+  });
+});
+
+describe("resolveDaemonHome", () => {
+  const root = "/home/me/.simlock";
+
+  it.each([
+    [true, "gateway", `${root}/gateway`],
+    [false, "worker", root],
+  ] as const)(
+    "sends the gateway flag to <root>/gateway and everything else to <root> (flag %s)",
+    async (gateway, role, dataDirectory) => {
+      const home = await resolveDaemonHome({ root, gateway, filesystem: new MemoryFilesystem() });
+
+      expect(home).toMatchObject({ role, dataDirectory });
+    },
+  );
+
+  async function present(files: readonly string[], extraDirectories: readonly string[] = []) {
+    const filesystem = new MemoryFilesystem();
+    for (const directory of extraDirectories) await filesystem.mkdirp(directory);
+    for (const file of files) {
+      await filesystem.mkdirp(join(file, ".."));
+      await filesystem.writeFileAtomic(file, "{}");
+    }
+    return (await resolveDaemonHome({ root, gateway: true, filesystem })).gatewayPresent;
+  }
+
+  it.each([
+    ["neither file", [], false],
+    ["instance.json only", [`${root}/gateway/instance.json`], true],
+    ["config.json only", [`${root}/gateway/config.json`], true],
+    ["both files", [`${root}/gateway/instance.json`, `${root}/gateway/config.json`], true],
+  ] as const)(
+    "reports a gateway present when gateway/instance.json or gateway/config.json exists (%s)",
+    async (_name, files, expected) => {
+      expect(await present(files)).toBe(expected);
+    },
+  );
+
+  it("does not report a gateway present for an empty gateway folder", async () => {
+    expect(await present([], [`${root}/gateway`])).toBe(false);
+  });
+
+  it("counts a path under a file (ENOTDIR) as absent and rethrows any other exists error", async () => {
+    const failing = (code: string) => ({
+      exists: () => Promise.reject(Object.assign(new Error(code), { code })),
+    });
+
+    await expect(
+      resolveDaemonHome({ root, gateway: true, filesystem: failing("ENOTDIR") }),
+    ).resolves.toMatchObject({ gatewayPresent: false });
+    await expect(
+      resolveDaemonHome({ root, gateway: true, filesystem: failing("EACCES") }),
+    ).rejects.toThrow("EACCES");
   });
 });

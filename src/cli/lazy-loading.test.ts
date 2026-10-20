@@ -58,7 +58,7 @@ const home = mkdtempSync(join(tmpdir(), "simlock-cli-lazy-"));
 async function environment(): Promise<CliEnvironment> {
   const ports: CliEnvironmentPorts = {
     clock: new FakeClock(0),
-    dataDirectory: home,
+    daemonHome: { role: "worker", dataDirectory: home, gatewayPresent: false },
     filesystem: new MemoryFilesystem(),
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),

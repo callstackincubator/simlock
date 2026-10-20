@@ -226,7 +226,7 @@ describe("MCP stdio lifecycle", () => {
       const cli = buildCliEnvironment(
         {
           clock: new FakeClock(0),
-          dataDirectory: "/simlock",
+          daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
           filesystem: new MemoryFilesystem(),
           ipc: new MemoryIpcTransport(),
           launcher: new FakeDaemonLauncher(),

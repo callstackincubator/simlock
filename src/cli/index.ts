@@ -97,7 +97,7 @@ async function buildDefaultEnvironment(): Promise<CliEnvironment> {
         logPath,
         simlockHome: dataDirectory,
       }),
-      dataDirectory,
+      daemonHome: { role: "worker", dataDirectory, gatewayPresent: false },
     },
     process.env,
   );
@@ -124,6 +124,7 @@ export async function runCli(
       path: command.path,
       environment: environment ?? (await buildDefaultEnvironment()),
       token,
+      gateway: false,
     });
   } catch (error: unknown) {
     await writeError((value) => (environment?.stderr ?? process.stderr).write(value), error);

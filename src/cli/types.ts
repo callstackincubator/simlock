@@ -5,6 +5,7 @@ import type { EventEnvelope } from "../bus/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import type {
   Clock,
+  DaemonHome,
   DaemonLauncher,
   Filesystem,
   IpcConnector,
@@ -24,11 +25,12 @@ export interface Output {
 /** why: the CLI's own shape for "start the stdio MCP server and run until it closes";
  * `src/mcp/main.ts` has a runner of the same job under the same name and a different shape, so
  * this one is named for what the CLI holds rather than shared, which would couple the two. */
-export type McpStdioLauncher = () => Promise<void>;
+export type McpStdioLauncher = (options: { readonly gateway: boolean }) => Promise<void>;
 
 export interface CliEnvironment {
   readonly clock: Clock;
   readonly configPath: string;
+  readonly daemonHome: DaemonHome;
   readonly requesterId: string;
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
@@ -46,7 +48,7 @@ export interface CliEnvironment {
   readonly followLogFile?: () => Promise<void>;
   readonly readEventHistory: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
   readonly loadMcpStdio?: () => Promise<McpStdioLauncher>;
-  readonly runMcpStdio?: () => Promise<void>;
+  readonly runMcpStdio?: McpStdioLauncher;
   readonly signals: Signals;
   readonly parentPid?: number;
   readonly parentWatch?: ParentWatch;
@@ -63,7 +65,7 @@ export interface CliEnvironmentPorts {
   readonly systemStats: SystemStats;
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
-  readonly dataDirectory: string;
+  readonly daemonHome: DaemonHome;
   readonly parentWatch?: ParentWatch;
   readonly signals?: Signals;
   readonly stderr?: Output;

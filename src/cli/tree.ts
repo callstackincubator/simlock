@@ -8,6 +8,7 @@ export interface CommandContext {
   readonly path: readonly string[];
   readonly environment: CliEnvironment;
   readonly token: string | undefined;
+  readonly gateway: boolean;
 }
 
 export interface CommandModule {
