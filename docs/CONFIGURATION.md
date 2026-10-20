@@ -397,6 +397,17 @@ rounded down. `<freeBytes>` and `<threshold>` are in GiB (1024³ bytes), or MiB
 under 1 GiB, with one decimal rounded half up and `.0` dropped: `8.2 GiB`,
 `10 GiB`, `512 MiB`.
 
+**Testing a destination.** `simlock alerts test <name>` sends one sample message
+to a destination now, so you can check its URL and secret before an event needs
+them; see [`simlock alerts test`](CLI.md#simlock-alerts-test-destination---json).
+A `generic` receiver gets the usual envelope with `seq` `0`, `module` `alerts`,
+`event` `alerts.test-sent` (also in `X-Simlock-Event`) and `payload`
+`{"destination": "<name>"}`, signed like any other message. That event comes only
+from this command: it is never a fleet event, is not in the event history, and
+cannot be listed in `events`. A `slack` destination gets `{"text": "🔔 Test message
+from the simlock gateway to destination <name>."}`. The sample is not queued,
+tried again or counted with the destination's waiting messages.
+
 **Delivery.** Each destination sends one message at a time, in the order the
 gateway saw the events, and a slow destination never delays another. A try
 ends after 10 seconds. A network error, a timeout, `429` or a `5xx` is tried

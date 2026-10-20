@@ -904,6 +904,24 @@ answers as a fleet of one:
   `UNSUPPORTED_IN_GATEWAY_MODE`: the operation exists, but not on this kind of
   daemon. Do not retry it.
 
+### Testing an alert destination
+
+`testAlertDestination({ destination })` (admin client) asks a gateway to post one
+sample message to the alert destination of that name (`gateway.alerts.destinations`),
+once, and resolves with `{ destination, status }`, the receiver's `2xx` status.
+It makes one try and waits at most 10 seconds from the start of the POST.
+
+- It rejects with `ALERT_SEND_FAILED` when the receiver does not take the
+  sample. `details` is `{ destination, status }` for a status that is not
+  `2xx` (a redirect is not followed), or `{ destination, error }` where `error`
+  is `timeout`, a network code such as `ECONNREFUSED`, or `network-error`; the
+  message never holds the URL.
+- It rejects with `UNKNOWN_ALERT_DESTINATION` (`details.destination`) for a name
+  the gateway does not list, or when it lists none, and with `BAD_REQUEST` for a
+  name that is empty or longer than 32 characters.
+- It rejects with `DAEMON_STOPPING` when the gateway stops during the try, and
+  on a single host with `UNSUPPORTED_IN_WORKER_MODE`. Do not retry the last one.
+
 ## What this client does not do
 
 - It does not start or stop the daemon. `connectSimlock`/`connectSimlockAdmin`

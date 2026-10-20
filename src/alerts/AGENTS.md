@@ -13,6 +13,8 @@ Imported by: `../daemon/main.ts` only.
 | ------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `index.ts`         | `createAlerts`: one subscription per listed event, `stop()`                                                |
 | `queue.ts`         | `DestinationQueue`: one message at a time, tries, timeout, bounded wait                                    |
+| `sample.ts`        | `sendTest`: the one-try sample behind `Alerts.test`, outside the queues                                    |
+| `error-code.ts`    | `errorCode`: a network error's code, else `network-error`, never its message                               |
 | `formats/types.ts` | `AlertFormatDefinition`: `build` turns an envelope into headers and body                                   |
 | `formats/index.ts` | `ALERT_FORMAT_REGISTRY`, typed over core's `ALERT_FORMATS`                                                 |
 | `formats/generic/` | The envelope as JSON, signed with HMAC-SHA256                                                              |
@@ -25,6 +27,13 @@ Imported by: `../daemon/main.ts` only.
    per try, 3 tries, 1 s then 5 s between them. Network errors, timeouts, `429` and `5xx` are retried;
    any other non-2xx status gives up at once. A queue holds 100 waiting messages and drops the oldest.
 3. `stop()` aborts the try in flight, cancels timers and empties the queues; it waits for nothing.
+4. `test(name)` (behind `simlock alerts test`) builds a sample envelope (event `alerts.test-sent`, a new
+   id from `idGenerator`, never on the bus) with the destination's format and POSTs it once, at once,
+   beside the queue: 10 s from the POST's start, then it aborts. It resolves, never rejects, with
+   `{ok: true, status}` or `{ok: false, reason}` (`unknown-destination`, `status`, `unreachable`,
+   `timeout`, `stopped`); `../gateway/dispatcher.ts` maps that to the contract's errors. `stop()` aborts
+   a test in flight (`stopped`) and a test after it posts nothing; neither writes a log line or counts
+   in "Alerts discarded at stop".
 
 Logs name the destination, never its URL or secret; a failed try is logged by code, never by an
 error's message. A format is added by a directory under `formats/`, an entry in the registry and in

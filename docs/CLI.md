@@ -83,11 +83,12 @@ command starts it again) to bring the platform up.
 | 1 | `PROVISION_FAILED` | creating a device for the request failed twice; the message is the driver's error |
 | 1 | `HISTORY_UNAVAILABLE` | `stats` while `history.db` could not be opened, so the usage figures cannot be read; the daemon's log says why |
 | 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down), or a worker named with `component install --worker` cannot be asked |
+| 1 | `ALERT_SEND_FAILED` | `alerts test`: the receiver answered with a status that is not `2xx`, could not be reached, or did not answer within 10 seconds; the message says which |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker, or for `component install` name the workers with `--worker` or `--all-workers` |
-| 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers (`worker drain`, `undrain`, `remove`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
+| 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers or alert destinations (`worker drain`, `undrain`, `remove`, `alerts test`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — usually a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb`/`devicectl` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
@@ -106,6 +107,7 @@ command starts it again) to bring the platform up.
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` or `component install --worker` naming a worker the gateway does not know |
+| 12 | `UNKNOWN_ALERT_DESTINATION` | `alerts test` naming a destination the gateway's `gateway.alerts.destinations` does not list, or a gateway with none |
 | 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
 | 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
 | 12 | `DEVICE_NOT_ENROLLABLE` | `device add` of a device that cannot be enrolled; the message says why |
@@ -1307,6 +1309,43 @@ A worker is never *added* by a command. It appears by connecting: mint a join
 token on the gateway with `simlock token create --role worker`, put it in the
 worker's `gateway.token` alongside `gateway.url`, and start it. `simlock
 token revoke <token-id>` closes any uplink that token opened.
+
+## `simlock alerts test <destination> [--json]`
+
+Sends one sample message to one of the gateway's alert destinations
+(`gateway.alerts.destinations`, see the configuration reference) and says
+whether the receiver took it, so a wrong URL or secret shows before an outage,
+not during one. It needs the `admin` role and a gateway: a single host answers
+`UNSUPPORTED_IN_WORKER_MODE` (exit 2). `<destination>` is a destination's
+`name`, 1 to 32 characters.
+
+```
+$ simlock alerts test ops-slack
+Sent a test message to ops-slack: HTTP 200
+
+$ simlock alerts test ops-slack --json
+{"destination":"ops-slack","status":200}
+```
+
+The command makes one try and waits at most 10 seconds for the answer. Any
+`2xx` status is success. It fails with `ALERT_SEND_FAILED` (exit 1) when the
+receiver answers another status (a redirect is not followed), when it cannot be
+reached (the message names the network code, for example `ECONNREFUSED`, never
+the URL), or when it does not answer in time:
+
+```
+{"error":{"code":"ALERT_SEND_FAILED","message":"ops-slack answered HTTP 404"}}
+{"error":{"code":"ALERT_SEND_FAILED","message":"ops-slack could not be reached: ECONNREFUSED"}}
+{"error":{"code":"ALERT_SEND_FAILED","message":"ops-slack did not answer within 10 s"}}
+```
+
+A name the gateway has not configured, or a gateway with no destinations, fails
+with `UNKNOWN_ALERT_DESTINATION` (exit 12). The sample goes out at once, beside
+the destination's own queue: it does not wait for a message that is retrying,
+and it is not retried. A message already being sent may reach the receiver at
+the same time, in either order. `simlock alerts` and `simlock alerts --help`
+print the usage and exit 0; a missing name or an unknown subcommand is a usage
+error (exit 2).
 
 ## `simlock mcp`
 
