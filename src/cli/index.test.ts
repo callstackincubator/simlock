@@ -3874,6 +3874,65 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
   });
 });
 
+describe("CLI: alerts test (ADR 0035 §1)", () => {
+  const USAGE = "Usage: simlock alerts test <destination> [--json]\n";
+
+  async function runAlerts(argv: string[], overrides: Partial<SimlockAdminClient> = {}) {
+    const output = outputCapture();
+    const inputs: unknown[] = [];
+    let connected = false;
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({
+            testAlertDestination: (input) => {
+              inputs.push(input);
+              return Promise.resolve({ destination: input.destination, status: 204 });
+            },
+            ...overrides,
+          });
+        },
+      }),
+    );
+    return { code, connected, inputs, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock alerts test prints the sent line, --json prints the output, a missing name prints the Expected line, simlock alerts and --help print the usage, and an unknown subcommand is a usage error", async () => {
+    const sent = await runAlerts(["alerts", "test", "ops-slack"]);
+    expect([sent.code, sent.stdout, sent.stderr, sent.inputs]).toEqual([
+      0,
+      "Sent a test message to ops-slack: HTTP 204\n",
+      "",
+      [{ destination: "ops-slack" }],
+    ]);
+
+    const json = await runAlerts(["alerts", "test", "ops-slack", "--json"]);
+    expect([json.code, json.stdout]).toEqual([0, '{"destination":"ops-slack","status":204}\n']);
+
+    for (const argv of [["alerts"], ["alerts", "--help"], ["alerts", "test", "--help"]]) {
+      const usage = await runAlerts(argv);
+      expect([usage.code, usage.stdout, usage.stderr, usage.connected]).toEqual([
+        0,
+        USAGE,
+        "",
+        false,
+      ]);
+    }
+
+    for (const [argv, message] of [
+      [["alerts", "test"], "Expected destination (run `simlock --help` for usage)"],
+      [["alerts", "foo"], "Unknown alerts command: foo (run `simlock --help` for usage)"],
+    ] as const) {
+      const refused = await runAlerts([...argv]);
+      expect(refused.code).toBe(2);
+      expect(refused.connected).toBe(false);
+      expect(JSON.parse(refused.stderr)).toEqual({ error: { code: "USAGE", message } });
+    }
+  });
+});
+
 describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () => {
   it("names the mode, each worker, and which worker a device and a lease live on", async () => {
     const output = outputCapture();
