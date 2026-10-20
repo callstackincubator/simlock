@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -76,5 +76,100 @@ describe("openStateDatabase", () => {
     const second = await open(directory);
     expect(second.database.prepare("SELECT step FROM runs").all()).toEqual([{ step: "alpha-1" }]);
     second.close();
+  });
+});
+
+describe("openStateDatabase refusals", () => {
+  const SEE = 'See "Breaking: state moves to state.db" in docs/CLI.md.';
+  const SQLITE_FILE_HEADER = 100;
+
+  async function seeded(directory: string): Promise<string> {
+    const path = join(directory, STATE_DB_NAME);
+    const state = await open(directory);
+    state.database.exec("CREATE TABLE padding (x TEXT)");
+    for (let row = 0; row < 400; row += 1) {
+      state.database
+        .prepare("INSERT INTO padding (x) VALUES (?)")
+        .run(`row-${String(row)}`.repeat(20));
+    }
+    state.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    state.close();
+    return path;
+  }
+
+  it("refuses with each Shared values message, word for word, for an old file, a damaged file, a file that is not SQLite, a newer version and a migration that throws", async () => {
+    const upgradeStep = "remove <path> and start again.";
+    const refusal = async (
+      directory: string,
+      schemaOwners: readonly SqliteSchemaOwner[] = owners,
+    ): Promise<string> => {
+      try {
+        const state = await openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: ["state.json"],
+          owners: schemaOwners,
+          sqlite,
+          upgradeStep,
+        });
+        state.close();
+      } catch (error: unknown) {
+        return (error as Error).message;
+      }
+      return "opened";
+    };
+
+    const oldFileDirectory = await newDirectory();
+    await writeFile(join(oldFileDirectory, "state.json"), "{}");
+    expect(await refusal(oldFileDirectory)).toBe(
+      `Found ${join(oldFileDirectory, "state.json")}, which this Simlock no longer reads. To upgrade: remove ${join(oldFileDirectory, "state.json")} and start again. ${SEE}`,
+    );
+    expect(existsSync(join(oldFileDirectory, STATE_DB_NAME))).toBe(false);
+
+    const notSqlite = await newDirectory();
+    await writeFile(join(notSqlite, STATE_DB_NAME), "this is not a sqlite database ".repeat(20));
+    expect(await refusal(notSqlite)).toBe(
+      `${join(notSqlite, STATE_DB_NAME)} is damaged (open: file is not a database). Move it away to start with empty state; every device and lease it held is forgotten.`,
+    );
+
+    const damaged = await newDirectory();
+    const damagedPath = await seeded(damaged);
+    const bytes = await readFile(damagedPath);
+    bytes.fill(0xff, 4096 + SQLITE_FILE_HEADER, 4096 + SQLITE_FILE_HEADER + 2048);
+    await writeFile(damagedPath, bytes);
+    expect(await refusal(damaged)).toMatch(
+      new RegExp(
+        `^${join(damaged, STATE_DB_NAME).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is damaged \\(quick_check: .+\\)\\. Move it away to start with empty state; every device and lease it held is forgotten\\.$`,
+      ),
+    );
+
+    const newer = await newDirectory();
+    (await open(newer)).close();
+    expect(
+      await refusal(newer, [
+        { ...owners[0]!, migrations: owners[0]!.migrations.slice(0, 1), version: 1 },
+      ]),
+    ).toBe(
+      `alpha in ${join(newer, STATE_DB_NAME)} is at version 2; this Simlock knows up to 1. Upgrade Simlock, or move state.db away.`,
+    );
+
+    const failing = await newDirectory();
+    const failingOwners: readonly SqliteSchemaOwner[] = [
+      owners[0]!,
+      {
+        migrations: ["CREATE TABLE gamma (x INTEGER) STRICT", "INSERT INTO nowhere VALUES (1)"],
+        name: "gamma",
+        version: 2,
+      },
+    ];
+    expect(await refusal(failing, failingOwners)).toBe(
+      `gamma in ${join(failing, STATE_DB_NAME)} could not move from version 1 to 2: no such table: nowhere. Upgrade Simlock, or move state.db away.`,
+    );
+    const afterwards = await sqlite.open(join(failing, STATE_DB_NAME), { readOnly: true });
+    expect(afterwards.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual(
+      [],
+    );
+    afterwards.close();
   });
 });
