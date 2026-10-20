@@ -202,6 +202,8 @@ export interface IosSimctlDriverOptions {
   readonly processRunner: ProcessRunner;
   readonly simlockHome: string;
   readonly uid?: number;
+  /** why: the daemon's pid is named in the staging directory of a new root. */
+  readonly pid?: number;
   readonly coreSimulatorRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
@@ -361,6 +363,7 @@ export class IosSimctlDriver implements Driver {
       path: configuredDeviceRoot(options),
       platform: "ios",
       ...(options.uid === undefined ? {} : { uid: options.uid }),
+      ...(options.pid === undefined ? {} : { pid: options.pid }),
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
 

@@ -144,6 +144,33 @@ describe("interrupted writes", () => {
   });
 });
 
+describe("interrupted root assembly", () => {
+  it("startup removes a staging directory named for a dead pid and keeps one named for a live pid", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-interrupted-staging-"));
+    temporaryDirectories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(directory);
+    const deadPid = 41003;
+    const livePid = 41004;
+    const processSupervisor = new FakeProcessSupervisor([livePid]);
+    const dead = join(directory, `.ios.${deadPid}.root-id.staging`);
+    const live = join(directory, `.ios.${livePid}.root-id.staging`);
+    for (const staging of [dead, live]) {
+      await filesystem.mkdirp(staging);
+      await filesystem.writeFileAtomic(join(staging, "marker.json"), "{}");
+    }
+
+    await start({
+      dataDirectory: directory,
+      filesystem,
+      processSupervisor,
+      statePath: join(directory, "state.json"),
+    });
+
+    expect([await filesystem.exists(dead), await filesystem.exists(live)]).toEqual([false, true]);
+  });
+});
+
 describe("the version a daemon reports", () => {
   it("is the version in package.json when the caller names none", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));

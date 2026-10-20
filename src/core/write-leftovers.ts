@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import type { Filesystem, Logger, ProcessSupervisor } from "../ports/index.js";
 
-const LEFTOVER_NAME =
+const TEMPORARY_FILE =
   /^\.[^/]+\.(\d+)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+const STAGING_DIRECTORY = /^\.[^/]+\.(\d+)\.[^./]+\.staging$/;
 
 export interface SweepWriteLeftoversOptions {
   readonly directories: readonly string[];
@@ -30,7 +31,7 @@ function abandonedWriterPid(
   name: string,
   processSupervisor: ProcessSupervisor,
 ): number | undefined {
-  const match = LEFTOVER_NAME.exec(name);
+  const match = TEMPORARY_FILE.exec(name) ?? STAGING_DIRECTORY.exec(name);
   if (match === null) return undefined;
   const pid = Number(match[1]);
   return processSupervisor.isAlive(pid) ? undefined : pid;
@@ -44,7 +45,11 @@ async function removeLeftover(
   const uid = process.getuid?.();
   try {
     const details = await filesystem.lstat(path);
-    if (details.kind !== "file" || (uid !== undefined && details.uid !== uid)) return;
+    if (
+      details.kind !== (path.endsWith(".staging") ? "directory" : "file") ||
+      (uid !== undefined && details.uid !== uid)
+    )
+      return;
     await filesystem.rm(path);
     logger.info("removed an interrupted write's leftover", { path, pid });
   } catch (error: unknown) {

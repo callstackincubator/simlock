@@ -464,7 +464,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   let stopping = false;
   const convergeStartup = async (): Promise<void> => {
     await sweepWriteLeftovers({
-      directories: [dataDirectory, dirname(statePath)],
+      directories: [dataDirectory, dirname(statePath), ...deviceRootParents(drivers)],
       filesystem,
       logger,
       processSupervisor,
@@ -1149,6 +1149,7 @@ async function discoverIosDriver(
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+      pid: process.pid,
     });
     logger.info("Discovered driver", { platform: "ios" });
     return { driver };
@@ -1197,6 +1198,7 @@ async function discoverAndroidDriver(
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+      pid: process.pid,
     });
     logger.info("Discovered driver", { platform: "android" });
     return { driver };
@@ -1459,4 +1461,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     }
     process.exitCode = 1;
   });
+}
+
+/** why: a root's staging directory sits beside it, so its parent is where leftovers are. */
+function deviceRootParents(drivers: readonly Driver[]): string[] {
+  return drivers.flatMap((driver) =>
+    "deviceRoot" in driver && typeof driver.deviceRoot === "string"
+      ? [dirname(driver.deviceRoot)]
+      : [],
+  );
 }

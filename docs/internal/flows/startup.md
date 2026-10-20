@@ -41,7 +41,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 
 Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop
 reaches its settle step, the steps after the read are skipped. Before step 16 it
-removes the `.<name>.<pid>.<uuid>.tmp` files of dead writers beside `state.json` and in
+removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside `state.json`, beside each device root and in
 the data directory (`sweepWriteLeftovers`).
 
 16. Settle open requests — `leasing.settleRequests`: every `open` request fails

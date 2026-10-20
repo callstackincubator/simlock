@@ -197,6 +197,8 @@ export interface AndroidDriverOptions {
   readonly scrcpyServerPath?: string | undefined;
   readonly tcpStreamConnector?: TcpStreamConnector | undefined;
   readonly uid?: number;
+  /** why: the daemon's pid is named in the staging directory of a new root. */
+  readonly pid?: number;
   readonly emulator?: AndroidEmulatorLaunchOptions | undefined;
 }
 
@@ -572,6 +574,7 @@ export class AndroidDriver implements Driver {
       path: configuredDeviceRoot(options),
       platform: "android",
       ...(options.uid === undefined ? {} : { uid: options.uid }),
+      ...(options.pid === undefined ? {} : { pid: options.pid }),
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
     const adbServer = new AdbServerSupervisor({
