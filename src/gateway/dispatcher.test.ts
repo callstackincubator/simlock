@@ -1,7 +1,11 @@
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createHmac } from "node:crypto";
+
+import { createAlerts } from "../alerts/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
+import type { AlertDestination } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
@@ -16,6 +20,7 @@ import {
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import { FakeWebhookPoster } from "../ports/testing.js";
 import type { TokenOperations } from "../auth/index.js";
 import { GatewayDispatcher } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
@@ -164,6 +169,8 @@ function harness(
     /** The gateway's own health; `running` by default. */
     readonly health?: "starting" | "running" | "failed";
     readonly load?: ConstructorParameters<typeof GatewayDispatcher>[0]["load"];
+    /** why: real alerts over a fake poster, wired as `testDestination`; none leaves the option out. */
+    readonly alertDestinations?: readonly AlertDestination[];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -202,6 +209,20 @@ function harness(
     routing: createRoutingPolicy("warm-then-free"),
     views: workers,
   });
+  const poster = new FakeWebhookPoster();
+  const alerts =
+    options.alertDestinations === undefined
+      ? undefined
+      : createAlerts({
+          clock,
+          destinations: options.alertDestinations,
+          eventBus,
+          idGenerator: { generate: () => "sample-id" },
+          logger: new JsonLinesLogger({ clock, module: "alerts", sink: logSink }),
+          poster,
+          version: "9.9.9",
+          workerLabel: () => undefined,
+        });
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
     clock,
@@ -220,10 +241,12 @@ function harness(
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
     logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
+    ...(alerts === undefined ? {} : { testDestination: (name) => alerts.test(name) }),
     ...(options.withoutTokens === true ? {} : { tokens }),
     workers,
   });
   return {
+    poster,
     clock,
     logSink,
     closedUplinkTokens,
@@ -871,6 +894,62 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ revoked: false });
 
     expect(closedUplinkTokens).toEqual([]);
+  });
+
+  describe("alerts.test", () => {
+    const generic: AlertDestination = {
+      name: "ops",
+      format: "generic",
+      url: "https://hooks.example.com/ops-token",
+      events: ["worker.connected"],
+      secret: "s3cr3t",
+    };
+    const slack: AlertDestination = {
+      name: "chat",
+      format: "slack",
+      url: "https://hooks.slack.example.com/chat-token",
+      events: ["worker.connected"],
+    };
+
+    it("alerts.test posts one sample to the named destination and answers its status", async () => {
+      const { dispatcher, poster } = harness({ alertDestinations: [generic, slack] });
+
+      await expect(
+        dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
+      ).resolves.toEqual({ destination: "ops", status: 200 });
+      await expect(
+        dispatcher.dispatch("alerts.test", { destination: "chat" }, session()),
+      ).resolves.toEqual({ destination: "chat", status: 200 });
+
+      expect(poster.requests).toHaveLength(2);
+      const [first, second] = poster.requests;
+      expect(first?.url).toBe("https://hooks.example.com/ops-token");
+      expect(JSON.parse(first?.body ?? "")).toEqual({
+        id: "evt_sample-id",
+        seq: 0,
+        timestamp: 1_000,
+        event: "alerts.test-sent",
+        payload: { destination: "ops" },
+        module: "alerts",
+      });
+      expect(first?.headers).toEqual({
+        "Content-Type": "application/json",
+        "User-Agent": "simlock/9.9.9",
+        "X-Simlock-Event": "alerts.test-sent",
+        "X-Simlock-Delivery": "evt_sample-id",
+        "X-Simlock-Signature": `sha256=${createHmac("sha256", "s3cr3t")
+          .update(first?.body ?? "")
+          .digest("hex")}`,
+      });
+      expect(second?.url).toBe("https://hooks.slack.example.com/chat-token");
+      expect(JSON.parse(second?.body ?? "")).toEqual({
+        text: "🔔 Test message from the simlock gateway to destination chat.",
+      });
+      expect(second?.headers).toEqual({
+        "Content-Type": "application/json",
+        "User-Agent": "simlock/9.9.9",
+      });
+    });
   });
 
   describe("worker.install-component (ADR 0010 §7)", () => {
