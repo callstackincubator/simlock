@@ -1,5 +1,7 @@
 import "./leases.css";
 
+import { useRef } from "react";
+
 import {
   ChoiceChips,
   type Column,
@@ -18,6 +20,7 @@ import { LeaseDrawer } from "./drawer";
 export function LeasesScreen() {
   const { choose, filter, paging, urlId, view } = useLeases();
   const search = useSearch();
+  const fromList = useOpenedFromList(urlId);
   return (
     <Page
       title="Leases"
@@ -37,7 +40,11 @@ export function LeasesScreen() {
         {(page) => <LeaseTable rows={page.rows} filter={filter} paging={paging} />}
       </Loaded>
       {urlId === undefined ? null : (
-        <LeaseDrawer key={urlId} id={urlId} onClose={() => navigate(`/leases${search}`)} />
+        <LeaseDrawer
+          key={urlId}
+          id={urlId}
+          onClose={() => closeDrawer(fromList, `/leases${search}`)}
+        />
       )}
     </Page>
   );
@@ -83,4 +90,20 @@ export function LeaseTable(props: {
       paging={paging}
     />
   );
+}
+
+// why: the screen stays mounted from the list to a lease, so a lease that appears while it is
+// mounted was opened from the list in this tab, and one present at the first render was loaded
+// directly.
+function useOpenedFromList(urlId: string | undefined): boolean {
+  const mountedOpen = useRef(urlId !== undefined);
+  if (urlId === undefined) mountedOpen.current = false;
+  return !mountedOpen.current;
+}
+
+// why: closing a drawer opened from the list is a step back, so Back does not reopen it; one loaded
+// directly has no list entry behind it, so closing replaces its address.
+function closeDrawer(fromList: boolean, list: string): void {
+  if (fromList) window.history.back();
+  else navigate(list, { replace: true });
 }
