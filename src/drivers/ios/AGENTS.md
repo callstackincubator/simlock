@@ -7,14 +7,15 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## Files
 
-| File                | Role                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------- |
-| `index.ts`          | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules               |
-| `physical.ts`       | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                          |
-| `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                                       |
-| `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                    |
-| `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done                     |
-| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone |
+| File                | Role                                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`          | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules                                                                                                   |
+| `device-data.ts`    | `iosDeviceDataTable`: owner `ios-device-data` version 1, table `ios_device_data` (`udid`, `name`, `device_type_id`, `runtime_id`, nullable `slim_signature`, `slim_mark_token`) |
+| `physical.ts`       | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                                                                                                              |
+| `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                                                                                                                           |
+| `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                                                                                                        |
+| `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done                                                                                                         |
+| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone                                                                                     |
 
 ## How it works
 
