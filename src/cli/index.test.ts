@@ -1485,6 +1485,47 @@ describe("CLI: auto-launch's failed start (#672)", () => {
   });
 });
 
+describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
+  it("status fails at once with the daemon's start error when the launched daemon exits with a fatal line", async () => {
+    const clock = new FakeClock(0);
+    const fatal = JSON.stringify({
+      message: "Daemon failed to start",
+      fields: { message: "Found /simlock/state.json, remove it" },
+    });
+    const launcher = new FakeDaemonLauncher(undefined, {
+      exit: { code: 1, signal: null },
+      output: `older line\n${fatal}\n`,
+    });
+    const output = outputCapture({
+      filesystem: new MemoryFilesystem(),
+      clock,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    });
+    let settled = false;
+    const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
+      settled = true;
+      return code;
+    });
+    for (let tick = 0; tick < 100 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+      await settle();
+    }
+    expect(settled, "status had not settled by 5 s").toBe(true);
+    expect(clock.now()).toBeLessThan(20_000);
+    expect(await exitCode).toBe(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: "The daemon could not start: Found /simlock/state.json, remove it",
+      },
+    });
+  });
+});
+
 describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)", () => {
   it.each([
     { closeAfter: "hello", rejectedCredential: false },

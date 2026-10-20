@@ -4,7 +4,21 @@ import { dirname } from "node:path";
 
 /** Starts the detached daemon owned by the operating system rather than the CLI. */
 export interface DaemonLauncher {
-  launch(): Promise<void>;
+  launch(): Promise<LaunchedDaemon>;
+}
+
+export interface DaemonExit {
+  readonly code: number | null;
+  readonly signal: string | null;
+}
+
+export interface LaunchedDaemon {
+  readonly exited: Promise<DaemonExit>;
+  readOutput(): Promise<string>;
+}
+
+export function startErrorFrom(_exit: DaemonExit, _output: string): string {
+  return "";
 }
 
 /**
@@ -35,7 +49,7 @@ export interface NodeDaemonLauncherOptions {
 export class NodeDaemonLauncher implements DaemonLauncher {
   constructor(private readonly options: NodeDaemonLauncherOptions) {}
 
-  async launch(): Promise<void> {
+  async launch(): Promise<LaunchedDaemon> {
     await mkdir(dirname(this.options.logPath), { recursive: true });
     // why: 0600 at creation, like the other files that hold secrets or state under the home:
     // this `open` is what first creates `daemon.log` for an auto-launched daemon -- the daemon's
@@ -58,16 +72,25 @@ export class NodeDaemonLauncher implements DaemonLauncher {
     } finally {
       await log.close();
     }
+    return { exited: new Promise<DaemonExit>(() => undefined), readOutput: async () => "" };
   }
 }
 
 export class FakeDaemonLauncher implements DaemonLauncher {
   launches = 0;
 
-  constructor(private readonly onLaunch: () => Promise<void> | void = () => undefined) {}
+  constructor(
+    private readonly onLaunch: () => Promise<void> | void = () => undefined,
+    private readonly result: { readonly exit?: DaemonExit; readonly output?: string } = {},
+  ) {}
 
-  async launch(): Promise<void> {
+  async launch(): Promise<LaunchedDaemon> {
     this.launches += 1;
     await this.onLaunch();
+    const { exit, output = "" } = this.result;
+    return {
+      exited: exit === undefined ? new Promise<DaemonExit>(() => undefined) : Promise.resolve(exit),
+      readOutput: async () => output,
+    };
   }
 }
