@@ -1,8 +1,15 @@
+import type { AlertEventName } from "../../../core/index.js";
 import type { AlertFormatDefinition } from "../types.js";
+import { SLACK_MESSAGES } from "./messages.js";
 
 export const slackFormat: AlertFormatDefinition = {
   name: "slack",
-  build() {
-    return { headers: {}, body: "" };
+  build({ envelope, version }) {
+    const payload = envelope.payload as Record<string, unknown>;
+    const message = SLACK_MESSAGES[envelope.event as AlertEventName];
+    return {
+      body: JSON.stringify({ text: message(payload, String(payload.workerId)) }),
+      headers: { "Content-Type": "application/json", "User-Agent": `simlock/${version}` },
+    };
   },
 };

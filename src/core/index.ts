@@ -2,6 +2,7 @@ export {
   ALERT_EVENTS,
   ALERT_FORMATS,
   type AlertDestination,
+  type AlertEventName,
   type AlertFormatName,
   type Config,
   type ConfigOverrides,
