@@ -1,5 +1,12 @@
 import { defined } from "./defined";
-import { type DeviceSlot, platformSlots, slotsLabel, workerHealth, workerSlots } from "./fleet";
+import {
+  type DeviceSlot,
+  hasIssue,
+  platformSlots,
+  slotsLabel,
+  workerHealth,
+  workerSlots,
+} from "./fleet";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { holderOf, leasePath, type TokenRecord } from "./leases";
@@ -100,7 +107,7 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
 }
 
 function matches(worker: WorkerView, filter: WorkerFilter): boolean {
-  if (filter === "issues") return workerHealth(worker).tone !== "ok";
+  if (filter === "issues") return hasIssue(worker);
   if (filter === "busy") return (useOf(worker)?.percent ?? 0) >= BUSY_PERCENT;
   return true;
 }
