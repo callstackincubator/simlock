@@ -40,6 +40,7 @@ export class DestinationQueue {
     this.destination = options.destination;
   }
 
+  // fallow-ignore-next-line unused-class-member -- called from createAlerts on array elements.
   enqueue(envelope: EventEnvelope): void {
     if (this.#stopped) return;
     if (this.#waiting.length >= MAX_WAITING) {
@@ -50,6 +51,7 @@ export class DestinationQueue {
     this.#pump();
   }
 
+  // fallow-ignore-next-line unused-class-member -- called from createAlerts on array elements.
   stop(): number {
     this.#stopped = true;
     const discarded = this.#waiting.length + (this.#current === undefined ? 0 : 1);
