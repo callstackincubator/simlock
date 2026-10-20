@@ -425,7 +425,9 @@ describe("loadConfig", () => {
       expect((await load()).warmPool.targets).toEqual([]);
       for (const [cpuCount, boots] of [
         [2, 1],
+        [6, 1],
         [8, 2],
+        [10, 2],
         [12, 3],
       ] as const) {
         expect(

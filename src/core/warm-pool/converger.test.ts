@@ -1060,6 +1060,8 @@ describe("warm pool targets", () => {
       devices: readonly VirtualDevice[],
       first: readonly WaitingDemand[],
       provisioning?: Promise<void>,
+      registers = false,
+      owner?: string,
     ) => {
       let waiting: readonly WaitingDemand[] = first;
       const gate = held();
@@ -1071,9 +1073,14 @@ describe("warm pool targets", () => {
         waiting: () => waiting,
       });
       const counts = () => [rig.bootCalls.length, rig.provisionCalls.length];
+      if (owner !== undefined) rig.claims.tryClaim("shut-x", "boot", owner);
       void rig.pool.pass();
       await flush();
       const started = counts();
+      if (registers) {
+        gate.finish();
+        await flush();
+      }
       void rig.pool.pass();
       await flush();
       const again = counts();
@@ -1086,11 +1093,20 @@ describe("warm pool targets", () => {
     const unregistered = await run([], [head, x2]);
     expect(unregistered).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
 
-    const registered = await run([], [head, x2], new Promise<void>(() => undefined));
+    const registered = await run([], [head, x2], new Promise<void>(() => undefined), true);
     expect(registered).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
 
     const bootAndCreation = await run([device("shut-x", "shutdown", 20 * minute)], [head, x2, x3]);
     expect(bootAndCreation).toEqual({ again: [1, 1], later: [1, 2], started: [1, 1] });
+
+    const owned = await run(
+      [device("shut-x", "shutdown", 20 * minute)],
+      [head, x2],
+      undefined,
+      false,
+      "an-agent",
+    );
+    expect(owned).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
   });
 
   it("does not return from a pass for a creation it started, and settle waits for it", async () => {

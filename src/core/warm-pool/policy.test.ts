@@ -205,6 +205,9 @@ describe("warm pool policy", () => {
       creation("iPhone 17"),
       creation("iPhone 16"),
     ]);
+    expect(evaluate(view([busy], { maxConcurrentBoots: 2, waiting: three }))).toEqual([
+      creation("iPhone 17"),
+    ]);
     expect(
       evaluate(
         view([busy], {
