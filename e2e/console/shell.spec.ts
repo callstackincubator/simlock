@@ -138,6 +138,28 @@ test.describe("the shell", () => {
     await expect(nav.getByRole("group").getByRole("link", { name: "Attention" })).toHaveCount(0);
   });
 
+  test("/fleet, /queue and /activity open the pages titled Fleet, Queue and Activity; /workers, /waiting and /events show Not found", async ({
+    daemon,
+    page,
+  }) => {
+    const heading = page.getByRole("heading", { level: 1 });
+    await page.goto("/");
+    await signIn(page, daemon.tokens.operator);
+    await expect(heading).toHaveText("Overview");
+    for (const [path, title] of [
+      ["/fleet", "Fleet"],
+      ["/queue", "Queue"],
+      ["/activity", "Activity"],
+    ] as const) {
+      await page.goto(path);
+      await expect(heading).toHaveText(title);
+    }
+    for (const path of ["/workers", "/waiting", "/events"]) {
+      await page.goto(path);
+      await expect(heading).toHaveText("Page not found");
+    }
+  });
+
   test("the sidebar collapses to icons on request, keeps every link's name, and stays collapsed on every page and after a reload", async ({
     daemon,
     page,
