@@ -251,18 +251,21 @@ describe("warm pool policy", () => {
     const two = [waiter("iPhone 15", true), waiter("iPhone 15"), waiter("iPhone 17")];
     const base = { maxConcurrentBoots: 5, limit: 10 };
 
-    expect(evaluate(view([ready("one")], { ...base, waiting: two.slice(1) }))).toEqual([
+    expect(evaluate(view([ready("one")], { ...base, waiting: two }))).toEqual([
       creation("iPhone 17"),
     ]);
     expect(
-      evaluate(view([ready("one"), ready("two")], { ...base, waiting: two.slice(1) })),
+      evaluate(
+        view([ready("one")], { ...base, waiting: [waiter("iPhone 15"), waiter("iPhone 17")] }),
+      ),
     ).toEqual([]);
+    expect(evaluate(view([ready("one"), ready("two")], { ...base, waiting: two }))).toEqual([]);
     expect(
       evaluate(
         view([], {
           ...base,
           onItsWay: [{ spec: spec("iPhone 15") }],
-          waiting: two.slice(1),
+          waiting: two,
         }),
       ),
     ).toEqual([creation("iPhone 17")]);
@@ -271,7 +274,7 @@ describe("warm pool policy", () => {
         view([], {
           ...base,
           onItsWay: [{ spec: spec("iPhone 15") }, { deviceId: "other", spec: spec("iPhone 17") }],
-          waiting: two.slice(1),
+          waiting: two,
         }),
       ),
     ).toEqual([]);

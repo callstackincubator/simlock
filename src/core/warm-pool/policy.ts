@@ -302,18 +302,23 @@ function boots(
   };
   const roomFor = (spec: VirtualSpec): boolean => room.global >= 1 && room[spec.platform] >= 1;
 
-  view.waiting.forEach((demand, position) => {
+  let atHead = true;
+  for (const demand of view.waiting) {
+    const head: boolean = atHead;
     if (demand.inFlight) {
+      atHead = false;
       hold(demand.platform);
-      return;
+      continue;
     }
+    const ready = running.find((candidate) => !matched.has(candidate) && serves(candidate, demand));
     const match =
-      running.find((candidate) => !matched.has(candidate) && serves(candidate, demand)) ??
-      view.onItsWay.find((entry) => !matched.has(entry) && servesSpec(entry.spec, demand));
+      ready ?? view.onItsWay.find((entry) => !matched.has(entry) && servesSpec(entry.spec, demand));
     if (match !== undefined) {
       matched.add(match);
-      return;
+      atHead = head && ready !== undefined;
+      continue;
     }
+    atHead = false;
     const device = open()
       ? bootable.find(
           (candidate) =>
@@ -328,10 +333,10 @@ function boots(
       claim(room, device);
       started += 1;
       proposals.push({ action: "boot", deviceId: device.id, reason: "waiting-request" });
-      return;
+      continue;
     }
     const creatable = view.admit.create(demand.spec) === undefined && roomFor(demand.spec);
-    if (position > 0 && creatable && open() && view.retry.mayAttempt(demand.spec, view.now)) {
+    if (!head && creatable && open() && view.retry.mayAttempt(demand.spec, view.now)) {
       started += 1;
       proposals.push({
         action: "provision",
@@ -339,10 +344,10 @@ function boots(
         spec: demand.spec,
         target: demand.spec,
       });
-    } else if (position === 0 && creatable) started += 1;
+    } else if (head && creatable) started += 1;
     else stuck.add(demand.platform);
     hold(demand.platform);
-  });
+  }
 
   const recent = bootable
     .filter(
