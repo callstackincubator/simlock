@@ -44,9 +44,17 @@ function eventLog(
 function openView(first: Replay = []) {
   const live = connect();
   const replays: ApiPath[] = [];
+  const olderReads: ApiPath[] = [];
   let replay: Replay = first;
   live.daemon.reads = async (path) => {
     if (!path.startsWith("/v1/events?")) return { body: {}, date: null };
+    if (!path.includes("since=")) {
+      olderReads.push(path);
+      return {
+        body: typeof replay === "function" ? await replay(path) : { events: [] },
+        date: null,
+      };
+    }
     replays.push(path);
     const body = typeof replay === "function" ? await replay(path) : { events: replay };
     return { body, date: null } satisfies ApiResponse<unknown>;
@@ -58,6 +66,7 @@ function openView(first: Replay = []) {
   return {
     ...live,
     feed,
+    olderReads,
     replays,
     stop,
     replayWith(next: Replay) {
@@ -473,5 +482,30 @@ describe("the event feed's loads", () => {
 
     expect(view.replays.slice(3)).toEqual(["/v1/events?since=5s"]);
     expect(view.shown()).toEqual([`1@${T0}`]);
+  });
+
+  it("an event the stream brings while an older page loads shows once, at the top, and a second signal before the answer asks for nothing", async () => {
+    const older = envelope(1, T0 - 10_000);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const view = openView((path) =>
+      path.includes("before=")
+        ? gate.then(() => ({ events: [older] }))
+        : Promise.resolve({ events: [envelope(5, T0)] }),
+    );
+    await settle();
+
+    view.feed.loadOlder();
+    view.feed.loadOlder();
+    view.daemon.openStream()?.send(frame(envelope(6, T0 + 1_000)));
+    view.daemon.openStream()?.send(frame(envelope(6, T0 + 1_000)));
+    await settle();
+    release();
+    await settle();
+
+    expect(view.shown()).toEqual([`6@${T0 + 1_000}`, `5@${T0}`, `1@${T0 - 10_000}`]);
+    expect(view.olderReads).toEqual([`/v1/events?before=evt_5_${T0}&limit=100`]);
   });
 });
