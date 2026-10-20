@@ -236,12 +236,6 @@ interface DeviceState {
    */
   port: number | undefined;
   snapshotExpected: boolean;
-  /**
-   * why: Set when the last readiness wait found another AVD's emulator answering on this device's
-   * serial, cleared when one finds the device's own: while set, nothing is sent to the serial,
-   * because whoever answers it is not this device.
-   */
-  serialHeldByAnother?: boolean;
 }
 
 interface SystemImage {
@@ -1868,19 +1862,17 @@ export class AndroidDriver implements Driver {
    * port is already held exits without answering, so the one that answers is whoever holds
    * the port -- another device, another Simlock instance, the user's own emulator. Refusing
    * here, before a mark or a baseline capture touches it, is what keeps a port collision from
-   * readying a device at another device's address; `serialHeldByAnother` then keeps the
-   * shutdown and destroy that follow a failed boot from sending it `emu kill`. The reported
+   * readying a device at another device's address; `#serialIsOwn` then keeps the
+   * shutdown and destroy that follow a failed boot from sending it `emu kill`, by asking the
+   * serial again each time. The reported
    * path is compared whole, and through `realpath` when the two spellings differ (an ancestor
    * symlink such as macOS's `/var` -> `/private/var`); anything unreadable fails closed.
    */
   async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
-    const state = this.#stateFor(data);
-    state.serialHeldByAnother = true;
     const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
     const result = await this.#runOrThrow(this.#sdk.adb, ["-s", data.serial, "emu", "avd", "path"]);
     const answered = answeredAvdPath(result.stdout);
     if (await this.#isOwnAvdPath(answered, expected)) {
-      state.serialHeldByAnother = false;
       return;
     }
     throw new DriverCrashError(
