@@ -1,3 +1,5 @@
+import { EVENT_ID_PATTERN } from "./schemas.js";
+
 export const EVENTS_PAGE_MAX = 500;
 export const EVENTS_PAGE_DEFAULT = 100;
 
@@ -11,11 +13,32 @@ export type EventsPageAnswer =
   | { readonly page: { readonly beforeId?: string; readonly limit?: number } }
   | { readonly refused: string };
 
+const LIMIT_DIGITS = /^[1-9]\d{0,2}$/;
+
 export function eventsPageQuery(ask: EventsPageAsk): EventsPageAnswer {
+  if (ask.before !== undefined && !EVENT_ID_PATTERN.test(ask.before)) {
+    return { refused: "before must be an event id" };
+  }
+  const limit = ask.limit === undefined ? undefined : parseLimit(ask.limit);
+  if (ask.limit !== undefined && limit === undefined) {
+    return { refused: "limit must be a whole number from 1 to 500" };
+  }
+  if (ask.since !== undefined && ask.before !== undefined) {
+    return { refused: "before and since cannot be used together" };
+  }
+  if (ask.since !== undefined && limit !== undefined) {
+    return { refused: "limit and since cannot be used together" };
+  }
   return {
     page: {
       ...(ask.before === undefined ? {} : { beforeId: ask.before }),
-      ...(ask.limit === undefined ? {} : { limit: Number(ask.limit) }),
+      ...(limit === undefined ? {} : { limit }),
     },
   };
+}
+
+function parseLimit(value: string): number | undefined {
+  if (!LIMIT_DIGITS.test(value)) return undefined;
+  const limit = Number(value);
+  return limit <= EVENTS_PAGE_MAX ? limit : undefined;
 }
