@@ -569,9 +569,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("a worker's host tab shows its facts and catalog, and its warm pool tab the installs in progress", async ({
-    page,
-  }) => {
+  test("each tab shows its content, sets ?tab=, and survives a reload", async ({ page }) => {
     const host = await startDaemon("worker", {
       driverScript: {
         ios: {
@@ -615,9 +613,29 @@ test.describe("the workers page", () => {
       await expect(fact(main, "iOS")).toContainText(/Runtimes: 18\.4.*, 26\.0/);
       await expect(fact(main, "agent-device")).toContainText(/available|off|unavailable/);
 
+      await expect(page).toHaveURL(/\?tab=host$/);
+
       await openTab(page, "Warm pool");
+      await expect(page).toHaveURL(/\?tab=warm-pool$/);
       const installs = page.getByRole("region", { name: "Installs in progress", exact: true });
       await expect(installs).toContainText(/iOS 19\.0\s*downloading for \d+ s, 1 waiter/);
+
+      await openTab(page, "Devices");
+      await expect(page).toHaveURL(/\?tab=devices$/);
+      await expect(page.getByRole("region", { name: "Devices", exact: true })).toBeVisible();
+
+      await openTab(page, "Events");
+      await expect(page).toHaveURL(/\?tab=events$/);
+
+      for (const tab of ["Events", "Host", "Warm pool", "Devices"]) {
+        await openTab(page, tab);
+        await page.reload();
+        await expect(page.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+      }
+      await page.goto(
+        new URL(`/fleet/${encodeURIComponent(view?.id ?? "")}?tab=host`, host.url).href,
+      );
+      await expect(fact(main, "Worker id")).toHaveText(view?.id ?? "");
     } finally {
       await host.dispose();
     }
