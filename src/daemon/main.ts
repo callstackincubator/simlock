@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
@@ -28,6 +28,7 @@ import {
   Registry,
   Nuke,
   SerializedDecision,
+  sweepWriteLeftovers,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
 import {
@@ -462,6 +463,12 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // on a daemon whose disposal has already run, and nothing would cancel them.
   let stopping = false;
   const convergeStartup = async (): Promise<void> => {
+    await sweepWriteLeftovers({
+      directories: [dataDirectory, dirname(statePath)],
+      filesystem,
+      logger,
+      processSupervisor,
+    });
     await leasing.settleRequests();
     const read = await core.readStartup();
     const steps = [
