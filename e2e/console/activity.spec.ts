@@ -329,6 +329,7 @@ test.describe("the Activity page", () => {
       await expect(drawer).toHaveCount(0);
       expect(new URL(page.url()).pathname).toBe("/activity");
       expect(await page.evaluate(() => window.history.length)).toBe(entries);
+      await expect(page.locator("main h1")).toBeFocused();
     } finally {
       await host.dispose();
     }
