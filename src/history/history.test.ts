@@ -438,6 +438,37 @@ describe("createEventHistory", () => {
     await history.stop();
   });
 
+  it("replayPage with limit alone returns the newest n, oldest first, and the newest n held in memory when the history is unreadable or its read throws", async () => {
+    const served = await rig({ capacity: 3 });
+    const history = served.history();
+    await history.start();
+    const rows = [1, 2, 3, 4].map((n) => relayed(served.bus, `evt_row${n}`, NOW + n));
+    const fromFile = await history.replayPage({ limit: 3 });
+    await history.stop();
+
+    const unread = await rig({ capacity: 3 });
+    const unreadable = [1, 2, 3].map((n) => relayed(unread.bus, `evt_row${n}`, NOW + n));
+    const fromUnstarted = await unread.history().replayPage({ limit: 2 });
+
+    const failing = await rig({ capacity: 2 });
+    const sqlite = new ProbeSqliteOpener({
+      fault: (call) => {
+        if (call.kind === "prepare" && /DESC/i.test(call.sql)) throw new Error("read failed");
+      },
+    });
+    const throwing = failing.history({ sqlite });
+    await throwing.start();
+    relayed(failing.bus, "evt_one", NOW + 1);
+    const held = [2, 3].map((n) => relayed(failing.bus, `evt_held${n}`, NOW + n));
+    const fromThrowing = await throwing.replayPage({ limit: 5 });
+    await throwing.stop();
+
+    expect(fromFile).toEqual({ events: rows.slice(1), kind: "events" });
+    expect(fromUnstarted).toEqual({ events: unreadable.slice(1), kind: "events" });
+    expect(fromThrowing).toEqual({ events: held, kind: "events" });
+    expect(levelRecords(failing, "warn")).toBe(1);
+  });
+
   it("opens a new file with incremental auto_vacuum, WAL, synchronous NORMAL and a 5 s busy timeout", async () => {
     const rigged = await rig();
     const sqlite = new ProbeSqliteOpener();
