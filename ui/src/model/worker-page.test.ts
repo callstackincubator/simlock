@@ -643,3 +643,16 @@ describe("a worker's warm pool tab", () => {
     ]);
   });
 });
+
+describe("a worker page's tab", () => {
+  const tabOf = (search: string, view: WorkerView = worker()) =>
+    workerPageOf({ now: NOW, search, tokens: [], worker: view }).tab;
+
+  it("is the one ?tab= names, and Devices for a value the page does not offer", () => {
+    expect(tabOf("?tab=host")).toBe("host");
+    expect(tabOf("?tab=events&page=2")).toBe("events");
+    expect(tabOf("")).toBe("devices");
+    expect(tabOf("?tab=overview")).toBe("devices");
+    expect(tabOf("?tab=")).toBe("devices");
+  });
+});
