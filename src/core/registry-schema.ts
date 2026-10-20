@@ -47,8 +47,8 @@ CREATE TABLE leases (
   requester_id TEXT NOT NULL,
   owner_id TEXT NOT NULL,
   granted_at INTEGER NOT NULL,
-  ttl_ms INTEGER NOT NULL,
-  ttl_deadline INTEGER NOT NULL,
+  ttl_ms REAL NOT NULL,
+  ttl_deadline REAL NOT NULL,
   last_renewed_at INTEGER NOT NULL,
   id_chosen_by_requester INTEGER NOT NULL
 ) STRICT;
@@ -81,8 +81,8 @@ CREATE TABLE lease_grants (
   requester_id TEXT NOT NULL,
   owner_id TEXT NOT NULL,
   granted_at INTEGER NOT NULL,
-  ttl_ms INTEGER NOT NULL,
-  ttl_deadline INTEGER NOT NULL,
+  ttl_ms REAL NOT NULL,
+  ttl_deadline REAL NOT NULL,
   last_renewed_at INTEGER NOT NULL,
   id_chosen_by_requester INTEGER NOT NULL,
   estimated_provision_ms INTEGER NOT NULL,

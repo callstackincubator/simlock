@@ -2521,6 +2521,24 @@ describe("Registry: state.db rows", () => {
     ]);
   });
 
+  it("a renew with a fractional ttl is stored and read back unchanged", async () => {
+    const { open, readyDevice, registry } = await world();
+    const device = await readyDevice("fk-1");
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 5_000.5,
+      ttlMs: 4_000.5,
+    });
+
+    const renewed = await registry.renewLease(lease.id, 2_500.5, 1_500.5);
+
+    expect(renewed).toMatchObject({ ttlDeadline: 2_500.5, ttlMs: 1_500.5 });
+    const reloaded = await open({ generate: () => "unused" });
+    expect(reloaded.snapshot.leases).toEqual([renewed]);
+  });
+
   it("a grant writes the lease, the device's move to leased and the request's granted result in one transaction", async () => {
     const { clock, state } = await world();
     const timing = {
