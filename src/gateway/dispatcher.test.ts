@@ -843,6 +843,24 @@ describe("GatewayDispatcher", () => {
     expect(asked).toEqual([{ sinceTs: 10 }]);
   });
 
+  it("events.replay with beforeId returns a worker's relayed event with payload.workerId", async () => {
+    const rig = await usageRig({ fleet: true });
+    rig.relay("w-1", "daemon.stopping", { reason: "from-worker" });
+    rig.emit("daemon.stopping", { reason: "local" });
+    const newest = rig.bus.replay().at(-1) as { id: string };
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: newest.id, limit: 5 },
+      session(),
+    );
+
+    expect(page).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ workerId: "w-1" }) }),
+    ]);
+  });
+
   it.each([
     {
       health: "running" as const,
