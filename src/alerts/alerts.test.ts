@@ -39,6 +39,7 @@ class Harness {
   readonly eventBus = new EventBus(this.clock);
   readonly poster = new FakeWebhookPoster();
   readonly sink = new MemoryLogSink();
+  readonly labels = new Map<string, string>();
   alerts: Alerts;
 
   constructor(destinations: AlertDestination[] = [destination()]) {
@@ -51,6 +52,7 @@ class Harness {
         "alerts",
       ),
       version: "9.9.9",
+      workerLabel: (id) => this.labels.get(id),
     });
   }
 
@@ -231,6 +233,20 @@ describe("alerts", () => {
     expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
       rows.map(([, , text]) => text),
     );
+  });
+
+  it("names the worker by the label workerLabel answers, and by the id when it answers undefined", async () => {
+    const h = harness([slackDestination({ events: ["worker.drain-started"] })]);
+    h.labels.set("wrk_1", "build-mac-3");
+    h.emit("worker.drain-started", { workerId: "wrk_1" });
+    h.emit("worker.drain-started", { workerId: "wrk_2" });
+    await settle();
+    await h.advance(1_000);
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual([
+      "⏸ Worker build-mac-3 is drained: it takes no new leases.",
+      "⏸ Worker wrk_2 is drained: it takes no new leases.",
+    ]);
   });
 
   it("posts nothing for an event the destination did not list", async () => {
@@ -596,6 +612,7 @@ describe("alerts", () => {
       clock: h.clock,
       logger: new JsonLinesLogger({ clock: h.clock, level: "debug", sink: h.sink }),
       version: "9.9.9",
+      workerLabel: () => undefined,
     });
     h.emit("worker.connected", connected());
 

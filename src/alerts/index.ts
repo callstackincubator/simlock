@@ -15,6 +15,7 @@ export function createAlerts(options: {
   clock: Clock;
   logger: Logger;
   version: string;
+  workerLabel(workerId: string): string | undefined;
 }): Alerts {
   const { destinations, eventBus, poster, clock, logger, version } = options;
   const queues = destinations.map(

@@ -970,6 +970,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       logger: logger.child("alerts"),
       poster: options.webhookPoster ?? new FetchWebhookPoster(),
       version: options.version,
+      workerLabel: () => undefined,
     });
   }
 
