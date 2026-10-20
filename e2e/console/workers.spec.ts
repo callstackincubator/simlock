@@ -705,6 +705,43 @@ test.describe("the workers page", () => {
     }
   });
 
+  test("closing the device drawer returns to /fleet/<id>?tab=devices with focus on the row", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await lease(host, "console-e2e");
+      const [view] = await workerList(host);
+      const workerId = found(view, "the host's worker").id;
+      const device = found((await status(host)).devices[0], "the host's device");
+
+      await openWorkerPage(page, host);
+      await openTab(page, "Devices");
+      const link = page
+        .getByRole("region", { name: "Devices", exact: true })
+        .getByRole("row")
+        .filter({ hasText: device.id })
+        .getByRole("link", { name: device.spec.model });
+      const drawer = page.getByRole("dialog");
+
+      for (const close of [
+        () => page.getByRole("button", { name: "Close" }).click(),
+        () => page.keyboard.press("Escape"),
+      ]) {
+        await link.click();
+        await expect(drawer).toBeVisible();
+        await close();
+        await expect(drawer).toBeHidden();
+        await expect(page).toHaveURL(
+          new RegExp(`/fleet/${encodeURIComponent(workerId)}\\?tab=devices$`),
+        );
+        await expect(link).toBeFocused();
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("each tab shows its content, sets ?tab=, and survives a reload", async ({ page }) => {
     const host = await startDaemon("worker", {
       driverScript: {
