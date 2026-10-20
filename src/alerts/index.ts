@@ -41,7 +41,9 @@ export function createAlerts(options: {
 
   return {
     test(name) {
-      const destination = destinations.find((each) => each.name === name) as AlertDestination;
+      const destination = destinations.find((each) => each.name === name);
+      if (destination === undefined)
+        return Promise.resolve({ ok: false, reason: "unknown-destination" });
       return sendTest({ destination, poster, clock, idGenerator, version, workerLabel });
     },
     stop() {

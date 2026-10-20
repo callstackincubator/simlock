@@ -130,6 +130,9 @@ export interface ErrorDetailsMap {
    */
   WORKER_UNREACHABLE: { readonly workerId: string };
 
+  /** why: `alerts.test` naming a destination the gateway's config does not list, or a gateway with none. */
+  UNKNOWN_ALERT_DESTINATION: { readonly destination: string };
+
   /**
    * why: `alerts.test`: the receiver did not take the sample. `status` is a non-2xx answer; `error` is
    * `timeout`, a network code such as `ECONNREFUSED`, or `network-error`. Never the error's own
@@ -194,6 +197,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNKNOWN_WORKER: true,
   WORKER_UNREACHABLE: true,
   ALERT_SEND_FAILED: true,
+  UNKNOWN_ALERT_DESTINATION: true,
   UNKNOWN_DAEMON_ERROR: true,
 };
 
@@ -404,6 +408,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "transport",
     cliExitCode: 1,
     httpStatus: 503,
+  },
+  // why: exit 12 beside `UNKNOWN_WORKER`: what you named does not exist.
+  UNKNOWN_ALERT_DESTINATION: {
+    code: "UNKNOWN_ALERT_DESTINATION",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 404,
   },
   // why: 502, the gateway worked and the receiver it called did not take the sample.
   ALERT_SEND_FAILED: {

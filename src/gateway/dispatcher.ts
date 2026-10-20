@@ -86,7 +86,7 @@ export type AlertTestOutcome =
   | { readonly ok: true; readonly status: number }
   | {
       readonly ok: false;
-      readonly reason: "status" | "unreachable" | "timeout";
+      readonly reason: "unknown-destination" | "status" | "unreachable" | "timeout";
       readonly status?: number;
       readonly error?: string;
     };
@@ -144,6 +144,47 @@ export interface GatewayDispatcherOptions {
     FleetLeaseIndex,
     "project" | "all" | "isGatewayRequester" | "requesterPrefix"
   >;
+}
+
+const UNKNOWN_DESTINATION: AlertTestOutcome = { ok: false, reason: "unknown-destination" };
+
+function alertTestError(
+  destination: string,
+  result: Extract<AlertTestOutcome, { ok: false }>,
+): DispatchError {
+  switch (result.reason) {
+    case "unknown-destination":
+      return new DispatchError(
+        "UNKNOWN_ALERT_DESTINATION",
+        `No alert destination named "${destination}". Check gateway.alerts.destinations in the gateway's config.`,
+        { destination },
+      );
+    case "status":
+      return new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} answered HTTP ${result.status}`,
+        {
+          destination,
+          status: result.status,
+        },
+      );
+    case "timeout":
+      return new DispatchError("ALERT_SEND_FAILED", `${destination} did not answer within 10 s`, {
+        destination,
+        error: "timeout",
+      });
+    case "unreachable": {
+      const error = result.error ?? "network-error";
+      return new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} could not be reached: ${error}`,
+        {
+          destination,
+          error,
+        },
+      );
+    }
+  }
 }
 
 export class GatewayDispatcher {
@@ -342,29 +383,10 @@ export class GatewayDispatcher {
   };
 
   #alertsTest: Handler<"alerts.test"> = async (input) => {
-    const result = await (
-      this.options.testDestination as NonNullable<GatewayDispatcherOptions["testDestination"]>
-    )(input.destination);
-    if (result.ok) return { destination: input.destination, status: result.status };
     const { destination } = input;
-    if (result.reason === "status") {
-      throw new DispatchError(
-        "ALERT_SEND_FAILED",
-        `${destination} answered HTTP ${result.status}`,
-        {
-          destination,
-          status: result.status,
-        },
-      );
-    }
-    const error = result.reason === "timeout" ? "timeout" : (result.error ?? "network-error");
-    throw new DispatchError(
-      "ALERT_SEND_FAILED",
-      result.reason === "timeout"
-        ? `${destination} did not answer within 10 s`
-        : `${destination} could not be reached: ${error}`,
-      { destination, error },
-    );
+    const result = (await this.options.testDestination?.(destination)) ?? UNKNOWN_DESTINATION;
+    if (result.ok) return { destination, status: result.status };
+    throw alertTestError(destination, result);
   };
 
   #workerRemove: Handler<"worker.remove"> = async (input) => ({

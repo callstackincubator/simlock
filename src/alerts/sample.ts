@@ -9,7 +9,7 @@ export type AlertTestResult =
   | { readonly ok: true; readonly status: number }
   | {
       readonly ok: false;
-      readonly reason: "status" | "unreachable" | "timeout";
+      readonly reason: "unknown-destination" | "status" | "unreachable" | "timeout";
       readonly status?: number;
       readonly error?: string;
     };
