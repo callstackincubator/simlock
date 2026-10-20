@@ -481,6 +481,7 @@ export class WarmPool {
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
       now: this.options.clock.now(),
+      onItsWay: [],
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
       spared: this.#spared,

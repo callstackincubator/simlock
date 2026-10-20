@@ -148,6 +148,7 @@ function view(
     targets?: readonly ResolvedTarget[];
     spared?: readonly ResolvedTarget[];
     inFlight?: readonly VirtualSpec[];
+    onItsWay?: WarmPolicyView["onItsWay"];
     maxConcurrentBoots?: number;
     blocked?: readonly VirtualSpec[];
     refuseProvision?: CapacityRefusalReason;
@@ -160,6 +161,7 @@ function view(
       create: () => options.refuseProvision,
     },
     inFlight: options.inFlight ?? [],
+    onItsWay: options.onItsWay ?? [],
     retry: {
       mayAttempt: (target) => !(options.blocked ?? []).some((held) => sameSpec(held, target)),
     },
@@ -234,6 +236,53 @@ describe("warm pool policy", () => {
     expect(
       evaluate(view([shutDown], { inFlight: [spec("iPad Pro")], waiting: [waiter("iPhone 15")] })),
     ).toEqual([]);
+  });
+
+  it("matches each device to one waiter in queue order and proposes nothing for a waiter an idle ready device or an onItsWay entry serves", () => {
+    const creation = (model: string) => ({
+      action: "provision",
+      reason: "waiting-request",
+      spec: spec(model),
+      target: spec(model),
+    });
+    const waiter = (model: string, inFlight = false) => classDemand("full", "ios", inFlight, model);
+    const ready = (id: string, options: Parameters<typeof device>[2] = {}) =>
+      device(id, "ready", { endedAgo: 90 * minute, ...options });
+    const two = [waiter("iPhone 15", true), waiter("iPhone 15"), waiter("iPhone 17")];
+    const base = { maxConcurrentBoots: 5, limit: 10 };
+
+    expect(evaluate(view([ready("one")], { ...base, waiting: two.slice(1) }))).toEqual([
+      creation("iPhone 17"),
+    ]);
+    expect(
+      evaluate(view([ready("one"), ready("two")], { ...base, waiting: two.slice(1) })),
+    ).toEqual([]);
+    expect(
+      evaluate(
+        view([], {
+          ...base,
+          onItsWay: [{ spec: spec("iPhone 15") }],
+          waiting: two.slice(1),
+        }),
+      ),
+    ).toEqual([creation("iPhone 17")]);
+    expect(
+      evaluate(
+        view([], {
+          ...base,
+          onItsWay: [{ spec: spec("iPhone 15") }, { deviceId: "other", spec: spec("iPhone 17") }],
+          waiting: two.slice(1),
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      evaluate(
+        view([ready("slim", { spec: spec("iPhone 15", { mode: "slim" }) })], {
+          ...base,
+          waiting: [waiter("iPhone 15", true), waiter("iPhone 17")],
+        }),
+      ),
+    ).toEqual([creation("iPhone 17")]);
   });
 
   it("proposes a boot, not a shutdown, for a released iPhone 15 that serves a waiting class request at the running cap", () => {

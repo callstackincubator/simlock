@@ -105,6 +105,7 @@ export interface WarmPolicyView {
   readonly spared: readonly ResolvedTarget[];
   /** The spec of each target boot or creation still running: they count toward the boot cap. */
   readonly inFlight: readonly VirtualSpec[];
+  readonly onItsWay: readonly { readonly spec: VirtualSpec; readonly deviceId?: string }[];
   /** The failure schedule: whether a spec may be tried now. */
   readonly retry: { mayAttempt(spec: VirtualSpec, now: number): boolean };
   /** What the capacity strategy refuses besides the running slots `capacity` already totals. */
