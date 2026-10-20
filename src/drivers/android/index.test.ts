@@ -541,7 +541,10 @@ describe("AndroidDriver", () => {
    */
   it("leaves no timer armed once each shutdown has seen its emulator exit", async () => {
     const harness = await provisionedHarness({
-      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+      afterwards: [
+        avdPathExpectation("emulator-5586"),
+        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      ],
     });
     const ready = await harness.driver.makeReady(harness.device);
     const launch = harness.runner.calls.findLastIndex(
@@ -559,7 +562,10 @@ describe("AndroidDriver", () => {
 
   it("kills an emulator that has not exited within the readiness timeout of a shutdown", async () => {
     const harness = await provisionedHarness({
-      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+      afterwards: [
+        avdPathExpectation("emulator-5586"),
+        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      ],
       readinessTimeoutMs: 2_000,
     });
     const ready = await harness.driver.makeReady(harness.device);
@@ -584,7 +590,10 @@ describe("AndroidDriver", () => {
 
   it("leaves no timer armed when waiting for the emulator to exit fails", async () => {
     const harness = await provisionedHarness({
-      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+      afterwards: [
+        avdPathExpectation("emulator-5586"),
+        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      ],
     });
     const ready = await harness.driver.makeReady(harness.device);
     const launch = harness.runner.calls.findLastIndex(
@@ -763,6 +772,7 @@ describe("AndroidDriver", () => {
 
     const restartedRunner = new ScriptedProcessRunner([
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      avdPathExpectation("emulator-5586"),
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
@@ -3928,6 +3938,46 @@ describe("AndroidDriver console ports across a restart", () => {
     },
   );
 
+  it("sends no kill when the stored serial's identity cannot be read, and gives the probe a timeout (#284)", async () => {
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    await before.resolveSpec(spec);
+    const stopped = await before.makeReady(await before.provision(spec));
+    await before.shutdown(stopped);
+
+    const inner = host.runner();
+    let unreachable = false;
+    const runner = new RecordingRunner({
+      run: async (command, args, options) =>
+        unreachable && command === binaries.adb && args.slice(2).join(" ") === "emu avd path"
+          ? { code: 1, stderr: "unreachable", stdout: "" }
+          : await inner.run(command, args, options),
+      spawn: (...args) => inner.spawn(...args),
+      spawnStreaming: (...args) => inner.spawnStreaming(...args),
+    });
+    const after = await createDriver(filesystem, runner, { ids: ["two"] });
+    await after.resolveSpec(spec);
+    const running = await after.makeReady(await after.provision(spec));
+    unreachable = true;
+    const callStart = runner.calls.length;
+
+    await after.shutdown(stopped).catch(() => undefined);
+
+    const calls = runner.calls.slice(callStart);
+    expect(calls.filter((call) => call.args.slice(2).join(" ") === "emu kill")).toEqual([]);
+    expect(host.avdAnswering(running.address)).toBe("simlock_two");
+    expect(
+      calls.find((call) => call.args.slice(2).join(" ") === "emu avd path")?.options.timeoutMs,
+    ).toBeGreaterThan(0);
+  });
+
   it("readies a stopped device and one provisioned after a restart each at an address its own emulator answers (#52)", async () => {
     const spec = {
       physical: false,
@@ -4059,6 +4109,7 @@ describe("AndroidDriver console port reservations", () => {
         "simlock_clean_baseline",
       ]),
       processResult(binaries.adb, ["-s", "emulator-5586", "emu", "avd", "snapshot", "list"], ""),
+      avdPathExpectation("emulator-5586"),
       processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_one"]),
     ]);
@@ -4087,6 +4138,7 @@ describe("AndroidDriver console port reservations", () => {
     await destroyed.catch(() => undefined);
 
     expect(runner.calls.slice(before).map((call) => call.args)).toEqual([
+      ["-s", "emulator-5586", "emu", "avd", "path"],
       ["-s", "emulator-5586", "emu", "kill"],
       ["delete", "avd", "-n", "simlock_one"],
     ]);
@@ -4598,6 +4650,7 @@ async function provisionedHarness(
   if (options.forBaselineReclaim === true) {
     expectations.push(
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      avdPathExpectation("emulator-5586"),
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
@@ -5899,6 +5952,7 @@ function baselineBuildExpectations(options: {
       "simlock_clean_baseline\n",
     ),
     processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+    avdPathExpectation("emulator-5586"),
     processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
     {
       hangs: true,
