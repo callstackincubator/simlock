@@ -225,6 +225,29 @@ test.describe("the Overview's figures", () => {
     }
   });
 
+  test("Overview's tiles and links land on /queue, /fleet and /activity, not Not found", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      const links = [
+        { follow: () => tile(page, "Waiting").getByRole("link").click(), path: "/queue" },
+        { follow: () => tile(page, "Workers").getByRole("link").click(), path: "/fleet" },
+        { follow: () => page.getByRole("link", { name: /^All \d+$/ }).click(), path: "/fleet" },
+        { follow: () => page.getByRole("link", { name: "All events" }).click(), path: "/activity" },
+      ];
+      for (const { follow, path } of links) {
+        await openOverview(page, host);
+        await follow();
+        await expect(page, path).toHaveURL(new RegExp(`${path}$`));
+        await expect(page.getByRole("heading", { level: 1, name: "Not found" })).toHaveCount(0);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("the Waiting page's Wait p95 equals GET /v1/stats?since=1h totals.wait.p95, also when opened as /waiting?range=7d", async ({
     page,
   }) => {
