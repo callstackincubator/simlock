@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { itemIdFrom, itemPath } from "./paths";
+import { devicePath, fleetAddress, itemIdFrom, itemPath } from "./paths";
 
 describe("an item's page path", () => {
   it("carries any id, a slash or a space included, and reads it back whole", () => {
@@ -25,5 +25,23 @@ describe("an item's page path", () => {
 
   it("keeps a malformed escape as it was typed", () => {
     expect(itemIdFrom("/activity", "/activity/%E0%A4%A")).toBe("%E0%A4%A");
+  });
+});
+
+describe("a worker's page and its device drawer", () => {
+  it("name the worker and the device by their own encoded ids, a slash inside either included", () => {
+    expect(fleetAddress("/fleet")).toEqual({});
+    expect(fleetAddress("/fleet/wrk_1")).toEqual({ workerId: "wrk_1" });
+    expect(fleetAddress("/fleet/wrk_1/")).toEqual({ workerId: "wrk_1" });
+    expect(fleetAddress(devicePath("wrk 1", "dev/1"))).toEqual({
+      deviceId: "dev/1",
+      workerId: "wrk 1",
+    });
+    expect(fleetAddress(devicePath("a/b", "c"))).toEqual({ deviceId: "c", workerId: "a/b" });
+    expect(fleetAddress("/leases/wrk_1")).toEqual({});
+    expect(fleetAddress("/fleet/%E0%A4%A/dev_1")).toEqual({
+      deviceId: "dev_1",
+      workerId: "%E0%A4%A",
+    });
   });
 });

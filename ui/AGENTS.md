@@ -48,6 +48,10 @@ asks it. The live connection asks `session.lost()` when it loses the stream, in 
 the same check: reconnect at once, back off as for an unreachable daemon, or stop while the session
 ends. `model/proxy-refusal.ts` words a refusal.
 
+`data/mode.ts` keeps the daemon's mode (`daemon.mode` of `GET /v1/status`, the one field the console
+reads from that route) once the live connection starts and again after each reconnect; a read that
+fails leaves none. `useDaemonMode` (`state/live.tsx`) gives it to state (ADR 0037 §4).
+
 ## Pages
 
 | Path                         | Screen    | Layout                                                                                                                                         |
