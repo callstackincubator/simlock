@@ -27,7 +27,7 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
    (absolute), default `$SIMLOCK_HOME/devices/<platform>`.
    A refusal (`OwnedRootError`) skips that platform only and emits `driver.root-rejected`.
 2. **Scope every command to the root.** Ownership is membership in the root, never a name prefix.
-3. **Opaque to core.** `address`, `driverData`, `deviceRoot` and `drivers.<platform>.*` are carried unread.
+3. **Opaque to core.** `address`, `driverData`, `deviceRoot` and `drivers.<platform>.*` are carried unread. Each driver package exports a `DeviceDataTable` (`iosDeviceDataTable`, `androidDeviceDataTable`) that stores its `driverData` in its own `state.db` table, built without a driver instance so it loads where the driver is refused; `daemon/main.ts` `productionDeviceDataTables` passes both on every host.
 4. **Prerequisites** — `iosPrerequisites`, `androidPrerequisites` return a `PrerequisiteCheck`, not a
    `Driver` method; built even when the driver did not start, run only by `doctor`.
 5. **Installers** — `installer-process.ts`: `runInstallerProcess` parses `%` progress from both

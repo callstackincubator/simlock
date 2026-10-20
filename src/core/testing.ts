@@ -82,7 +82,7 @@ const memorySqlite: SqliteOpener = {
   open: (_path, options) => new NodeSqliteOpener().open(":memory:", options),
 };
 
-function openMemoryState(owners: readonly SqliteSchemaOwner[]): Promise<StateDatabase> {
+export function openMemoryState(owners: readonly SqliteSchemaOwner[]): Promise<StateDatabase> {
   return openStateDatabase({
     dataDirectory: "/memory",
     filesystem: new MemoryFilesystem(),

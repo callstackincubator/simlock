@@ -2240,5 +2240,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+export { iosDeviceDataTable } from "./device-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
 export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";
