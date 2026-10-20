@@ -9,6 +9,29 @@ interface IosDeviceDataRow {
   readonly slim_mark_token: string | null;
 }
 
+interface IosDriverData {
+  readonly deviceTypeId: string;
+  readonly name: string;
+  readonly runtimeId: string;
+  readonly slimMarkToken?: string;
+  readonly slimSignature?: string;
+  readonly udid: string;
+}
+
+const REQUIRED_KEYS = ["deviceTypeId", "name", "runtimeId", "udid"] as const;
+const OPTIONAL_KEYS = ["slimMarkToken", "slimSignature"] as const;
+
+function isIosDriverData(value: unknown): value is IosDriverData {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  const known = new Set<string>([...REQUIRED_KEYS, ...OPTIONAL_KEYS]);
+  return (
+    Object.keys(record).every((key) => known.has(key)) &&
+    REQUIRED_KEYS.every((key) => typeof record[key] === "string") &&
+    OPTIONAL_KEYS.every((key) => record[key] === undefined || typeof record[key] === "string")
+  );
+}
+
 export const iosDeviceDataTable: DeviceDataTable = {
   migrations: [
     `CREATE TABLE ios_device_data (
@@ -40,7 +63,10 @@ export const iosDeviceDataTable: DeviceDataTable = {
   },
   version: 1,
   write(database, deviceId, driverData) {
-    const data = driverData as Record<string, string | undefined>;
+    if (!isIosDriverData(driverData)) {
+      throw new Error(`Invalid ios driver data for device ${deviceId}`);
+    }
+    const data = driverData;
     database
       .prepare(
         `INSERT INTO ios_device_data (device_id, udid, name, device_type_id, runtime_id, slim_signature, slim_mark_token)
@@ -51,10 +77,10 @@ export const iosDeviceDataTable: DeviceDataTable = {
       )
       .run(
         deviceId,
-        data.udid ?? null,
-        data.name ?? null,
-        data.deviceTypeId ?? null,
-        data.runtimeId ?? null,
+        data.udid,
+        data.name,
+        data.deviceTypeId,
+        data.runtimeId,
         data.slimSignature ?? null,
         data.slimMarkToken ?? null,
       );
