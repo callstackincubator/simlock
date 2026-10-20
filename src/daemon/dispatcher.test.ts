@@ -1434,6 +1434,12 @@ describe("Dispatcher: events.replay paging", () => {
       ).rejects.toMatchObject({ code: "HISTORY_UNAVAILABLE" });
     }
   });
+
+  it("events.replay with limit alone returns the newest n events, oldest first, through the worker dispatcher", async () => {
+    const { dispatcher } = await pagedRig(5);
+    const page = await dispatcher.dispatch("events.replay", { limit: 2 }, admin);
+    expect(reasons(page)).toEqual(["r4", "r5"]);
+  });
 });
 
 describe("Dispatcher: config.get eventLog", () => {

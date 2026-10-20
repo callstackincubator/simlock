@@ -861,6 +861,16 @@ describe("GatewayDispatcher", () => {
     ]);
   });
 
+  it("events.replay with limit alone returns the newest n events, oldest first, through the gateway dispatcher", async () => {
+    const rig = await usageRig({ fleet: true });
+    for (const reason of ["a", "b", "c"]) rig.emit("daemon.stopping", { reason });
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch("events.replay", { limit: 2 }, session());
+
+    expect(page.map((event) => (event.payload as { reason: string }).reason)).toEqual(["b", "c"]);
+  });
+
   it.each([
     {
       health: "running" as const,
