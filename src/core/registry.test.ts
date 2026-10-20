@@ -2621,4 +2621,58 @@ describe("Registry: state.db rows", () => {
     });
     expect(committed).toEqual(["commit"]);
   });
+
+  it("pruning deletes the rows of dropped requests and their grant and environment rows, past the retention and past the record cap", async () => {
+    const counts = (state: StateDatabase) =>
+      ["lease_requests", "lease_grants", "lease_grant_environment"].map(
+        (table) => state.database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n,
+      );
+    const ask = (registry: Registry, id: string) =>
+      registry.createLeaseRequest({
+        id,
+        ownerId: "agent-1",
+        request: { platform: "ios" },
+        requesterId: "agent-1",
+      });
+
+    const aged = await world({ leaseRequestLimits: { maxRecords: 10, retentionMs: 1_000 } });
+    const device = await aged.readyDevice("fk-aged");
+    await ask(aged.registry, "req_old");
+    await aged.registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      request: {
+        environment: { SIMLOCK_UDID: "abc", OTHER: "x" },
+        id: "req_old",
+        timing: {
+          estimatedBootMs: 2,
+          estimatedProvisionMs: 1,
+          estimatedReadyMs: 4,
+          estimatedReclaimMs: 3,
+        },
+      },
+      requesterId: "agent-1",
+      ttlDeadline: 5_000,
+      ttlMs: 4_000,
+    });
+    expect(counts(aged.state)).toEqual([1, 1, 2]);
+    aged.clock.advance(999);
+    await ask(aged.registry, "req_new");
+    expect(counts(aged.state)).toEqual([2, 1, 2]);
+    aged.clock.advance(2);
+    await ask(aged.registry, "req_newer");
+    expect(counts(aged.state)).toEqual([2, 0, 0]);
+    expect(
+      aged.state.database.prepare("SELECT id FROM lease_requests ORDER BY rowid").all(),
+    ).toEqual([{ id: "req_new" }, { id: "req_newer" }]);
+
+    const capped = await world({ leaseRequestLimits: { maxRecords: 2, retentionMs: 1_000_000 } });
+    await ask(capped.registry, "req_a");
+    await capped.registry.settleLeaseRequest("req_a", { state: "cancelled" });
+    await ask(capped.registry, "req_b");
+    await ask(capped.registry, "req_c");
+    expect(
+      capped.state.database.prepare("SELECT id FROM lease_requests ORDER BY rowid").all(),
+    ).toEqual([{ id: "req_b" }, { id: "req_c" }]);
+  });
 });
