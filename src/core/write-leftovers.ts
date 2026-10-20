@@ -1,19 +1,24 @@
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Filesystem, Logger, ProcessSupervisor } from "../ports/index.js";
 
 const TEMPORARY_FILE =
   /^\.[^/]+\.(\d+)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
-const STAGING_DIRECTORY = /^\.[^/]+\.(\d+)\.[^./]+\.staging$/;
+const STAGING_WRITER_AND_ID = /^(\d+)\.[^./]+$/;
+const STAGING_ID = /^[^./]+$/;
 
 export interface SweepWriteLeftoversOptions {
   readonly directories: readonly string[];
+  /** why: staging names are matched against these roots' own names, so a user's directory that merely looks like one is never touched. */
+  readonly deviceRoots: readonly string[];
   readonly filesystem: Filesystem;
   readonly logger: Logger;
   readonly processSupervisor: ProcessSupervisor;
+  readonly uid?: number;
 }
 
 export async function sweepWriteLeftovers(options: SweepWriteLeftoversOptions): Promise<void> {
-  for (const directory of new Set(options.directories)) {
+  const parents = new Set(options.deviceRoots.map((root) => dirname(root)));
+  for (const directory of new Set([...options.directories, ...parents])) {
     let names: string[];
     try {
       names = await options.filesystem.readdir(directory);
@@ -21,28 +26,50 @@ export async function sweepWriteLeftovers(options: SweepWriteLeftoversOptions): 
       continue;
     }
     for (const name of names) {
-      const pid = abandonedWriterPid(name, options.processSupervisor);
-      if (pid !== undefined) await removeLeftover(join(directory, name), pid, options);
+      const path = join(directory, name);
+      const temporary = TEMPORARY_FILE.exec(name);
+      if (temporary !== null) {
+        await removeIfAbandoned(path, temporary[1], options);
+        continue;
+      }
+      for (const root of options.deviceRoots) {
+        if (dirname(root) !== directory) continue;
+        const staging = stagingWriter(name, basename(root));
+        if (staging === undefined) continue;
+        if (staging === "legacy") {
+          options.logger.info("left a legacy staging directory in place", { path });
+        } else {
+          await removeIfAbandoned(path, staging, options);
+        }
+      }
     }
   }
 }
 
-function abandonedWriterPid(
-  name: string,
-  processSupervisor: ProcessSupervisor,
-): number | undefined {
-  const match = TEMPORARY_FILE.exec(name) ?? STAGING_DIRECTORY.exec(name);
-  if (match === null) return undefined;
-  const pid = Number(match[1]);
-  return processSupervisor.isAlive(pid) ? undefined : pid;
+function stagingWriter(name: string, rootName: string): string | "legacy" | undefined {
+  const prefix = `.${rootName}.`;
+  if (!name.startsWith(prefix) || !name.endsWith(".staging")) return undefined;
+  const middle = name.slice(prefix.length, name.length - ".staging".length);
+  const writer = STAGING_WRITER_AND_ID.exec(middle);
+  if (writer !== null) return writer[1];
+  return STAGING_ID.test(middle) ? "legacy" : undefined;
+}
+
+async function removeIfAbandoned(
+  path: string,
+  writer: string | undefined,
+  options: SweepWriteLeftoversOptions,
+): Promise<void> {
+  const pid = Number(writer);
+  if (options.processSupervisor.isAlive(pid)) return;
+  await removeLeftover(path, pid, options);
 }
 
 async function removeLeftover(
   path: string,
   pid: number,
-  { filesystem, logger }: SweepWriteLeftoversOptions,
+  { filesystem, logger, uid }: SweepWriteLeftoversOptions,
 ): Promise<void> {
-  const uid = process.getuid?.();
   try {
     const details = await filesystem.lstat(path);
     if (

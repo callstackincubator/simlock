@@ -467,10 +467,12 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   let stopping = false;
   const convergeStartup = async (): Promise<void> => {
     await sweepWriteLeftovers({
-      directories: [dataDirectory, dirname(statePath), ...deviceRootParents(drivers)],
+      deviceRoots: deviceRoots(drivers),
+      directories: [dataDirectory, dirname(statePath)],
       filesystem,
       logger,
       processSupervisor,
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
     });
     await leasing.settleRequests();
     const read = await core.readStartup();
@@ -1484,11 +1486,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   });
 }
 
-/** why: a root's staging directory sits beside it, so its parent is where leftovers are. */
-function deviceRootParents(drivers: readonly Driver[]): string[] {
+/** why: a root's staging directory sits beside it, so the sweep looks there for leftovers. */
+function deviceRoots(drivers: readonly Driver[]): string[] {
   return drivers.flatMap((driver) =>
-    "deviceRoot" in driver && typeof driver.deviceRoot === "string"
-      ? [dirname(driver.deviceRoot)]
-      : [],
+    "deviceRoot" in driver && typeof driver.deviceRoot === "string" ? [driver.deviceRoot] : [],
   );
 }
