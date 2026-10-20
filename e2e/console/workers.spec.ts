@@ -767,26 +767,26 @@ test.describe("the workers page", () => {
 
       await page.goto(fleet.gateway.url);
       await signIn(page, fleet.gateway.tokens.operator);
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
       const forA = await eventsOf(fleet.gateway, idOf("worker-a"));
       await expect(forA.getByText("lease.granted").first()).toBeVisible();
-      await expect(forA.getByText("worker.drained")).toHaveCount(0);
+      await expect(forA.getByText("worker.drain-started")).toHaveCount(0);
       const forB = await eventsOf(fleet.gateway, idOf("worker-b"));
-      await expect(forB.getByText("worker.drained").first()).toBeVisible();
+      await expect(forB.getByText("worker.drain-started").first()).toBeVisible();
       await expect(forB.getByText("lease.granted")).toHaveCount(0);
 
-      await page.route(
-        (url) => url.pathname === "/v1/events",
-        async (route) => {
-          await route.fulfill({ json: { events: [] } });
-        },
-      );
+      const replay = (url: URL) => url.pathname === "/v1/events";
+      await page.route(replay, async (route) => {
+        await route.fulfill({ json: { events: [] } });
+      });
       await eventsOf(fleet.gateway, idOf("worker-a"));
       await expect(page.getByText("No events for this worker in the last hour.")).toBeVisible();
-      await page.unroute((url) => url.pathname === "/v1/events");
+      await page.unroute(replay);
 
       const [only] = await workerList(host);
       await page.goto(host.url);
       await signIn(page, host.tokens.operator);
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
       const forHost = await eventsOf(host, found(only, "the host's worker").id);
       await expect(forHost.getByText("lease.granted").first()).toBeVisible();
     } finally {

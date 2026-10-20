@@ -19,9 +19,11 @@ import {
 import {
   type CapabilityRow,
   type DeviceRow,
+  type EventRow,
   type FigureCard,
   type InstallRow,
   type PlatformCard,
+  useWorkerEvents,
   useWorkerPage,
   type WarmRow,
   type WorkerPageView,
@@ -68,6 +70,7 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
         {page.tab === "devices" ? <DevicesTab page={page} /> : null}
         {page.tab === "host" ? <HostTab inspector={page} /> : null}
         {page.tab === "warm-pool" ? <WarmTab inspector={page} /> : null}
+        {page.tab === "events" ? <WorkerEvents id={page.id} /> : null}
       </Tabs>
     </Page>
   );
@@ -402,6 +405,30 @@ function Installs({ rows }: { readonly rows: readonly InstallRow[] }) {
           {install.platform} <span className="mono">{install.component}</span>{" "}
           <Status tone={install.status.tone}>{install.status.word}</Status> for{" "}
           <span className="mono">{install.duration}</span>, {install.waiters}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function WorkerEvents({ id }: { readonly id: string }) {
+  const view = useWorkerEvents(id);
+  return <Loaded view={view}>{(rows) => <WorkerEventList rows={rows} />}</Loaded>;
+}
+
+function WorkerEventList({ rows }: { readonly rows: readonly EventRow[] }) {
+  if (rows.length === 0) {
+    return <p className="muted">No events for this worker in the last hour.</p>;
+  }
+  return (
+    <ul className="worker-events" aria-label="Events for this worker">
+      {rows.map((row) => (
+        <li key={row.id}>
+          <time dateTime={row.iso} className="mono muted">
+            {row.time}
+          </time>
+          <span className="mono">{row.name}</span>
+          <span className="muted">{row.summary}</span>
         </li>
       ))}
     </ul>

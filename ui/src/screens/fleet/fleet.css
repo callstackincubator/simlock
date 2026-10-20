@@ -121,3 +121,24 @@
   margin: 0;
   padding: var(--space-4) var(--space-6);
 }
+
+.worker-events {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.worker-events li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.worker-events li > :last-child {
+  grid-column: 2;
+}

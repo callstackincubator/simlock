@@ -19,11 +19,15 @@ import {
   writeWorkerTab,
 } from "../model/worker-page";
 import { type WorkerList, workerPath } from "../model/workers";
-import { useLiveResource, useNow } from "./live";
+import { type EventRow, eventRows } from "../model/event-list";
+import { eventsOfWorker } from "../model/events";
+import { useRecentEvents } from "./events";
+import { useDaemonMode, useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { navigate, setSearch, usePath, useSearch } from "./router";
 
+export type { EventRow } from "../model/event-list";
 export type {
   CapabilityRow,
   DeviceRow,
@@ -148,4 +152,14 @@ export function useLeaseUdid(leaseId: string): string | undefined {
   return useLiveResource<{ readonly lease: LeaseDetails }>(
     `/v1/leases/${encodeURIComponent(leaseId)}`,
   ).data?.lease.udid;
+}
+
+// why: the events the console holds, an hour of them, that belong to this worker, newest first.
+export function useWorkerEvents(workerId: string): LoadView<readonly EventRow[]> {
+  const feed = useRecentEvents();
+  const mode = useDaemonMode();
+  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(feed), (held) =>
+    eventRows(eventsOfWorker(held, workerId, mode), workers, "all"),
+  );
 }
