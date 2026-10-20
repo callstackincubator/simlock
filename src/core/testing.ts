@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 import type { EventBus } from "../bus/index.js";
 import {
   type Clock,
@@ -5,6 +7,7 @@ import {
   NodeSqliteOpener,
   NoopLogger,
   type SqliteOpener,
+  type SqliteSchemaOwner,
 } from "../ports/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import { ComponentInstaller } from "./component-installer.js";
@@ -79,15 +82,43 @@ const memorySqlite: SqliteOpener = {
   open: (_path, options) => new NodeSqliteOpener().open(":memory:", options),
 };
 
-export function openTestState(): Promise<StateDatabase> {
+function openMemoryState(owners: readonly SqliteSchemaOwner[]): Promise<StateDatabase> {
   return openStateDatabase({
     dataDirectory: "/memory",
     filesystem: new MemoryFilesystem(),
     logger: new NoopLogger(),
     oldFiles: [],
-    owners: [registryOwner, fakeDeviceDataTable],
+    owners,
     sqlite: memorySqlite,
     upgradeStep: "",
+  });
+}
+
+export function openTestState(): Promise<StateDatabase> {
+  return openMemoryState([registryOwner, fakeDeviceDataTable]);
+}
+
+export function describeDeviceDataTable(
+  name: string,
+  table: DeviceDataTable,
+  examples: readonly [unknown, unknown, ...unknown[]],
+): void {
+  describe(`DeviceDataTable ${name}`, () => {
+    it("reads back each example it was written with, a second write replaces the first, and a missing id is refused", async () => {
+      const state = await openMemoryState([table]);
+      const [first, second] = examples;
+      for (const [index, example] of examples.entries()) {
+        const id = `dev_${String(index)}`;
+        table.write(state.database, id, example);
+        const read = table.read(state.database, id);
+        expect(read).toStrictEqual(example);
+      }
+      table.write(state.database, "dev_replace", first);
+      table.write(state.database, "dev_replace", second);
+      expect(table.read(state.database, "dev_replace")).toStrictEqual(second);
+      expect(() => table.read(state.database, "dev_missing")).toThrow();
+      state.close();
+    });
   });
 }
 
