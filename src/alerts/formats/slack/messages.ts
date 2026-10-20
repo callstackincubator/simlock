@@ -1,5 +1,7 @@
 import type { AlertEventName } from "../../../core/index.js";
 
+import { formatAge, formatBytes } from "./units.js";
+
 type Payload = Record<string, unknown>;
 type Message = (payload: Payload, worker: string) => string;
 
@@ -25,9 +27,9 @@ export const SLACK_MESSAGES: Record<AlertEventName, Message> = {
   "device.recovery-failed": (p, worker) =>
     `⚠️ Device ${p.deviceId} on ${worker} crashed during lease ${p.leaseId} and could not be brought back: ${p.reason}.`,
   "device.stalled-transition-detected": (p, worker) =>
-    `⏳ Device ${p.deviceId} on ${worker} has been ${p.state} for ${p.ageMs}.`,
+    `⏳ Device ${p.deviceId} on ${worker} has been ${p.state} for ${formatAge(p.ageMs)}.`,
   "disk.pressure-detected": (p, worker) =>
-    `💾 Worker ${worker} is low on disk: ${p.freeBytes} free (threshold ${p.threshold}).`,
+    `💾 Worker ${worker} is low on disk: ${formatBytes(p.freeBytes)} free (threshold ${formatBytes(p.threshold)}).`,
   "component.install-failed": (p, worker) =>
     `❌ Installing ${p.platform} ${p.componentId} on ${worker} failed: ${p.error}.`,
 };
