@@ -962,30 +962,25 @@ describe("GatewayDispatcher", () => {
     });
 
     it("alerts.test fails with ALERT_SEND_FAILED on a non-2xx status, a rejection and no answer within 10 s, and tries once", async () => {
-      const refused = () =>
-        Promise.reject(
-          Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }),
-        );
-      const statusCases = [404, 301, 503] as const;
-      for (const status of statusCases) {
-        const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
-        poster.respond = () => Promise.resolve({ status });
-
-        await expect(
-          dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
-        ).rejects.toMatchObject({
-          code: "ALERT_SEND_FAILED",
-          message: `ops answered HTTP ${status}`,
-          details: { destination: "ops", status },
-        });
-        clock.advance(60_000);
-        expect(poster.requests).toHaveLength(1);
-      }
-
-      for (const [respond, error] of [
-        [refused, "ECONNREFUSED"],
-        [() => Promise.reject(new TypeError("fetch failed")), "network-error"],
-      ] as const) {
+      const refused = Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ECONNREFUSED" },
+      });
+      const cases = [
+        [() => Promise.resolve({ status: 404 }), "ops answered HTTP 404", { status: 404 }],
+        [() => Promise.resolve({ status: 301 }), "ops answered HTTP 301", { status: 301 }],
+        [() => Promise.resolve({ status: 503 }), "ops answered HTTP 503", { status: 503 }],
+        [
+          () => Promise.reject(refused),
+          "ops could not be reached: ECONNREFUSED",
+          { error: "ECONNREFUSED" },
+        ],
+        [
+          () => Promise.reject(new TypeError("fetch failed")),
+          "ops could not be reached: network-error",
+          { error: "network-error" },
+        ],
+      ] as const;
+      for (const [respond, message, details] of cases) {
         const { clock, dispatcher, poster } = harness({ alertDestinations: [generic] });
         poster.respond = respond;
 
@@ -993,8 +988,8 @@ describe("GatewayDispatcher", () => {
           dispatcher.dispatch("alerts.test", { destination: "ops" }, session()),
         ).rejects.toMatchObject({
           code: "ALERT_SEND_FAILED",
-          message: `ops could not be reached: ${error}`,
-          details: { destination: "ops", error },
+          message,
+          details: { destination: "ops", ...details },
         });
         clock.advance(60_000);
         expect(poster.requests).toHaveLength(1);
