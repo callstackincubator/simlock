@@ -3919,6 +3919,26 @@ describe("AndroidDriver console ports across a restart", () => {
     expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}.avd`)).toBe(false);
   });
 
+  it("refuses to delete the AVD of a discovered emulator that does not exit", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    const spec = await before.resolveSpec({ model: "Pixel 5", platform: "android" });
+    const running = await before.makeReady(await before.provision(spec));
+    const inner = host.runner();
+    const runner: ProcessRunner = {
+      ...inner,
+      run: async (command, args, options) =>
+        args.includes("kill") ? ok() : inner.run(command, args, options),
+    };
+    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const orphan = (await after.listManaged()).devices[0]!;
+
+    await expect(after.destroy(orphan)).rejects.toThrow("did not exit");
+
+    expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}.avd`)).toBe(true);
+  });
+
   it("readies a stopped device and one provisioned after a restart each at an address its own emulator answers (#52)", async () => {
     const spec = {
       physical: false,
