@@ -301,6 +301,7 @@ async function createHarness(
     components,
     coordinator,
     driver,
+    provisioner,
     queue,
     registry,
     requestIds,
@@ -901,6 +902,40 @@ describe("LeaseAcquisitionCoordinator", () => {
       secondGranted: secondDeviceId !== undefined,
       sameDevice: secondDeviceId === firstGrant.device.id,
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
+  });
+
+  it("grants a request queued behind an in-flight head the device the pool created for it, with no provision of its own", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    harness.driver.hangMakeReady();
+    const first = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
+    await settle();
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    let secondDeviceId: string | undefined;
+    void second.then((grant) => {
+      secondDeviceId = grant.device.id;
+    });
+    await settle();
+    expect(harness.coordinator.waitingDemand()).toMatchObject([
+      { inFlight: true, spec: request },
+      { inFlight: false, spec: request },
+    ]);
+
+    const created = harness.provisioner.provision(request, {
+      claim: { kind: "boot" },
+      reservation: { release: () => undefined },
+    });
+    await settle();
+    harness.driver.releaseMakeReady();
+    const [firstGrant, handoff] = await Promise.all([first, created]);
+    handoff.claim.release();
+    harness.coordinator.kick();
+    await settle();
+
+    expect({
+      provisioned: harness.driver.calls.filter((call) => call.operation === "provision").length,
+      sameDevice: secondDeviceId === firstGrant.device.id,
+      secondGotPoolDevice: secondDeviceId === handoff.device.id,
+    }).toEqual({ provisioned: 2, sameDevice: false, secondGotPoolDevice: true });
   });
 
   it("grants a request queued behind another request booting a shut-down device once that device is granted, with no release", async () => {
@@ -3398,6 +3433,7 @@ describe("LeaseAcquisitionCoordinator waiting demand", () => {
           platform: "ios",
           target: { kind: "model", model: "iPhone 16" },
         },
+        spec: request,
       },
     ]);
 
