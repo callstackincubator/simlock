@@ -839,9 +839,9 @@ export const fakeDeviceDataTable: DeviceDataTable = {
   },
   version: 1,
   write(database, deviceId, driverData) {
-    const fakeDeviceId = (driverData as { fakeDeviceId?: unknown } | null | undefined)
-      ?.fakeDeviceId;
-    if (typeof fakeDeviceId !== "string") {
+    const data = driverData as Record<string, unknown> | null | undefined;
+    const fakeDeviceId = data?.fakeDeviceId;
+    if (typeof fakeDeviceId !== "string" || Object.keys(data ?? {}).length !== 1) {
       throw new Error(`Invalid fake driver data for device ${deviceId}`);
     }
     database

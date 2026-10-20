@@ -10,7 +10,14 @@ describeDeviceDataTable("fakeDeviceDataTable", fakeDeviceDataTable, [
 describe("fakeDeviceDataTable", () => {
   it("refuses driver data that is not { fakeDeviceId: string }, naming the device", async () => {
     const state = await openTestState();
-    for (const invalid of [{}, { fakeDeviceId: 3 }, null, undefined, "fk"]) {
+    for (const invalid of [
+      {},
+      { fakeDeviceId: 3 },
+      { fakeDeviceId: "a", extra: 1 },
+      null,
+      undefined,
+      "fk",
+    ]) {
       expect(() => fakeDeviceDataTable.write(state.database, "dev_bad", invalid)).toThrow(
         "Invalid fake driver data for device dev_bad",
       );
