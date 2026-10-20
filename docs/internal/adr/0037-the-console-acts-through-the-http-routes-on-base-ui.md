@@ -141,12 +141,13 @@ sequenceDiagram
   end
 ```
 
-### 4. The console reads the daemon's mode once
+### 4. The console reads the daemon's mode
 
 On a single host the three worker routes answer 501
 `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2). So the console offers Drain,
-Undrain and Remove only when it knows it talks to a gateway. After sign-in
-it reads `GET /v1/status` once and keeps `daemon.mode`. This narrows ADR
+Undrain and Remove only when it knows it talks to a gateway. After sign-in,
+and again after each reconnect, it reads `GET /v1/status` and keeps
+`daemon.mode`. This narrows ADR
 0013 §1, which says the console does not read that route: it reads this
 one field and nothing else from it. If the read fails, the console offers
 no worker action until the next successful read. It never guesses
