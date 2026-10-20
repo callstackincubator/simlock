@@ -171,6 +171,7 @@ export class GatewayDispatcher {
       "worker.drain": this.#workerDrain,
       "worker.undrain": this.#workerUndrain,
       "worker.remove": this.#workerRemove,
+      "alerts.test": this.#alertsTest,
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
@@ -324,6 +325,8 @@ export class GatewayDispatcher {
     await this.options.workers.setDrained(input.workerId, false);
     return { drained: false, workerId: input.workerId };
   };
+
+  #alertsTest: Handler<"alerts.test"> = (input) => ({ destination: input.destination, status: 0 });
 
   #workerRemove: Handler<"worker.remove"> = async (input) => ({
     removed: await this.options.workers.remove(input.workerId),

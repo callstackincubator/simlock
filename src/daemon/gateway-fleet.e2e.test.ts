@@ -38,9 +38,11 @@ import {
   MemoryFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  resolveDaemonSocketPath,
   SystemClock,
 } from "../ports/index.js";
 import { FakeWebhookPoster } from "../ports/testing.js";
+import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -730,6 +732,58 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       expect(JSON.parse(chat?.body ?? "")).toEqual({
         text: "🟢 Worker worker-a connected (simlock 1.0.0-e2e).",
       });
+    } finally {
+      receiver.closeAllConnections();
+      await new Promise<void>((resolve) => receiver.close(() => resolve()));
+    }
+  }, 30_000);
+
+  it("alerts.test over the gateway's real unix socket reaches a loopback receiver with the signed sample", async () => {
+    const received: Array<{ headers: Record<string, unknown>; body: string }> = [];
+    const receiver: Server = createHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({ headers: request.headers, body: Buffer.concat(chunks).toString("utf8") });
+        response.writeHead(200).end();
+      });
+    });
+    await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (receiver.address() as { port: number }).port;
+      const gateway = await startGateway({
+        destinations: [destinationFor({ name: "ops", url: `http://127.0.0.1:${port}/hook` })],
+      });
+      const { secret } = await gateway.dispatch(
+        "token.create",
+        { role: "operator", label: "alerts-test" },
+        adminSession(),
+      );
+      const client = await connectSimlockAdmin({
+        endpoint: resolveDaemonSocketPath(directories.at(-1) as string),
+        credential: secret,
+      });
+      try {
+        await expect(client.testAlertDestination({ destination: "ops" })).resolves.toEqual({
+          destination: "ops",
+          status: 200,
+        });
+      } finally {
+        await client.close();
+      }
+
+      expect(received).toHaveLength(1);
+      const body = received[0]?.body ?? "";
+      expect(JSON.parse(body)).toMatchObject({
+        seq: 0,
+        event: "alerts.test-sent",
+        payload: { destination: "ops" },
+        module: "alerts",
+      });
+      expect(received[0]?.headers["x-simlock-event"]).toBe("alerts.test-sent");
+      expect(received[0]?.headers["x-simlock-signature"]).toBe(
+        `sha256=${createHmac("sha256", "e2e-secret").update(body).digest("hex")}`,
+      );
     } finally {
       receiver.closeAllConnections();
       await new Promise<void>((resolve) => receiver.close(() => resolve()));

@@ -1028,6 +1028,20 @@ export const relayCancel = defineOperation({
   output: z.object({}),
 });
 
+/**
+ * why: ADR 0035 §1: asks the gateway to post one sample message to one of its alert destinations,
+ * once, outside the destination's queue. `destination` is only looked up by name among the
+ * configured ones, never used in a URL.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const alertsTest = defineOperation({
+  name: "alerts.test",
+  role: "admin",
+  effect: "write",
+  input: z.object({ destination: z.string().min(1).max(32) }),
+  output: z.object({ destination: z.string(), status: z.number() }),
+});
+
 const identityGet = defineOperation({
   name: "identity.get",
   role: "agent",
@@ -1079,6 +1093,7 @@ export const OPERATIONS = {
   "device.remove": deviceRemove,
   "relay.request": relayRequest,
   "relay.cancel": relayCancel,
+  "alerts.test": alertsTest,
 } as const;
 
 export type OperationName = keyof typeof OPERATIONS;

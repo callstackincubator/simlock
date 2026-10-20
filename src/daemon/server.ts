@@ -1159,6 +1159,8 @@ export class DaemonServer {
         );
       case "worker.remove":
         return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
+      case "alerts.test":
+        return this.#dispatcher.dispatch("alerts.test", frame.payload, this.#session(connection));
       case "component.install":
         return this.#installComponent(connection, frame.id, "component.install", frame.payload);
       case "worker.install-component":

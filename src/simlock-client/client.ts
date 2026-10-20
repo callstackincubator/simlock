@@ -28,6 +28,8 @@ import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { IpcConnection, IpcConnector } from "../ports/index.js";
 import { SimlockWire, WireCallError, type CallHooks, type LeaseScopedPush } from "./wire.js";
 import type {
+  AlertsTestInput,
+  AlertsTestOutput,
   CatalogGetInput,
   CatalogGetOutput,
   CleanupRunInput,
@@ -162,6 +164,8 @@ export type {
   WorkerRemoveOutput,
   WorkerUndrainOutput,
   WorkerView,
+  AlertsTestInput,
+  AlertsTestOutput,
 } from "./types.js";
 export {
   isSimlockError,
@@ -265,6 +269,13 @@ export interface SimlockAdminClient extends SimlockClient {
   drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput>;
+
+  /**
+   * why: ADR 0035 §1: asks a gateway to post one sample message to the named alert destination, once.
+   * Rejects with `ALERT_SEND_FAILED` when the receiver does not take it, `UNKNOWN_ALERT_DESTINATION`
+   * for a name the gateway has not configured, and on a worker with `UNSUPPORTED_IN_WORKER_MODE`.
+   */
+  testAlertDestination(input: AlertsTestInput): Promise<AlertsTestOutput>;
 
   /**
    * ADR 0010 §6: installs one iOS simulator runtime or Android system image, with no lease.
@@ -456,6 +467,7 @@ function buildDegradedClient(
     drainWorker: () => rejected(),
     undrainWorker: () => rejected(),
     removeWorker: () => rejected(),
+    testAlertDestination: () => rejected(),
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
     removeComponent: () => rejected(),
@@ -691,6 +703,10 @@ class SimlockClientImpl {
 
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput> {
     return this.#call("worker.undrain", input);
+  }
+
+  testAlertDestination(input: AlertsTestInput): Promise<AlertsTestOutput> {
+    return this.#call("alerts.test", input);
   }
 
   async installComponent(
