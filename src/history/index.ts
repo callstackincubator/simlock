@@ -17,7 +17,9 @@ import {
   configureDatabase,
   envelopeSize,
   INSERT_EVENT_SQL,
+  selectEventsBefore,
   selectEventsSince,
+  selectOldestTimestamp,
 } from "./database.js";
 import { HISTORY_DB_NAME } from "./names.js";
 import { pruneHistory, totalEventBytes } from "./prune.js";
@@ -149,11 +151,27 @@ class EventHistory implements EventHistoryHandle {
     }
   }
 
-  async replayPage(_input: {
+  async replayPage(input: {
     readonly beforeId?: string;
     readonly limit: number;
   }): Promise<EventsPageRead> {
-    return { events: [], kind: "events" };
+    const database = this.#database;
+    if (input.beforeId === undefined) return { events: [], kind: "events" };
+    if (database === undefined || !this.#readable || !this.#writing) return { kind: "unavailable" };
+    try {
+      const events = selectEventsBefore(database, input.beforeId, input.limit);
+      if (events !== undefined) return { events, kind: "events" };
+      const oldestTs = selectOldestTimestamp(database);
+      return oldestTs === undefined
+        ? { events: [], kind: "events" }
+        : { kind: "not-kept", oldestTs };
+    } catch (error: unknown) {
+      this.#options.logger.warn("History page read failed", {
+        error: describe(error),
+        path: this.#path,
+      });
+      return { kind: "unavailable" };
+    }
   }
 
   async start(): Promise<void> {

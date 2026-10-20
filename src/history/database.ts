@@ -10,6 +10,13 @@ export const INSERT_EVENT_SQL =
 const SELECT_SINCE_SQL =
   "SELECT envelope FROM events WHERE timestamp > ? ORDER BY timestamp, seq, rowid";
 
+const SELECT_CURSOR_SQL = "SELECT timestamp, seq, rowid AS position FROM events WHERE id = ?";
+
+const SELECT_BEFORE_SQL =
+  "SELECT envelope FROM events WHERE (timestamp, seq, rowid) < (?, ?, ?) ORDER BY timestamp DESC, seq DESC, rowid DESC LIMIT ?";
+
+const SELECT_OLDEST_SQL = "SELECT timestamp FROM events ORDER BY timestamp, seq, rowid LIMIT 1";
+
 export function configureDatabase(database: SqliteDatabase): void {
   database.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
   database.exec("PRAGMA auto_vacuum=INCREMENTAL");
@@ -61,6 +68,29 @@ export function selectEventsSince(database: SqliteDatabase, sinceTs: number): Ev
     if (envelope !== undefined) events.push(envelope);
   }
   return events;
+}
+
+export function selectEventsBefore(
+  database: SqliteDatabase,
+  beforeId: string,
+  limit: number,
+): EventEnvelope[] | undefined {
+  const cursor = database.prepare(SELECT_CURSOR_SQL).get(beforeId);
+  if (cursor === undefined) return undefined;
+  const events: EventEnvelope[] = [];
+  const rows = database
+    .prepare(SELECT_BEFORE_SQL)
+    .all(Number(cursor.timestamp), Number(cursor.seq), Number(cursor.position), limit);
+  for (const row of rows) {
+    const envelope = parseEnvelope(row.envelope);
+    if (envelope !== undefined) events.push(envelope);
+  }
+  return events.reverse();
+}
+
+export function selectOldestTimestamp(database: SqliteDatabase): number | undefined {
+  const row = database.prepare(SELECT_OLDEST_SQL).get();
+  return row === undefined ? undefined : Number(row.timestamp);
 }
 
 export function parseEnvelope(stored: unknown): EventEnvelope | undefined {
