@@ -1011,6 +1011,32 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toHaveLength(3);
   });
 
+  it("runs waiting-request boots beside the pass, three at once under maxConcurrentBoots 3, and counts them in the next pass's inFlight", async () => {
+    const gate = held();
+    const shutDown = ["a", "b", "c", "d"].map((id) => device(id, "shutdown", 20 * minute));
+    const rig = harness(shutDown, {
+      boot: async (target) => {
+        await gate.gate;
+        return { ...target, state: "ready" };
+      },
+      maxConcurrentBoots: 3,
+      waiting: () => shutDown.map((item) => waiter(item.spec)),
+    });
+
+    const first = rig.pool.pass();
+    await flush();
+    expect(rig.bootCalls).toEqual(["a", "b", "c"]);
+
+    const second = rig.pool.pass();
+    await flush();
+    expect(rig.bootCalls).toEqual(["a", "b", "c"]);
+
+    gate.finish();
+    await Promise.all([first, second]);
+    await rig.pool.settle();
+    expect(rig.bootCalls).toContain("d");
+  });
+
   it("does not return from a pass for a creation it started, and settle waits for it", async () => {
     const gate = held();
     const rig = harness([], { provision: async () => gate.gate, targets: [iphone17] });
