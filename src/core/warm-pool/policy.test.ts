@@ -1634,6 +1634,69 @@ describe("warm pool policy", () => {
         expect(evaluate(view([wanted, young], { learned }))).toEqual([]);
         expect(evaluate(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual([]);
       });
+
+      it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request, for a kind short for ram-budget, device-limit or reserve, or for a configured target", () => {
+        const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 2, now - 2 * minute)];
+        const recent = device("recent", "ready", { endedAgo: 5 * minute, spec: older });
+        const stale = device("stale", "ready", { endedAgo: 30 * minute, spec: older });
+        const displace = { action: "shutdown", deviceId: "stale", reason: "displaced" };
+
+        const base = plan(view([recent, stale], { learned, limit: 2, maxConcurrentBoots: 2 }));
+        expect(base.proposals).toEqual([displace, provision(kind)]);
+        expect(base.targets.map((report) => [report.target, report.ready, report.short])).toEqual([
+          ["ios iPhone 17 26.0", 0, undefined],
+          ["ios iPad Pro 26.0", 1, "running-limit"],
+        ]);
+
+        const refused = (options: Parameters<typeof view>[1]) =>
+          evaluate(view([recent, stale], { learned, maxConcurrentBoots: 2, ...options }));
+        expect(refused({ limit: 2 })).toEqual([displace, provision(kind)]);
+        expect(refused({ limit: 2, targets: [{ count: 1, spec: older }] })).toEqual([]);
+        expect(refused({ limit: 2, waiting: [modelDemand("iPad Pro")] })).toEqual([]);
+        expect(evaluate(view([recent], { learned, limit: 1, maxConcurrentBoots: 2 }))).toEqual([
+          { ...displace, deviceId: "recent" },
+          provision(kind),
+        ]);
+        expect(refused({ handoffInFlight: true, limit: 2 })).toEqual([]);
+        const droid = device("droid", "ready", {
+          endedAgo: 40 * minute,
+          spec: spec("Pixel 8", { platform: "android" }),
+        });
+        expect(
+          evaluate(
+            view([droid], {
+              learned: [learnedOf(kind, 1, now), learnedOf(droid.spec, 1, now - minute)],
+              limit: 2,
+              limits: { ios: 0 },
+              maxConcurrentBoots: 2,
+            }),
+          ),
+        ).toEqual([]);
+        expect(refused({ limit: 3, refuseProvision: "ram-budget" })).toEqual([]);
+        expect(refused({ limit: 3, refuseProvision: "device-limit" })).toEqual([]);
+        expect(refused({ limit: 3, reserve: { ios: 1 } })).toEqual([]);
+
+        const newer = device("newer", "ready", { endedAgo: 30 * minute, spec: kind });
+        expect(
+          evaluate(
+            view([newer], {
+              learned,
+              limit: 1,
+              maxConcurrentBoots: 2,
+            }),
+          ),
+        ).toEqual([]);
+        expect(
+          evaluate(
+            view([recent], {
+              learned: [learnedOf(older, 1, now)],
+              limit: 1,
+              maxConcurrentBoots: 2,
+              targets: [{ count: 1, spec: spec("iPhone 15") }],
+            }),
+          ),
+        ).toEqual([]);
+      });
     });
   });
 });
