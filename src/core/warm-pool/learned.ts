@@ -95,6 +95,10 @@ export class LearnedKinds {
       .run(at, leaseId);
   }
 
+  forget(_spec: VirtualSpec): void {}
+
+  clear(): void {}
+
   kinds(now: number): LearnedKind[] {
     const database: SqliteDatabase = this.#state.database;
     const windowStart = now - LEARNED_WINDOW_MS;

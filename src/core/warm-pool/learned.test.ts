@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { NodeFilesystem, NodeSqliteOpener, NoopLogger } from "../../ports/index.js";
+import { openStateDatabase } from "../../state/index.js";
 import type { VirtualSpec } from "../domain.js";
 import { openMemoryState } from "../testing.js";
 import { LearnedKinds, warmPoolOwner } from "./learned.js";
@@ -15,6 +20,14 @@ async function open() {
   const state = await openMemoryState([warmPoolOwner]);
   return { kinds: new LearnedKinds(state), state };
 }
+
+const directories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    directories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
+  );
+});
 
 describe("LearnedKinds", () => {
   it("counts a kind's peak over the last 24 hours, at least one, lists the newest last lease first, and keeps a full untagged kind leased twice as one row", async () => {
@@ -126,5 +139,45 @@ describe("LearnedKinds", () => {
     expect(after.some((kind) => kind.spec.model === "Phone 1")).toBe(true);
     expect(after.some((kind) => kind.spec.platform === "android")).toBe(true);
     expect(leaseRows(state)).toBe(33);
+  });
+
+  it("survives a reopen of the same file, and forget and clear remove the rows", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-learned-"));
+    directories.push(directory);
+    const openFile = () =>
+      openStateDatabase({
+        dataDirectory: directory,
+        filesystem: new NodeFilesystem(),
+        logger: new NoopLogger(),
+        oldFiles: [],
+        owners: [warmPoolOwner],
+        sqlite: new NodeSqliteOpener(),
+        upgradeStep: "",
+      });
+    const first = await openFile();
+    const written = new LearnedKinds(first);
+    written.learn(spec("iPhone 16"), "a", T0);
+    written.learn(spec("iPad Pro"), "b", T0 + 1);
+    first.close();
+
+    const second = await openFile();
+    const reopened = new LearnedKinds(second);
+    expect(reopened.kinds(T0 + 5).map((kind) => kind.spec.model)).toEqual([
+      "iPad Pro",
+      "iPhone 16",
+    ]);
+
+    reopened.forget(spec("iPad Pro"));
+    expect(reopened.kinds(T0 + 5).map((kind) => kind.spec.model)).toEqual(["iPhone 16"]);
+    expect(
+      Number(second.database.prepare("SELECT COUNT(*) AS n FROM warm_kind_leases").get()?.n),
+    ).toBe(1);
+
+    reopened.clear();
+    expect(reopened.kinds(T0 + 5)).toEqual([]);
+    expect(
+      Number(second.database.prepare("SELECT COUNT(*) AS n FROM warm_kind_leases").get()?.n),
+    ).toBe(0);
+    second.close();
   });
 });
