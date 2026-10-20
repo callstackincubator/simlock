@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ProbeSqliteOpener } from "../history/testing.js";
 import {
   NodeFilesystem,
   NodeSqliteOpener,
   NoopLogger,
+  type SqliteOpener,
   type SqliteSchemaOwner,
 } from "../ports/index.js";
 import { openStateDatabase, STATE_DB_NAME } from "./index.js";
@@ -171,4 +173,52 @@ describe("openStateDatabase refusals", () => {
     );
     afterwards.close();
   });
+
+  it(
+    "a lock held past 5 s at open, at the quick_check and at BEGIN IMMEDIATE gives the lock message, not the damage one",
+    { timeout: 30_000 },
+    async () => {
+      const directory = await newDirectory();
+      const path = join(directory, STATE_DB_NAME);
+      const lockMessage = `${path} is locked by another process. Stop the other Simlock daemon using it, then start again.`;
+      (await open(directory)).close();
+      const refusal = async (opener: SqliteOpener): Promise<string> => {
+        try {
+          (
+            await openStateDatabase({
+              dataDirectory: directory,
+              filesystem: new NodeFilesystem(),
+              logger: new NoopLogger(),
+              oldFiles: [],
+              owners,
+              sqlite: opener,
+              upgradeStep: "",
+            })
+          ).close();
+        } catch (error: unknown) {
+          return (error as Error).message;
+        }
+        return "opened";
+      };
+      const lockedAt = (sql: string) =>
+        new ProbeSqliteOpener({
+          fault: (call) => {
+            if (call.kind !== "open" && call.sql.startsWith(sql)) {
+              throw Object.assign(new Error("database is locked"), { errcode: 5 });
+            }
+          },
+        });
+
+      expect(await refusal(lockedAt("PRAGMA quick_check"))).toBe(lockMessage);
+      expect(await refusal(lockedAt("BEGIN IMMEDIATE"))).toBe(lockMessage);
+
+      const holder = await sqlite.open(path, { readOnly: false });
+      holder.exec("PRAGMA locking_mode=EXCLUSIVE");
+      holder.exec("BEGIN EXCLUSIVE");
+      const message = await refusal(sqlite);
+      holder.exec("COMMIT");
+      holder.close();
+      expect(message).toBe(lockMessage);
+    },
+  );
 });
