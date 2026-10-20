@@ -428,6 +428,30 @@ test.describe("the Activity page", () => {
     }
   });
 
+  test("a daemon with no events in the last hour but older history shows them at once, and an empty history says No events yet", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openEvents(page, host);
+
+      let queries = await stubEvents(page, (query) =>
+        query.has("since") ? {} : { events: stubbedRange(1, 40) },
+      );
+      await page.reload();
+      await expect.poll(() => eventsHeld(page)).toBe(40);
+      await expect(rows(page).first()).toBeVisible();
+      expect(older(queries)).toEqual(["?limit=100"]);
+
+      queries = await stubEvents(page, () => ({}));
+      await page.reload();
+      await expect(page.getByText("No events yet.")).toBeVisible();
+      expect(older(queries)).toEqual(["?limit=100"]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("on a gateway, a worker's event shows that worker's label", async ({ page }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
     try {
