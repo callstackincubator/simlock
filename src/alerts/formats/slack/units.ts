@@ -19,3 +19,12 @@ export function formatAge(value: unknown): string {
   const minutes = Math.floor((value % 3_600_000) / 60_000);
   return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
 }
+
+const MAX_PART = 300;
+
+/** why: Slack reads `&`, `<` and `>` in text as markup, and `<!channel>` pings a channel. */
+export function part(value: unknown): string {
+  const points = Array.from(String(value));
+  const cut = points.length > MAX_PART ? `${points.slice(0, MAX_PART).join("")}…` : points.join("");
+  return cut.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}

@@ -379,6 +379,43 @@ describe("alerts", () => {
     );
   });
 
+  it("a relayed payload with missing fields posts the text the Known gap names", async () => {
+    const h = harness([
+      slackDestination({
+        events: [
+          "device.quarantine-abandoned",
+          "disk.pressure-detected",
+          "device.stalled-transition-detected",
+        ],
+      }),
+    ]);
+    const cases: [EventName, Record<string, unknown>, string][] = [
+      [
+        "device.quarantine-abandoned",
+        { workerId: "wrk_1", deviceId: "dev_1" },
+        "⚠️ Device dev_1 on wrk_1 was retired after undefined failed clean-ups.",
+      ],
+      [
+        "disk.pressure-detected",
+        { workerId: "wrk_1", threshold: 10_737_418_240 },
+        "💾 Worker wrk_1 is low on disk: ? free (threshold 10 GiB).",
+      ],
+      [
+        "device.stalled-transition-detected",
+        { workerId: "wrk_1" },
+        "⏳ Device undefined on wrk_1 has been undefined for ?.",
+      ],
+    ];
+    for (const [event, payload] of cases) {
+      h.emit(event, payload as never);
+      await settle();
+    }
+
+    expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
+      cases.map(([, , text]) => text),
+    );
+  });
+
   it("posts nothing for an event the destination did not list", async () => {
     const h = harness();
     h.emit("worker.connected", connected());
