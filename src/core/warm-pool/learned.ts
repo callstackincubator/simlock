@@ -77,6 +77,15 @@ export class LearnedKinds {
       database
         .prepare("DELETE FROM warm_kind_leases WHERE ended_at < ?")
         .run(at - LEARNED_WINDOW_MS);
+      const surplus = database
+        .prepare(
+          "SELECT id FROM warm_kinds WHERE platform = ? ORDER BY last_leased_at DESC, id DESC LIMIT -1 OFFSET ?",
+        )
+        .all(spec.platform, LEARNED_KINDS_PER_PLATFORM);
+      for (const { id } of surplus) {
+        database.prepare("DELETE FROM warm_kind_leases WHERE kind_id = ?").run(Number(id));
+        database.prepare("DELETE FROM warm_kinds WHERE id = ?").run(Number(id));
+      }
     });
   }
 
