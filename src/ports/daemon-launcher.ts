@@ -17,8 +17,28 @@ export interface LaunchedDaemon {
   readOutput(): Promise<string>;
 }
 
-export function startErrorFrom(_exit: DaemonExit, _output: string): string {
-  return "";
+export function startErrorFrom(exit: DaemonExit, output: string): string {
+  const lines = output.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const message = fatalMessage(lines[index] ?? "");
+    if (message !== undefined) return `The daemon could not start: ${message}`;
+  }
+  return `The daemon exited with code ${String(exit.code ?? exit.signal)} while starting; see \`simlock daemon logs\``;
+}
+
+function fatalMessage(line: string): string | undefined {
+  let record: unknown;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof record !== "object" || record === null) return undefined;
+  const { message, fields } = record as { message?: unknown; fields?: unknown };
+  if (message !== "Daemon failed to start") return undefined;
+  if (typeof fields !== "object" || fields === null) return undefined;
+  const detail = (fields as { message?: unknown }).message;
+  return typeof detail === "string" ? detail : undefined;
 }
 
 /**

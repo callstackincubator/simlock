@@ -8,6 +8,7 @@ import type { SimlockAdminClient } from "../admin/index.js";
 import type { ConfigOverrides, ModuleConfigEntry } from "../core/index.js";
 import type {
   Clock,
+  DaemonExit,
   DaemonLauncher,
   Filesystem,
   IpcConnector,
@@ -38,7 +39,11 @@ class AutoLaunchAdminConnector {
       if (!(await isUnavailable(error))) throw error;
     }
     await this.checkConfig();
-    await this.launcher.launch();
+    const launched = await this.launcher.launch();
+    let exit: DaemonExit | undefined;
+    void launched.exited.then((value) => {
+      exit = value;
+    });
     // why: the constant lives behind the ports barrel, which loads on the first connection that needs it.
     const { DAEMON_STARTUP_TIMEOUT_MS } = await import("../ports/index.js");
     const deadline = this.clock.now() + DAEMON_STARTUP_TIMEOUT_MS;
@@ -50,6 +55,22 @@ class AutoLaunchAdminConnector {
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
+        if (exit !== undefined) {
+          const output = await launched.readOutput().catch(() => "");
+          try {
+            return await this.finishConnection(await this.connectClient(resolveCredential));
+          } catch (lastAttempt: unknown) {
+            if (!(await isUnavailable(lastAttempt))) throw lastAttempt;
+          }
+          const { SimlockError } = await import("../contract/index.js");
+          const { startErrorFrom } = await import("../ports/index.js");
+          throw new SimlockError(
+            "DAEMON_STARTUP_FAILED",
+            "transport",
+            startErrorFrom(exit, output),
+            {},
+          );
+        }
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
