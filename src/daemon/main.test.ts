@@ -3692,9 +3692,11 @@ describe("startDaemon state.db", () => {
       role: "admin",
       via: "socket",
     } as const;
+    const port = await freeLoopbackPort();
     const launch = (now: number) =>
       startDaemon({
         clock: new FakeClock(now),
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [],
@@ -3719,6 +3721,16 @@ describe("startDaemon state.db", () => {
     };
     expect(listed.tokens).toEqual([labelled.token, bare.token]);
     expect("label" in (listed.tokens[1] ?? {})).toBe(false);
+
+    const statusWith = async (secret: string) =>
+      (
+        await fetch(`http://127.0.0.1:${port}/v1/status`, {
+          headers: { authorization: `Bearer ${secret}` },
+        })
+      ).status;
+    expect(await statusWith(labelled.secret)).toBe(200);
+    expect(await statusWith(bare.secret)).toBe(200);
+    expect(await statusWith("slk_not-a-created-secret")).toBe(401);
   });
 
   it("a start that fails after state.db opened closes it before it throws", async () => {
