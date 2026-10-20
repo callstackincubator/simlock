@@ -13,9 +13,10 @@ describe("the daemon's mode", () => {
     const { connection, daemon } = connect();
     let status: () => Promise<ApiResponse<unknown>> = () =>
       Promise.resolve({ body: { daemon: { mode: "gateway" } }, date: null });
+    let statusReads = 0;
     daemon.reads = (path) =>
       path === "/v1/status"
-        ? status()
+        ? ((statusReads += 1), status())
         : Promise.resolve({ body: { workers: [] } as unknown, date: null });
     const seen: unknown[] = [];
 
@@ -23,6 +24,7 @@ describe("the daemon's mode", () => {
     store.subscribe(() => seen.push(store.mode()));
     await settle();
     expect(store.mode()).toBe("gateway");
+    expect(statusReads).toBe(1);
 
     const reconnect = async () => {
       daemon.openStream()?.end();

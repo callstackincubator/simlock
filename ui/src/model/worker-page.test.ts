@@ -117,6 +117,26 @@ describe("a worker's row in the list", () => {
     expect(workerRow(worker({ capacity: undefined })).use).toBeUndefined();
   });
 
+  it("has the load meters of a connected worker and none for one that is not connected", () => {
+    expect(workerRow(worker({ load: LOAD })).meters.map((meter) => meter.label)).toEqual([
+      "CPU",
+      "Memory",
+      "Disk",
+    ]);
+    expect(workerRow(worker({ connection: "disconnected", load: LOAD })).meters).toEqual([]);
+  });
+
+  it("shows the Disconnected banner for a disconnected worker only, then Drained", () => {
+    const disconnected = worker({
+      connection: "disconnected",
+      drained: true,
+      lastSeenAt: NOW - 4_000,
+    });
+    expect(inspect(disconnected).banners).toEqual(["Disconnected · last seen 4 s ago", "Drained"]);
+    expect(inspect(worker({ connection: "incompatible" })).banners).toEqual([]);
+    expect(inspect(worker()).banners).toEqual([]);
+  });
+
   it("keeps the list's page and size on the link, and nothing of a worker's own pagers", () => {
     expect(listSearch("?page=2&size=50&devices-page=3&warm-pool-size=50")).toBe("?page=2&size=50");
     expect(listSearch("?devices-page=3")).toBe("");

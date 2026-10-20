@@ -153,4 +153,10 @@ describe("the events of one worker", () => {
       "evt_1",
     ]);
   });
+
+  it("are ordered by time before sequence", () => {
+    const later = { ...event("lease.granted", { workerId: "wrk_1" }, 1), timestamp: T0 + 1_000 };
+    const earlier = { ...event("worker.drained", { workerId: "wrk_1" }, 2), timestamp: T0 };
+    expect(ids(eventsOfWorker([earlier, later], "wrk_1", "gateway"))).toEqual(["evt_1", "evt_2"]);
+  });
 });
