@@ -121,6 +121,15 @@ async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 }
 
+async function openWorkerPage(page: Page, daemon: RunningDaemon): Promise<void> {
+  await openConsole(page, daemon);
+  const view = found((await workerList(daemon))[0], "the host's worker");
+  await row(page, view.label ?? view.id)
+    .getByRole("link")
+    .click();
+  await expect(title(page, view.label ?? view.id)).toBeVisible();
+}
+
 function row(page: Page, name: string): Locator {
   return page.getByRole("row").filter({ has: page.getByRole("link", { exact: true, name }) });
 }
@@ -640,15 +649,24 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("on a single host, the overview shows CPU, memory and disk as figures with the reading's age ticking", async ({
+  test("the worker page shows load meters with the reading's age ticking, capacity cards with the slot legend, and the leases card, all above the tabs", async ({
     daemon,
     page,
   }) => {
-    await openConsole(page, daemon);
+    await openWorkerPage(page, daemon);
 
     await expect(figure(page, "CPU")).toContainText(/\d+% busy, /, { timeout: 20_000 });
     await expect(figure(page, "Memory")).toContainText("available");
     await expect(figure(page, "Disk")).toContainText("free");
+    await expect(figure(page, "Leases")).toContainText("0");
+    const capacity = page.getByRole("group", { name: "Capacity" });
+    await expect(capacity.locator(".card").filter({ hasText: "iOS" })).toContainText("running");
+    await expect(page.locator(".slot-legend")).toContainText("leased");
+    const tabs = await page.getByRole("tablist").boundingBox();
+    for (const above of [figures(page), capacity, page.locator(".slot-legend")]) {
+      const box = await above.boundingBox();
+      expect(box?.y, "a card sits above the tab list").toBeLessThan(tabs?.y ?? 0);
+    }
     const read = page.getByText(/^Read \d+ s ago$/);
     await expect(read).toBeVisible();
     const first = await read.textContent();
@@ -659,7 +677,7 @@ test.describe("the workers page", () => {
     daemon,
     page,
   }) => {
-    await openConsole(page, daemon);
+    await openWorkerPage(page, daemon);
     await expect(figure(page, "CPU")).toContainText("busy", { timeout: 20_000 });
 
     // why: both the worker's reading (every 15 s) and the fill's own slide can move between two
@@ -698,7 +716,7 @@ test.describe("the workers page", () => {
     daemon,
     page,
   }) => {
-    await openConsole(page, daemon);
+    await openWorkerPage(page, daemon);
     await expect(figure(page, "Memory")).toContainText("available");
     // why: only macOS reports a memory pressure, and how full a CI machine's memory happens to be
     // is nobody's to predict. This answers the page's own read of the worker list with the memory
@@ -770,7 +788,7 @@ test.describe("the workers page", () => {
     daemon,
     page,
   }) => {
-    await openConsole(page, daemon);
+    await openWorkerPage(page, daemon);
 
     const fill = figures(page).locator(".load-bar-fill").first();
     await expect(fill).toBeVisible();
