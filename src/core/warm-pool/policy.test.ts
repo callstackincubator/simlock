@@ -849,10 +849,22 @@ describe("warm pool policy", () => {
 
       expect(evaluate(view([shut], { targets: [target(1)], waiting: [queued] }))).toEqual([]);
       expect(
-        evaluate(view([shut], { targets: [target(1)], waiting: [{ ...queued, inFlight: true }] })),
+        evaluate(
+          view([shut], {
+            maxConcurrentBoots: 2,
+            targets: [target(1)],
+            waiting: [{ ...queued, inFlight: true }],
+          }),
+        ),
       ).toEqual([{ action: "boot", deviceId: "shut", reason: "target", target: kind }]);
       expect(
-        evaluate(view([shut], { targets: [target(1)], waiting: [classDemand("full", "android")] })),
+        evaluate(
+          view([shut], {
+            maxConcurrentBoots: 2,
+            targets: [target(1)],
+            waiting: [classDemand("full", "android")],
+          }),
+        ),
       ).toHaveLength(1);
     });
 

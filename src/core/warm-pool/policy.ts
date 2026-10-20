@@ -34,7 +34,7 @@ export type WarmProposal =
   | {
       readonly action: "provision";
       readonly spec: VirtualSpec;
-      readonly reason: "target";
+      readonly reason: "target" | "waiting-request";
       readonly target: VirtualSpec;
     };
 
@@ -164,10 +164,11 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const bootable = view.devices.filter(
     (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
-  const keeps = boots(view, running, bootable, room, held);
+  const queued = boots(view, running, bootable, room, held);
+  const keeps = queued.proposals;
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
-  const wanted = planTargets(view, targets, bootable, keeps, room, held, idle);
+  const wanted = planTargets(view, targets, bootable, queued, room, held, idle);
   return {
     proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
     targets: wanted.reports,
@@ -266,12 +267,18 @@ function overBudget(
   return proposals;
 }
 
+interface QueuePass {
+  readonly proposals: WarmProposal[];
+  readonly started: number;
+}
+
 /**
- * Boots into the slots that are free: first one device for the request at the head of the queue,
- * then the shut-down devices released less than `idle.shutdownAfterMs` ago, most recently released
- * first. A device that does not fit the free room on its platform is passed over. Slots that a
- * waiting request no idle device serves is about to take are held back from the second kind, and
- * so are the slots the reserve holds: the first kind is a request's, not an idle device's.
+ * why: the queue is served in order, one device per waiter. A waiter behind the head gets a
+ * shut-down device booted or a new one created, within `maxConcurrentBoots` counting the pool's
+ * flights, each in-flight waiter and the head's own work; the head's creation stays leasing's.
+ * Then the shut-down devices released less than `idle.shutdownAfterMs` ago, most recently
+ * released first. Slots a waiting request no idle device serves is about to take are held back
+ * from the second kind, and so are the slots the reserve holds.
  */
 function boots(
   view: WarmPolicyView,
@@ -279,38 +286,48 @@ function boots(
   bootable: readonly VirtualDevice[],
   room: Slots,
   held: Slots,
-): DeviceProposal[] {
-  const proposals: DeviceProposal[] = [];
+): QueuePass {
+  const proposals: WarmProposal[] = [];
   const taken = new Set<string>();
-  const boot = (device: VirtualDevice, reason: DeviceProposal["reason"]): void => {
-    taken.add(device.id);
-    claim(room, device);
-    proposals.push({ action: "boot", deviceId: device.id, reason });
-  };
-
-  const unserved: WaitingDemand[] = [];
-  view.waiting.forEach((demand, position) => {
-    // Only the first request in the line, the queue head, is granted a device, and not one
-    // already in flight (strict FIFO): a device booted for one behind it would sit idle, be shut
-    // down by the idle rule, and be booted again. The others still hold a slot below.
-    const device =
-      position === 0 && !demand.inFlight
-        ? bootable.find(
-            (candidate) =>
-              !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
-          )
-        : undefined;
-    if (device !== undefined) boot(device, "waiting-request");
-    else if (demand.inFlight || !running.some((candidate) => serves(candidate, demand))) {
-      unserved.push(demand);
-    }
-  });
-  // A request no device serves will take a free slot of its own (it boots a device or creates
-  // one), so those slots are not the pool's to fill with a device nobody asked for.
-  for (const demand of unserved) {
+  let started = view.inFlight.length + view.waiting.filter((demand) => demand.inFlight).length;
+  const open = (): boolean => started < view.config.maxConcurrentBoots;
+  const hold = (platform: "ios" | "android"): void => {
     room.global -= 1;
-    room[demand.platform] -= 1;
-  }
+    room[platform] -= 1;
+  };
+  const roomFor = (spec: VirtualSpec): boolean => room.global >= 1 && room[spec.platform] >= 1;
+
+  view.waiting.forEach((demand, position) => {
+    if (demand.inFlight) {
+      hold(demand.platform);
+      return;
+    }
+    if (running.some((candidate) => serves(candidate, demand))) return;
+    const device = open()
+      ? bootable.find(
+          (candidate) =>
+            !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
+        )
+      : undefined;
+    if (device !== undefined) {
+      taken.add(device.id);
+      claim(room, device);
+      started += 1;
+      proposals.push({ action: "boot", deviceId: device.id, reason: "waiting-request" });
+      return;
+    }
+    const creatable = view.admit.create(demand.spec) === undefined && roomFor(demand.spec);
+    if (position > 0 && creatable && open()) {
+      started += 1;
+      proposals.push({
+        action: "provision",
+        reason: "waiting-request",
+        spec: demand.spec,
+        target: demand.spec,
+      });
+    } else if (position === 0 && creatable) started += 1;
+    hold(demand.platform);
+  });
 
   const recent = bootable
     .filter(
@@ -322,9 +339,13 @@ function boots(
     )
     .sort((left, right) => compareLeastRecentlyUsed(right, left));
   for (const device of recent) {
-    if (hasWarmRoom(room, held, device)) boot(device, "recently-released");
+    if (hasWarmRoom(room, held, device)) {
+      claim(room, device);
+      started += 1;
+      proposals.push({ action: "boot", deviceId: device.id, reason: "recently-released" });
+    }
   }
-  return proposals;
+  return { proposals, started };
 }
 
 /** The targets with those that resolved to one spec merged into one, counts summed. */
@@ -469,25 +490,32 @@ function planTargets(
   view: WarmPolicyView,
   targets: readonly ResolvedTarget[],
   bootable: readonly VirtualDevice[],
-  keeps: readonly DeviceProposal[],
+  queued: QueuePass,
   room: Slots,
   held: Slots,
   isIdle: (device: VirtualDevice) => boolean,
 ): { proposals: WarmProposal[]; reports: TargetReport[] } {
-  const keepBoots = keeps.map((proposal) => proposal.deviceId);
+  const keepBoots = queued.proposals.flatMap((proposal) =>
+    proposal.action === "boot" ? [proposal.deviceId] : [],
+  );
   const plan: TargetPlan = {
     bootable,
     held,
     proposals: [],
     room,
-    started: view.inFlight.length + keepBoots.length,
+    started: queued.started,
     taken: new Set(keepBoots),
     view,
   };
   const pending = (spec: VirtualSpec): number =>
     view.inFlight.filter((flying) => sameSpec(flying, spec)).length +
-    keepBoots.filter((id) =>
-      view.devices.some((device) => device.id === id && sameSpec(device.spec, spec)),
+    queued.proposals.filter((proposal) =>
+      proposal.action === "provision"
+        ? sameSpec(proposal.spec, spec)
+        : proposal.action === "boot" &&
+          view.devices.some(
+            (device) => device.id === proposal.deviceId && sameSpec(device.spec, spec),
+          ),
     ).length;
   const reports = targets.map(({ count, spec }): TargetReport => {
     const ready = readyOfKind(view.devices, isIdle, spec).length;
