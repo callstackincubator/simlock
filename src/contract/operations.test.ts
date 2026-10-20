@@ -84,6 +84,7 @@ const ROLE_MATRIX: ReadonlyArray<{
     role: "admin",
   },
   { name: "relay.cancel", input: { relayId: "r-1" }, role: "admin" },
+  { name: "alerts.test", input: { destination: "ops" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -167,6 +168,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
     effect: "write",
   },
   { name: "relay.cancel", input: { relayId: "r-1" }, effect: "write" },
+  { name: "alerts.test", input: { destination: "ops" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {
