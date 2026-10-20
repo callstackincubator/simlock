@@ -4,12 +4,13 @@ import { EventBus } from "../../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../../ports/index.js";
 import type { RunningCapacity } from "../capacity/index.js";
 import { DeviceOperationClaims } from "../device-operation-claims.js";
-import type {
-  VirtualDevice,
-  VirtualSpec,
-  LeaseRecord,
-  TargetResolution,
-  WaitingDemand,
+import {
+  exactRequirement,
+  type VirtualDevice,
+  type VirtualSpec,
+  type LeaseRecord,
+  type TargetResolution,
+  type WaitingDemand,
 } from "../domain.js";
 import { BootTimeoutError, type DeviceRequest } from "../driver.js";
 import { SerializedDecision } from "../serialized-decision.js";
@@ -57,6 +58,17 @@ function leaseOn(deviceId: string): LeaseRecord {
     requesterId: "holder",
     ttlDeadline: now + minute,
     ttlMs: minute,
+  };
+}
+
+function waiter(spec: VirtualSpec, inFlight = false): WaitingDemand {
+  return {
+    classOf: () => undefined,
+    inFlight,
+    mode: "full",
+    platform: spec.platform,
+    requirement: exactRequirement(spec),
+    spec,
   };
 }
 
@@ -849,6 +861,43 @@ describe("warm pool targets", () => {
     expect(rig.claims.isClaimed("new-1")).toBe(false);
     expect(rig.state.devices.map((item) => item.state)).toEqual(["ready"]);
     expect(rig.kick).toHaveBeenCalled();
+  });
+
+  it("runs a waiting-request creation under an ownerless boot claim and a provisioning reservation, releases the claim once ready, kicks, and on a throw logs once and holds the spec back a minute", async () => {
+    const behind = { ...kind, model: "iPhone 16" };
+    const waiting = [waiter({ ...kind, model: "iPhone 15" }, true), waiter(behind)];
+    const ok = harness([], { maxConcurrentBoots: 2, waiting: () => waiting });
+
+    await ok.pool.pass();
+    await ok.pool.settle();
+
+    expect(ok.provisionCalls).toHaveLength(1);
+    expect(ok.provisionCalls[0]?.spec).toEqual(behind);
+    expect(ok.provisionCalls[0]?.claim).toEqual({ kind: "boot" });
+    expect(ok.provisionReservations).toHaveLength(1);
+    expect(ok.claims.isClaimed("new-1")).toBe(false);
+    expect(ok.kick).toHaveBeenCalled();
+
+    const failing = harness([], {
+      maxConcurrentBoots: 2,
+      provision: async () => {
+        throw new Error("the runtime would not boot");
+      },
+      waiting: () => waiting,
+    });
+    await failing.pool.pass();
+    await failing.pool.settle();
+    failing.clock.advance(WARM_POOL_TICK_MS);
+    await failing.pool.settle();
+
+    expect(failing.provisionCalls).toHaveLength(1);
+    const warnings = failing.sink.records.filter(
+      (record) => record.message === "warm pool creation of a device failed",
+    );
+    expect(warnings).toHaveLength(1);
+    failing.clock.advance(minute);
+    await failing.pool.settle();
+    expect(failing.provisionCalls).toHaveLength(2);
   });
 
   it("boots a shut-down device of the target's kind before creating one, and counts the target filled", async () => {
