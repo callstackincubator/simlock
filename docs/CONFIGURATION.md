@@ -161,8 +161,9 @@ The folder a daemon lives in decides what it is: `~/.simlock` is a worker and
 `~/.simlock/gateway` is a gateway. No config key names the role. A worker is
 what every simlock daemon has always been; a gateway is a daemon that owns no
 devices and fronts the workers connected to it. `simlock --gateway daemon start`
-starts the gateway (creating it on the first start), and plain `simlock daemon
-start` starts the worker; both run on one machine, each with its own config,
+starts the gateway (creating it on the first start), and `simlock --local daemon
+start` starts the worker (a plain `simlock daemon start` does too, unless only a
+gateway is present); both run on one machine, each with its own config,
 state, socket and log. A `config.json` that still sets `mode` is refused at
 load, with a message that says to remove the key.
 

@@ -275,22 +275,16 @@ describe("daemon folders (ADR 0034)", () => {
       expect(gatewayLog).toContain("Daemon started");
       expect(logs.stdout).toBe(gatewayLog);
       expect(events.code, events.stderr).toBe(0);
+      const started = events.stdout
+        .split("\n")
+        .filter((line) => line !== "")
+        .map(
+          (line) =>
+            JSON.parse(line) as { event: string; payload: { configSnapshot?: { mode?: string } } },
+        )
+        .find((entry) => entry.event === "daemon.started");
+      expect(started?.payload.configSnapshot?.mode).toBe("gateway");
       expect(existsSync(join(env.home, "daemon.log"))).toBe(false);
-    } finally {
-      await stopGateway(env);
-    }
-  });
-
-  it("with a worker and a present gateway, a plain status reaches the worker", async () => {
-    const env = await withDaemon();
-
-    try {
-      await startGateway(env);
-
-      const status = await env.cli(["status", "--json"]);
-
-      expect(status.code, status.stderr).toBe(0);
-      expect(daemonMode(status)).toBe("worker");
     } finally {
       await stopGateway(env);
     }

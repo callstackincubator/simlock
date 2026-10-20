@@ -2532,8 +2532,10 @@ unanswered probe times out with `DAEMON_STARTUP_FAILED`. A connection to an
 already listening daemon keeps the usual `DAEMON_CONNECTION_LOST` behavior.
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
-exists for operators and debugging. `start` starts the worker, and
-`simlock --gateway daemon start` starts the gateway; a second worker for the
+exists for operators and debugging. `start` starts the daemon a plain
+command reaches (the worker, or the gateway on a machine with only a gateway;
+see above), `simlock --gateway daemon start` starts the gateway, and
+`simlock --local daemon start` starts the worker; a second worker for the
 same user cannot start, because the running one's socket refuses it. `status`
 reports the role, both in the human line (`Daemon: running (gateway)`) and
 as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
@@ -2669,8 +2671,10 @@ when it holds one: that key no longer exists (the event history is one SQLite
 file, not rotated generations). The command then prints `Removed
 eventLog.rotateBytes from <config path>: it is no longer used.` on stderr, once.
 
-`simlock config set` writes the worker's `config.json`, and `simlock --gateway
-config set` writes the gateway's (and makes the gateway present). Like every
+`simlock config set` writes the `config.json` of the daemon a plain command
+reaches (the worker's, or the gateway's on a machine with only a gateway), and
+`simlock --gateway config set` writes the gateway's (and makes the gateway
+present). Like every
 `config set`, it is a validated file write, and config is daemon *input*, read
 at start: a running daemon keeps its settings until `daemon stop` and the next
 start. The same command sets a worker's `gateway.url` and `gateway.token` to

@@ -18,25 +18,25 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
 
 ## Files
 
-| File             | Role                                                                                   |
-| ---------------- | -------------------------------------------------------------------------------------- |
-| `index.ts`       | `runCli`: the global `--token` and `--gateway`, the command lookup, the error boundary |
-| `tree.ts`        | The command tree — each node names the module that implements it                       |
-| `environment.ts` | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed      |
-| `types.ts`       | `CliEnvironment` and its ports — types only, so routing loads no code                  |
-| `errors.ts`      | The error → code/exit mapping                                                          |
-| `usage-error.ts` | `UsageError` and `withHelpHint`, the help pointer's one wording                        |
-| `connect.ts`     | `connectDaemonClient`: credential order, the admin session, the notice                 |
-| `args.ts`        | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`             |
-| `commands/*.ts`  | One module per command, `run(argv, context)`; loaded by the tree on a hit              |
-| `format.ts`      | The human renderers for `status`, `worker list`, `daemon start`, etc.                  |
-| `duration.ts`    | `parseDuration` for `--ttl`-style flags                                                |
-| `termination.ts` | The signals and parent-exit wait a held lease blocks on                                |
-| `log-file.ts`    | `readLogFile`: `daemon.log` plus a rotated generation                                  |
-| `stdio.ts`       | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                        |
-| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited                |
-| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                                   |
-| `main.ts`        | The bin; sets `process.exitCode`                                                       |
+| File             | Role                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `index.ts`       | `runCli`: the global `--token`, `--gateway` and `--local`, the command lookup, the error boundary |
+| `tree.ts`        | The command tree — each node names the module that implements it                                  |
+| `environment.ts` | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed                 |
+| `types.ts`       | `CliEnvironment` and its ports — types only, so routing loads no code                             |
+| `errors.ts`      | The error → code/exit mapping                                                                     |
+| `usage-error.ts` | `UsageError` and `withHelpHint`, the help pointer's one wording                                   |
+| `connect.ts`     | `connectDaemonClient`: credential order, the admin session, the notice                            |
+| `args.ts`        | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`                        |
+| `commands/*.ts`  | One module per command, `run(argv, context)`; loaded by the tree on a hit                         |
+| `format.ts`      | The human renderers for `status`, `worker list`, `daemon start`, etc.                             |
+| `duration.ts`    | `parseDuration` for `--ttl`-style flags                                                           |
+| `termination.ts` | The signals and parent-exit wait a held lease blocks on                                           |
+| `log-file.ts`    | `readLogFile`: `daemon.log` plus a rotated generation                                             |
+| `stdio.ts`       | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                                   |
+| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited                           |
+| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                                              |
+| `main.ts`        | The bin; sets `process.exitCode`                                                                  |
 
 `format.ts`, `duration.ts` and `termination.ts` are reached only from a command module, and
 `follow-log.ts` and `passthrough.ts` only from a dynamic import inside `environment.ts`.
