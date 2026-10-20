@@ -20,8 +20,9 @@ Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
 ## How it works
 
 1. **Start** — requester id from `resolveRequesterId(env, "mcp:<pid>")`. It is the
-   principal; no credential, so the session is `agent`. `simlock --gateway mcp` runs the
-   session on the gateway: every connect (a tool call's and a renew's) asks
+   principal; no credential, so the session is `agent`. The daemon follows the CLI's choice
+   (`resolveDaemonHome` with `--gateway`, `--local` or neither); `simlock --gateway mcp` runs the
+   session on the gateway. MCP adds no `--gateway` hint. Every connect (a tool call's and a renew's) asks
    `resolveDaemonHome` again, so a gateway started mid-session is found, and with none
    present the connect throws `GATEWAY_NOT_PRESENT` before it connects, which the tool
    reports as `{ code, message }`.

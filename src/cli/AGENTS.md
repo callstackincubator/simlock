@@ -43,14 +43,18 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
 
 ## How it works
 
-1. **Route** — `runCli` takes out the global `--token` and `--gateway` (bare, anywhere; `--gateway=<x>` is a usage error), then walks `COMMANDS` to the deepest
+1. **Route** — `runCli` takes out the global `--token`, `--gateway` and `--local` (bare, anywhere; `--gateway=<x>` and `--local=<x>` are usage errors, and both flags together are one), then walks `COMMANDS` to the deepest
    node the words name and loads that one module (a parent and its children can share it).
    Nothing runs without a node: an unmatched word is
    a usage error before any command module is read. `--help`/`-h` as the first word, or no
    words, prints the root usage without building an environment at all. Any error is one JSON
    line on stderr, `{ error: { code, message } }`. Exit code: `ERROR_TABLE` `cliExitCode`,
-   2 for a usage error, else 1. `--gateway` makes `resolveDaemonHome` pick `<root>/gateway`
-   (the launcher gets `--gateway`, with `SIMLOCK_HOME` still the root); with no gateway
+   2 for a usage error, else 1. The flag goes to `resolveDaemonHome`, which picks the folder:
+   `--gateway` `<root>/gateway`, `--local` the worker, and with no flag the gateway only when
+   one is present and `<root>/instance.json` does not exist. The launcher gets `--gateway`
+   whenever the chosen role is the gateway (`SIMLOCK_HOME` still the root). When a worker
+   answers `UNSUPPORTED_IN_WORKER_MODE`, no `--gateway` was given and a gateway is present,
+   the printed message gets the `--gateway` hint appended. With `--gateway` and no gateway
    present every command but `daemon start`, `config set` and `mcp` (and any `--help`, except after `adb`/`simctl`)
    stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects.
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
@@ -88,7 +92,7 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    A new identity on `daemon.log.1` is a rotation: print its rest, restart at offset 0.
 8. **`simlock config set`** — validates the merged file with `loadConfig`, writes
    `config.json` atomically, mode `0600`.
-9. **`simlock mcp`** — imports `src/mcp/main.ts` and runs it, passing `--gateway` as `{ gateway }`.
+9. **`simlock mcp`** — imports `src/mcp/main.ts` and runs it, passing the global flag as `{ daemonFlag }`.
 
 ## Rules
 

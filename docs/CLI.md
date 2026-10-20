@@ -28,7 +28,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 
 ## Global flags
 
-Two flags are accepted anywhere on the command line, before or after the
+Three flags are accepted anywhere on the command line, before or after the
 command:
 
 - `--token <secret>` (or `--token=<secret>`) connects as admin with that
@@ -36,8 +36,12 @@ command:
 - `--gateway` sends the command, the daemon auto-start it may trigger, and
   `simlock mcp` to this machine's gateway (the daemon in `~/.simlock/gateway`)
   in place of its worker (the daemon in `~/.simlock`). It takes no value:
-  `--gateway=yes` is a usage error. Without the flag, every command goes to
-  the worker.
+  `--gateway=yes` is a usage error. Without the flag, the command goes to the
+  gateway or the worker as [Which daemon a command
+  reaches](#which-daemon-a-command-reaches) says.
+- `--local` is the mirror of `--gateway`: it always reaches (and auto-starts)
+  this machine's worker in `~/.simlock`. It takes no value (`--local=yes` is a
+  usage error) and cannot be combined with `--gateway`.
 
 A machine has a gateway only after `simlock --gateway daemon start` (the first
 start creates it) or `simlock --gateway config set <key> <value>` (which writes
@@ -46,6 +50,32 @@ its `config.json`). With none, every other `--gateway` command (`status`,
 `lease`, and the rest) exits 2 with `GATEWAY_NOT_PRESENT` and starts nothing,
 reads nothing and writes nothing; a `--gateway mcp` tool call fails with the
 same code. `--help` still prints usage, except after `adb` or `simctl`.
+
+### Which daemon a command reaches
+
+Without `--gateway` or `--local`, a command reaches the gateway when a gateway
+is present (`~/.simlock/gateway/instance.json` or
+`~/.simlock/gateway/config.json` exists) and `~/.simlock/instance.json` does
+not. Otherwise it reaches the worker. A machine with one daemon therefore
+never needs `--gateway`.
+
+| `~/.simlock/instance.json` | gateway present | A plain command reaches |
+| --- | --- | --- |
+| no | no | worker |
+| yes | no | worker |
+| no | yes | gateway |
+| yes | yes | worker, with the hint below on a gateway-only refusal |
+
+An empty `~/.simlock/gateway/` folder does not make a gateway present. A worker
+writes `~/.simlock/instance.json` on its first start, so a worker added after
+the gateway starts with `simlock --local daemon start`; from then on plain
+commands reach the worker again. A plain command run while that first start is
+in flight may still reach the gateway.
+
+When a worker refuses a gateway-only command (`worker drain`, for example) and
+a gateway is present, the message ends with `A gateway also runs on this
+machine: run the command again with --gateway.` The hint is never added when
+`--gateway` was given or when no gateway is present.
 
 To run a gateway beside the worker on one machine:
 
