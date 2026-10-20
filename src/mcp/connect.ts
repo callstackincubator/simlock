@@ -17,7 +17,9 @@ import {
 import {
   DAEMON_STARTUP_TIMEOUT_MS,
   IpcError,
+  startErrorFrom,
   type Clock,
+  type DaemonExit,
   type DaemonLauncher,
   type IpcConnector,
 } from "../ports/index.js";
@@ -53,7 +55,11 @@ export async function connectWithAutoLaunch(
   } catch (error: unknown) {
     if (!isUnavailable(error)) throw error;
   }
-  await options.launcher.launch();
+  const launched = await options.launcher.launch();
+  let exit: DaemonExit | undefined;
+  void launched.exited.then((value) => {
+    exit = value;
+  });
   const deadline = options.clock.now() + (options.startupTimeoutMs ?? DAEMON_STARTUP_TIMEOUT_MS);
   let lastError: unknown;
   while (options.clock.now() < deadline) {
@@ -62,6 +68,20 @@ export async function connectWithAutoLaunch(
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
       lastError = error;
+      if (exit !== undefined) {
+        const output = await launched.readOutput().catch(() => "");
+        try {
+          return await connectToRunningDaemon(options);
+        } catch (lastAttempt: unknown) {
+          if (!isUnavailable(lastAttempt)) throw lastAttempt;
+        }
+        throw new SimlockError(
+          "DAEMON_STARTUP_FAILED",
+          "transport",
+          startErrorFrom(exit, output),
+          {},
+        );
+      }
       await delay(options.clock, options.retryIntervalMs ?? 50);
     }
   }
