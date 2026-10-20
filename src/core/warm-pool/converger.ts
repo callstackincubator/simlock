@@ -1,4 +1,5 @@
 import type { EventBus } from "../../bus/index.js";
+import type { StateDatabase } from "../../state/index.js";
 import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../../ports/index.js";
 import {
   capacityDevice,
@@ -34,6 +35,7 @@ import {
   type WarmProposal,
 } from "./policy.js";
 import type { WarmPoolFigures, WarmTargetFigures } from "./figures.js";
+import { LearnedKinds } from "./learned.js";
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
@@ -64,6 +66,7 @@ export interface WarmPoolOptions {
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
+  readonly state: StateDatabase;
   readonly registry: {
     readonly snapshot: {
       readonly virtualDevices: readonly VirtualDevice[];
@@ -102,6 +105,7 @@ export class WarmPool {
   /** When a target's spec whose boot or creation failed may be tried again. */
   readonly #schedule = new RetrySchedule();
   readonly #flights = new Set<Flight>();
+  readonly #learned: LearnedKinds;
   #again = false;
   #disposed = false;
   /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
@@ -137,6 +141,7 @@ export class WarmPool {
 
   constructor(private readonly options: WarmPoolOptions) {
     this.#logger = options.logger?.child("warm-pool") ?? new NoopLogger();
+    this.#learned = new LearnedKinds(options.state);
   }
 
   start(): void {
@@ -145,7 +150,28 @@ export class WarmPool {
     for (const event of TRIGGERS) {
       this.#unsubscribe.push(this.options.eventBus.subscribe(event, () => this.#trigger()));
     }
+    this.#subscribeLearning();
     this.#armTick();
+  }
+
+  /** why: the pool learns from committed facts on the bus, never from the lease path (ADR 0017 §3). */
+  #subscribeLearning(): void {
+    const { clock, eventBus, registry } = this.options;
+    this.#unsubscribe.push(
+      eventBus.subscribe("lease.granted", ({ payload }) => {
+        const device = registry.snapshot.virtualDevices.find(
+          (candidate) => candidate.id === payload.deviceId,
+        );
+        if (device !== undefined) this.#learned.learn(device.spec, payload.leaseId, clock.now());
+      }),
+    );
+    for (const event of ["lease.released", "lease.expired"] as const) {
+      this.#unsubscribe.push(
+        eventBus.subscribe(event, ({ payload }) =>
+          this.#learned.ended(payload.leaseId, clock.now()),
+        ),
+      );
+    }
   }
 
   dispose(): void {
@@ -210,6 +236,7 @@ export class WarmPool {
       devices,
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
+      learned: this.#learned.kinds(this.options.clock.now()),
       targets: [...this.#resolved, ...this.#spared],
     });
   }
@@ -233,8 +260,10 @@ export class WarmPool {
             const kind = this.#kindOfTarget(target);
             return {
               booting: 0,
+              configuredCount: target.count,
               count: target.count,
               kind,
+              origin: "configured",
               ready: 0,
               target: describeTarget(target),
               ...(enabled ? {} : { short: "disabled" as const }),
@@ -346,9 +375,11 @@ export class WarmPool {
           last === undefined
             ? 0
             : [...this.#flights].filter((flight) => sameSpec(flight.spec, last)).length,
+        configuredCount: target.count,
         count: target.count,
         kind: this.#kindOfTarget(target),
         message: resolution.message,
+        origin: "configured",
         ready: last === undefined ? 0 : readyCount(this.#deviceCounts(), last),
         short: resolution.refusal,
         target: describeTarget(target),
@@ -481,6 +512,7 @@ export class WarmPool {
       ),
       inFlight: [...this.#flights].map((flight) => flight.spec),
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
+      learned: this.#learned.kinds(this.options.clock.now()),
       leases,
       now: this.options.clock.now(),
       onItsWay: this.#onItsWay(devices),

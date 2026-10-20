@@ -8,7 +8,7 @@ import {
   type PhysicalDevice,
   UnknownModelError,
 } from "../core/index.js";
-import { FakeDriver, loadTestRegistry, testComponentWiring } from "../core/testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring, testStateOf } from "../core/testing.js";
 import { EventBus, type EventMap } from "../bus/index.js";
 import { FakeClock, FakeSystemStats } from "../ports/index.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
@@ -134,6 +134,7 @@ async function createHarness(
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
   });
   return { bus, clock, decisions: wiring.decisions, driver, engine, registry };

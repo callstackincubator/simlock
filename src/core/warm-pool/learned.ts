@@ -1,0 +1,143 @@
+import type { SqliteDatabase, SqliteSchemaOwner } from "../../ports/index.js";
+import type { StateDatabase } from "../../state/index.js";
+import type { Platform, VirtualSpec } from "../domain.js";
+
+const WARM_POOL_V1 = `
+CREATE TABLE warm_kinds (
+  id INTEGER PRIMARY KEY,
+  platform TEXT NOT NULL,
+  model TEXT NOT NULL,
+  os_version TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  image_tag TEXT NOT NULL,
+  last_leased_at INTEGER NOT NULL,
+  UNIQUE (platform, model, os_version, mode, image_tag)
+) STRICT;
+
+CREATE TABLE warm_kind_leases (
+  lease_id TEXT PRIMARY KEY,
+  kind_id INTEGER NOT NULL REFERENCES warm_kinds (id),
+  granted_at INTEGER NOT NULL,
+  ended_at INTEGER
+) STRICT;
+`;
+
+export const warmPoolOwner: SqliteSchemaOwner = {
+  migrations: [WARM_POOL_V1],
+  name: "warm-pool",
+  version: 1,
+};
+
+export const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export const LEARNED_KINDS_PER_PLATFORM = 32;
+
+export interface LearnedKind {
+  readonly spec: VirtualSpec;
+  readonly count: number;
+  readonly lastLeasedAt: number;
+}
+
+/**
+ * why: the record of the kinds this worker granted a lease of and the leases that make up each
+ * one's peak. It stores no device id, so the registry and this record never need to agree. Every
+ * method lets a database error through: the converger decides what a failed read or write costs.
+ */
+export class LearnedKinds {
+  readonly #state: StateDatabase;
+
+  constructor(state: StateDatabase) {
+    this.#state = state;
+  }
+
+  learn(spec: VirtualSpec, leaseId: string, at: number): void {
+    this.#state.transaction(() => {
+      const database = this.#state.database;
+      const row = database
+        .prepare(
+          `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, last_leased_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (platform, model, os_version, mode, image_tag)
+           DO UPDATE SET last_leased_at = excluded.last_leased_at
+           RETURNING id`,
+        )
+        .get(
+          spec.platform,
+          spec.model,
+          spec.osVersion,
+          spec.mode ?? "full",
+          spec.imageTag ?? "",
+          at,
+        );
+      database
+        .prepare(
+          "INSERT OR REPLACE INTO warm_kind_leases (lease_id, kind_id, granted_at, ended_at) VALUES (?, ?, ?, NULL)",
+        )
+        .run(leaseId, Number(row?.id), at);
+      database
+        .prepare("DELETE FROM warm_kind_leases WHERE ended_at < ?")
+        .run(at - LEARNED_WINDOW_MS);
+    });
+  }
+
+  ended(leaseId: string, at: number): void {
+    this.#state.database
+      .prepare("UPDATE warm_kind_leases SET ended_at = ? WHERE lease_id = ? AND ended_at IS NULL")
+      .run(at, leaseId);
+  }
+
+  kinds(now: number): LearnedKind[] {
+    const database: SqliteDatabase = this.#state.database;
+    const windowStart = now - LEARNED_WINDOW_MS;
+    return database
+      .prepare(
+        "SELECT id, platform, model, os_version, mode, image_tag, last_leased_at FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+      )
+      .all()
+      .map((row) => {
+        const leases = database
+          .prepare("SELECT granted_at, ended_at FROM warm_kind_leases WHERE kind_id = ?")
+          .all(Number(row.id))
+          .map((lease) => ({
+            end: lease.ended_at === null ? now : Number(lease.ended_at),
+            start: Math.max(Number(lease.granted_at), windowStart),
+          }));
+        return {
+          count: Math.max(1, peakOverlap(leases, windowStart)),
+          lastLeasedAt: Number(row.last_leased_at),
+          spec: specOf(row),
+        };
+      });
+  }
+}
+
+function peakOverlap(
+  intervals: readonly { readonly start: number; readonly end: number }[],
+  floor: number,
+): number {
+  const edges = intervals
+    .filter((interval) => interval.end > floor)
+    .flatMap((interval) => [
+      { at: interval.start, delta: 1 },
+      { at: interval.end, delta: -1 },
+    ])
+    .sort((left, right) => left.at - right.at || left.delta - right.delta);
+  let open = 0;
+  let peak = 0;
+  for (const edge of edges) {
+    open += edge.delta;
+    peak = Math.max(peak, open);
+  }
+  return peak;
+}
+
+function specOf(row: Record<string, unknown>): VirtualSpec {
+  return {
+    model: String(row.model),
+    osVersion: String(row.os_version),
+    physical: false,
+    platform: String(row.platform) as Platform,
+    ...(row.mode === "slim" ? { mode: "slim" as const } : {}),
+    ...(row.image_tag === "" ? {} : { imageTag: String(row.image_tag) }),
+  };
+}

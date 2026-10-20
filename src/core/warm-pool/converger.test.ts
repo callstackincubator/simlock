@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../../ports/index.js";
@@ -14,11 +14,20 @@ import {
 } from "../domain.js";
 import { BootTimeoutError, type DeviceRequest } from "../driver.js";
 import { SerializedDecision } from "../serialized-decision.js";
+import type { StateDatabase } from "../../state/index.js";
+import { openMemoryState } from "../testing.js";
 import type { WarmTarget } from "./config.js";
 import { WARM_POOL_TICK_MS, WarmPool, type WarmPoolOptions } from "./converger.js";
+import { warmPoolOwner } from "./learned.js";
 
 const minute = 60_000;
 const now = 1_000 * minute;
+
+let learnedState: StateDatabase;
+
+beforeEach(async () => {
+  learnedState = await openMemoryState([warmPoolOwner]);
+});
 
 function device(
   id: string,
@@ -98,6 +107,7 @@ function harness(
     reserveThrows?: boolean;
     refusedPlatforms?: readonly ("ios" | "android")[];
     provisioning?: Promise<void>;
+    state?: StateDatabase;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -298,6 +308,7 @@ function harness(
         return { leases: state.leases, virtualDevices: state.devices };
       },
     },
+    state: options.state ?? learnedState,
   };
   const pool = new WarmPool(poolOptions);
   return {
@@ -1274,6 +1285,7 @@ describe("warm pool targets", () => {
     expect(rig.pool.targets()).toEqual([
       {
         booting: 0,
+        configuredCount: 1,
         count: 1,
         kind: {
           mode: "full",
@@ -1282,6 +1294,7 @@ describe("warm pool targets", () => {
           platform: "ios",
         },
         message: "iOS 27.0 is not installed",
+        origin: "configured",
         ready: 0,
         short: "runtime-missing",
         target: "ios iPhone 17 27.0",

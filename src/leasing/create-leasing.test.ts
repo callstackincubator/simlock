@@ -11,7 +11,7 @@ import {
   type Registry,
   UnknownLeaseError,
 } from "../core/index.js";
-import { type CapacityLimits, type ResourceStrategyOptions } from "../core/testing.js";
+import { type CapacityLimits, type ResourceStrategyOptions, testStateOf } from "../core/testing.js";
 import {
   capacityChangedPayload,
   FakeDriver,
@@ -225,6 +225,7 @@ async function createHarness(
       ? {}
       : { modelPreferences: options.modelPreferences }),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
 
@@ -1581,13 +1582,14 @@ describe("createLeasing RAM budget by mode", () => {
     ] as const) {
       await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
     }
+    await after.engine.settle();
+    // why: the pool keeps the kind the reused lease taught it: the one slim device it made takes the 2 GiB the deletes freed.
+    expect(operations(driver, "makeReady")).toBe(boots + 1);
     expect(after.engine.ramBudget).toEqual({
       limitBytes: 5 * gibibyte,
       overLimit: false,
-      usedBytes: 2 * gibibyte,
+      usedBytes: 4 * gibibyte,
     });
-    await after.engine.request(request, { noWait: true, ownerId: "new", requesterId: "new" });
-    expect(operations(driver, "provision")).toBe(provisions + 1);
   });
 });
 
@@ -1734,6 +1736,7 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
       eventBus: bus1,
       idGenerator,
       registry: registry1,
+      state: testStateOf(registry1),
       systemStats: systemStats(),
     });
     const granted = await engine1.request(request, {
@@ -1776,6 +1779,7 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
       eventBus: bus2,
       idGenerator,
       registry: registry2,
+      state: testStateOf(registry2),
       systemStats: systemStats(),
     });
 
@@ -1998,6 +2002,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       eventBus: bus,
       idGenerator,
       registry: beforeRegistry,
+      state: testStateOf(beforeRegistry),
       systemStats,
     });
     const granted = await before.request(request, { ownerId: "a", requesterId: "a" });
@@ -2025,6 +2030,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       eventBus: bus,
       idGenerator,
       registry,
+      state: testStateOf(registry),
       systemStats,
     });
     await after.convergeRunningCapacity();
@@ -2123,6 +2129,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       eventBus: bus,
       idGenerator,
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * gibibyte,

@@ -13,6 +13,7 @@ import {
   type WaitingDemand,
 } from "../domain.js";
 import { compareLeastRecentlyUsed } from "../idle-order.js";
+import type { LearnedKind } from "./learned.js";
 
 /**
  * What one pass acts on: shut a running device down, boot a shut-down one back, or create a new
@@ -72,7 +73,9 @@ export interface TargetReport {
   /** The kind as resolved, or as configured for a target that did not resolve. */
   readonly kind: TargetKind;
   readonly spec?: VirtualSpec;
+  readonly origin: "configured" | "learned";
   readonly count: number;
+  readonly configuredCount: number;
   readonly ready: number;
   /** Boots and creations of the kind running or proposed in the pass. */
   readonly booting: number;
@@ -104,6 +107,7 @@ export interface WarmPolicyView {
   readonly targets: readonly ResolvedTarget[];
   /** Targets whose resolution failed and that keep a stale spec: their devices are spared. */
   readonly spared: readonly ResolvedTarget[];
+  readonly learned: readonly LearnedKind[];
   /** why: the spec of each boot or creation of the pool still running, for a target or a waiter; they count toward the boot cap. */
   readonly inFlight: readonly VirtualSpec[];
   readonly onItsWay: readonly { readonly spec: VirtualSpec; readonly deviceId?: string }[];
@@ -170,7 +174,15 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const keeps = queued.proposals;
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
-  const wanted = planTargets(view, targets, bootable, queued, room, held, idle);
+  const wanted = planTargets(
+    view,
+    plannedKinds(targets, view.learned),
+    bootable,
+    queued,
+    room,
+    held,
+    idle,
+  );
   return {
     proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
     targets: wanted.reports,
@@ -412,6 +424,61 @@ function createForWaiter(state: QueueState, demand: WaitingDemand, head: boolean
   } else state.stuck.add(demand.platform);
 }
 
+interface PlannedKind {
+  readonly spec: VirtualSpec;
+  readonly configuredCount: number;
+  readonly learnedCount: number;
+  readonly origin: "configured" | "learned";
+}
+
+// why: configured targets fill in config order, then learned kinds newest first; a learned kind of a configured target's spec is that entry, not a second one.
+function plannedKinds(
+  targets: readonly ResolvedTarget[],
+  learned: readonly LearnedKind[],
+): PlannedKind[] {
+  const kinds: PlannedKind[] = targets.map((target) => ({
+    configuredCount: target.count,
+    learnedCount: 0,
+    origin: "configured",
+    spec: target.spec,
+  }));
+  for (const kind of learned) {
+    const index = kinds.findIndex((entry) => sameSpec(entry.spec, kind.spec));
+    const existing = kinds[index];
+    if (existing === undefined) {
+      kinds.push({
+        configuredCount: 0,
+        learnedCount: kind.count,
+        origin: "learned",
+        spec: kind.spec,
+      });
+    } else kinds[index] = { ...existing, learnedCount: kind.count };
+  }
+  return kinds;
+}
+
+/**
+ * why: what a learned kind has: its ready idle devices, and the ones leased, reclaiming or under
+ * an operation claim (a reclaim that has not yet given its claim up), which come back on their own.
+ * A burst held at its peak so makes nothing more.
+ */
+function haveOfKind(
+  view: WarmPolicyView,
+  isIdle: (device: VirtualDevice) => boolean,
+  spec: VirtualSpec,
+): number {
+  const leased = new Set(view.leases.map((lease) => lease.deviceId));
+  const ready = new Set(readyOfKind(view.devices, isIdle, spec).map((device) => device.id));
+  return view.devices.filter(
+    (device) =>
+      sameSpec(device.spec, spec) &&
+      (ready.has(device.id) ||
+        leased.has(device.id) ||
+        device.state === "reclaiming" ||
+        (device.state !== "provisioning" && view.isClaimed(device.id))),
+  ).length;
+}
+
 /** The targets with those that resolved to one spec merged into one, counts summed. */
 function mergeTargets(targets: readonly ResolvedTarget[]): ResolvedTarget[] {
   const merged: ResolvedTarget[] = [];
@@ -471,13 +538,16 @@ export function readyCount(input: DeviceCounts, spec: VirtualSpec): number {
  * devices a target counts.
  */
 export function targetedDevices(
-  input: DeviceCounts & { readonly targets: readonly ResolvedTarget[] },
+  input: DeviceCounts & {
+    readonly targets: readonly ResolvedTarget[];
+    readonly learned: readonly LearnedKind[];
+  },
 ): ReadonlySet<string> {
   const isIdle = idlePredicate(input.leases, input.isClaimed);
   return new Set(
-    mergeTargets(input.targets).flatMap((target) =>
-      readyOfKind(input.devices, isIdle, target.spec)
-        .slice(0, target.count)
+    plannedKinds(mergeTargets(input.targets), input.learned).flatMap((kind) =>
+      readyOfKind(input.devices, isIdle, kind.spec)
+        .slice(0, Math.max(kind.configuredCount, kind.learnedCount))
         .map((device) => device.id),
     ),
   );
@@ -495,7 +565,10 @@ function neverLeasedIdle(
   proposed: readonly DeviceProposal[],
   room: Slots,
 ): DeviceProposal[] {
-  const kept = targetedDevices({ ...view, targets: [...view.targets, ...view.spared] });
+  const kept = targetedDevices({
+    ...view,
+    targets: [...view.targets, ...view.spared],
+  });
   const already = new Set(proposed.map((proposal) => proposal.deviceId));
   const proposals: DeviceProposal[] = [];
   for (const device of running) {
@@ -553,7 +626,7 @@ interface TargetPlan {
  */
 function planTargets(
   view: WarmPolicyView,
-  targets: readonly ResolvedTarget[],
+  targets: readonly PlannedKind[],
   bootable: readonly VirtualDevice[],
   queued: QueuePass,
   room: Slots,
@@ -583,16 +656,19 @@ function planTargets(
             (device) => device.id === proposal.deviceId && sameSpec(device.spec, spec),
           ),
     ).length;
-  const reports = targets.map(({ count, spec }): TargetReport => {
+  const reports = targets.map(({ configuredCount, learnedCount, origin, spec }): TargetReport => {
     const ready = readyOfKind(view.devices, isIdle, spec).length;
     const filling = pending(spec);
-    const missing = count - ready - filling;
+    const missing =
+      Math.max(configuredCount - ready, learnedCount - haveOfKind(view, isIdle, spec)) - filling;
     const before = plan.proposals.length;
     const short = missing > 0 ? fillTarget(plan, spec, missing, filling > 0) : undefined;
     const report = {
       booting: filling + plan.proposals.length - before,
-      count,
+      configuredCount,
+      count: Math.max(configuredCount, learnedCount),
       kind: kindOf(spec),
+      origin,
       ready,
       spec,
       target: describeTarget(spec),

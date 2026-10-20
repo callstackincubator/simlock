@@ -37,6 +37,7 @@ import {
   OwnedRootError,
   Registry,
   registryOwner,
+  warmPoolOwner,
   Nuke,
   SerializedDecision,
   sweepWriteLeftovers,
@@ -251,7 +252,7 @@ async function composeDaemon(
     owners:
       role === "gateway"
         ? [tokensOwner, drainedWorkersOwner]
-        : [registryOwner, tokensOwner, ...new Set(deviceDataTables.values())],
+        : [registryOwner, warmPoolOwner, tokensOwner, ...new Set(deviceDataTables.values())],
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
@@ -386,6 +387,7 @@ async function composeDaemon(
     optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
     registry,
+    state,
     systemStats,
   });
   const leaseEnvironment: Record<string, string> = Object.assign(

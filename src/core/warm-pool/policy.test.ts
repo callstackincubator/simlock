@@ -147,6 +147,7 @@ function view(
     reset?: readonly string[];
     targets?: readonly ResolvedTarget[];
     spared?: readonly ResolvedTarget[];
+    learned?: WarmPolicyView["learned"];
     inFlight?: readonly VirtualSpec[];
     onItsWay?: WarmPolicyView["onItsWay"];
     maxConcurrentBoots?: number;
@@ -166,6 +167,7 @@ function view(
       mayAttempt: (target) => !(options.blocked ?? []).some((held) => sameSpec(held, target)),
     },
     spared: options.spared ?? [],
+    learned: options.learned ?? [],
     targets: options.targets ?? [],
     capacity: capacityOf(
       devices,
@@ -1070,6 +1072,7 @@ describe("warm pool policy", () => {
       expect(result.targets).toEqual([
         {
           booting: 0,
+          configuredCount: 1,
           count: 1,
           kind: {
             mode: "full",
@@ -1077,6 +1080,7 @@ describe("warm pool policy", () => {
             osVersion: "26.0",
             platform: "ios",
           },
+          origin: "configured",
           ready: 0,
           short: "running-limit",
           spec: kind,
@@ -1121,6 +1125,7 @@ describe("warm pool policy", () => {
       expect(result.targets).toStrictEqual([
         {
           booting: 0,
+          configuredCount: 1,
           count: 1,
           kind: {
             mode: "full",
@@ -1128,6 +1133,7 @@ describe("warm pool policy", () => {
             osVersion: "26.0",
             platform: "ios",
           },
+          origin: "configured",
           ready: 1,
           spec: kind,
           target: "ios iPhone 17 26.0",
@@ -1270,6 +1276,7 @@ describe("warm pool policy", () => {
       expect(result.targets).toStrictEqual([
         {
           booting: 0,
+          configuredCount: 1,
           count: 1,
           kind: {
             mode: "full",
@@ -1277,6 +1284,7 @@ describe("warm pool policy", () => {
             osVersion: "26.0",
             platform: "ios",
           },
+          origin: "configured",
           ready: 1,
           spec: kind,
           target: "ios iPhone 17 26.0",
@@ -1305,6 +1313,7 @@ describe("warm pool policy", () => {
       ]);
       expect(result.targets[0]).toStrictEqual({
         booting: 1,
+        configuredCount: 2,
         count: 2,
         kind: {
           mode: "full",
@@ -1312,6 +1321,7 @@ describe("warm pool policy", () => {
           osVersion: "26.0",
           platform: "ios",
         },
+        origin: "configured",
         ready: 0,
         spec: kind,
         target: "ios iPhone 17 26.0",
@@ -1486,6 +1496,7 @@ describe("warm pool policy", () => {
         devices: [leasedReady],
         isClaimed: () => false,
         leases: [leaseOn(leasedReady)],
+        learned: [],
         targets: [target(1)],
       });
 
@@ -1497,6 +1508,7 @@ describe("warm pool policy", () => {
         devices,
         isClaimed: (id: string) => id === "claimed",
         leases: devices.filter((item) => item.state === "leased").map(leaseOn),
+        learned: [],
         targets,
       });
 
