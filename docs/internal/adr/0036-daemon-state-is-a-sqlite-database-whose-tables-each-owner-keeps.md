@@ -135,8 +135,9 @@ stateDiagram-v2
 - **Old files.** A daemon whose folder still has `state.json`,
   `tokens.json` or `workers.json` refuses to start. Its message names the
   file and the upgrade step: with the old version, release every lease and
-  run `simlock nuke --delete`, then remove the file. Nothing is imported.
-  Tokens are created again with `simlock token create`.
+  run `simlock nuke --delete-devices`, then remove the file. Nothing is
+  imported. Tokens are created again with `simlock token create`, and
+  physical devices are added again with `simlock device add`.
 - **Damage.** `PRAGMA quick_check` runs on open. A file that fails it, or
   will not open, refuses to start on both daemon kinds, naming the file.
   Nothing is set aside or deleted. A lock held by another process waits up
@@ -146,7 +147,10 @@ stateDiagram-v2
   as `history.db` does.
 - **Downgrade.** An older Simlock finds no `state.json` and starts empty.
   The docs say: before downgrading, release every lease and run
-  `simlock nuke --delete`.
+  `simlock nuke --delete-devices`.
+- **Seen where it is started.** Every refusal is the daemon's start error.
+  A CLI or MCP server that auto-started the daemon prints that error as
+  soon as the daemon exits, in place of a timeout.
 
 ## Consequences
 
@@ -164,8 +168,9 @@ stateDiagram-v2
   adapter, and on a temporary file where a test restarts the daemon.
   About 36 test files switch from `statePath` and `MemoryFilesystem` to one
   helper.
-- Upgrading from 0.3 or older takes an operator step: release, nuke,
-  remove the old files, create tokens again.
+- Upgrading from a Simlock that wrote JSON takes an operator step:
+  release, nuke, remove the old files, create tokens again, add physical
+  devices again.
 - `docs/CONFIGURATION.md`, `docs/CLI.md`, ARCHITECTURE.md, the startup
   flow and the core, auth, gateway and daemon manuals stop naming the JSON
   files.
