@@ -41,6 +41,7 @@ interface WorkerView {
     readonly id: string;
     readonly deviceId: string;
     readonly grantedAt: number;
+    readonly requesterId: string;
   }[];
   readonly load?: {
     readonly readAt: number;
@@ -620,6 +621,85 @@ test.describe("the workers page", () => {
         );
         await expect(cells.nth(2)).not.toContainText(`${shownSeconds} s expires`);
       }
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("a Devices row opens the drawer at /fleet/<id>/<deviceId> with the device's model, runtime, state word, and holder and lease when leased; a leased device shows its UDID and an unleased simulator shows no UDID field", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await lease(host, "console-e2e-1");
+      await lease(host, "console-e2e-2");
+      expect((await host.cli(["release", "--all", "--yes"])).code).toBe(0);
+      await lease(host, "console-e2e-3");
+      await waitFor(
+        async () =>
+          (await status(host)).devices.every(
+            (device) => device.state === "ready" || device.state === "leased",
+          ),
+        { label: "every device ready or leased" },
+      );
+      const { devices } = await status(host);
+      const [view] = await workerList(host);
+      const workerId = found(view, "the host's worker").id;
+      const leased = found(
+        devices.find((device) => device.state === "leased"),
+        "a leased device",
+      );
+      const idle = found(
+        devices.find((device) => device.state === "ready"),
+        "a ready device",
+      );
+      const held = found(
+        view?.leases.find((candidate) => candidate.deviceId === leased.id),
+        "the lease on the leased device",
+      );
+      const asked = await fetch(new URL(`/v1/leases/${encodeURIComponent(held.id)}`, host.url), {
+        headers: { Authorization: `Bearer ${host.tokens.operator}` },
+      });
+      const udid = ((await asked.json()) as { lease: { udid: string } }).lease.udid;
+      expect(udid).not.toBe("");
+
+      await openWorkerPage(page, host);
+      const devicesTable = page.getByRole("region", { name: "Devices", exact: true });
+      const drawer = page.getByRole("dialog");
+
+      await devicesTable
+        .getByRole("row")
+        .filter({ hasText: idle.id })
+        .getByRole("cell")
+        .nth(3)
+        .click();
+      await expect(page).toHaveURL(
+        new RegExp(
+          `/fleet/${encodeURIComponent(workerId)}/${encodeURIComponent(idle.id)}\\?tab=devices$`,
+        ),
+      );
+      await expect(fact(drawer, "Model")).toHaveText(idle.spec.model);
+      await expect(fact(drawer, "Runtime")).toHaveText(idle.spec.osVersion);
+      await expect(fact(drawer, "State")).toHaveText("ready");
+      await expect(drawer.getByText("Holder")).toHaveCount(0);
+      await expect(drawer.getByText("UDID")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(drawer).toBeHidden();
+
+      await devicesTable
+        .getByRole("row")
+        .filter({ hasText: leased.id })
+        .getByRole("cell")
+        .nth(3)
+        .click();
+      await expect(fact(drawer, "Model")).toHaveText(leased.spec.model);
+      await expect(fact(drawer, "State")).toHaveText("leased");
+      await expect(fact(drawer, "Holder")).toHaveText(held.requesterId);
+      await expect(fact(drawer, "Lease").getByRole("link")).toHaveAttribute(
+        "href",
+        new RegExp(`/leases/${encodeURIComponent(held.id)}/?$`),
+      );
+      await expect(fact(drawer, "UDID")).toHaveText(udid);
     } finally {
       await host.dispose();
     }
