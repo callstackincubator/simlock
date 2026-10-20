@@ -160,8 +160,8 @@ stateDiagram-v2
   to 5 s and is never taken for damage.
 - **Order.** The daemon first checks whether its socket answers; if it
   does, it refuses with `DaemonAlreadyRunningError` before it opens
-  anything. Only then does it open `state.db`, run the old-file check and
-  migrate, and last claim its socket. A newer binary started beside a
+  anything. Only then does it run the old-file check, then open `state.db`
+  (with its damage check) and migrate, and last claim its socket. A newer binary started beside a
   running daemon therefore never migrates that daemon's live file. Two
   daemons starting at the same moment are still caught by the socket claim.
 - **Versions.** A stored version newer than the code's (a downgrade), or a
