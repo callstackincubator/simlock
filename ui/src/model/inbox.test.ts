@@ -282,6 +282,50 @@ describe("the Inbox items of a lease about to end", () => {
   });
 });
 
+describe("the order of the Inbox items", () => {
+  it("keeps the order given for problems, puts the longest wait first and the least time left first", () => {
+    const request = (id: string, waitedMs: number): WaitingRequest => ({
+      createdAt: NOW - waitedMs,
+      id,
+      queuePosition: 1,
+      requesterId: "agent-b",
+      spec: { model: "iPhone 16", platform: "ios" },
+      stage: "queued",
+    });
+    const lease = (id: string, leftMs: number): LeaseRecord => ({
+      deviceId: "dev_1",
+      grantedAt: NOW - 60_000,
+      id,
+      idChosenByRequester: false,
+      lastRenewedAt: NOW - 30_000,
+      ownerId: "tok_1",
+      requesterId: "tok_1",
+      ttlDeadline: NOW + leftMs,
+      ttlMs: 900_000,
+    });
+    const workers = [
+      worker({ drained: true, id: "wrk_z" }),
+      worker({ drained: true, id: "wrk_a", devices: [device("dev_2", { state: "quarantined" })] }),
+    ];
+
+    const keys = inboxItems(workers, {
+      leases: [lease("lse_b", 200_000), lease("lse_a", 100_000)],
+      now: NOW,
+      requests: [request("req_new", 70_000), request("req_old", 90_000)],
+    }).map((item) => item.key);
+
+    expect(keys).toEqual([
+      "wrk_z/drained",
+      "wrk_a/drained",
+      "wrk_a/dev_2/quarantined",
+      "request/req_old/waiting",
+      "request/req_new/waiting",
+      "lease/lse_a/ending",
+      "lease/lse_b/ending",
+    ]);
+  });
+});
+
 describe("the Inbox page", () => {
   it("lists a row per item, naming the worker or the device on its worker", () => {
     const page = pageOf([
