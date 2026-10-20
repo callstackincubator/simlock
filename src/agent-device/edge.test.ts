@@ -9,13 +9,8 @@ import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { NodeSqliteOpener } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
-import {
-  CryptoTokenSecrets,
-  FakeClock,
-  JsonLinesLogger,
-  MemoryFilesystem,
-  MemoryLogSink,
-} from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import { seedTokensDatabase } from "../auth/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -145,23 +140,12 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   temporaryDirectories.push(directory);
   const clock = new FakeClock(1_000);
   const filesystem = new MemoryFilesystem();
-  await filesystem.mkdirp(directory);
-  const hasher = new CryptoTokenSecrets();
-  const record = (id: string, secret: string, role: string) => ({
-    createdAt: 0,
-    hash: hasher.hash(secret),
-    id,
-    role,
-  });
-  await filesystem.writeFileAtomic(
-    join(directory, "tokens.json"),
-    JSON.stringify([
-      record(principals.one, secrets.one, "agent"),
-      record(principals.two, secrets.two, "agent"),
-      record("tok_operator", secrets.operator, "operator"),
-      record("tok_worker", secrets.worker, "worker"),
-    ]),
-  );
+  await seedTokensDatabase(directory, [
+    [principals.one, secrets.one, "agent"],
+    [principals.two, secrets.two, "agent"],
+    ["tok_operator", secrets.operator, "operator"],
+    ["tok_worker", secrets.worker, "worker"],
+  ]);
   const port = await freeLoopbackPort();
   const fake = options.upstream ?? new FakeAgentDevice();
   const drivers = options.drivers?.(clock) ?? [iosDriver(clock)];

@@ -56,7 +56,8 @@ import {
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
-import { createAuth } from "../auth/index.js";
+import { createAuth, tokensOwner } from "../auth/index.js";
+import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
@@ -378,6 +379,7 @@ async function buildDispatcher(
     clock,
     config: { enabled: false, host: "127.0.0.1", port: 4700 },
     dataDirectory: "/",
+    database: (await openMemoryStateDatabase([tokensOwner])).database,
     filesystem,
     idGenerator: sequence(),
     keySetFetcher: new FakeKeySetFetcher(),

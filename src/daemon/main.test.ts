@@ -23,6 +23,7 @@ import {
   fakeDeviceDataTables,
   loadTestRegistry,
 } from "../core/testing.js";
+import { seedTokensDatabase } from "../auth/testing.js";
 import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
@@ -31,7 +32,6 @@ import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
-  CryptoTokenSecrets,
   FakeClock,
   FakeHostInfo,
   FakeHostLoadProbe,
@@ -1330,15 +1330,8 @@ describe("startDaemon HTTP gateway startup readiness", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
     const secret = "slk_test_agent";
-    await filesystem.mkdirp(directory);
-    await filesystem.writeFileAtomic(
-      join(directory, "tokens.json"),
-      JSON.stringify([
-        { id: "tok_agent", hash: secrets.hash(secret), role: "agent", createdAt: 0 },
-      ]),
-    );
+    await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
     const port = await freeLoopbackPort();
 
     const startPromise = startDaemon({
@@ -1719,15 +1712,10 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
-    await filesystem.mkdirp(directory);
-    await filesystem.writeFileAtomic(
-      join(directory, "tokens.json"),
-      JSON.stringify([
-        { id: "tok_agent", hash: secrets.hash("slk_cause_agent"), role: "agent", createdAt: 0 },
-        { id: "tok_op", hash: secrets.hash("slk_cause_operator"), role: "operator", createdAt: 0 },
-      ]),
-    );
+    await seedTokensDatabase(directory, [
+      ["tok_agent", "slk_cause_agent", "agent"],
+      ["tok_op", "slk_cause_operator", "operator"],
+    ]);
     const port = await freeLoopbackPort();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));

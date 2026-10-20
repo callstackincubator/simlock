@@ -13,13 +13,13 @@ import type { DaemonServer } from "../daemon/server.js";
 import type { WebSocketUplinkListenerFactory } from "../ports/uplink-websocket.js";
 import type { GatewayRelay } from "../gateway/index.js";
 import {
-  CryptoTokenSecrets,
   FakeClock,
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
   type Filesystem,
 } from "../ports/index.js";
+import { seedTokensDatabase } from "../auth/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -182,29 +182,13 @@ function driverFor(
   });
 }
 
-async function agentTokensFile(filesystem: Filesystem, directory: string, records: string[][]) {
-  await filesystem.mkdirp(directory);
-  const hasher = new CryptoTokenSecrets();
-  await filesystem.writeFileAtomic(
-    join(directory, "tokens.json"),
-    JSON.stringify(
-      records.map(([id, secret, role]) => ({
-        createdAt: 0,
-        hash: hasher.hash(secret as string),
-        id,
-        role,
-      })),
-    ),
-  );
-}
-
 // fallow-ignore-next-line complexity -- one rig that starts a gateway and any number of workers over a real uplink.
 async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const directory = await mkdtemp(join(tmpdir(), "sl-gw-"));
   temporaryDirectories.push(directory);
   const clock = new FakeClock(1_000);
   const filesystem = new MemoryFilesystem();
-  await agentTokensFile(filesystem, directory, [
+  await seedTokensDatabase(directory, [
     [principals.one, secrets.one, "agent"],
     [principals.two, secrets.two, "agent"],
     ["tok_operator", secrets.operator, "operator"],
@@ -268,9 +252,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     let directPort: number | undefined;
     if (spec.direct === true) {
       directPort = await freeLoopbackPort();
-      await agentTokensFile(workerFilesystem, workerDirectory, [
-        [principals.one, secrets.direct, "agent"],
-      ]);
+      await seedTokensDatabase(workerDirectory, [[principals.one, secrets.direct, "agent"]]);
     }
     const started = startDaemon({
       clock: workerClock,

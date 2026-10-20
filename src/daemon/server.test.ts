@@ -51,7 +51,9 @@ import {
   type Auth,
   createAuth,
   type SessionRoleResolver,
+  tokensOwner,
 } from "../auth/index.js";
+import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonServer } from "./server.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
 import { linkPair } from "../link/testing.js";
@@ -934,7 +936,7 @@ describe("DaemonServer", () => {
     // for `afterEach` to stop, and this test only needs the winner alive on `socketPath` (so
     // the loser's own `start()` below actually loses) plus its filesystem.
     await createHarness({
-      adminSecret: adminAuth(winnerFilesystem, secrets).adminSecret,
+      adminSecret: (await adminAuth(winnerFilesystem, secrets)).adminSecret,
       socketPath,
     });
     // The winner (the only one whose `start()` actually reached `host.start()`'s success path)
@@ -943,7 +945,7 @@ describe("DaemonServer", () => {
 
     const loserFilesystem = new MemoryFilesystem();
     const second = await createHarness({
-      adminSecret: adminAuth(loserFilesystem, secrets).adminSecret,
+      adminSecret: (await adminAuth(loserFilesystem, secrets)).adminSecret,
       socketPath,
       start: false,
     });
@@ -970,8 +972,8 @@ describe("DaemonServer", () => {
       const socketPath = join(directory, "daemon.sock");
       const filesystem = new MemoryFilesystem();
       const secrets = new CryptoTokenSecrets();
-      const oldSecret = adminAuth(filesystem, secrets);
-      const replacementSecret = adminAuth(filesystem, secrets);
+      const oldSecret = await adminAuth(filesystem, secrets);
+      const replacementSecret = await adminAuth(filesystem, secrets);
       const replacement = await createHarness({
         adminSecret: replacementSecret.adminSecret,
         socketPath,
@@ -3781,10 +3783,11 @@ function testConfig(
   };
 }
 
-function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): Auth {
+async function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): Promise<Auth> {
   return createAuth({
     config: { enabled: false, host: "127.0.0.1", port: 4700 },
     dataDirectory: "/",
+    database: (await openMemoryStateDatabase([tokensOwner])).database,
     filesystem,
     secrets,
     idGenerator: { generate: () => "id" },

@@ -63,6 +63,22 @@ export function filterSqliteExperimentalWarning(): void {
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
 
+export function inTransaction<T>(database: SqliteDatabase, work: () => T): T {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = work();
+    database.exec("COMMIT");
+    return result;
+  } catch (error: unknown) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // why: the connection may already have ended the transaction; the first error is the one to report
+    }
+    throw error;
+  }
+}
+
 export function passesQuickCheck(database: SqliteDatabase): boolean {
   const rows = database.prepare("PRAGMA quick_check").all();
   return rows.length === 1 && Object.values(rows[0] ?? {})[0] === "ok";

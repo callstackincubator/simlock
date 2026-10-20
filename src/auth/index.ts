@@ -4,6 +4,7 @@ import type {
   Clock,
   Filesystem,
   IdGenerator,
+  SqliteDatabase,
   KeySetFetcher,
   Logger,
   TokenSecrets,
@@ -14,14 +15,14 @@ import { AuthError, type AuthConfig, type AuthStrategyDefinition } from "./strat
 import { authStrategies } from "./strategies/index.js";
 import { AdminSecretManager } from "./admin-secret.js";
 import { AdminAuthenticationFailedError } from "./hello.js";
-import { TokenStore } from "./token-store.js";
+import { TokenStore, tokensOwner } from "./token-store.js";
 import type { TokenOperations } from "./tokens.js";
 
 export { AuthError } from "./strategy.js";
 export type { AuthConfig, AuthStrategyDefinition, StrategyAnswer } from "./strategy.js";
 export type { Identity } from "./identity.js";
 export type { TokenOperations, TokenRole } from "./tokens.js";
-export { authStrategies };
+export { authStrategies, tokensOwner };
 export { AdminAuthenticationFailedError, resolveAgentRole } from "./hello.js";
 export type { SessionRoleResolver } from "./hello.js";
 
@@ -29,6 +30,7 @@ export interface AuthOptions {
   readonly config: AuthConfig;
   readonly dataDirectory: string;
   readonly filesystem: Filesystem;
+  readonly database: SqliteDatabase;
   readonly secrets: TokenSecrets;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
@@ -58,9 +60,8 @@ export function createAuthFrom(
 ): Auth {
   const store = new TokenStore({
     clock: options.clock,
-    filesystem: options.filesystem,
+    database: options.database,
     idGenerator: options.idGenerator,
-    path: join(options.dataDirectory, "tokens.json"),
     secrets: options.secrets,
   });
   const adminSecret = new AdminSecretManager({
