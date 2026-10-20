@@ -176,6 +176,24 @@ function checkAlertEvents(events: unknown, path: string): AlertEventName[] {
   return events as AlertEventName[];
 }
 
+function checkAlertSecret(
+  format: AlertFormatName,
+  entry: Record<string, unknown>,
+  path: string,
+): string | undefined {
+  const { secret } = entry;
+  if (ALERT_FORMAT_SECRET[format] === "refused") {
+    if ("secret" in entry) {
+      throw invalidValue(`${path}.secret`, `no secret: a ${format} destination is not signed`);
+    }
+    return undefined;
+  }
+  if (typeof secret !== "string" || secret.length === 0) {
+    throw invalidValue(`${path}.secret`, `a non-empty secret for a ${format} destination`);
+  }
+  return secret;
+}
+
 function alertDestinationValidator(
   names: Set<string>,
 ): (value: unknown, path: string, warn: Warn) => AlertDestination {
@@ -189,23 +207,14 @@ function alertDestinationValidator(
     const format = stringUnion(ALERT_FORMATS)(entry.format, `${path}.format`);
     if (!isAlertUrl(entry.url)) throw invalidValue(`${path}.url`, ALERT_URL_EXPECTED);
     const events = checkAlertEvents(entry.events, path);
-    const { secret } = entry;
-    if (
-      ALERT_FORMAT_SECRET[format] === "required" &&
-      (typeof secret !== "string" || secret.length === 0)
-    ) {
-      throw invalidValue(`${path}.secret`, `a non-empty secret for a ${format} destination`);
-    }
-    if (ALERT_FORMAT_SECRET[format] === "refused" && "secret" in entry) {
-      throw invalidValue(`${path}.secret`, `no secret: a ${format} destination is not signed`);
-    }
+    const secret = checkAlertSecret(format, entry, path);
     names.add(name);
     return {
       name,
       format,
       url: entry.url,
       events,
-      ...(typeof secret === "string" ? { secret } : {}),
+      ...(secret === undefined ? {} : { secret }),
     };
   };
 }
