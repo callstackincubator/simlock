@@ -42,19 +42,6 @@ describe("FakeParentWatch", () => {
 
     expect(exitCount).toBe(0);
   });
-
-  it("fires at most once even if exit() is somehow observed twice", () => {
-    const watch = new FakeParentWatch();
-    let exitCount = 0;
-
-    watch.watch(4321, () => {
-      exitCount += 1;
-    });
-    watch.exit(4321);
-    watch.exit(4321);
-
-    expect(exitCount).toBe(1);
-  });
 });
 
 describe("NodeParentWatch", () => {

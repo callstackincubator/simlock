@@ -89,6 +89,8 @@ async function renewHeld(
     return frontReply(leaseEndedByHost(), call);
   }
   if (outcome.kind === "failed") return frontReply(failure(outcome.message), call);
+  // why: the gateway's list trails a grant, and agent-device already answered; the next tick or heartbeat renews.
+  if (outcome.kind === "unlisted") return relay(reply);
   if (ttl !== undefined && ttl !== entry.ttlMs) {
     context.map.setTtl(leaseId, ttl);
     context.renewals.rearm(context, leaseId);

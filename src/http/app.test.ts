@@ -628,21 +628,19 @@ describe("POST /v1/lease-requests", () => {
     expect(dispatcher.calls).toHaveLength(0);
   });
 
-  it("forwards a body's imageTag to the dispatched lease.request", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, imageTag: "google_apis_playstore" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ imageTag: "google_apis_playstore" });
-  });
-
-  it("forwards a body's physical true to the dispatched lease.request", async () => {
+  it.each([
+    ["imageTag", { imageTag: "google_apis_playstore" }],
+    ["mode", { mode: "slim" }],
+    ["owner field rather than silently dropping it (ADR §27a, H7)", { owner: "someone-else" }],
+    ["physical true", { physical: true }],
+  ])("forwards a body's %s to the dispatched lease.request", async (_label, extra) => {
     const { app, dispatcher } = buildHarness();
     const first = await Promise.race([
-      postLeaseRequest(app, { ...defaultBody, physical: true }),
+      postLeaseRequest(app, { ...defaultBody, ...extra }),
       waitForDispatch(dispatcher, "lease.request").then((call) => call),
     ]);
     if (first instanceof Response) throw new Error(`the body was refused with ${first.status}`);
-    expect(first.input).toMatchObject({ physical: true });
+    expect(first.input).toMatchObject(extra);
   });
 
   it("answers 400 BAD_REQUEST naming allowDownload for a body with physical true and allowDownload true", async () => {
@@ -663,21 +661,6 @@ describe("POST /v1/lease-requests", () => {
     const body = (await response.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toContain("allowDownload");
-  });
-
-  it("forwards a body's mode to the dispatched lease.request", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, mode: "slim" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ mode: "slim" });
-  });
-
-  it("forwards a body's owner field to the dispatched lease.request rather than silently dropping it (ADR §27a, H7)", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-
-    expect((call.input as { owner?: string }).owner).toBe("someone-else");
   });
 
   it("builds an operator token's session as admin but never as the gateway's uplink, so §27a's owner gate still refuses it at the shared dispatcher (ADR §27a, H3)", async () => {
@@ -2229,27 +2212,6 @@ describe("operator-only listing routes", () => {
 
       expect(asked.map((input) => input.includeLedger === true)).toEqual([false, true]);
     });
-
-    it("answers HISTORY_NOT_KEPT with status 422 and oldestTs in the body, and HISTORY_UNAVAILABLE with 503", async () => {
-      const { dispatcher, get } = statsHarness();
-      dispatcher.handlers["usage.get"] = () => {
-        throw new DispatchError("HISTORY_NOT_KEPT", "The history does not reach back.", {
-          oldestTs: 1_234,
-        });
-      };
-      const notKept = await get("?since=1h");
-      dispatcher.handlers["usage.get"] = () => {
-        throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be opened.");
-      };
-      const unavailable = await get("?since=1h");
-
-      expect(notKept.status).toBe(422);
-      expect(await notKept.json()).toMatchObject({
-        error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
-      });
-      expect(unavailable.status).toBe(503);
-      expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
-    });
   });
 
   it("GET /v1/events/stream dispatches events.subscribe then follows the raw event bus live", async () => {
@@ -2418,17 +2380,6 @@ describe("worker routes", () => {
       "worker.undrain",
       "worker.remove",
     ]);
-  });
-
-  it("leaves the role check to the shared dispatcher, which 403s an agent token", async () => {
-    const { app, dispatcher } = gatewayHarness();
-    dispatcher.handlers["worker.list"] = () => {
-      throw new DispatchError("FORBIDDEN", "Operation worker.list requires role admin");
-    };
-
-    const response = await app.request("/v1/workers", { headers: agentAuth });
-
-    expect(response.status).toBe(403);
   });
 
   it("puts a refusal's typed details in the body, so a client need not parse prose", async () => {

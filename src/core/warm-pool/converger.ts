@@ -134,6 +134,8 @@ export class WarmPool {
   readonly #lastSpecs = new Map<string, VirtualSpec>();
   /** Every target's state as the last pass left it. */
   #reports: readonly TargetReport[] = [];
+  /** why: every report of the last pass, learned kinds included, which `figures()` lists and the log and the event leave out. */
+  #figured: readonly TargetReport[] = [];
   /** Whether a pass has left its reports yet: until one has, the figures come from the config. */
   #passed = false;
   /**
@@ -300,7 +302,7 @@ export class WarmPool {
     });
   }
 
-  /** Every report as the last pass left it: how many are ready, and why not more. Targets that resolved to one spec are one report. */
+  /** why: every configured target's report as the last pass left it: how many are ready, and why not more. Targets that resolved to one spec are one report. */
   targets(): readonly TargetReport[] {
     return this.#reports;
   }
@@ -314,7 +316,7 @@ export class WarmPool {
     const { enabled, reserveRunning, targets } = this.options.config;
     const reports =
       enabled && this.#passed
-        ? this.#reports
+        ? this.#figured
         : targets.map((target): TargetReport => {
             const kind = this.#kindOfTarget(target);
             return {
@@ -394,7 +396,9 @@ export class WarmPool {
     try {
       const refused = await this.#resolveEnabled();
       const plan = await this.options.decisions.run(() => evaluate(this.#view()));
-      const reports = configuredOnly([...refused, ...plan.targets]);
+      const everyReport = [...refused, ...plan.targets];
+      const reports = configuredOnly(everyReport);
+      this.#figured = everyReport;
       this.#note(reports);
       for (const proposal of plan.proposals) {
         if (this.#draining) break;
@@ -529,6 +533,7 @@ export class WarmPool {
           count: report.count,
           mode: report.kind.mode,
           model: report.kind.model,
+          origin: "configured",
           platform: report.kind.platform,
           ready: report.ready,
           reason: report.short,
@@ -830,8 +835,7 @@ function shutDownIn(devices: readonly VirtualDevice[], down: ReadonlySet<string>
 }
 
 /**
- * why: status, the short log and `warm-pool.target-missed` describe the operator's targets only in
- * this version, so a learned kind's report is left out and a merged entry is judged by the
+ * why: the short log and `warm-pool.target-missed` describe the operator's targets only, so a learned kind's report is left out and a merged entry is judged by the
  * configured count: a configured target that is met is not short however short the learned count is.
  */
 function configuredOnly(reports: readonly TargetReport[]): TargetReport[] {
@@ -853,7 +857,9 @@ function figureOf(report: TargetReport): WarmTargetFigures {
     ...report.kind,
     booting: report.booting,
     count: report.count,
+    origin: report.origin,
     ready: report.ready,
+    ...(report.spec?.imageTag === undefined ? {} : { imageTag: report.spec.imageTag }),
     ...(report.short === undefined ? {} : { short: report.short }),
   };
 }

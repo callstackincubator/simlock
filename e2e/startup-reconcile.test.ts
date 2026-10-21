@@ -101,35 +101,24 @@ async function deviceState(env: TestEnv, deviceId: string): Promise<string | und
 }
 
 describe("startup ends every lease whose device is not running", () => {
-  it("a daemon restarted after its leased device was scripted stopped answers a renew of that lease with UNKNOWN_LEASE, records lease.released with reason device-lost, and the device becomes ready after reclaim", async () => {
-    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 120_000 } } });
-    await prepare(env);
-    const held = await lease(env, "ios");
+  it.each(["stopped", "transitioning"] as const)(
+    "a daemon restarted after its leased device was scripted %s answers a renew of that lease with UNKNOWN_LEASE, records lease.released with reason device-lost, and the device becomes ready after reclaim",
+    async (runState) => {
+      const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 120_000 } } });
+      await prepare(env);
+      const held = await lease(env, "ios");
 
-    await script(env, "ios", [{ deviceId: held.driverDeviceId, runState: "stopped" }]);
-    await restart(env);
+      await script(env, "ios", [{ deviceId: held.driverDeviceId, runState }]);
+      await restart(env);
 
-    expect(await renewError(env, held.leaseId)).toBe("UNKNOWN_LEASE");
-    const ended = await leaseEvents(env, held.leaseId);
-    expect(ended.map((entry) => entry.event)).toEqual(["lease.released"]);
-    expect(ended[0]?.payload).toMatchObject({ leaseId: held.leaseId, reason: "device-lost" });
-    await waitForDeviceState(env, held.driverDeviceId, "ready");
-    expect(await reclaimCalls(env, held.driverDeviceId)).toHaveLength(1);
-  });
-
-  it("a daemon restarted after its leased device was scripted transitioning answers a renew with UNKNOWN_LEASE, records lease.released with reason device-lost, and the device becomes ready after reclaim", async () => {
-    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 120_000 } } });
-    await prepare(env);
-    const held = await lease(env, "ios");
-
-    await script(env, "ios", [{ deviceId: held.driverDeviceId, runState: "transitioning" }]);
-    await restart(env);
-
-    expect(await renewError(env, held.leaseId)).toBe("UNKNOWN_LEASE");
-    const ended = await leaseEvents(env, held.leaseId);
-    expect(ended[0]?.payload).toMatchObject({ leaseId: held.leaseId, reason: "device-lost" });
-    await waitForDeviceState(env, held.driverDeviceId, "ready");
-  });
+      expect(await renewError(env, held.leaseId)).toBe("UNKNOWN_LEASE");
+      const ended = await leaseEvents(env, held.leaseId);
+      expect(ended.map((entry) => entry.event)).toEqual(["lease.released"]);
+      expect(ended[0]?.payload).toMatchObject({ leaseId: held.leaseId, reason: "device-lost" });
+      await waitForDeviceState(env, held.driverDeviceId, "ready");
+      expect(await reclaimCalls(env, held.driverDeviceId)).toHaveLength(1);
+    },
+  );
 
   it("a daemon restarted after its leased device was removed from the scripted reality ends the lease, emits device.deleted with initiator doctor, and the fake driver log shows no reclaim call for it", async () => {
     const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 120_000 } } });

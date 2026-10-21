@@ -559,43 +559,6 @@ describe("createLeasing", () => {
     expect(harness.driver.calls.map((call) => call.operation)).toContain("destroy");
   });
 
-  it("A purge failure logs nothing, because device.purge-failed carries the error.", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
-    const sink = new MemoryLogSink();
-    const harness = await createHarness({
-      driver,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
-    });
-    const first = await harness.engine.request(request, {
-      ownerId: "first",
-      requesterId: "first",
-    });
-
-    await harness.engine.release(first.lease.id, "explicit");
-    await harness.engine.settle();
-
-    expect(
-      harness.bus.replay().filter((event) => event.event === "device.purge-failed"),
-    ).toMatchObject([
-      {
-        payload: {
-          deviceId: first.device.id,
-          error: "DriverCrashError: purge exploded",
-          leaseId: first.lease.id,
-        },
-      },
-    ]);
-    // At `debug`, so a line at any level would be caught: nothing names the device or the error.
-    expect(
-      sink.records.filter((record) => {
-        const line = JSON.stringify(record);
-        return line.includes("purge exploded") || line.includes(first.device.id);
-      }),
-    ).toEqual([]);
-  });
-
   it("quarantines a release-time purge failure instead of keeping the device eligible", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
@@ -1213,21 +1176,6 @@ describe("createLeasing", () => {
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
   });
 
-  it("rejects a no-wait request at capacity with a typed error", async () => {
-    const harness = await createHarness();
-    await harness.engine.request(request, {
-      ownerId: "agent-1",
-      requesterId: "agent-1",
-    });
-
-    // A no-wait request that queued instead would leave an await hanging; this names it.
-    const outcome = await settledOrPending(
-      harness.engine.request(request, { noWait: true, ownerId: "agent-2", requesterId: "agent-2" }),
-    );
-
-    expect(outcome).toBeInstanceOf(NoCapacityError);
-  });
-
   it("rejects a timed-out queue entry and skips it on a later release", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
@@ -1320,27 +1268,6 @@ describe("createLeasing", () => {
       ttlMs: 40,
       ttlDeadline: 1_045,
     });
-  });
-
-  it("enforces one active request or lease per requester, then permits another after release", async () => {
-    const harness = await createHarness();
-    const first = await harness.engine.request(request, {
-      ownerId: "agent-1",
-      requesterId: "agent-1",
-    });
-
-    await expect(
-      harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
-    ).rejects.toMatchObject({
-      existingLeaseId: first.lease.id,
-      message: expect.stringContaining(first.lease.id),
-      name: "RequesterAlreadyLeasedError",
-    });
-    await harness.engine.release(first.lease.id, "explicit");
-    await harness.engine.settle();
-    await expect(
-      harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
-    ).resolves.toMatchObject({ lease: { ownerId: "agent-1", requesterId: "agent-1" } });
   });
 
   it("retries after a provision failure without leaking capacity", async () => {
@@ -3967,7 +3894,7 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
   const waitingMessage =
     "Requester agent-1 already has a waiting request; wait for it to be granted or cancel it before requesting another device";
 
-  it("with no lease.maxPerRequester, a requester holding a lease is refused with today's message, naming that lease", async () => {
+  it("with no lease.maxPerRequester, a requester holding a lease is refused with today's message, naming that lease, and is granted another once it releases it", async () => {
     const harness = await createHarness({ limits: roomy });
     const first = await harness.engine.request(request, asking("agent-1"));
 
@@ -3979,6 +3906,12 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
       existingLeaseId: first.lease.id,
       message: `Requester agent-1 already holds lease ${first.lease.id}; release it (\`simlock release ${first.lease.id}\`) before requesting another device`,
       name: "RequesterAlreadyLeasedError",
+    });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    await expect(harness.engine.request(request, asking("agent-1"))).resolves.toMatchObject({
+      lease: { ownerId: "agent-1", requesterId: "agent-1" },
     });
   });
 

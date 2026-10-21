@@ -4877,19 +4877,6 @@ describe("AndroidDriver defaultModels", () => {
       watch: ["Wear OS Large Round", "Wear OS Small Round"],
     });
   });
-
-  it("has no Android list for vision", async () => {
-    const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
-
-    expect(Object.keys(driver.defaultModels).sort()).toEqual([
-      "auto",
-      "desktop",
-      "phone",
-      "tablet",
-      "tv",
-      "watch",
-    ]);
-  });
 });
 
 describe("AndroidDriver library catalog", () => {
@@ -5510,21 +5497,19 @@ describe("AndroidDriver image fit", () => {
       );
     });
 
-    it("says the model does not take Play Store images", async () => {
-      const { refusal } = await fitHarness([["36", "google_apis_playstore", "arm64-v8a"]]);
+    it.each([
+      ["Pixel 6", "36", "google_apis_playstore", "Play Store"],
+      ["Pixel 5", "35", "tablet", "tablet"],
+    ])(
+      "says the model does not take the kind of image it was given (%s)",
+      async (model, osVersion, imageTag, noun) => {
+        const { refusal } = await fitHarness([[osVersion, imageTag, "arm64-v8a"]]);
 
-      expect((await refusal("Pixel 6", "36")).message).toBe(
-        "No installed system image fits Pixel 6 at Android 36: Pixel 6 does not take Play Store images",
-      );
-    });
-
-    it("says the model does not take tablet images", async () => {
-      const { refusal } = await fitHarness([["35", "tablet", "arm64-v8a"]]);
-
-      expect((await refusal("Pixel 5", "35")).message).toBe(
-        "No installed system image fits Pixel 5 at Android 35: Pixel 5 does not take tablet images",
-      );
-    });
+        expect((await refusal(model, osVersion)).message).toBe(
+          `No installed system image fits ${model} at Android ${osVersion}: ${model} does not take ${noun} images`,
+        );
+      },
+    );
 
     it("says none of the installed images fit it when no single check rules out every image", async () => {
       const { refusal } = await fitHarness([

@@ -771,22 +771,35 @@ function requireGatewayHttp(config: Config): void {
  */
 function validateGatewayMembership(config: Config): void {
   const { token, url } = config.gateway;
-  if (url !== undefined) {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
-    }
-    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
-    }
-  }
+  if (url !== undefined) requireWebSocketUrl(url);
   if (url !== undefined && token === undefined) {
     throw invalidValue("gateway.token", "a join token, since gateway.url is set");
   }
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
+  }
+  requireJoinedWorkerHttpOff(config);
+}
+
+function requireWebSocketUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+  }
+}
+
+// why: a joined worker is reached through the gateway; its own listener would be a second entrance.
+function requireJoinedWorkerHttpOff(config: Config): void {
+  if (config.gateway.url !== undefined && config.http.enabled) {
+    throw invalidValue(
+      "http.enabled",
+      "false when gateway.url is set (joined workers are reached through the gateway)",
+    );
   }
 }
 

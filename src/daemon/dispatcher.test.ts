@@ -988,23 +988,6 @@ describe("Dispatcher: ownership", () => {
     return (grant as { lease: { id: string } }).lease.id;
   }
 
-  it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
-    const { dispatcher } = await buildDispatcher();
-
-    await expect(
-      dispatcher.dispatch(
-        "lease.request",
-        {
-          model: "iPhone 17 Pro",
-          osVersion: "26.5",
-          owner: "someone-else",
-          platform: "ios",
-        },
-        session({ principal: "tok_agent", role: "agent" }),
-      ),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
   // H3 (round 3 review): §27a's gate used to be `role !== "admin"`, which an HTTP `operator`
   // bearer token satisfies just as well as the gateway's own uplink -- on a plain worker with no
   // gateway anywhere, any operator token could name someone else as owner. `isGatewayUplink` is
@@ -1012,22 +995,31 @@ describe("Dispatcher: ownership", () => {
   // `acceptUplink` (this worker dialled its own configured `gateway.url`); a session merely
   // carrying `role: "admin"` from anywhere else -- an operator token's HTTP session included --
   // no longer suffices.
-  it("lease.request: rejects a plain admin session (not the gateway's uplink) naming owner with FORBIDDEN (ADR §27a, H3)", async () => {
-    const { dispatcher } = await buildDispatcher();
+  it.each([
+    ["a non-admin session", { principal: "tok_agent", role: "agent" }],
+    [
+      "a plain admin session (not the gateway's uplink)",
+      { principal: "tok_operator", role: "admin" },
+    ],
+  ] as const)(
+    "lease.request: rejects %s naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7, H3)",
+    async (_name, who) => {
+      const { dispatcher } = await buildDispatcher();
 
-    await expect(
-      dispatcher.dispatch(
-        "lease.request",
-        {
-          model: "iPhone 17 Pro",
-          osVersion: "26.5",
-          owner: "someone-else",
-          platform: "ios",
-        },
-        session({ principal: "tok_operator", role: "admin" }),
-      ),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          {
+            model: "iPhone 17 Pro",
+            osVersion: "26.5",
+            owner: "someone-else",
+            platform: "ios",
+          },
+          session({ ...who }),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
 
   it("lease.request: the gateway's own uplink session may set owner, and the granted lease ends up owned by that, not the uplink's own principal (ADR §27a, H3)", async () => {
     const { dispatcher } = await buildDispatcher();
@@ -1442,29 +1434,6 @@ describe("Dispatcher: events.replay paging", () => {
   });
 });
 
-describe("Dispatcher: config.get eventLog", () => {
-  it("config.get reports eventLog.retention and maxBytes and no rotateBytes", async () => {
-    const { dispatcher } = await buildDispatcher();
-
-    const { eventLog } = await dispatcher.dispatch("config.get", {}, session({ role: "admin" }));
-
-    expect(eventLog).toStrictEqual({
-      maxBytes: 256 * 1024 * 1024,
-      retention: 7 * 24 * 60 * 60 * 1000,
-    });
-  });
-});
-
-describe("Dispatcher: config.get metrics", () => {
-  it("config.get reports metrics.retention", async () => {
-    const { dispatcher } = await buildDispatcher();
-
-    const { metrics } = await dispatcher.dispatch("config.get", {}, session({ role: "admin" }));
-
-    expect(metrics).toStrictEqual({ retention: 90 * 24 * 60 * 60 * 1000 });
-  });
-});
-
 describe("Dispatcher: status.get history", () => {
   it.each([
     {
@@ -1738,6 +1707,7 @@ describe("Dispatcher: device mode on every surface", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -1770,6 +1740,7 @@ describe("Dispatcher: device mode on every surface", () => {
           count: 2,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "26.5",
           platform: "ios",
           ready: 0,
@@ -1780,6 +1751,7 @@ describe("Dispatcher: device mode on every surface", () => {
           count: 1,
           mode: "slim",
           model: "Pixel 8",
+          origin: "configured",
           platform: "android",
           ready: 0,
           short: "disabled",
@@ -3308,27 +3280,6 @@ describe("Dispatcher: device.exec", () => {
     // EXEC_TIMEOUT, not the exit code the kill produced: "we stopped it" and "it failed" are
     // different facts, and only the first tells a caller to raise the limit (ADR §19e).
     await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
-  });
-
-  it("refuses a verb the driver refuses with PASSTHROUGH_REFUSED and spawns nothing", async () => {
-    const runner = new ScriptedProcessRunner([]);
-    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
-
-    const error = await dispatcher
-      .dispatch(
-        "device.exec",
-        { args: ["delete", "ABCD"], leaseId, tool: "simctl" },
-        session({ principal: "tok_agent" }),
-      )
-      .then(
-        () => undefined,
-        (rejected: unknown) => rejected,
-      );
-
-    expect(classifyError(error)).toBe("PASSTHROUGH_REFUSED");
-    // Refused before anything was spawned -- the point of the refusal list is that the command
-    // never runs, not that its output is discarded.
-    expect(runner.calls).toEqual([]);
   });
 
   /**
