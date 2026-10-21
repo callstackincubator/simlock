@@ -3098,6 +3098,7 @@ describe("Doctor: warm pool targets", () => {
   const figuresOf = (
     targets: readonly {
       model: string;
+      origin?: "configured" | "learned";
       osVersion?: string;
       platform?: "ios" | "android";
       short?: "runtime-missing" | "unknown-model" | "ram-budget";
@@ -3152,11 +3153,13 @@ describe("Doctor: warm pool targets", () => {
     return report.findings.filter((finding) => finding.kind === "warm-pool-target-unreachable");
   }
 
-  it("reports a target short with runtime-missing as unreachable, naming the install command", async () => {
+  it("reports a configured target short with runtime-missing as unreachable, naming the install command, and no learned entry, even one short runtime-missing", async () => {
     const found = await findings({
       figures: figuresOf([
         { model: "iPhone 17", osVersion: "26.0" },
         { model: "iPhone 17", osVersion: "27.0", short: "runtime-missing" },
+        { model: "iPhone 16", origin: "learned", osVersion: "27.0", short: "runtime-missing" },
+        { model: "iPhone 15", origin: "learned", osVersion: "26.0", short: "unknown-model" },
       ]),
     });
 
