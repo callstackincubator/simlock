@@ -818,6 +818,18 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(request?.input).toMatchObject({ requesterId: hex(1), requires: ["agent-device"] });
   });
 
+  it('allocate through the gateway with `osVersion` ">=18" reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device`', async () => {
+    const rig = await setUp();
+    const tap = tapDispatch(rig.gateway);
+
+    const answer = await envelopeOf(await allocate(rig, 1, { osVersion: ">=18" }));
+
+    const request = tap.inputs.find((entry) => entry.operation === "lease.request");
+    expect(request?.input).toMatchObject({ osVersion: ">=18", requires: ["agent-device"] });
+    const lease = (answer.result as { data: { lease: Record<string, unknown> } }).data.lease;
+    expect(lease["device"]).toMatchObject({ osVersion: "26.5" });
+  });
+
   it("allocate on a worker, directly, sends no `requires`, as today", async () => {
     const rig = await setUp({ workers: [{ direct: true, label: "w1" }] });
     const member = first(rig);
