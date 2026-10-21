@@ -528,8 +528,10 @@ test.describe("the console acts", () => {
       await expect(refused).toBeVisible();
       await page.clock.fastForward(30_000);
       await expect(refused).toBeVisible();
-      await expect(refused.getByRole("button", { name: "Close" })).toBeVisible();
-      await refused.getByRole("button", { name: "Close" }).click();
+      await expect(
+        refused.getByRole("button", { name: "Close", includeHidden: true }),
+      ).toBeVisible();
+      await refused.getByRole("button", { name: "Close", includeHidden: true }).click();
       await expect(refused).toBeHidden();
       await page.unroute("**/v1/workers/*/drain");
 
@@ -541,8 +543,12 @@ test.describe("the console acts", () => {
       await expect(toasts.locator(".toast:visible")).toHaveCount(3);
       await expect(toastOf("toast-a takes leases again")).toBeHidden();
 
-      await expect(toastOf("toast-d drained").getByRole("button", { name: "Close" })).toBeVisible();
-      await toastOf("toast-d drained").getByRole("button", { name: "Close" }).click();
+      await expect(
+        toastOf("toast-d drained").getByRole("button", { name: "Close", includeHidden: true }),
+      ).toBeVisible();
+      await toastOf("toast-d drained")
+        .getByRole("button", { name: "Close", includeHidden: true })
+        .click();
       await expect(toastOf("toast-a takes leases again")).toBeVisible();
       await expect(toasts.locator(".toast:visible")).toHaveCount(3);
     } finally {

@@ -6,12 +6,13 @@
   bottom: var(--space-4);
   z-index: 80;
   width: min(22rem, calc(100% - var(--space-8)));
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
 }
 
 .toast {
-  position: absolute;
-  right: 0;
-  bottom: 0;
+  position: relative;
   width: 100%;
   border: 1px solid var(--border-strong);
   background: var(--bg);
@@ -60,4 +61,16 @@
 
 .toast[data-type="error"] .toast-title {
   color: var(--status-error);
+}
+
+/* why: the manager marks a toast past its limit; it waits hidden and comes back as newer ones close,
+ * so the newest sit at the bottom and an error toast is never lost. */
+.toast[data-limited] {
+  display: none;
+}
+
+.toast-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
 }

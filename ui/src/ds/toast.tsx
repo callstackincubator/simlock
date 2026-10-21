@@ -2,6 +2,9 @@ import "./toast.css";
 
 import { Toast } from "@base-ui/react/toast";
 
+import { IconButton } from "./button";
+import { Icon } from "./icon";
+
 export interface ToastSpec {
   readonly tone?: "error";
   readonly title: string;
@@ -46,6 +49,14 @@ function ToastList() {
   return toasts.map((toast) => (
     <Toast.Root key={toast.id} toast={toast} className="toast">
       <Toast.Content className="toast-content">
+        <Toast.Close
+          className="toast-close"
+          render={
+            <IconButton aria-label="Close">
+              <Icon name="close" />
+            </IconButton>
+          }
+        />
         <Toast.Title className="toast-title" />
         <Toast.Description className="toast-description" />
         <Toast.Action className="button button-secondary toast-action" />
