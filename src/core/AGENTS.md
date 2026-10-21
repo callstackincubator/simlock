@@ -92,7 +92,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    physical one. Physical not present: wait `health.probeIntervalMs`, not counted. Entry writes
    `quarantineCause` (kind, message cut to 300 characters, or `stalledState`); retries keep it, every exit drops it.
 5. **Cleanup** — `CleanupReaper` on `lease.released`, `daemon.started`, `disk.pressure-detected`, a
-   tick. `idle-shutdown`: leased once, `ready`, idle past T1, not warm-targeted. `idle-destroy`:
+   tick. `idle-shutdown`: leased once, `ready`, idle past T1, neither warm-targeted nor serving a queued request with the pool enabled. `idle-destroy`:
    `shutdown`, idle (lease end, else `shutdownAt`) past T2, or T1 under pressure. `CleanupExecutor`
    revalidates, acts, emits `cleanup.executed`; a throwing action is logged, the run goes on.
 6. **Nuke** — one at a time: close acquisition, settle reclaim and warm pool → release all leases

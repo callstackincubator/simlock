@@ -518,25 +518,32 @@ export function readyCount(input: DeviceCounts, spec: VirtualSpec): number {
   return readyOfKind(input.devices, idlePredicate(input.leases, input.isClaimed), spec).length;
 }
 
-/**
- * The devices a target keeps: for each target, its ready unleased devices of that kind, oldest
- * first, up to its count. The one place the pool and the idle shutdown timer agree on which
- * devices a target counts.
- */
+/** why: the reaper and pool must spare the same devices while queue FIFO delays their grant. */
 export function targetedDevices(
   input: DeviceCounts & {
     readonly targets: readonly ResolvedTarget[];
     readonly learned: readonly LearnedKind[];
+    readonly waiting: readonly WaitingDemand[];
   },
 ): ReadonlySet<string> {
   const isIdle = idlePredicate(input.leases, input.isClaimed);
-  return new Set(
+  const kept = new Set(
     plannedKinds(mergeTargets(input.targets), input.learned).flatMap((kind) =>
       readyOfKind(input.devices, isIdle, kind.spec)
         .slice(0, Math.max(kind.configuredCount, kind.learnedCount))
         .map((device) => device.id),
     ),
   );
+  for (const device of input.devices) {
+    if (
+      device.state === "ready" &&
+      isIdle(device) &&
+      input.waiting.some((demand) => !demand.inFlight && serves(device, demand))
+    ) {
+      kept.add(device.id);
+    }
+  }
+  return kept;
 }
 
 /**

@@ -70,7 +70,10 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
 6. **Report** — emit `warm-pool.target-missed`, arm the retry timer.
 
 `targeted()`: per target and learned kind, its ready unleased unclaimed devices, oldest first, up to its count.
-The reaper's `idle-shutdown` spares them. With no pass yet, it resolves the targets first.
+It also includes every ready unleased unclaimed device a current non-in-flight waiter could
+be granted, using the pool's requirement, mode and fresh-identity checks. Demand is read on
+every call, so cancellation removes this protection. The reaper's `idle-shutdown` spares
+these devices. With no pass yet, it resolves the targets first. With the pool off it returns none.
 
 Figures (`figures()`, read by `status.get`, doctor's `warm-pool-target-unreachable`, the console):
 `enabled`, `reserveRunning`, and per kind `platform`, `model`, `osVersion`, `mode`, `count`, `ready`,

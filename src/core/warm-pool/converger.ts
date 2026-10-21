@@ -285,12 +285,7 @@ export class WarmPool {
     this.#draining = true;
   }
 
-  /**
-   * The devices the idle shutdown timer leaves alone: for each target, its ready unleased devices
-   * of that kind, oldest first, up to its count. Targets not yet resolved by any pass are resolved
-   * first, so the reaper's first run after a start does not read an empty set; none with the
-   * pool off.
-   */
+  /** why: resolve before the first reaper run, and read live demand so cancellation drops queue protection. */
   async targeted(): Promise<ReadonlySet<string>> {
     if (!this.options.config.enabled) return new Set();
     if (!this.#hasResolved) await this.#resolveTargets();
@@ -301,6 +296,7 @@ export class WarmPool {
       leases,
       learned: this.#learnedKinds(),
       targets: [...this.#resolved, ...this.#spared],
+      waiting: this.options.acquisition.waitingDemand(),
     });
   }
 

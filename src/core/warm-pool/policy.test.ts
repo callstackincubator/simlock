@@ -1505,6 +1505,7 @@ describe("warm pool policy", () => {
         leases: [leaseOn(leasedReady)],
         learned: [],
         targets: [target(1)],
+        waiting: [],
       });
 
       expect([...named]).toEqual([]);
@@ -1517,6 +1518,7 @@ describe("warm pool policy", () => {
         leases: devices.filter((item) => item.state === "leased").map(leaseOn),
         learned: [] as WarmPolicyView["learned"],
         targets,
+        waiting: [] as readonly WaitingDemand[],
       });
 
       it("names, for each target, its ready unleased devices of that kind, oldest first, up to the count", () => {
