@@ -1,15 +1,3 @@
-.usage-range {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.usage-range p {
-  margin: 0;
-  font-size: var(--text-sm);
-}
-
 .usage-panels {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
@@ -28,4 +16,10 @@
 
 .usage-id {
   margin-left: var(--space-2);
+}
+
+/* Tables too wide for a small cell take a whole row each, after the small panels. */
+.usage-span {
+  grid-column: 1 / -1;
+  order: 1;
 }

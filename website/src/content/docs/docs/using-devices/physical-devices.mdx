@@ -1,0 +1,114 @@
+---
+title: Physical devices
+description: Lease a real iPhone, iPad or Android phone, use it, and know what Simlock removes from it when the lease ends.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`--physical` leases a real phone or tablet plugged into a worker, instead of a simulator or emulator. Everything else about the lease works the same way: it has a TTL, you renew it, and you release it.
+
+## Before you start
+
+- An admin must enrol the device on the worker it is plugged into first. Simlock never leases a device that is not enrolled. See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
+- The device must be plugged in by USB, trusted, and usable when the lease is granted. A device that is not is skipped, and the request waits for it.
+- An iPhone or iPad that needs its passcode counts as not present. Keep it unlocked.
+
+`simlock status` lists enrolled devices. A device that cannot be used shows as `absent`, with the reason: `locked`, `untrusted` or `not-present`.
+
+## Lease a physical device
+
+```sh
+simlock lease --platform ios --physical --device "iPhone 15"
+```
+
+The request matches an enrolled device of that platform:
+
+- `--device` matches the model name, in any letter case.
+- `--class` is `phone` or `tablet`. An iPad is a `tablet`; every Android device is a `phone`. With neither `--device` nor `--class`, the lease asks for a `phone`.
+- `--os` is exact. `--os 18` matches no device on 18.4.1; for any 18.x write `--os ">=18 <19"`. On Android the OS is the API level, such as `--os 34`.
+
+`--mode`, `--image-tag` and `--allow-download` mean nothing for a physical device. Passing any of them with `--physical` is a `BAD_REQUEST` (exit 2). A lease without `--physical` never gets a physical device.
+
+The grant is the same JSON line as for a simulator, with `device.physical` set to `true`, a `device.class`, and no `device.mode`.
+
+## When no device fits or all are busy
+
+| Situation | What happens |
+| --- | --- |
+| No enrolled device could ever match | Fails at once with `UNKNOWN_MODEL` (exit 12). It never queues. |
+| A device matches but is leased, being cleaned, or absent | Waits in the queue for it. |
+| Same, with `--no-wait` | Fails at once with `NO_CAPACITY` (exit 11). |
+
+```json
+{"error":{"code":"UNKNOWN_MODEL","message":"no enrolled physical device can match ios model iPhone 15 os 18; --os is exact, for any 18.x write --os \">=18 <19\""}}
+```
+
+Physical requests wait in a queue of their own. A simulator request never waits behind a physical one, and a physical request for one model never waits behind a request for another.
+
+## Use the device
+
+A physical device does not go through `simlock simctl` or `simlock adb`: those reach Simlock's simulators and emulators only. Use the platform's own tools with the values from the grant's `environment`.
+
+<Tabs syncKey="platform">
+  <TabItem label="iPhone and iPad">
+
+The lease's `environment` holds `SIMLOCK_DEVICE_UDID`. Pass it to `devicectl`:
+
+```sh
+eval "$(simlock lease --platform ios --physical --device "iPhone 15" --detach --export-env)"
+xcrun devicectl device install app --device "$SIMLOCK_DEVICE_UDID" ./build/Debug-iphoneos/MyApp.app
+xcrun devicectl device process launch --device "$SIMLOCK_DEVICE_UDID" com.example.myapp
+```
+
+  </TabItem>
+  <TabItem label="Android">
+
+The lease's `environment` holds `ANDROID_SERIAL` and `ANDROID_ADB_SERVER_PORT=5037`, which plain `adb` reads, so it reaches your phone and never one of Simlock's emulators:
+
+```sh
+eval "$(simlock lease --platform android --physical --detach --export-env)"
+adb install app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.example.myapp/.MainActivity
+```
+
+  </TabItem>
+</Tabs>
+
+From another machine, run commands through `exec` over HTTP: `devicectl` on an iPhone or iPad, `adb` on an Android phone. Simlock adds the device to the command for you. See [Remote agents](/simlock/docs/using-devices/remote-agents).
+
+<Aside type="caution">
+Physical devices are not separated from the rest of the machine the way simulators are. Every tool on the worker sees them, so an agent can reach a phone it did not lease. Tell agents to use only the device their lease names.
+</Aside>
+
+## What happens when the lease ends
+
+<Aside type="danger">
+When a physical lease is released or expires, Simlock uninstalls every app it can see that was not on the device when it was enrolled. On iOS those are the apps installed by Xcode or `devicectl`; on Android, the user-installed apps. Do not lease a device that holds an app you want to keep unless that app was on it at enrolment.
+</Aside>
+
+A release does not:
+
+- touch App Store or TestFlight apps on iOS;
+- reset settings, files, accounts or keychain items;
+- clear the data of an app that is on the enrolment list;
+- reinstall an app from the list that is missing. It is reported, not put back.
+
+If you install an app on purpose and want to keep it, ask an admin to run `simlock device add` for the device again, so the app joins its list.
+
+When the cleanup fails while the device is plugged in, the device is set aside and retried in the background; it is not leased meanwhile. A physical lease survives a daemon restart.
+
+## When the device is unplugged
+
+Simlock checks which enrolled devices are connected every 30 seconds. A device that is missing from two checks in a row, about a minute, becomes `absent`. A lease on it ends: a held `simlock lease` prints a `lease-lost` line with reason `device-lost` and exits with code 14. A locked iPhone counts as missing.
+
+When the device is back, Simlock cleans it and it can be leased again. A request waiting for it is granted then.
+
+## Screen and UI automation
+
+- To watch a physical device's screen in the console, see [Watching the screen](/simlock/docs/using-devices/watching-the-screen). A physical iPhone needs iOS 27 or later.
+- agent-device drives simulators and emulators only. See [agent-device](/simlock/docs/using-devices/agent-device).
+
+## Related
+
+- How the queue and TTL work: [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
+- Every error code: [Errors](/simlock/docs/using-devices/errors).

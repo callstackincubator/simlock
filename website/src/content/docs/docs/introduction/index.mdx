@@ -1,0 +1,45 @@
+---
+title: What is Simlock
+description: Simlock hands each coding agent its own iOS simulator or Android emulator, so parallel agents stop breaking each other's devices.
+---
+
+Simlock leases iOS simulators and Android emulators to coding agents. Each agent asks for a device and gets one that no other agent will touch until it gives it back.
+
+## The problem
+
+Run two or three coding agents on one Mac and they all see the same simulators. Each one picks whatever `simctl` or `adb` lists. Sooner or later two agents pick the same device: one installs its build over the other's, erases it mid-test, or shuts it down. Neither agent knows the other exists, so the failures look random.
+
+## What a lease gives you
+
+You ask Simlock for a device, for example "an iPhone 16 on iOS 18.4". You get back a **lease**: a device that is booted, checked and yours alone.
+
+- If a matching device is free, you get it at once.
+- If none is free, Simlock creates one, up to the limit your machine can run.
+- If the machine is full, your request waits in a queue until a device frees up.
+- When you release the device, Simlock wipes it before the next agent gets it.
+- If your agent crashes without releasing, the lease runs out on its own after its time to live (TTL), so the device is never stuck.
+
+Simlock works by agreement, not by force. It does not hide other devices or block `xcrun simctl`. It works because you tell your agents to use only the device a lease hands them.
+
+## Two ways to run it
+
+**One machine.** Install Simlock on the Mac or Linux box where your agents run. A background process, the daemon, starts on demand the first time you run a command. This machine is a **worker**: it owns its devices.
+
+**A fleet.** When one machine is not enough, run a **gateway** and join several workers to it. Agents talk to the gateway's single address, and the gateway sends each request to a worker that can serve it. Workers connect out to the gateway, so they need no open inbound port. See [When you need a gateway](/simlock/docs/gateway).
+
+## Ways in
+
+| Way in | Who it is for |
+| --- | --- |
+| CLI (`simlock lease`, `simlock release`) | Any agent that can run shell commands, and you at a terminal. |
+| MCP server (`simlock mcp`) | Agents that use the Model Context Protocol. Four tools: list, lease, release, status. |
+| HTTP API | Agents on another machine. They need a token from the operator. |
+| Programmatic client (`simlock/client`) | Node.js tools on the same machine that want to lease devices without running the CLI. |
+
+Operators also get a web console that shows devices, leases and the queue. See [Console](/simlock/docs/worker/console).
+
+## Where to go next
+
+- [How it works](/simlock/docs/introduction/how-it-works) explains leases, the queue, capacity and the warm pool.
+- [Requirements](/simlock/docs/introduction/requirements) lists what your machine needs.
+- [Install and check your machine](/simlock/docs/getting-started) gets you to a first lease.

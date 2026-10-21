@@ -17,7 +17,10 @@ import {
   configureDatabase,
   envelopeSize,
   INSERT_EVENT_SQL,
+  selectEventsBefore,
   selectEventsSince,
+  selectNewestEvents,
+  selectOldestTimestamp,
 } from "./database.js";
 import { HISTORY_DB_NAME } from "./names.js";
 import { pruneHistory, totalEventBytes } from "./prune.js";
@@ -58,8 +61,17 @@ export interface EventHistoryStatus {
   readonly rebuildFailed?: true;
 }
 
+export type EventsPageRead =
+  | { readonly kind: "events"; readonly events: EventEnvelope[] }
+  | { readonly kind: "not-kept"; readonly oldestTs: number }
+  | { readonly kind: "unavailable" };
+
 export interface EventHistoryHandle {
   replay(input?: { readonly sinceTs?: number }): Promise<EventEnvelope[]>;
+  replayPage(input: {
+    readonly beforeId?: string;
+    readonly limit: number;
+  }): Promise<EventsPageRead>;
   status(): EventHistoryStatus;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -138,6 +150,44 @@ class EventHistory implements EventHistoryHandle {
       });
       return bus.replay({ sinceTs: input.sinceTs });
     }
+  }
+
+  async replayPage(input: {
+    readonly beforeId?: string;
+    readonly limit: number;
+  }): Promise<EventsPageRead> {
+    const database = this.#database;
+    if (input.beforeId === undefined) return { events: this.#newest(input.limit), kind: "events" };
+    if (database === undefined || !this.#readable || !this.#writing) return { kind: "unavailable" };
+    try {
+      const events = selectEventsBefore(database, input.beforeId, input.limit);
+      if (events !== undefined) return { events, kind: "events" };
+      const oldestTs = selectOldestTimestamp(database);
+      return oldestTs === undefined
+        ? { events: [], kind: "events" }
+        : { kind: "not-kept", oldestTs };
+    } catch (error: unknown) {
+      this.#options.logger.warn("History page read failed", {
+        error: describe(error),
+        path: this.#path,
+      });
+      return { kind: "unavailable" };
+    }
+  }
+
+  #newest(limit: number): EventEnvelope[] {
+    const database = this.#database;
+    if (database !== undefined && this.#readable && this.#writing) {
+      try {
+        return selectNewestEvents(database, limit);
+      } catch (error: unknown) {
+        this.#options.logger.warn("History read failed; paging from memory", {
+          error: describe(error),
+          path: this.#path,
+        });
+      }
+    }
+    return this.#options.bus.replay().slice(-limit);
   }
 
   async start(): Promise<void> {

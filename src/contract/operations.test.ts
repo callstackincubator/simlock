@@ -1631,3 +1631,18 @@ describe("usage.get input", () => {
     expect(parse({ from: 0 }).success).toBe(false);
   });
 });
+
+describe("events.replay input", () => {
+  const parse = (input: unknown) => OPERATIONS["events.replay"].input.safeParse(input);
+
+  it("accepts beforeId and limit in bounds, and refuses limit 0, 501 and 1.5, a beforeId of evt_ or abc, and beforeId or limit with sinceTs", () => {
+    expect(parse({ beforeId: "evt_abc", limit: 1 }).success).toBe(true);
+    expect(parse({ limit: 500 }).success).toBe(true);
+    expect(parse({ sinceTs: 5 }).success).toBe(true);
+
+    for (const limit of [0, 501, 1.5]) expect(parse({ limit }).success).toBe(false);
+    for (const beforeId of ["evt_", "abc"]) expect(parse({ beforeId }).success).toBe(false);
+    expect(parse({ beforeId: "evt_abc", sinceTs: 5 }).success).toBe(false);
+    expect(parse({ limit: 5, sinceTs: 5 }).success).toBe(false);
+  });
+});

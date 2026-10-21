@@ -1,32 +1,41 @@
 import type { ComponentType } from "react";
 
 import type { IconName } from "../ds";
-import { AttentionScreen } from "../screens/attention";
-import { EventsScreen } from "../screens/events";
+import { InboxScreen } from "../screens/inbox";
+import { ActivityScreen } from "../screens/activity";
 import { LeasesScreen } from "../screens/leases";
 import { OverviewScreen } from "../screens/overview";
 import { UsageScreen } from "../screens/usage";
-import { WaitingScreen } from "../screens/waiting";
-import { WorkersScreen } from "../screens/workers";
+import { QueueScreen } from "../screens/queue";
+import { FleetScreen } from "../screens/fleet";
+
+export type NavGroup = "Operate" | "Observe";
 
 export interface Route {
   readonly path: `/${string}`;
   readonly label: string;
   readonly icon: IconName;
+  readonly group?: NavGroup;
   readonly Screen: ComponentType;
 }
 
 export const ROUTES: readonly Route[] = [
   { Screen: OverviewScreen, icon: "overview", label: "Overview", path: "/" },
-  { Screen: WorkersScreen, icon: "workers", label: "Workers", path: "/workers" },
-  { Screen: LeasesScreen, icon: "leases", label: "Leases", path: "/leases" },
-  { Screen: WaitingScreen, icon: "waiting", label: "Waiting", path: "/waiting" },
-  { Screen: AttentionScreen, icon: "attention", label: "Attention", path: "/attention" },
-  { Screen: EventsScreen, icon: "events", label: "Events", path: "/events" },
-  { Screen: UsageScreen, icon: "usage", label: "Usage", path: "/usage" },
+  { Screen: InboxScreen, icon: "inbox", label: "Inbox", path: "/inbox" },
+  { Screen: FleetScreen, group: "Operate", icon: "workers", label: "Fleet", path: "/fleet" },
+  { Screen: LeasesScreen, group: "Operate", icon: "leases", label: "Leases", path: "/leases" },
+  { Screen: QueueScreen, group: "Operate", icon: "waiting", label: "Queue", path: "/queue" },
+  {
+    Screen: ActivityScreen,
+    group: "Observe",
+    icon: "events",
+    label: "Activity",
+    path: "/activity",
+  },
+  { Screen: UsageScreen, group: "Observe", icon: "usage", label: "Usage", path: "/usage" },
 ];
 
-// why: a section's own pages live under its path (`/workers/<id>`), so a path belongs to the route
+// why: a section's own pages live under its path (`/fleet/<id>`), so a path belongs to the route
 // it starts with; only the overview is matched exactly, since every path starts with `/`.
 export function routeFor(path: string): Route | undefined {
   return ROUTES.find((route) =>

@@ -1,0 +1,160 @@
+---
+title: Cleanup and disk space
+description: How Simlock shuts down and deletes idle devices, how to run cleanup by hand, what it will never delete, and how to reset a machine with nuke.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Simlock cleans up after itself. A simulator or emulator that sits idle is first shut down, then deleted, so a worker does not fill its disk with devices nobody uses. You only run cleanup by hand when you want the space back now.
+
+Cleanup only ever touches simulators and emulators Simlock created. It never touches a device that has a lease, and it never touches a physical phone or tablet.
+
+## How idle devices are cleaned up
+
+An idle device goes through two steps, measured from the moment its last lease ended:
+
+| Step | Default | Config key | What happens |
+| --- | --- | --- | --- |
+| Shut down | after 10 minutes idle | `idle.shutdownAfterMs` | A booted device with no lease is shut down. It stays on disk and boots again for the next lease that fits it. |
+| Delete | after 60 minutes idle | `idle.deleteAfterMs` | A shut-down device is deleted, with its data. |
+
+Simlock checks once a minute, when a lease is released, and when the daemon starts.
+
+A few devices are kept booted on purpose:
+
+- Devices the [warm pool](/simlock/docs/worker/capacity) keeps ready are not shut down.
+- A device a queued request is waiting for is not shut down.
+- A device the warm pool booted that never served a lease is not shut down by the idle timer. Once it is shut down, its delete timer counts from that moment.
+
+To change the timers, set the keys and restart the daemon:
+
+```sh
+simlock config set idle.shutdownAfterMs 1800000
+simlock config set idle.deleteAfterMs 14400000
+simlock daemon stop
+simlock daemon start
+```
+
+If `daemon start` fails with `DAEMON_STOPPING`, the old daemon is still finishing its work. Wait a few seconds and run it again.
+
+<Aside>
+A device made under the `fresh` lease identity is deleted as soon as its lease ends, without waiting for these timers. See [Capacity](/simlock/docs/worker/capacity).
+</Aside>
+
+## When the disk runs low
+
+When free space on the disk that holds `~/.simlock` drops below `diskPressure.freeBytesThreshold` (10 GiB by default), Simlock deletes shut-down devices sooner: after the shutdown time (10 minutes) instead of the delete time (60 minutes).
+
+Simlock records a `disk.pressure-detected` event once each time free space crosses below the threshold. See [Monitoring](/simlock/docs/worker/monitoring) to watch for it.
+
+Disk pressure does not remove runtimes or system images. To free that space, remove components you no longer need; see [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+
+## Run cleanup now
+
+Preview what cleanup would do:
+
+```sh
+simlock cleanup --dry-run
+```
+
+```json
+[{"action":"destroy","reason":"idle 95m > T2=60m","rule":"idle-destroy","target":"dev_3f1c9a52-6b0e-4d7a-9c21-8e4f5b7a2d10"},{"action":"shutdown","reason":"idle 14m > T1=10m","rule":"idle-shutdown","target":"dev_a81e44d0-2c9b-4f6e-b3a7-51d0c8e9f264"}]
+```
+
+Each entry names the device (`target`), what cleanup does to it (`shutdown` or `destroy`), the rule, and why. `T1` is the shutdown time and `T2` the delete time. An empty list `[]` means nothing is due.
+
+Run it for real by dropping `--dry-run`. It prints the same list for the actions it took:
+
+```sh
+simlock cleanup
+```
+
+To run one rule only, name it with `--rule`. The two rules are `idle-shutdown` and `idle-destroy`:
+
+```sh
+simlock cleanup --rule idle-destroy
+```
+
+`simlock list --rules` lists the rule names. A rule name that does not exist matches nothing and prints `[]`.
+
+Cleanup still respects the idle timers: it does not delete a device that has been idle for less than the delete time. To remove every device at once, use [nuke](#reset-a-machine-with-nuke).
+
+`cleanup` is an admin command. Run it on the worker itself, from the user account that runs the daemon. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`: run it on the worker whose devices you mean.
+
+## Where devices live
+
+Simlock keeps its simulators and emulators in its own folders, called device roots:
+
+| Platform | Default device root | Config key |
+| --- | --- | --- |
+| iOS | `~/.simlock/devices/ios` | `drivers.ios.deviceRoot` |
+| Android | `~/.simlock/devices/android` | `drivers.android.deviceRoot` |
+
+If you set `SIMLOCK_HOME`, the roots move with it.
+
+Simlock creates each root itself, owner-only, with a marker file inside that ties it to this Simlock installation. That marker is how Simlock proves a device is its own.
+
+What this means for you:
+
+- Simlock never touches the simulators in Xcode's own device set or the emulators in `~/.android/avd`. Your own devices are safe from cleanup, `nuke` and `doctor`.
+- Simlock only deletes devices it has a record of, inside its own roots.
+- Simlock refuses to use a root it did not create. If you point `drivers.ios.deviceRoot` at an existing folder, the iOS platform does not start and `simlock doctor` names the reason, such as `missing-marker` or `non-empty-unowned-root`.
+
+To move a root, give it an absolute path that does not exist yet, then restart the daemon so Simlock creates it:
+
+```sh
+simlock config set drivers.ios.deviceRoot /Volumes/Devices/simlock-ios
+simlock daemon stop
+simlock daemon start
+```
+
+A root is refused when:
+
+| Reason | Meaning | Fix |
+| --- | --- | --- |
+| `not-absolute` | The path is relative or not a string. | Use an absolute path. |
+| `missing-marker` | The folder exists but Simlock did not create it. | Remove the empty folder and restart, or pick a path that does not exist. |
+| `non-empty-unowned-root` | The folder holds files and has no marker. | Pick another path. Simlock never adopts a folder with someone's data in it. |
+| `invalid-marker`, `wrong-instance` | The marker is damaged or belongs to another Simlock installation. | Pick another path. |
+| `symlink` | The root is a symbolic link. | Point the key at the real folder. |
+| `wrong-owner`, `wrong-permissions` | Another user owns it, or group or others can read it. | Fix the owner, or run `chmod 700` on it. |
+
+Simlock reads the roots only when the daemon starts, so restart it after a fix.
+
+Devices that sit inside a root with no record (usually left by a daemon that crashed while creating one) are orphans. `simlock doctor` reports them and `simlock doctor --purge-orphans` deletes them. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
+
+## Reset a machine with nuke
+
+`simlock nuke` is the emergency reset for one machine. Use it when leases or devices are stuck and you want to start over.
+
+<Aside type="danger" title="Nuke ends every lease on this machine">
+Every agent holding a device here loses it at once, and every queued request is cancelled. With `--delete-devices`, every simulator and emulator Simlock created is deleted, with the apps and data on it. There is no undo.
+</Aside>
+
+```sh
+simlock nuke
+```
+
+```text
+Nuke Simlock-managed devices? [y/N] y
+{"deletedDevices":[],"releasedLeaseIds":["lse_7d2c41e8-93a5-4b1f-8e60-2fa9c3d5b174"]}
+```
+
+Without `--delete-devices`, nuke:
+
+- ends every lease, including leases on physical devices, whose apps are uninstalled as on any release,
+- cancels every queued lease request,
+- shuts down every booted simulator and emulator,
+- clears what the warm pool learned from past leases, so it does not boot those kinds again unasked. Warm pool targets you configured are still kept.
+
+With `--delete-devices`, it also deletes every simulator and emulator Simlock created:
+
+```sh
+simlock nuke --delete-devices
+```
+
+Nuke never touches devices Simlock did not create, and never deletes or unenrolls a physical device.
+
+Nuke asks for confirmation. In a script, or anywhere without a terminal, pass `--yes`; without it the command stops with `nuke requires confirmation or --yes`.
+
+Nuke runs on one machine only. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`: run it on each worker you want to reset.

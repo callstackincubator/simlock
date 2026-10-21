@@ -1,0 +1,118 @@
+---
+title: Watching the screen
+description: Watch a leased simulator, emulator or physical device live in the console, turn screen streaming on, and know its limits.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The console can show the live screen of any leased device: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type. Nothing is captured until someone presses **Show screen**, and the capture stops when they stop watching or the lease ends.
+
+## Before you start
+
+- The console is on, and you can sign in with an operator token. See [Console](/simlock/docs/worker/console).
+- Screen streaming is turned on for the worker that holds the device. It is off by default.
+- For a physical iPhone: the worker runs Xcode 27, and the iPhone runs iOS 27 or later.
+
+## Turn screen streaming on
+
+<Steps>
+
+1. On each worker, turn streaming on:
+
+   ```sh
+   simlock config set capabilities.stream.enabled true
+   ```
+
+2. With a gateway, turn it on there too. The gateway passes each stream through to the worker that holds the device:
+
+   ```sh
+   simlock --gateway config set capabilities.stream.enabled true
+   ```
+
+3. Restart each daemon you changed, because the setting is read when the daemon starts:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+4. Check that it is on. `simlock worker list` (with `--gateway` for a fleet) ends each worker's line with the stream's state:
+
+   ```text
+   3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93 (mac-studio-2): connected -- ios 1/6, android 0/4, 1 lease(s) -- macOS 26.0 arm64; xcode 26.1 (17B55) -- stream available
+   ```
+
+   `stream unavailable: <reason>` says why no platform on that worker can stream. `stream off` means the setting is not on there.
+
+</Steps>
+
+To turn streaming off, set `capabilities.stream.enabled` to `false` and restart the daemon.
+
+## Watch a device
+
+<Steps>
+
+1. Open the console and go to **Leases**.
+2. Select the lease.
+3. In the **Screen** panel, press **Show screen**.
+
+</Steps>
+
+The picture appears with its size, codec, frame rate and bandwidth under it. Press **Stop** to end it. Leaving the page, closing the tab and signing out stop it the same way.
+
+When streaming is off on the lease's worker, the button cannot be pressed and the panel says "Streaming is off on" and the worker's name. When the worker cannot capture this device, the panel says why.
+
+## What to expect
+
+- **The first picture can take a while.** A simulator usually shows within seconds. A physical Android phone takes longer: Simlock checks the phone's screen and adb server before it starts. The console waits up to 200 seconds.
+- **A phone with its screen off is woken first.** If it does not wake, you are told to turn it on. While a phone streams, it is kept awake as long as it is charging, and its setting is put back when the stream ends.
+- **The picture ends with the lease.** When the lease is released, expires or loses its device, the stream stops, so a device is never watched after it is handed back.
+- **A frozen device does not look live.** A stream that gets no frames for 30 seconds ends with an error.
+- **Each viewer is a separate capture.** Two browser tabs on one lease capture the device twice.
+- **A rotated iOS simulator or iPhone keeps the first picture's scale.** An Android device's picture follows the rotation.
+
+## Physical iPhone requirements
+
+A physical iPhone streams only when both of these hold:
+
+- The worker it is plugged into runs Xcode 27.
+- The iPhone runs iOS 27 or later.
+
+Otherwise the panel shows the reason, for example:
+
+```text
+Physical iPhone streams need iOS 27 or later on the iPhone; 00008110-001A2B3C4D5E801E runs iOS 18.6. Update the iPhone and ask for the stream again.
+```
+
+Simulators stream on any Xcode the worker supports.
+
+## Quality and cost
+
+The worker encodes the screen as H.264. Three settings on the worker trade picture quality for bandwidth:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `capabilities.stream.maxDimension` | `720` | Longest side of the picture, in pixels (96 to 4096). Costs the most bandwidth. |
+| `capabilities.stream.bitrateKbps` | `1500` | Target bitrate, in kilobits per second (100 to 40000). |
+| `capabilities.stream.fps` | `30` | Highest frame rate (1 to 60). A still screen sends far fewer frames. |
+
+At the defaults, a screen that is busy redrawing costs about 1.4 Mbit/s, and a screen nobody touches costs between 25 and 90 kbit/s. Each iOS capture uses about 50 to 80 MB of memory on the worker. Restart the daemon after you change these.
+
+## Stream from your own tool
+
+Anything with an agent or operator token can read a lease's screen over HTTP at `GET /v1/stream/leases/<lease-id>`, on a worker or a gateway with streaming on. An agent token can read only its own leases. The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. Most users watch in the console instead.
+
+## When it does not work
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` is not `true` on that worker. | Turn it on and restart the worker's daemon. |
+| The panel says the screen cannot be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker without Xcode 27. | Update the iPhone or the worker's Xcode. |
+| "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone and press **Show screen** again. |
+| The panel gives up waiting for the first picture | The device painted nothing for 30 seconds. | Press **Show screen** again. |
+| The picture stops on a lease that is still active | The device stopped sending frames. | Press **Stop**, then **Show screen** again. |
+
+## Related
+
+- Using the console: [Console](/simlock/docs/worker/console).
+- Every `capabilities.stream.*` key: [Configuration reference](/simlock/docs/reference/configuration).

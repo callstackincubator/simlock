@@ -271,16 +271,13 @@ describe("EventBus", () => {
     expect(bus.replay({ sinceTs: 110 }).map(({ seq }) => seq)).toEqual([3]);
   });
 
-  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
-    "has exactly the event names %s catalogs",
-    (doc) => {
-      expect(documentedEventNames(readFileSync(join(REPO_ROOT, doc), "utf8"))).toEqual(
-        Object.keys(EVENT_NAMES).sort(),
-      );
-    },
-  );
+  it.each(["docs/internal/EVENTS.md"])("has exactly the event names %s catalogs", (doc) => {
+    expect(documentedEventNames(readFileSync(join(REPO_ROOT, doc), "utf8"))).toEqual(
+      Object.keys(EVENT_NAMES).sort(),
+    );
+  });
 
-  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+  it.each(["docs/internal/EVENTS.md"])(
     "lists lease-engine among the device.deleted initiators in %s",
     (doc) => {
       const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
@@ -290,7 +287,7 @@ describe("EventBus", () => {
     },
   );
 
-  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+  it.each(["docs/internal/EVENTS.md"])(
     "lists cleanup-reaper among the device.deleted initiators in %s",
     (doc) => {
       const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
@@ -300,7 +297,7 @@ describe("EventBus", () => {
     },
   );
 
-  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+  it.each(["docs/internal/EVENTS.md"])(
     "lists nuke among the device.deleted initiators in %s",
     (doc) => {
       const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");

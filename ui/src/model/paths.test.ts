@@ -1,22 +1,53 @@
 import { describe, expect, it } from "vitest";
 
-import { itemIdFrom, itemPath } from "./paths";
+import { devicePath, fleetAddress, inboxPath, itemIdFrom, itemPath } from "./paths";
 
 describe("an item's page path", () => {
   it("carries any id, a slash or a space included, and reads it back whole", () => {
     for (const id of ["wrk_1", "wrk 1/dev_2/quarantined", "a%b"]) {
-      expect(itemIdFrom("/attention", itemPath("/attention", id)), id).toBe(id);
+      expect(itemIdFrom("/inbox", itemPath("/inbox", id)), id).toBe(id);
+    }
+  });
+
+  it("ends an Inbox address in a slash when the key holds a dot, and not otherwise", () => {
+    expect(inboxPath("lease/lse_1.gw/ending")).toBe("/inbox/lease%2Flse_1.gw%2Fending/");
+    expect(inboxPath("wrk_1/drained")).toBe("/inbox/wrk_1%2Fdrained");
+    expect(itemIdFrom("/inbox", inboxPath("lease/lse_1.gw/ending"))).toBe("lease/lse_1.gw/ending");
+  });
+
+  it("round-trips an id with a slash for /fleet, /queue and /activity", () => {
+    for (const section of ["/fleet", "/queue", "/activity"] as const) {
+      expect(itemPath(section, "a/b c"), section).toBe(`${section}/a%2Fb%20c`);
+      expect(itemIdFrom(section, itemPath(section, "a/b c")), section).toBe("a/b c");
     }
   });
 
   it("names no item on the section's own page or on another section's", () => {
-    expect(itemIdFrom("/events", "/events")).toBeUndefined();
-    expect(itemIdFrom("/events", "/events/")).toBeUndefined();
-    expect(itemIdFrom("/events", "/eventsx/1")).toBeUndefined();
-    expect(itemIdFrom("/events", "/leases/1")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/activity")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/activity/")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/activityx/1")).toBeUndefined();
+    expect(itemIdFrom("/activity", "/leases/1")).toBeUndefined();
   });
 
   it("keeps a malformed escape as it was typed", () => {
-    expect(itemIdFrom("/events", "/events/%E0%A4%A")).toBe("%E0%A4%A");
+    expect(itemIdFrom("/activity", "/activity/%E0%A4%A")).toBe("%E0%A4%A");
+  });
+});
+
+describe("a worker's page and its device drawer", () => {
+  it("name the worker and the device by their own encoded ids, a slash inside either included", () => {
+    expect(fleetAddress("/fleet")).toEqual({});
+    expect(fleetAddress("/fleet/wrk_1")).toEqual({ workerId: "wrk_1" });
+    expect(fleetAddress("/fleet/wrk_1/")).toEqual({ workerId: "wrk_1" });
+    expect(fleetAddress(devicePath("wrk 1", "dev/1"))).toEqual({
+      deviceId: "dev/1",
+      workerId: "wrk 1",
+    });
+    expect(fleetAddress(devicePath("a/b", "c"))).toEqual({ deviceId: "c", workerId: "a/b" });
+    expect(fleetAddress("/leases/wrk_1")).toEqual({});
+    expect(fleetAddress("/fleet/%E0%A4%A/dev_1")).toEqual({
+      deviceId: "dev_1",
+      workerId: "%E0%A4%A",
+    });
   });
 });

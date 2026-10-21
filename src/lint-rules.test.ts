@@ -728,6 +728,30 @@ describe("the console's layers", () => {
     ]);
   });
 
+  it("fires ui-base-ui-in-ds-only for an import of Base UI from the screens, and not from the design system", () => {
+    const found = layerViolations({
+      ...layers,
+      "ui/src/ds/b.ts":
+        'import "@base-ui/react/dialog";\nexport type Props = number;\nexport const b = 1;\n',
+      "ui/src/screens/s.ts": 'import "@base-ui/react/dialog";\nimport "../ds/b.js";\nexport {};\n',
+    });
+
+    expect(found.filter((line) => line.startsWith("ui-base-ui-in-ds-only"))).toEqual([
+      "ui-base-ui-in-ds-only ui/src/screens/s.ts -> @base-ui/react/dialog",
+    ]);
+  });
+
+  it("fires ui-base-ui-in-ds-only for an import of Base UI from a file directly under ui/src", () => {
+    const found = layerViolations({
+      ...layers,
+      "ui/src/main.ts": 'import "@base-ui/react";\nexport {};\n',
+    });
+
+    expect(found.filter((line) => line.startsWith("ui-base-ui-in-ds-only"))).toEqual([
+      "ui-base-ui-in-ds-only ui/src/main.ts -> @base-ui/react",
+    ]);
+  });
+
   it("lets a test reach across layers, as a test drives its subject through what it needs", () => {
     expect(
       layerViolations({

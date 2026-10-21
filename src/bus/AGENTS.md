@@ -4,7 +4,7 @@ Does: post-commit business facts — ids, order, the in-memory ring. The durable
 Entry: `index.ts` → `EventBus`, `EventMap`, `eventKey`.
 Uses: ports. Never imports: core, leasing, drivers, gateway.
 Catalog: [internal EVENTS.md](../../docs/internal/EVENTS.md) (rationale),
-[EVENTS.md](../../docs/EVENTS.md) (user cut). Rules: [events.md](../../docs/internal/agent-rules/events.md).
+[events.mdx](../../website/src/content/docs/docs/reference/events.mdx) (user cut). Rules: [events.md](../../docs/internal/agent-rules/events.md).
 
 ## Files
 
@@ -45,6 +45,7 @@ Catalog: [internal EVENTS.md](../../docs/internal/EVENTS.md) (rationale),
 
 1. `index.ts`: the name and its payload type in `EventMap`.
 2. `index.test.ts`: the name in `EVENT_NAMES` (typed `Record<EventName, true>`).
-3. A row in both `docs/internal/EVENTS.md` and `docs/EVENTS.md` — name, payload, emission
-   point, status. A test fails when either catalog's names differ from `EVENT_NAMES`.
+3. A row in both `docs/internal/EVENTS.md` and the website's events reference — name,
+   payload, emission point, status. A test fails when the internal catalog's names differ from
+   `EVENT_NAMES`.
 4. Emit it from the module that commits the change, after the commit.

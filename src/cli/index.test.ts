@@ -475,7 +475,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("names the lease from the requester id rather than from a flag of its own", async () => {
-      // why: Every argument after the tool name belongs to the tool (docs/CLI.md), so identity is
+      // why: Every argument after the tool name belongs to the tool, so identity is
       // the only thing left to select a lease with -- and `--agent-id`/`SIMLOCK_AGENT_ID`
       // already is that identity. A requester holding no lease is a usage error naming it.
       const output = outputCapture();
@@ -655,7 +655,7 @@ describe("CLI: exit codes", () => {
 
     it("spawns locally against a worker, accepting and ignoring --lease", async () => {
       // why: The other half of the same switch, and the reason `--lease` is accepted on both: one
-      // command line has to work against either kind of daemon (docs/CLI.md). A worker takes
+      // command line has to work against either kind of daemon. A worker takes
       // the flag, drops it, and passes the rest to the tool untouched.
       const output = outputCapture();
       const ran: unknown[] = [];
@@ -950,7 +950,7 @@ describe("CLI: exit codes", () => {
     expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
   });
 
-  // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
+  // why: the CLI reference promises a missing required argument ends with the `simlock --help`
   // pointer, and guards reach it two ways -- an explicit `withHelpHint` call or
   // `requiredPositional` -- either of which can be dropped silently, so a sample of both
   // paths (a command guard and the router's unknown command) is pinned here.
@@ -6633,7 +6633,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
 });
 
 /**
- * why: `docs/CLI.md` promises exactly one structured error line per failure, and binds `USAGE` to
+ * why: the CLI reference promises exactly one structured error line per failure, and binds `USAGE` to
  * exit 2. A `SIMLOCK_HOME` whose socket path exceeds the platform limit had neither: the path
  * was resolved while *building* the environment, and `runCli` takes its environment as a
  * default parameter -- whose initializer runs before the function body, and therefore before

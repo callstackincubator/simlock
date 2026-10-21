@@ -955,7 +955,7 @@ describe("McpSession", () => {
   });
 
   it("retries alone with the launching connect when a tool call joined a renew's attempt", async () => {
-    // `docs/CLI.md` and `docs/CLIENT.md` promise a tool call may start a daemon that is not
+    // why: The CLI reference and the client guide promise a tool call may start a daemon that is not
     // running. Sharing `#connecting` with the renew timer is free in the other direction, but
     // here it would hand the tool call the timer's weaker attempt -- and "nothing is
     // listening" for something it was allowed to fix.

@@ -4,6 +4,7 @@
 
 .lease-meter {
   display: block;
+  margin-top: var(--space-1);
   width: 4rem;
 }
 
@@ -151,4 +152,35 @@
   position: absolute;
   inset: auto 0 0;
   background: var(--field);
+}
+
+.lease-line {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.drawer-note {
+  padding: var(--space-4) var(--space-6);
+}
+
+.lease-events {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lease-events li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.lease-events li > :last-child {
+  grid-column: 2;
 }

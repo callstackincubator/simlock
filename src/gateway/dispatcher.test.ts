@@ -169,7 +169,7 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(
   options: {
-    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly tokenRecords?: readonly { id: string; label?: string }[];
     readonly withoutTokens?: boolean;
@@ -832,6 +832,7 @@ describe("GatewayDispatcher", () => {
           asked.push(input);
           return fromHistory;
         },
+        replayPage: async () => ({ events: [], kind: "events" }),
         status: () => ({ opened: true, writing: true }),
       },
     });
@@ -840,6 +841,45 @@ describe("GatewayDispatcher", () => {
       fromHistory,
     );
     expect(asked).toEqual([{ sinceTs: 10 }]);
+  });
+
+  it("events.replay with beforeId returns a worker's relayed event with payload.workerId", async () => {
+    const rig = await usageRig({ fleet: true });
+    rig.relay("w-1", "daemon.stopping", { reason: "from-worker" });
+    rig.emit("daemon.stopping", { reason: "local" });
+    const newest = rig.bus.replay().at(-1) as { id: string };
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: newest.id, limit: 5 },
+      session(),
+    );
+
+    expect(page).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ workerId: "w-1" }) }),
+    ]);
+  });
+
+  it("events.replay with limit alone returns the newest n events, oldest first, through the gateway dispatcher", async () => {
+    const rig = await usageRig({ fleet: true });
+    for (const reason of ["a", "b", "c"]) rig.emit("daemon.stopping", { reason });
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch("events.replay", { limit: 2 }, session());
+
+    expect(page.map((event) => (event.payload as { reason: string }).reason)).toEqual(["b", "c"]);
+  });
+
+  it("events.replay with beforeId and no limit returns at most 100 events through the gateway dispatcher", async () => {
+    const rig = await usageRig({ fleet: true });
+    for (let n = 0; n < 130; n += 1) rig.emit("daemon.stopping", { reason: `r${n}` });
+    const newest = rig.bus.replay().at(-1) as { id: string };
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch("events.replay", { beforeId: newest.id }, session());
+
+    expect(page).toHaveLength(100);
   });
 
   it.each([
@@ -1976,6 +2016,8 @@ describe("GatewayDispatcher: usage.get", () => {
     const gate = { open: true };
     const eventHistory = {
       replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      replayPage: (input: { readonly beforeId?: string; readonly limit: number }) =>
+        rig.history.replayPage(input),
       status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
     };
     return { eventHistory, gate, rig };

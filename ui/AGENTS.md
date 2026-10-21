@@ -3,7 +3,7 @@
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
 Entry: `src/main.tsx` → `App` (`src/app/app.tsx`).
 Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only).
-Surface: [CONSOLE.md](../docs/CONSOLE.md). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
+Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 ## Layers
 
@@ -29,8 +29,8 @@ Each layer imports only the layers below it. `.dependency-cruiser.mjs` enforces 
 
 1. Model: a pure builder in `src/model/<page>.ts` turns route data into the page's view model
    (`overviewOf` in `overview.ts`). Shared rules live once: `workerHealth`, `workerSlots`
-   (`fleet.ts`), `eventSummary`, `eventTone` (`activity.ts`), `attentionTone`
-   (`attention.ts`), the word → tone tables (`tones.ts`), page paths (`paths.ts`).
+   (`fleet.ts`), `eventSummary`, `eventTone` (`activity.ts`), `inboxTone`
+   (`inbox.ts`), the word → tone tables (`tones.ts`), page paths (`paths.ts`).
 2. State: a hook in `src/state/<page>.ts` reads routes with `useLiveResource`, turns each into a
    `LoadView` (`resource.ts`: `loadView`, `mapView`, `bothViews`), and maps it through the
    builder. It re-exports the view-model types the screen needs.
@@ -48,32 +48,76 @@ asks it. The live connection asks `session.lost()` when it loses the stream, in 
 the same check: reconnect at once, back off as for an unreachable daemon, or stop while the session
 ends. `model/proxy-refusal.ts` words a refusal.
 
+`data/mode.ts` keeps the daemon's mode (`daemon.mode` of `GET /v1/status`, the one field the console
+reads from that route) once the live connection starts and again after each reconnect; a read that
+fails leaves none. `useDaemonMode` (`state/live.tsx`) gives it to state (ADR 0037 §4).
+
+## Actions
+
+An action is described once per kind of item in `model/actions.ts` (`leaseActions`, `requestActions`,
+`workerActions`, `inboxActions`): its label, danger, confirm, toasts and request (ADR 0037 §3). A
+screen never builds one; `state/actions.ts` (`useActions`) turns them into menu entries and its `run`
+is the one runner: it asks `confirm`, calls `ApiClient.write` and tells `notify` the outcome, and keeps
+an in-flight flag per item key, shared by the row, the drawer and the Inbox so a second click sends
+nothing. `notify` and `confirm` are plain functions `App` passes in through `state/services.tsx`.
+`write` sends through the same path as a read (token, `credentials`, the 401 path), but a network
+error or a timeout on a write throws without asking whether the session ended. The worker actions
+are offered only when `useDaemonMode` says `gateway` (ADR 0037 §4).
+
+## Search
+
+⌘K / Ctrl+K (`app/shell.tsx`, ignored while a modal drawer or dialog is open) or the sidebar's "Search or
+jump to…" opens `CommandPalette` (`ds/command-palette.tsx`). `model/search.ts` builds the results from
+the same views the pages show (pages, workers, their devices, `leaseRows`, `waitingTable`) and the
+actions of `model/actions.ts`, filters them by word prefix and orders them; `state/search.ts` keeps
+each read as it stood the first time it settled (`useSettledOnce`), so the list is built when the
+dialog opens, a group fills in once and then never changes, and runs a result through `navigate` or
+`useActions().run`. The palette keeps its highlight by result id, which Base UI's Autocomplete does
+not (its highlight is an index it resets when the items change), so the listbox is written in `ds/`.
+
 ## Pages
 
-| Path                | Screen    | Layout                                                                               |
-| ------------------- | --------- | ------------------------------------------------------------------------------------ |
-| `/`                 | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity |
-| `/workers[/<id>]`   | Workers   | list + inspector (`MasterDetail`)                                                    |
-| `/leases[/<id>]`    | Leases    | list + inspector; the inspector holds the live screen                                |
-| `/waiting[/<id>]`   | Waiting   | Wait p95 tile, list + inspector                                                      |
-| `/attention[/<id>]` | Attention | list + inspector                                                                     |
-| `/events[/<id>]`    | Events    | list + inspector with the payload                                                    |
-| `/usage`            | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)     |
+| Path                         | Screen   | Layout                                                                                                                                         |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                          | Overview | range chips in the toolbar, five stat tiles, Needs you, capacity, two charts, workers table                                                    |
+| `/fleet[/<id>[/<deviceId>]]` | Fleet    | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` |
+| `/leases[/<id>]`             | Leases   | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events)                                                     |
+| `/queue[/<id>]`              | Queue    | Wait p95 tile + table; a request opens in a `Drawer`                                                                                           |
+| `/inbox[/<key>]`             | Inbox    | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                          |
+| `/activity[/<id>]`           | Activity | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload          |
+| `/usage`                     | Usage    | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                  |
 
-On a list page the URL names the chosen item; with none, the first item shows on a wide screen
-and the list alone on a phone. Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
+The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue), then
+Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
+
+Leases, Queue, Inbox and Activity show the list alone, and the chosen item opens in a drawer over it
+(`state/drawer.ts`: closing steps back when the drawer was opened from the list).
+
+Activity's `EventFeed` (`data/event-feed.ts`) holds the events: the stream, the last hour and the gap after a reconnect add
+newer ones, and `loadOlder` adds the 100 before the oldest held (`GET /v1/events?before=&limit=100`, or `?limit=100` with
+none held). It reports how the history stands (`HistoryState`: more, start, gone, failed); `ds/feed.tsx` calls `onNearEnd`
+within 20 rows of the end and draws the end row.
+Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
 ## Design system
 
 `src/ds/index.ts` exports every component. Tokens and base elements: `foundation.css`.
 
 - Frame: `AppFrame`, `Sidebar` (collapsible; width kept per browser by `data/preferences.ts`),
-  `Page`, `MasterDetail`, `ListPane`, `List`, `ListRow`, `Inspector`.
+  `Page`, `ListRow`, `Drawer`, `DrawerTabs`
+  (a modal panel over the page, closed by an `IconButton` from `button.tsx`; Base UI), `Toolbar` (filters left, search right), `DesignProvider`
+  (Base UI's `CSPProvider`, so no `<style>` element).
 - Content: `Panel`, `Card`, `Row`, `Grid`, `StatRow`, `StatTile`, `Facts`, `DataTable`, `Pager`,
   `MinuteChart`, `MinuteTable`, `Empty`, `Id`, `Loaded`.
 - Signals: `Status` (square and word), `StatusDot` (square alone, the word as its name),
   `Meter`, `Slots`, `ShareBar`, `SlotLegend`.
-- Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `Icon`.
+- Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
+- Search: `CommandPalette` (Base UI Dialog around a combobox and listbox, written in `ds/`).
+- Actions: `RowMenu` (a ⋯ button and its menu), `MenuRow` (a table row that opens the same menu on a
+  right-click), `ActionBar` (a drawer's or page's first safe action and its ⋯; Base UI Menu and
+  ContextMenu), `createConfirmer` and `ConfirmHost` (Base UI AlertDialog, type-to-confirm, one host), `createToaster`
+  and `ToastHost` (Base UI Toast: its manager is the only queue, and owns the timer, the limit and
+  closing). `DataTable` takes a `menu` for its last column.
 
 ## Rules
 

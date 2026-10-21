@@ -3,13 +3,12 @@
 // fleet of them behind a gateway that every agent goes through. The social card
 // (scripts/og.mjs) reads the second step for its gateway table.
 //
-// why: every command is in the user docs. The CLI talks only to daemons on its own machine
-// (docs/CLI.md); your-mac runs the gateway, so `simlock --gateway lease` reaches it there.
-// agent-device leases through Simlock's /v1/agent-device (docs/HTTP-API.md), and remote agents
-// use POST /v1/lease-requests. A worker listens on 4701 and a gateway on 4700
-// (docs/CONFIGURATION.md, http.port).
+// why: every command is in the user docs. The CLI talks only to daemons on its own machine,
+// and your-mac runs the gateway, so `simlock --gateway lease` reaches it there.
+// agent-device leases through Simlock's /v1/agent-device, and remote agents use
+// POST /v1/lease-requests. A worker listens on 4701 and a gateway on 4700 (http.port).
 //
-// why: routing follows gateway.routing in docs/CONFIGURATION.md (a worker with a ready device
+// why: routing follows gateway.routing on the docs' routing page (a worker with a ready device
 // first, then the most free capacity): claude code gets your-mac's ready iPhone; codex's iPhone
 // goes to mac-studio, which then has the most free slots; the Pixel goes to linux-box, which has
 // the most after that. A slot that is "free" has no device running.

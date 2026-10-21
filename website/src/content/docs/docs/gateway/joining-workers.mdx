@@ -1,0 +1,127 @@
+---
+title: Join workers to a gateway
+description: Connect a worker machine to your gateway with a join token, check that it joined, and know what happens when the connection drops.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A worker joins a gateway by dialling out to it with a join token. Once joined, the gateway can route lease requests to it. The worker keeps serving agents on its own machine as before.
+
+## Before you start
+
+- A running gateway that the worker can reach. See [Set up a gateway](/simlock/docs/gateway/setup).
+- A worker machine where `simlock doctor` passes for the platforms you want to serve. See [Install and check your machine](/simlock/docs/getting-started).
+- The worker needs no inbound port. It needs to reach the gateway's address, for example `wss://gateway.example.com`.
+
+<Aside type="caution" title="The gateway gets admin rights on the worker">
+A joined worker gives its gateway the same rights as an operator on that worker. Anyone who controls the gateway, or holds an operator token for it, can lease and release any device on the worker, install and remove runtimes there, and read its configuration. Join a worker only to a gateway you trust as much as the worker itself.
+</Aside>
+
+## Join a worker
+
+<Steps>
+
+1. On the gateway, make a join token for this worker:
+
+   ```sh
+   simlock --gateway token create --role worker --label mac-mini-2
+   ```
+
+   ```json
+   {"secret":"slk_7mQ2xVb9Lr4pK0sZt8YcN1dHf6WjE3uAoG5iRk2Pq-s","token":{"id":"tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24","role":"worker","label":"mac-mini-2","createdAt":1792569600000}}
+   ```
+
+   Copy the `secret`. It is printed once. Make one token per worker, so that you can revoke one machine without touching the others.
+
+2. On the worker, set the gateway's address, the token and a display name, all in one command:
+
+   ```sh
+   simlock config set gateway '{"url":"wss://gateway.example.com","token":"slk_7mQ2xVb9Lr4pK0sZt8YcN1dHf6WjE3uAoG5iRk2Pq-s","label":"mac-mini-2"}'
+   ```
+
+   ```text
+   Updated gateway in /Users/alex/.simlock/config.json; takes effect on daemon restart.
+   ```
+
+   - `url` is the gateway's base address, starting with `wss://` (or `ws://` without TLS). The worker adds `/v1/uplink` itself. If your reverse proxy serves the gateway under a path, include it: `wss://example.com/simlock`.
+   - `token` is the join token's secret.
+   - `label` is optional. It is the name the gateway shows for this worker instead of its id.
+
+   Set `url` and `token` together: Simlock refuses a configuration with only one of them. The token is stored in plain text in `config.json`, which `simlock config set` writes so that only your user can read it.
+
+3. Restart the worker so the setting takes effect. Do it when no agent is using the machine:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+</Steps>
+
+## Check that it joined
+
+On the gateway, list the workers:
+
+```sh
+simlock --gateway worker list
+```
+
+```text
+4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68 (mac-mini-2): connected -- ios 0/4, android 0/2, 0 lease(s) -- macOS 15.6 arm64; xcode 16.4 (16F6), emulator 35.4.9 -- agent-device off -- stream off
+  Load: CPU 12% busy (10 cores) · memory 21.4 GiB of 32.0 GiB available · swap 0 B used · pressure normal · disk 412.7 GiB of 926.4 GiB free · read 3s ago
+```
+
+The first word after the name is the connection: `connected`, `disconnected`, or `incompatible`. The id at the start is the worker's own id. It stays the same across restarts, and it is what `simlock worker drain` and the other worker commands take.
+
+If the worker is not listed, read the worker's log:
+
+```sh
+simlock daemon logs
+```
+
+| The log says | What it means | What to do |
+| --- | --- | --- |
+| `Uplink to gateway established` | The worker joined. | Nothing. |
+| `Uplink to gateway failed; retrying` with reason `rejected` and `The gateway refused the uplink with HTTP 401` | The gateway does not know the token: it is mistyped, revoked, or made on another daemon. | Make a new join token on the gateway and set it on the worker. |
+| The same, with `HTTP 403` | The token is real but is not a worker token. | Make one with `--role worker`. |
+| `Uplink to gateway failed; retrying` with any other reason | The worker cannot reach the gateway. | Check the address, DNS, and that the reverse proxy passes WebSocket upgrades. |
+
+A worker shown as `incompatible` is connected, but it and the gateway run Simlock versions that cannot talk to each other. The gateway sends it no requests. Update the older one.
+
+## What changes on a joined worker
+
+- **Local agents keep working.** Agents on the worker machine still lease devices from it directly. They share the worker's devices with requests from the gateway: a device a local agent holds is not free for the fleet, and the other way round.
+- **The worker's own HTTP API keeps working.** Joining does not turn it on or off. The worker never needs it to join, so you can leave it off.
+- **The worker's own settings still apply.** Capacity, the warm pool, cleanup and downloads are set on each worker. The gateway's lease settings apply to leases made through the gateway.
+- **The worker starts without the gateway.** If the gateway is down when the worker starts, the worker starts anyway, serves local agents, and keeps trying to join.
+
+## When the connection drops
+
+The worker redials by itself. It waits 1 second, then twice as long after each failure, up to 30 seconds between tries.
+
+While the worker is away:
+
+- The gateway shows it as `disconnected` and sends it no new requests.
+- Leases on the worker keep running, including leases made through the gateway. The devices stay booted.
+- An agent that renews, releases, or runs a command on such a lease through the gateway gets `WORKER_UNREACHABLE` (exit 1). Retry until the worker is back. A lease that is not renewed before its time to live runs out expires on the worker.
+
+When the worker reconnects, the gateway picks up its leases again, and renew, release and commands work as before.
+
+## Leave a gateway
+
+To take a worker out of the fleet for good:
+
+<Steps>
+
+1. On the gateway, drain the worker so it gets no new leases, and wait until its leases end. See [Managing workers](/simlock/docs/gateway/managing-workers#take-a-worker-out-of-service).
+
+2. On the worker, remove the `gateway` key from `~/.simlock/config.json`, then restart the worker daemon.
+
+3. On the gateway, revoke the worker's join token and remove the worker:
+
+   ```sh
+   simlock --gateway token revoke tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24
+   simlock --gateway worker remove 4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68
+   ```
+
+</Steps>

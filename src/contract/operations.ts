@@ -10,6 +10,11 @@
 import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
+import {
+  EVENTS_PAGE_MAX,
+  EVENTS_PAGE_WITH_SINCE_MESSAGE,
+  eventsPageWithoutSince,
+} from "./events-page.js";
 import { parseOsConstraint } from "./os-range.js";
 import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
@@ -24,6 +29,7 @@ import {
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
+  EVENT_ID_PATTERN,
   hostFactsSchema,
   historyStatusSchema,
   hostLoadSchema,
@@ -645,7 +651,13 @@ export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
   effect: "read",
-  input: z.object({ sinceTs: z.number().optional() }),
+  input: z
+    .object({
+      beforeId: z.string().regex(EVENT_ID_PATTERN).optional(),
+      limit: z.number().int().min(1).max(EVENTS_PAGE_MAX).optional(),
+      sinceTs: z.number().optional(),
+    })
+    .refine(eventsPageWithoutSince, { message: EVENTS_PAGE_WITH_SINCE_MESSAGE }),
   output: z.array(eventEnvelopeSchema),
 });
 
