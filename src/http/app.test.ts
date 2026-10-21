@@ -1618,6 +1618,7 @@ describe("lease routes", () => {
       ],
       ["ttlMs a string", renew('{"ttlMs":"60s"}'), "ttlMs must be a number"],
       ["ttlMs negative", renew('{"ttlMs":-1}'), "ttlMs must be a positive number"],
+      ["ttlMs zero", renew('{"ttlMs":0}'), "ttlMs must be a positive number"],
       ["a number", renew("5"), "Body must be a JSON object"],
       ["an array", renew("[]"), "Body must be a JSON object"],
       ["malformed JSON", renew("{"), "Invalid JSON body"],

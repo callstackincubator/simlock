@@ -134,6 +134,25 @@ describe("buildOpenApiDocument", () => {
         "reclaiming",
       ],
     });
+    const renew = operation("/v1/leases/{id}/renew", "post");
+    expect(errorCodes(renew, "415")).toEqual(["UNSUPPORTED_MEDIA_TYPE"]);
+    expect(renew?.requestBody).toEqual(expect.objectContaining({ required: false }));
+    expect({
+      exec: dataShapes(operation("/v1/leases/{id}/exec", "post")),
+      lease: dataShapes(operation("/v1/leases/{id}/events", "get")),
+      stages: dataShapes(operation("/v1/lease-requests/{id}/events", "get")),
+    }).toEqual({
+      exec: [["chunk", "stream"], ["error"], ["exitCode"]],
+      lease: [["attempts", "event"], ["event"], ["event", "reason"]],
+      stages: [
+        ["createdAt", "id", "component", "percent", "state", "waiting"],
+        ["createdAt", "id", "error", "state"],
+        ["createdAt", "id", "etaSeconds", "state"],
+        ["createdAt", "id", "lease", "state"],
+        ["createdAt", "id", "queuePosition", "state"],
+        ["createdAt", "id", "state"],
+      ],
+    });
     for (const stream of [
       operation("/v1/leases/{id}/exec", "post"),
       operation("/v1/leases/{id}/events", "get"),
@@ -187,6 +206,19 @@ function streamMessage(operation: { responses?: object } | undefined): StreamSch
     { content?: { "text/event-stream"?: { schema?: StreamSchema } } }
   >;
   return responses["200"]?.content?.["text/event-stream"]?.schema ?? {};
+}
+
+function dataShapes(operation: { responses?: object } | undefined) {
+  const data = streamMessage(operation).properties?.data as
+    | { anyOf?: Shape[]; oneOf?: Shape[] }
+    | undefined;
+  return (data?.anyOf ?? data?.oneOf ?? [])
+    .map((shape) => Object.keys(shape.properties ?? {}))
+    .sort((a, b) => a.join().localeCompare(b.join()));
+}
+
+interface Shape {
+  readonly properties?: object;
 }
 
 function streamEvents(operation: { responses?: object } | undefined) {
