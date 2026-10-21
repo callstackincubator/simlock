@@ -8532,7 +8532,10 @@ describe("CLI: daemon install (#830)", () => {
       const serviceManager = new FakeServiceManager();
       let stops = 0;
       let polls = 0;
-      const connectExistingAdmin: CliEnvironment["connectExistingAdmin"] = async () => {
+      const connectExistingAdmin: CliEnvironment["connectExistingAdmin"] = async (
+        resolveCredential,
+      ) => {
+        await resolveCredential();
         if (!options.running)
           throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
         if (stops > 0) {
@@ -8553,6 +8556,7 @@ describe("CLI: daemon install (#830)", () => {
         clock,
         daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
         connectExistingAdmin,
+        readAdminTokenFile: async () => "admin-token",
         sleep: async (milliseconds) => {
           clock.advance(milliseconds);
         },

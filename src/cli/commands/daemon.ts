@@ -1,5 +1,6 @@
 import { asDaemonRefusal, UsageError } from "../errors.js";
 import { connectDaemonClient } from "../connect.js";
+import { stopRunningDaemon } from "../daemon-service.js";
 import { commandArgs, isHelp, subcommand, writeResult } from "../args.js";
 import { consoleLines, formatStatus } from "../format.js";
 import type { StatusGetOutput } from "../../admin/index.js";
@@ -57,11 +58,13 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   if (command === "install") {
     const { manager, definition } = serviceAccess(environment);
     const service = await definition();
+    const stopped = await stopRunningDaemon(environment, token);
     await manager.install(service);
     const status = await startDaemon(context);
     if (values.json) {
       writeResult((value) => environment.stdout.write(value), {
         status: "installed",
+        ...(stopped ? { stopped: true } : {}),
         service: {
           state: "installed",
           manager: manager.manager,
@@ -70,6 +73,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
         },
       });
     } else {
+      if (stopped) environment.stdout.write("Stopped the running daemon; leases are kept.\n");
       environment.stdout.write(`Service installed: ${service.name} (${manager.manager})\n`);
       environment.stdout.write(runningLines(status));
       environment.stdout.write("To start after a reboot, turn on automatic login for this user.\n");
