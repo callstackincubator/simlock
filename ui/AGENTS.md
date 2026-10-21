@@ -81,7 +81,7 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 `src/ds/index.ts` exports every component. Tokens and base elements: `foundation.css`.
 
 - Frame: `AppFrame`, `Sidebar` (collapsible; width kept per browser by `data/preferences.ts`),
-  `Page`, `List`, `ListRow`, `Drawer`, `DrawerTabs`
+  `Page`, `ListRow`, `Drawer`, `DrawerTabs`
   (a modal panel over the page, closed by an `IconButton` from `button.tsx`; Base UI), `Toolbar` (filters left, search right), `DesignProvider`
   (Base UI's `CSPProvider`, so no `<style>` element).
 - Content: `Panel`, `Card`, `Row`, `Grid`, `StatRow`, `StatTile`, `Facts`, `DataTable`, `Pager`,

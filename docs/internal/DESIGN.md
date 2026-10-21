@@ -95,7 +95,7 @@ one. Use the daemon's own word for the state (`leased`, `quarantined`,
 square of its colour, then the word in `--text` (`Status` in
 `ui/src/ds/status.tsx`). In a list row, where there is room for the square
 alone (`StatusDot`), the word is the square's accessible name and its tooltip,
-and the chosen row's inspector shows it in full. A worker's square shows the
+and the row's drawer shows it in full. A worker's square shows the
 worst of what is wrong with it: red for a lost or failed worker, amber for a
 drained or starting one, one over its RAM budget, or a load figure past its
 threshold, green otherwise (`workerHealth` in `ui/src/model/fleet.ts`). A word
@@ -237,8 +237,7 @@ put together from them and draws nothing of its own that one of them already dra
 ## Layout
 
 - Phone first. Every page works at 360px wide with no sideways scrolling of the page. Under 768px
-  the sidebar is a bar on top with a menu, and a list page shows its list until something is
-  chosen and the inspector after (the address says which). Under 768px a table's rows stack into
+  the sidebar is a bar on top with a menu. Under 768px a table's rows stack into
   blocks, each cell a line with its column's name beside it (`data-label`). A wide table, of six
   columns or more, stacks the same way under 1100px. Otherwise a table has a fixed layout: a
   column of numbers is 8rem wide, the others share the rest, and a long cell wraps or, for an id,
@@ -246,7 +245,6 @@ put together from them and draws nothing of its own that one of them already dra
 - Stat tiles fill the row, each at least 170px wide, and wrap.
 - From 1024px a chart and the panel beside it share a row, two thirds and one third; two panels
   of the same weight share it half and half.
-- A list page with nothing in its address shows its first row in the inspector on a wide screen.
 
 ## Focus and keyboard
 
@@ -261,9 +259,8 @@ put together from them and draws nothing of its own that one of them already dra
 
 Short, and only where it says where something came from. Colour changes on hover take 120ms
 (`--duration`). Moves take 220ms (`--duration-move`) on one easing (`--ease`): the sidebar
-widens and narrows; a page rises 10px as it opens; a list slides in from the left and an
-inspector from the right, again each time another thing is chosen; a drawer from the right, once, when it opens; the chosen row's bar and a
-meter or share bar slide to their new place. Nothing loops, nothing moves on its own, and
+widens and narrows; a page rises 10px as it opens; a drawer slides in from the right, once, when it opens; a
+meter or share bar slides to its new place. Nothing loops, nothing moves on its own, and
 charts never animate. With `prefers-reduced-motion: reduce`, there are no transitions and no
 animations at all.
 
