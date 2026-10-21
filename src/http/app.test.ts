@@ -340,6 +340,41 @@ describe("GET /v1/status, /v1/catalog", () => {
   });
 });
 
+describe("a query to a System route", () => {
+  it.each([
+    ["/v1/catalog?platform=windows", 400, "platform must be ios or android", undefined],
+    ["/v1/catalog?platform=ios&platform=android", 200, undefined, { platform: "ios" }],
+    ["/v1/stats?ledger=2", 400, "ledger must be 1", undefined],
+    [
+      "/v1/stats?since=1h&from=2026-10-15T00:00Z",
+      400,
+      "stats takes since or from, not both",
+      undefined,
+    ],
+  ])("%s gets today's answer", async (url, status, message, dispatched) => {
+    const { app, dispatcher } = buildHarness();
+    const seen: unknown[] = [];
+    dispatcher.handlers["catalog.get"] = (input) => {
+      seen.push(input);
+      return { platforms: [] };
+    };
+    dispatcher.handlers["usage.get"] = (input) => {
+      seen.push(input);
+      return {};
+    };
+
+    const response = await app.request(url, { headers: operatorAuth });
+
+    expect(response.status).toBe(status);
+    if (message === undefined) {
+      expect(seen).toEqual([dispatched]);
+    } else {
+      expect(await response.json()).toEqual({ error: { code: "BAD_REQUEST", message } });
+      expect(seen).toEqual([]);
+    }
+  });
+});
+
 describe("GET /v1/components", () => {
   const listing = {
     components: [
