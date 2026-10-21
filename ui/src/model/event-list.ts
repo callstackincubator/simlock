@@ -12,7 +12,7 @@ import {
 import { eventsPerMinute, extremes, type MinuteCount } from "./history";
 import { type LeaseRecord, leasePath } from "./leases";
 import { formatCount, writeQuery } from "./paging";
-import { itemPath } from "./paths";
+import { inboxPath, itemPath } from "./paths";
 import type { Tone } from "./tones";
 import type { WaitingRequest } from "./waiting";
 import { type WorkerView, workerPath } from "./workers";
@@ -157,7 +157,7 @@ export function eventAction(event: ConsoleEvent, places: EventPlaces): EventActi
     (entry) => "device" in entry && entry.worker.id === workerId && entry.device.id === deviceId,
   );
   if (item !== undefined) {
-    return { label: "Open Inbox item", to: itemPath("/inbox", item.key) };
+    return { label: "Open Inbox item", to: inboxPath(item.key) };
   }
   const worker = places.workers.find((entry) => entry.id === workerId);
   if (worker !== undefined) return { label: "Open worker", to: workerPath(worker.id) };

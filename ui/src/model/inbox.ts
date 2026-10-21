@@ -1,6 +1,6 @@
 import { eventSummary, eventTone } from "./activity";
 import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
-import { itemPath } from "./paths";
+import { inboxPath, itemPath } from "./paths";
 import {
   deviceOfLease,
   holderName,
@@ -394,7 +394,7 @@ export function inboxPageOf(input: {
     group: inboxGroup(item),
     key: item.key,
     subject: inboxSubject(item),
-    to: itemPath("/inbox", item.key),
+    to: inboxPath(item.key),
     tone: inboxTone(item.condition),
     word: item.condition,
   }));

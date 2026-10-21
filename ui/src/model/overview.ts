@@ -15,7 +15,7 @@ import { minuteLabel } from "./history";
 import { formatBusyPercent, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { formatCount } from "./paging";
-import { itemPath } from "./paths";
+import { inboxPath, itemPath } from "./paths";
 import { formatDuration } from "./time";
 import type { Tone, Toned } from "./tones";
 import type { WaitingRequest } from "./waiting";
@@ -248,7 +248,7 @@ function inboxOf(input: {
     needsYou: problems.slice(0, NEEDS_YOU_ROWS).map((item) => ({
       key: item.key,
       subject: inboxSubject(item),
-      to: itemPath("/inbox", item.key),
+      to: inboxPath(item.key),
       tone: inboxTone(item.condition),
       word: item.condition,
     })),

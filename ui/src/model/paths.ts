@@ -4,6 +4,13 @@ export function itemPath(section: Section, id: string): `/${string}` {
   return `${section}/${encodeURIComponent(id)}`;
 }
 
+// why: an Inbox key may hold a `.` (a gateway lease id does), and the daemon serves the console's page
+// only for a path whose last segment has none, so such an address ends in `/`.
+export function inboxPath(key: string): `/${string}` {
+  const path = itemPath("/inbox", key);
+  return key.includes(".") ? `${path}/` : path;
+}
+
 // why: ids are opaque and may hold a slash (an Inbox item's key does), so the whole rest of the
 // path is one id; a malformed escape is kept as typed rather than thrown.
 export function itemIdFrom(section: Section, path: string): string | undefined {
