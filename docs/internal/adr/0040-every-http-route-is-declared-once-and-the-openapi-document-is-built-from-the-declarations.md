@@ -128,8 +128,12 @@ replies at run time.
 
 `@hono/zod-openapi` types each handler's return against the route's
 declared replies, and the dispatcher's answers are typed from the same Zod
-schemas, so a handler whose reply does not fit its declaration fails the
-typecheck. Nothing checks replies at run time. An extra field a type
+schemas, so a handler whose JSON reply does not fit its declaration fails
+the typecheck, on every route whose declared replies all carry JSON. A
+`text/event-stream` or bodiless reply lets a handler return any
+`Response`: the streaming routes, the stream module's route and
+`DELETE /v1/lease-requests/{id}`'s 204 are described, not type-checked.
+Nothing checks replies at run time. An extra field a type
 allows can still reach a reply undocumented; that risk is accepted for
 the code a runtime check would cost.
 
