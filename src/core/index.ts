@@ -133,6 +133,7 @@ export type { InstanceIdentityOptions } from "./instance-identity.js";
 export { Nuke } from "./nuke.js";
 export { type NukeExecutor } from "./core-ports.js";
 export { registryOwner } from "./registry-schema.js";
+export { warmPoolOwner } from "./warm-pool/index.js";
 export { RegistryLoadError } from "./registry-rows.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
 export {

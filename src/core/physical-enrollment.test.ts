@@ -6,7 +6,7 @@ import { type FakePhysicalDevice } from "./fake-driver.js";
 import type { PhysicalDevice } from "./domain.js";
 import { createCore, loadConfig } from "./index.js";
 import { PhysicalEnrollment } from "./physical-enrollment.js";
-import { FakeDriver, loadTestRegistry, testComponentWiring } from "./testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js";
 
 const UDID = "00008110-001A2B3C4D5E";
 const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
@@ -37,6 +37,7 @@ async function build(physicalDevices: readonly FakePhysicalDevice[] = [IPHONE]) 
     drivers: [driver],
     eventBus,
     registry,
+    state: testStateOf(registry),
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
   });
@@ -400,6 +401,7 @@ describe("PhysicalEnrollment", () => {
       drivers: [harness.driver, android],
       eventBus: harness.eventBus,
       registry: harness.registry,
+      state: testStateOf(harness.registry),
       systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 }),
       ...testComponentWiring({
         clock: harness.clock,

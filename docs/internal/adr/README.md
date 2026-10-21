@@ -55,7 +55,7 @@ the status is stale.
 | [0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) | An event has one id, minted where the fact happened | Accepted; §6 narrowed by 0021 |
 | [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted; §3 narrowed by 0022 for physical devices; §3–5 narrowed by 0025 on Android |
 | [0016](0016-usage-figures-are-derived-on-read-from-the-event-history.md) | Usage figures are derived on read from the event history | Accepted — partly implemented: the event and retention parts are built, the reader (§1, §5–§8) is not; §6's fleet join and a Consequence superseded by 0021; §1 and §4 superseded by 0032 |
-| [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — partly implemented: §3 (the release path still calls into the pool) |
+| [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — partly implemented: §3 (the release path still calls into the pool); §2, §4, §5 and §8 narrowed by 0038 |
 | [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — partly implemented: §3 and §4's warm-pool name rule; §4's path rules superseded by 0027; §1's one-write wording narrowed by 0036 |
 | [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted; §1–2 narrowed by 0022 for physical devices; §4 narrowed by 0036 (a replay reads the current device) |
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
@@ -74,3 +74,4 @@ the status is stale.
 | [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted — not yet implemented |
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
+| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented |

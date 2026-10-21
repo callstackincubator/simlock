@@ -35,7 +35,7 @@ class MutableRegistry implements NukeRegistryView {
   }
 }
 
-function createHarness(devices: VirtualDevice[]) {
+function createHarness(devices: VirtualDevice[], onForget: () => void = () => undefined) {
   const registry = new MutableRegistry(devices);
   const calls: string[] = [];
   const lifecycle: NukeDeviceLifecycle = {
@@ -79,6 +79,7 @@ function createHarness(devices: VirtualDevice[]) {
       },
     },
     registry,
+    warmPool: { forget: onForget },
   });
   return { calls, lifecycle, registry, service };
 }
@@ -98,6 +99,32 @@ describe("NukeService", () => {
       "release-maintenance:end",
       "maintenance:end",
     ]);
+  });
+
+  it("clears the warm pool's record before it resets devices, and still resets them when forget throws", async () => {
+    const clearing = createHarness([device("ready", "ready")], () => {
+      clearing.calls.push("forget");
+    });
+    const throwing = createHarness([device("ready", "ready")], () => {
+      throwing.calls.push("forget");
+      throw new Error("disk I/O error");
+    });
+
+    await clearing.service.nuke(false);
+    await throwing.service.nuke(false);
+
+    for (const run of [clearing, throwing]) {
+      expect(run.calls).toEqual([
+        "maintenance:begin",
+        "release-maintenance:begin",
+        "release:killed",
+        "forget",
+        "shutdown:ready",
+        "release-maintenance:end",
+        "maintenance:end",
+      ]);
+      expect(run.registry.devices).toMatchObject([{ id: "ready", state: "shutdown" }]);
+    }
   });
 
   it("targets only non-deleted registry records and supports shutdown-only mode", async () => {
@@ -227,6 +254,8 @@ describe("NukeService", () => {
         },
       },
       registry: harness.registry,
+
+      warmPool: { forget() {} },
     });
 
     await expect(harness.service.nuke(false)).rejects.toThrow("release failed");
@@ -281,6 +310,8 @@ describe("NukeService", () => {
         async endMaintenance() {},
       },
       registry,
+
+      warmPool: { forget() {} },
     });
 
     async function register(
@@ -381,6 +412,8 @@ describe("NukeService", () => {
       },
       logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
       registry: harness.registry,
+
+      warmPool: { forget() {} },
     });
 
     await service.nuke(false);

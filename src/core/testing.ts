@@ -17,6 +17,7 @@ import { DriverCatalog } from "./driver-catalog.js";
 import type { Platform } from "./domain.js";
 import { Registry, type RegistryOptions } from "./registry.js";
 import { registryOwner } from "./registry-schema.js";
+import { warmPoolOwner } from "./warm-pool/index.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 /**
@@ -95,7 +96,7 @@ export function openMemoryState(owners: readonly SqliteSchemaOwner[]): Promise<S
 }
 
 export function openTestState(): Promise<StateDatabase> {
-  return openMemoryState([registryOwner, fakeDeviceDataTable]);
+  return openMemoryState([registryOwner, warmPoolOwner, fakeDeviceDataTable]);
 }
 
 export function describeDeviceDataTable(
@@ -122,14 +123,22 @@ export function describeDeviceDataTable(
   });
 }
 
+const registryStates = new WeakMap<Registry, StateDatabase>();
+
+// why: the daemon hands the registry and the warm pool one `state.db` handle, so a test engine takes the registry's.
+export function testStateOf(registry: Registry): StateDatabase {
+  const state = registryStates.get(registry);
+  if (state === undefined) throw new Error("this registry was not loaded by loadTestRegistry");
+  return state;
+}
+
 export async function loadTestRegistry(
   options: Omit<RegistryOptions, "deviceData" | "state"> & {
     readonly state?: StateDatabase | undefined;
   },
 ): Promise<Registry> {
-  return Registry.load({
-    ...options,
-    deviceData: fakeDeviceDataTables,
-    state: options.state ?? (await openTestState()),
-  });
+  const state = options.state ?? (await openTestState());
+  const registry = await Registry.load({ ...options, deviceData: fakeDeviceDataTables, state });
+  registryStates.set(registry, state);
+  return registry;
 }

@@ -69,7 +69,7 @@ describe("RAM budget by device mode", () => {
   it("counts each device by its mode once booted, needs full-size room for every new one, and goes over after a restart with larger sizes", async () => {
     const env = await withDaemon({
       // Fresh devices are deleted on release, so each pass below starts from an empty budget.
-      configOverrides: { lease: { identity: { ios: "fresh" } } },
+      configOverrides: { lease: { identity: { ios: "fresh" } }, warmPool: { enabled: false } },
       driverScript: {
         ios: {
           availableOsVersions: [UNSLIMMABLE, SLIMMABLE],

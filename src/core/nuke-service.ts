@@ -44,6 +44,8 @@ export interface NukeServiceOptions {
   readonly leases: LeaseMaintenance;
   readonly registry: NukeRegistryView;
   readonly logger?: Logger;
+  /** why: nuke starts the warm pool over, so the kinds it learned are not booted back. */
+  readonly warmPool: { forget(): void };
 }
 
 /**
@@ -83,6 +85,13 @@ export class NukeService implements NukeExecutor {
       await this.options.leases.beginMaintenance();
       releaseMaintenanceStarted = true;
       const releasedLeaseIds = await this.options.leases.releaseAllDuringMaintenance("killed");
+      try {
+        this.options.warmPool.forget();
+      } catch (error: unknown) {
+        this.#logger.error("nuke could not clear the warm pool's record", {
+          error: stableError(error),
+        });
+      }
 
       for (const device of this.options.registry.snapshot.virtualDevices) {
         try {
