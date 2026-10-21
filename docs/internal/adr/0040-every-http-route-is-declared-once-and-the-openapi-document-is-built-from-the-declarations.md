@@ -44,7 +44,9 @@ flowchart LR
 ### 1. Zod 4
 
 The repo moves from Zod 3 to Zod 4. Every schema accepts and refuses the
-same inputs as before. Our own messages (refinements, custom errors, the
+same inputs as before, except whole numbers above 2^53−1 and ±Infinity,
+which Zod 4 refuses; they were refused later with our own message, and
+now get Zod's. Our own messages (refinements, custom errors, the
 hand-written query messages that move into schemas) stay word for word.
 Zod's own default messages in a 400 `BAD_REQUEST` may change wording;
 codes and statuses do not. The JSON Schema text MCP `tools/list` publishes
@@ -78,8 +80,10 @@ A route registered any other way is a bug, except the module mounts (§4).
 
 ### 3. The OpenAPI document
 
-`src/http` builds an OpenAPI 3.1 document from the declarations, without a
-running daemon. A root script prints it. It is not served by the daemon.
+`src/http` builds an OpenAPI 3.1 document from the declarations and the
+module definitions it is given, without a running daemon. The daemon side
+passes the module registry's definitions, since only the daemon and the
+CLI read the registry. A root script writes it to a file. It is not served by the daemon.
 The document's `info.version` is the package version.
 
 - **Auth:** one bearer security scheme; `/v1/healthz` declares none.
@@ -101,14 +105,17 @@ The document's `info.version` is the package version.
 ### 4. Module and uplink routes are listed, not re-declared
 
 The `agent-device` and `stream` mounts stay one handler each, served at
-`/v1/<name>` and `/v1/<name>/*`. Each module lists its routes (method, path,
-statuses) for the document, tagged with the module and the config key that
+`/v1/<name>` and `/v1/<name>/*`. Each module's definition carries its
+routes as plain data (`http.routes`: method, path, statuses), so the
+document needs no module loaded. This extends ADR 0030's definition by one
+optional field; `definition.ts` stays light. agent-device's own route check
+is derived from the same list. The routes go into the document tagged with the module and the config key that
 turns it on (`capabilities.<name>.enabled`). Bodies simlock owns are typed
 (the stream's refusals, the agent-device front's own refusals);
 agent-device's own protocol bodies are not copied, the route links to
 agent-device. Each module's routes carry its own tag, `agent-device` or
 `stream`. `GET /v1/uplink` is listed as gateway only, tagged `Uplink`, with
-101, 401 and 403. A test keeps each module's list equal to the paths its
+101, 400, 401, 403 and 404. A test keeps each module's list equal to the paths its
 handler answers. The coverage check (§6) counts a mount as covered when
 its module lists at least one path under it, and matches the uplink
 against `UPLINK_PATH`, since the upgrade is not a route of the app.
@@ -119,11 +126,14 @@ against `UPLINK_PATH`, since the upgrade is not a route of the app.
 declared schema, with unknown keys refused at every depth, and refuses an
 error code that is neither declared nor a base code. The schemas
 themselves stay as they are: the contract strips unknown keys in
-production. For a module route it refuses a status the module did not
-list and a JSON refusal body that does not match its listed schema;
-binary and proxied bodies are not checked. A mismatch answers 500
+production. For the stream module it refuses a status the module did not
+list and a refusal body that does not match its listed schema.
+agent-device's routes are not checked: its front passes agent-device's
+own replies through on the same statuses as its refusals. A mismatch answers 500
 `INTERNAL` naming the route and the problem; on an SSE route the stream
-sends an `error` message saying so and ends. The
+sends an `error` message, `{error:{code:"INTERNAL",message}}`, and ends.
+The fast e2e lane runs with the switch on; the slow lane, with real
+devices and agent-device, runs without it. The
 switch is on in unit tests and in the e2e daemon
 (`SIMLOCK_CHECK_HTTP_REPLIES=1`, set only by the e2e harness), and off in
 production.
