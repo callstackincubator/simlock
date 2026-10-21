@@ -285,6 +285,49 @@ test.describe("the Inbox view", () => {
     }
   });
 
+  test("an Inbox item whose key holds a . reloads at its address", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      // why: a gateway's lease id holds a `.`, which a single host never makes, so the list is stubbed.
+      await page.route(
+        (url) => url.pathname === "/v1/leases",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          await route.fulfill({
+            json: {
+              leases: [
+                {
+                  deviceId: "dev_stub",
+                  grantedAt: now - 60_000,
+                  id: "wrk_a.lse_1",
+                  idChosenByRequester: false,
+                  lastRenewedAt: now - 30_000,
+                  ownerId: "tok_stub",
+                  requesterId: "tok_stub",
+                  ttlDeadline: now + 4 * 60_000,
+                  ttlMs: 900_000,
+                },
+              ],
+            },
+            response,
+          });
+        },
+      );
+      await openInbox(page, host);
+
+      await page.getByRole("region", { name: "Heads-up" }).getByRole("link").click();
+      const address = new URL(page.url()).pathname;
+      expect(address).toBe(`/inbox/${encodeURIComponent("lease/wrk_a.lse_1/ending")}/`);
+      await page.reload();
+
+      await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(address);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("draining a worker adds it to the Inbox view within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
