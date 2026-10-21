@@ -8,7 +8,16 @@ export function asRecord(value: unknown): Fields | undefined {
 
 export const present = (value: unknown): boolean => value !== undefined && value !== null;
 
-const STRING_FIELDS = ["platform", "target", "udid", "serial", "device", "deviceKey"] as const;
+const STRING_FIELDS = [
+  "platform",
+  "target",
+  "udid",
+  "serial",
+  "device",
+  "deviceKey",
+  "osVersion",
+  "imageTag",
+] as const;
 const INTEGER_FIELDS = ["shardAll", "shardSplit"] as const;
 
 export function malformedField(source: Fields): string | undefined {
