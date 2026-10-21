@@ -169,6 +169,8 @@ the tool's docs alone.
 | agent-device | the version `package.json` pins for `@agent-device/proxy` (tag `v<version>`) | `git -C <checkout> show v<version>:<path>` in a clone of `callstack/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstack/agent-device/contents/<path>?ref=v<version>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
 | Android SDK tools, Xcode tools | the installed ones | run them: `<tool> --help`, or the command itself |
 | simlock's own CLI | `main` | `pnpm build`, then `node dist/cli/main.js <command> --help` or the command itself |
+| systemd (Linux service units) | tag `v255` (Ubuntu 24.04 LTS); no Linux machine runs this repo's lanes | `gh api 'repos/systemd/systemd/contents/<path>?ref=v255' -H 'Accept: application/vnd.github.raw'` |
+| launchd, launchctl, plutil (macOS) | the installed ones | run them: a throwaway LaunchAgent under a `com.callstack.simlock.probe*` label, booted out afterwards |
 
 ## Project checks
 
