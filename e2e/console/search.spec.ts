@@ -135,6 +135,57 @@ test.describe("the search while data loads", () => {
   });
 });
 
+test.describe("the search during live updates", () => {
+  test("a live update while the dialog is open changes neither the list nor the highlight, and reopening builds the list again", async ({
+    page,
+  }) => {
+    const host = await startHostWithQueue();
+    try {
+      await openConsole(page, host.tokens.operator, new URL("/", host.url).toString());
+      await page.keyboard.press("Control+k");
+      const dialog = page.getByRole("dialog", { name: "Search" });
+      const box = dialog.getByRole("combobox");
+      await box.fill("nav");
+      const options = dialog.getByRole("option");
+      const before = await options.allInnerTexts();
+      expect(before).toHaveLength(4);
+      await page.keyboard.press("ArrowDown");
+      const highlighted = dialog.locator("[data-highlighted]");
+      await expect(highlighted).toHaveText(before[1] ?? "");
+
+      const refetched = page.waitForResponse(
+        async (response) =>
+          response.url().endsWith("/v1/lease-requests") &&
+          (await response.text()).includes("nav-late"),
+      );
+      host.cliBackground([
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 16",
+        "--os",
+        "18.4",
+        "--agent-id",
+        "nav-late",
+      ]);
+      await refetched;
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      );
+      expect(await options.allInnerTexts()).toEqual(before);
+      await expect(highlighted).toHaveText(before[1] ?? "");
+
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Control+k");
+      await box.fill("nav-late");
+      await expect(options.first()).toContainText("nav-late");
+    } finally {
+      await host.dispose();
+    }
+  });
+});
+
 test.describe("the search shortcut", () => {
   test("⌘K does nothing while a drawer is open", async ({ page }) => {
     const host = await startHostWithQueue();
