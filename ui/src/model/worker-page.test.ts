@@ -621,7 +621,12 @@ describe("a worker's warm pool tab", () => {
       ["Pixel 8 / google_apis", "configured", "27.0", 1, 0, 0, "runtime-missing"],
       ["Pixel 8 / google_apis_playstore", "configured", "27.0", 1, 0, 0, "runtime-missing"],
     ]);
-    expect(new Set(warm?.targets.map((row) => row.key)).size).toBe(4);
+    expect(warm?.targets.map((row) => row.key)).toEqual([
+      "ios-iPhone 17-26.0-full#0",
+      "ios-iPhone 17-undefined-full#0",
+      "android-Pixel 8-27.0-full-google_apis#0",
+      "android-Pixel 8-27.0-full-google_apis_playstore#0",
+    ]);
   });
 
   it("says the pool is off when the worker reports it so, and keeps two refused targets of one kind as two rows", () => {
