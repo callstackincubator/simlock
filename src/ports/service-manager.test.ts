@@ -24,32 +24,38 @@ function parsePlist(xml: string): PlistValue {
     index += 1;
     return value.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
   };
-  const value = (): PlistValue => {
-    const token = tokens[index];
+  const list = (): PlistValue[] => {
+    const items: PlistValue[] = [];
+    while (tokens[index]?.[1] !== "/") items.push(value());
     index += 1;
-    const tag = token?.[2];
-    if (tag === "true") return true;
-    if (tag === "false") return false;
-    if (tag === "array") {
-      const items: PlistValue[] = [];
-      while (tokens[index]?.[1] !== "/") items.push(value());
+    return items;
+  };
+  const dict = (): { [key: string]: PlistValue } => {
+    const entries: { [key: string]: PlistValue } = {};
+    while (tokens[index]?.[1] !== "/") {
       index += 1;
-      return items;
-    }
-    if (tag === "dict") {
-      const entries: { [key: string]: PlistValue } = {};
-      while (tokens[index]?.[1] !== "/") {
-        index += 1;
-        const key = text();
-        index += 1;
-        entries[key] = value();
-      }
+      const key = text();
       index += 1;
-      return entries;
+      entries[key] = value();
     }
+    index += 1;
+    return entries;
+  };
+  const scalar = (tag: string | undefined): PlistValue => {
     const content = tokens[index]?.[1] === "/" ? "" : text();
     index += 1;
     return tag === "integer" ? Number(content) : content;
+  };
+  const value = (): PlistValue => {
+    const tag = tokens[index]?.[2];
+    index += 1;
+    const keywords: Record<string, () => PlistValue> = {
+      true: () => true,
+      false: () => false,
+      array: list,
+      dict,
+    };
+    return (keywords[tag ?? ""] ?? (() => scalar(tag)))();
   };
   return value();
 }
