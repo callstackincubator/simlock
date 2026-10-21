@@ -2192,3 +2192,55 @@ describe("warm pool targets", () => {
     });
   });
 });
+
+describe("warm pool learned kinds", () => {
+  const kindsOf = (state: StateDatabase, at = now) => new LearnedKinds(state).kinds(at);
+  const granted = (rig: ReturnType<typeof harness>, leaseId: string, deviceId: string): void =>
+    void rig.eventBus.emit(
+      "lease.granted",
+      { deviceId, leaseId, platform: "ios", requestId: "req", requester: "a", source: "warm" },
+      "test",
+    );
+
+  it("learns on lease.granted the leased device's kind, closes it on lease.released and lease.expired, skips a physical device and learns nothing with warmPool.enabled false", async () => {
+    const devices = [device("d1", "leased", 0), device("d2", "leased", 0)];
+    const learnedWith = async (
+      end: "lease.released" | "lease.expired" | undefined,
+      options: { enabled?: boolean } = {},
+    ) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      const rig = harness(devices, { ...options, state });
+      rig.pool.start();
+      granted(rig, "l1", "d1");
+      rig.clock.advance(minute);
+      if (end === "lease.released") {
+        rig.eventBus.emit(
+          end,
+          { deviceId: "d1", leaseId: "l1", ownerId: "a", reason: "explicit" },
+          "test",
+        );
+      } else if (end === "lease.expired") {
+        rig.eventBus.emit(end, { deviceId: "d1", leaseId: "l1", ownerId: "a" }, "test");
+      }
+      rig.clock.advance(minute);
+      granted(rig, "l2", "d2");
+      const kinds = kindsOf(state, rig.clock.now());
+      rig.pool.dispose();
+      return kinds;
+    };
+
+    const open = await learnedWith(undefined);
+    expect(open.map((kind) => [kind.spec.model, kind.count])).toEqual([["iPhone 15", 2]]);
+    const released = await learnedWith("lease.released");
+    expect(released.map((kind) => kind.count)).toEqual([1]);
+    const expired = await learnedWith("lease.expired");
+    expect(expired.map((kind) => kind.count)).toEqual([1]);
+    expect(await learnedWith(undefined, { enabled: false })).toEqual([]);
+
+    const state = await openMemoryState([warmPoolOwner]);
+    const physical = harness(devices, { state });
+    physical.pool.start();
+    granted(physical, "l3", "phone-1");
+    expect(kindsOf(state)).toEqual([]);
+  });
+});

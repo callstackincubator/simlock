@@ -48,6 +48,15 @@ describe("LearnedKinds", () => {
         },
       },
       {
+        count: 2,
+        name: "a lease granted at the instant of the read beside a held one",
+        run: (kinds) => {
+          kinds.learn(phone, "a", T0);
+          kinds.learn(phone, "b", T0 + 10);
+          return T0 + 10;
+        },
+      },
+      {
         count: 1,
         name: "two in sequence",
         run: (kinds) => {
