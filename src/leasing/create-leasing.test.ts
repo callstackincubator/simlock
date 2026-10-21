@@ -11,7 +11,7 @@ import {
   type Registry,
   UnknownLeaseError,
 } from "../core/index.js";
-import { type CapacityLimits, type ResourceStrategyOptions } from "../core/testing.js";
+import { type CapacityLimits, type ResourceStrategyOptions, testStateOf } from "../core/testing.js";
 import {
   capacityChangedPayload,
   FakeDriver,
@@ -173,8 +173,10 @@ async function createHarness(
     readonly warmPoolEnabled?: boolean;
     /** Replaces keys of the `warmPool` block, `targets` and `maxConcurrentBoots` among them. */
     readonly warmPool?: Partial<Config["warmPool"]>;
-    /** `0` leaves no device recently released, so the pool boots none back unasked. */
+    /** why: how long a ready device may idle before the pool shuts it down. */
     readonly idleShutdownAfterMs?: number;
+    /** why: starts the warm pool as the daemon's startup does, so it learns from the leases and reacts to events. */
+    readonly startPool?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -225,9 +227,11 @@ async function createHarness(
       ? {}
       : { modelPreferences: options.modelPreferences }),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
 
+  if (options.startPool === true) await engine.convergeRunningCapacity();
   return { bus, clock, decisions: wiring.decisions, driver, engine, registry, state };
 }
 
@@ -1499,6 +1503,7 @@ describe("createLeasing RAM budget by mode", () => {
   it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; a delete brings it back under", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16", "iPhone 16 Pro"],
       availableOsVersions: ["26.4", "26.5"],
       clock,
       platform: "ios",
@@ -1581,13 +1586,14 @@ describe("createLeasing RAM budget by mode", () => {
     ] as const) {
       await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
     }
+    await after.engine.settle();
+    // why: the pool keeps the kind the reused lease taught it: the one slim device it made takes the 2 GiB the deletes freed.
+    expect(operations(driver, "makeReady")).toBe(boots + 1);
     expect(after.engine.ramBudget).toEqual({
       limitBytes: 5 * gibibyte,
       overLimit: false,
-      usedBytes: 2 * gibibyte,
+      usedBytes: 4 * gibibyte,
     });
-    await after.engine.request(request, { noWait: true, ownerId: "new", requesterId: "new" });
-    expect(operations(driver, "provision")).toBe(provisions + 1);
   });
 });
 
@@ -1734,6 +1740,7 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
       eventBus: bus1,
       idGenerator,
       registry: registry1,
+      state: testStateOf(registry1),
       systemStats: systemStats(),
     });
     const granted = await engine1.request(request, {
@@ -1776,6 +1783,7 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
       eventBus: bus2,
       idGenerator,
       registry: registry2,
+      state: testStateOf(registry2),
       systemStats: systemStats(),
     });
 
@@ -1998,6 +2006,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       eventBus: bus,
       idGenerator,
       registry: beforeRegistry,
+      state: testStateOf(beforeRegistry),
       systemStats,
     });
     const granted = await before.request(request, { ownerId: "a", requesterId: "a" });
@@ -2025,6 +2034,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       eventBus: bus,
       idGenerator,
       registry,
+      state: testStateOf(registry),
       systemStats,
     });
     await after.convergeRunningCapacity();
@@ -2123,6 +2133,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
       eventBus: bus,
       idGenerator,
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * gibibyte,
@@ -3043,13 +3054,14 @@ describe("createLeasing warm pool", () => {
   it("a nuke waits for a warm pool boot already in flight, then deletes the device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock,
       latencyMs: { makeReady: 50 },
       platform: "ios",
       reclaimResult: "shutdown",
     });
-    const harness = await createHarness({ driver });
+    const harness = await createHarness({ driver, startPool: true });
     const granting = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
     await flush();
     clock.advance(50);
@@ -3075,6 +3087,7 @@ describe("createLeasing warm pool", () => {
     async function releasedDeviceBooting(failBoot = false) {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({
+        knownModels: ["iPhone 16"],
         availableOsVersions: ["26.5"],
         clock,
         latencyMs: { makeReady: 50 },
@@ -3082,6 +3095,7 @@ describe("createLeasing warm pool", () => {
         reclaimResult: "shutdown",
       });
       const harness = await createHarness({
+        startPool: true,
         driver,
         limits: {
           android: { maxDevices: 1, maxRunning: 1 },
@@ -3284,12 +3298,13 @@ describe("createLeasing warm pool", () => {
 
   it("boots a released iOS device back to ready when the running limit has room", async () => {
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
       platform: "ios",
       reclaimResult: "shutdown",
     });
-    const harness = await createHarness({ driver });
+    const harness = await createHarness({ driver, startPool: true });
     const first = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
 
     await harness.engine.release(first.lease.id, "explicit");
@@ -4510,6 +4525,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
   it("lists a request that waits for a device the warm pool is booting as waiting-for-device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock,
       latencyMs: { makeReady: 50 },
@@ -4517,6 +4533,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       reclaimResult: "shutdown",
     });
     const harness = await createHarness({
+      startPool: true,
       driver,
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },

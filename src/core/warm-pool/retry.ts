@@ -14,13 +14,13 @@ interface Failure {
 }
 
 /**
- * Where a target's failed boot or creation is remembered, keyed by the resolved spec (`sameSpec`
+ * why: where a target's failed boot or creation is remembered, keyed by the resolved spec (`sameSpec`
  * says which specs are one): a failure records the attempt and when the next try is allowed (one
  * minute after the first, doubling per failure in a row, never more than ten minutes), and a
  * success forgets it. The policy asks one question (`mayAttempt`), the converger reports two facts
  * (`failed`, `succeeded`) and asks when to look again (`nextAttemptAt`); nothing else knows how a
  * target is held back, so a later schedule (an attempt limit, a delay per reason) replaces this
- * file. A device's own short pause after a failed keep boot or shutdown is the converger's; a target's
+ * file. A device's own short pause after a failed shutdown is the converger's; a target's
  * boot is held back here and nowhere else.
  */
 export class RetrySchedule {
@@ -36,6 +36,10 @@ export class RetrySchedule {
     const delay = Math.min(RETRY_FIRST_MS * 2 ** (count - 1), RETRY_MAX_MS);
     this.succeeded(spec);
     this.#failures.push({ count, retryAt: now + delay, spec });
+  }
+
+  failures(spec: VirtualSpec): number {
+    return this.#failureOf(spec)?.count ?? 0;
   }
 
   succeeded(spec: VirtualSpec): void {

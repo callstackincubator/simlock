@@ -12,6 +12,7 @@ import {
   loadTestRegistry,
   openTestState,
   testComponentWiring,
+  testStateOf,
 } from "../core/testing.js";
 import type { StateDatabase } from "../state/index.js";
 import { EventBus } from "../bus/index.js";
@@ -165,6 +166,7 @@ async function createHarness(
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
   });
   const harness = {

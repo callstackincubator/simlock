@@ -36,11 +36,15 @@ const FAILING_RECLAIM = {
 };
 
 /**
- * A worker whose stall threshold is one second: a device left `provisioning` with nothing
- * working on it is stalled a second after it entered that state.
+ * why: a worker whose stall threshold is one second: a device left `provisioning` with nothing
+ * working on it is stalled a second after it entered that state. The pool is off: a kind it
+ * learned from the first lease would be refilled with a ready device the stranded lease takes.
  */
 const STALLING = {
-  config: { stalledTransition: { minimumThresholdMs: 1_000, thresholdMultiplier: 1 } },
+  config: {
+    stalledTransition: { minimumThresholdMs: 1_000, thresholdMultiplier: 1 },
+    warmPool: { enabled: false },
+  },
   driverScript: { ios: IOS },
 } as const;
 

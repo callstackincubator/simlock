@@ -122,7 +122,7 @@ describe("loadConfig", () => {
       http: { enabled: false, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
-        maxConcurrentBoots: 1,
+        maxConcurrentBoots: 2,
         reserveRunning: { android: 0, ios: 0 },
         targets: [],
         quarantine: {
@@ -411,20 +411,31 @@ describe("loadConfig", () => {
   );
 
   describe("warmPool.targets and warmPool.maxConcurrentBoots", () => {
-    async function load(warmPool?: unknown) {
+    async function load(warmPool?: unknown, cpuCount = 8) {
       const filesystem = new MemoryFilesystem();
       await filesystem.mkdirp("/home/agent/.simlock");
       if (warmPool !== undefined) {
         await filesystem.writeFileAtomic(configPath, JSON.stringify({ warmPool }));
       }
-      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+      const systemStats = new FakeSystemStats({ cpuCount, totalRamBytes: 32 * gibibyte });
+      return loadConfig({ configPath, filesystem, systemStats });
     }
 
-    it("defaults to no targets and one concurrent boot", async () => {
-      const config = await load();
-
-      expect(config.warmPool.targets).toEqual([]);
-      expect(config.warmPool.maxConcurrentBoots).toBe(1);
+    it("defaults to no targets and max(1, floor(cpuCount / 4)) concurrent boots, and a file value wins", async () => {
+      expect((await load()).warmPool.targets).toEqual([]);
+      for (const [cpuCount, boots] of [
+        [2, 1],
+        [6, 1],
+        [8, 2],
+        [10, 2],
+        [12, 3],
+      ] as const) {
+        expect(
+          (await load(undefined, cpuCount)).warmPool.maxConcurrentBoots,
+          `${cpuCount} CPUs`,
+        ).toBe(boots);
+      }
+      expect((await load({ maxConcurrentBoots: 5 }, 2)).warmPool.maxConcurrentBoots).toBe(5);
     });
 
     it("loads a target with a model, an OS range, a mode and a count, and a boot cap of two", async () => {

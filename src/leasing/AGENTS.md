@@ -56,7 +56,8 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    that fails hands the device to core's quarantine through a port leasing
    declares, and the waiter's slot is freed either way.
 5. **Grant** (lock) — `LeaseLifecycle.grant` → one registry commit: device
-   `leased` + lease + request granted. Emits `lease.granted`. Arms the TTL.
+   `leased` + lease + request granted. Emits `lease.granted`. Arms the TTL. A grant of a ready
+   device wakes the queue, so the next waiter plans without another event.
 6. **Renew** — moves `ttlDeadline`; emits `lease.renewed`. The gateway forwards
    renews; it runs no timers of its own.
 7. **End** — explicit release, TTL expiry, `device-lost` (health monitor or

@@ -1,4 +1,5 @@
 import { parseOsConstraint } from "../../contract/index.js";
+import type { SystemStats } from "../../ports/index.js";
 import { WARM_POOL_NAME_MAX, WARM_POOL_TARGETS_MAX } from "../../contract/schemas.js";
 import {
   booleanValue,
@@ -34,16 +35,18 @@ export interface WarmPoolConfig {
   readonly reserveRunning: { readonly ios: number; readonly android: number };
   /** Kinds of device kept booted ahead of demand. */
   readonly targets: readonly WarmTarget[];
-  /** The most target boots and creations that run at once. */
+  /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
 }
 
-export const defaultWarmPoolConfig: WarmPoolConfig = {
-  enabled: true,
-  maxConcurrentBoots: 1,
-  reserveRunning: { android: 0, ios: 0 },
-  targets: [],
-};
+export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig {
+  return {
+    enabled: true,
+    maxConcurrentBoots: Math.max(1, Math.floor(systemStats.cpuCount() / 4)),
+    reserveRunning: { android: 0, ios: 0 },
+    targets: [],
+  };
+}
 
 /** A non-empty string no longer than the bound the status answer carries. */
 function boundedName(value: unknown, path: string): string {
