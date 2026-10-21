@@ -2590,7 +2590,20 @@ describe("warm pool learned kinds", () => {
       learned.learn(pixel, "pixel", now - 3 * minute);
       learned.learn(device("d1", "ready", 0).spec, "phone-0", now - 2 * minute);
       learned.learn(device("d1", "ready", 0).spec, "phone-1", now - 2 * minute);
-      const rig = harness([], { limit: 0, state, targets: [phone] });
+      const androidListing: PlatformCatalog = {
+        ...iosListing,
+        images: [{ abi: "arm64", runtime: "35", tag: "google_apis" }],
+        modelRuntimes: { "Pixel 8": ["35"] },
+        models: ["Pixel 8"],
+        platform: "android",
+        runtimes: ["35"],
+      };
+      const rig = harness([], {
+        catalog: async () => [iosListing, androidListing],
+        limit: 0,
+        state,
+        targets: [phone],
+      });
       const summary = () =>
         rig.pool.figures().targets.map((target) => ({
           count: target.count,

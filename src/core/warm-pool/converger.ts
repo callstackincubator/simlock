@@ -134,6 +134,8 @@ export class WarmPool {
   readonly #lastSpecs = new Map<string, VirtualSpec>();
   /** Every target's state as the last pass left it. */
   #reports: readonly TargetReport[] = [];
+  /** why: every report of the last pass, learned kinds included, which `figures()` lists and the log and the event leave out. */
+  #figured: readonly TargetReport[] = [];
   /** Whether a pass has left its reports yet: until one has, the figures come from the config. */
   #passed = false;
   /**
@@ -314,7 +316,7 @@ export class WarmPool {
     const { enabled, reserveRunning, targets } = this.options.config;
     const reports =
       enabled && this.#passed
-        ? this.#reports
+        ? this.#figured
         : targets.map((target): TargetReport => {
             const kind = this.#kindOfTarget(target);
             return {
@@ -394,7 +396,9 @@ export class WarmPool {
     try {
       const refused = await this.#resolveEnabled();
       const plan = await this.options.decisions.run(() => evaluate(this.#view()));
-      const reports = configuredOnly([...refused, ...plan.targets]);
+      const everyReport = [...refused, ...plan.targets];
+      const reports = configuredOnly(everyReport);
+      this.#figured = everyReport;
       this.#note(reports);
       for (const proposal of plan.proposals) {
         if (this.#draining) break;
@@ -853,8 +857,9 @@ function figureOf(report: TargetReport): WarmTargetFigures {
     ...report.kind,
     booting: report.booting,
     count: report.count,
-    origin: "configured",
+    origin: report.origin,
     ready: report.ready,
+    ...(report.spec?.imageTag === undefined ? {} : { imageTag: report.spec.imageTag }),
     ...(report.short === undefined ? {} : { short: report.short }),
   };
 }
