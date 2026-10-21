@@ -583,7 +583,7 @@ describe("a worker's warm pool tab", () => {
     short: "runtime-missing" as const,
   };
 
-  it("lists each kind the pool keeps with its wanted, ready and booting numbers and the reason it is short, a dash where there is none", () => {
+  it("lists each kind the pool keeps with its origin, its image tag, its wanted, ready and booting numbers and the reason it is short, a dash where there is none, and gives two kinds that differ by tag two keys", () => {
     const { warm } = inspect(
       worker({
         warmPool: {
@@ -591,7 +591,14 @@ describe("a worker's warm pool tab", () => {
           reserveRunning: { android: 0, ios: 1 },
           targets: [
             { ...target, booting: 1, count: 2, osVersion: "26.0", ready: 1, short: undefined },
-            { ...target, osVersion: undefined },
+            { ...target, origin: "learned" as const, osVersion: undefined },
+            { ...target, imageTag: "google_apis", model: "Pixel 8", platform: "android" as const },
+            {
+              ...target,
+              imageTag: "google_apis_playstore",
+              model: "Pixel 8",
+              platform: "android" as const,
+            },
           ],
         },
       }),
@@ -601,6 +608,7 @@ describe("a worker's warm pool tab", () => {
     expect(
       warm?.targets.map((row) => [
         row.model,
+        row.origin,
         row.runtime,
         row.wanted,
         row.ready,
@@ -608,9 +616,12 @@ describe("a worker's warm pool tab", () => {
         row.short,
       ]),
     ).toEqual([
-      ["iPhone 17", "26.0", 2, 1, 1, "—"],
-      ["iPhone 17", "—", 1, 0, 0, "runtime-missing"],
+      ["iPhone 17", "configured", "26.0", 2, 1, 1, "—"],
+      ["iPhone 17", "learned", "—", 1, 0, 0, "runtime-missing"],
+      ["Pixel 8 / google_apis", "configured", "27.0", 1, 0, 0, "runtime-missing"],
+      ["Pixel 8 / google_apis_playstore", "configured", "27.0", 1, 0, 0, "runtime-missing"],
     ]);
+    expect(new Set(warm?.targets.map((row) => row.key)).size).toBe(4);
   });
 
   it("says the pool is off when the worker reports it so, and keeps two refused targets of one kind as two rows", () => {

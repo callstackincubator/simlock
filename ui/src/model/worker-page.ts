@@ -507,6 +507,7 @@ function hostTabOf(worker: WorkerView): HostTab {
 export interface WarmRow {
   readonly key: string;
   readonly model: string;
+  readonly origin: string;
   readonly runtime: string;
   readonly mode: string;
   readonly wanted: number;
@@ -536,6 +537,7 @@ function warmRow(row: WarmPoolRow): WarmRow {
     key: row.key,
     mode: row.mode,
     model: row.model,
+    origin: "",
     ready: row.ready,
     runtime: row.osVersion ?? "—",
     short: row.short ?? "—",
