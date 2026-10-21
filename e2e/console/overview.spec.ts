@@ -230,7 +230,9 @@ test.describe("the Overview's figures", () => {
     }
   });
 
-  test("on a single host, Overview shows all five numbers and both charts", async ({ page }) => {
+  test("on a single host, Overview shows all five numbers and both charts, and no Activity panel", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await openOverview(page, host);
@@ -247,21 +249,19 @@ test.describe("the Overview's figures", () => {
       await expect(page.getByRole("region", { name: "Leases held" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Requests in the queue" })).toBeVisible();
       await expect(page.locator("#main details.chart-data")).toHaveCount(2);
+      await expect(page.getByRole("region", { name: "Activity" })).toHaveCount(0);
     } finally {
       await host.dispose();
     }
   });
 
-  test("Overview's tiles and links land on /queue, /fleet and /activity, not Not found", async ({
-    page,
-  }) => {
+  test("Overview's tiles and links land on /queue and /fleet, not Not found", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       const links = [
         { follow: () => tile(page, "Waiting").getByRole("link").click(), path: "/queue" },
         { follow: () => tile(page, "Workers").getByRole("link").click(), path: "/fleet" },
         { follow: () => page.getByRole("link", { name: "Open Fleet" }).click(), path: "/fleet" },
-        { follow: () => page.getByRole("link", { name: "All events" }).click(), path: "/activity" },
       ];
       await openOverview(page, host);
       for (const { follow, path } of links) {
