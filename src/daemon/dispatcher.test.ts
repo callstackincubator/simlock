@@ -1907,7 +1907,7 @@ describe("Dispatcher: #parseOutput", () => {
       (rejected: unknown) => rejected,
     );
 
-    // Fails closed, generically -- not the raw zod issues (which could describe internal
+    // why: fails closed, generically -- not the raw zod issues (which could describe internal
     // shape) and not the malformed payload itself.
     expect(classifyError(error) ?? "INTERNAL").toBe("INTERNAL");
     expect((error as Error).message).toMatch(/does not match its contract output schema/);
@@ -2080,7 +2080,7 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
       const catalog = await dispatcher.dispatch("catalog.get", {}, session());
 
       expect(catalog.platforms[0]?.images).toEqual(installed);
-      // Only what is on the machine is listed, however much of the rest a policy would download.
+      // why: only what is on the machine is listed, however much of the rest a policy would download.
       expect(catalog.platforms[0]?.runtimes).toEqual(["26.5"]);
       expect(catalog.platforms[0]?.modelRuntimes).toEqual({ "iPhone 17 Pro": ["26.5"] });
       // The driver is asked with no policy, so no policy can add an image it would download.
@@ -2179,7 +2179,7 @@ describe("Dispatcher: status.get installs in progress", () => {
 
   it("lists no install once it has failed", async () => {
     const { driver, installer, installs } = await withInstaller();
-    // The first install is held; the second waits behind it and fails once its turn comes.
+    // why: the first install is held; the second waits behind it and fails once its turn comes.
     const first = installer.install({ component: "27.0", platform: "ios" });
     const call = installer.install({ component: "28.0", platform: "ios" });
     await flushPromises();
@@ -3357,7 +3357,7 @@ describe("Dispatcher: device.exec", () => {
   ])(
     "refuses a tool no driver claims ($tool) with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST",
     async ({ args, message, tool }) => {
-      // A well-formed request for a wrapper this daemon has no driver for is not a malformed
+      // why: a well-formed request for a wrapper this daemon has no driver for is not a malformed
       // one -- same distinction `driver.passthrough` draws, and the same error code.
       const runner = new ScriptedProcessRunner([]);
       const { dispatcher, leaseId } = await withLease({ processRunner: runner });

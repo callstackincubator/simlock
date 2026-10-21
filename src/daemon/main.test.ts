@@ -2032,7 +2032,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         join(SIMLOCK_HOME, "adb-server.json"),
         JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
       );
-      // Nothing is scripted: the install is refused once its argv is recorded.
+      // why: nothing is scripted: the install is refused once its argv is recorded.
       const processRunner = new ScriptedProcessRunner([]);
 
       const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
