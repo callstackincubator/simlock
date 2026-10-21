@@ -65,7 +65,8 @@
     "prepare": "lefthook install",
     "check": "pnpm run typecheck && pnpm run typecheck:e2e && pnpm run lint && pnpm run lint:comments && pnpm run format:check && pnpm run test",
     "release": "release-it",
-    "mutate": "node scripts/mutate.mjs"
+    "mutate": "node scripts/mutate.mjs",
+    "openapi": "pnpm run build:daemon && node scripts/openapi.mjs"
   },
   "dependencies": {
     "@agent-device/proxy": "0.21.28",
