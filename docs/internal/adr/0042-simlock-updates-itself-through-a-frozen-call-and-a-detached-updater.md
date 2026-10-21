@@ -47,8 +47,8 @@ flowchart LR
    a starting worker answers once its leases are loaded. It needs
    `admin`. The client sends it on a mismatched connection, as it does
    `daemon.stop`. Its input (`version?`, `force?`, `cancel?`, `query?`)
-   and its answer (`started`, `version`, `health`, `update`,
-   `lastUpdateFailure`, `latestVersion`) never change shape. `query`
+   and its answer (`started`, `upToDate`, `resolved`, `version`, `health`,
+   `update`, `lastUpdateFailure`, `latestVersion`) never change shape. `query`
    returns that answer and starts nothing, so it is also how a follower
    or the updater reads a daemon across a protocol change. So a gateway can update, and follow, a worker that
    shows `incompatible`, and the gateway and its workers can be updated
