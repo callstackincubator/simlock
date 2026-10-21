@@ -25,6 +25,18 @@ import { LearnedKinds, warmPoolOwner } from "./learned.js";
 const minute = 60_000;
 const now = 1_000 * minute;
 
+/** why: a catalog read that lists the iOS models the learned-kind tests lease. */
+const iosListing: PlatformCatalog = {
+  classDefaults: {},
+  defaultRuntime: undefined,
+  modelAliases: {},
+  modelClasses: {},
+  modelRuntimes: { "iPad Pro": ["26.0"], "iPhone 15": ["26.0"] },
+  models: ["iPad Pro", "iPhone 15"],
+  platform: "ios",
+  runtimes: ["26.0"],
+};
+
 const iphone15: WarmTarget = {
   count: 1,
   model: "iPhone 15",
@@ -401,7 +413,9 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.shutdownCalls).toEqual(["a"]);
-    expect(rig.sink.records).toEqual([]);
+    expect(rig.sink.records.map((record) => record.fields)).toEqual([
+      { deviceId: "a", reason: "over-budget" },
+    ]);
     expect(rig.kick).toHaveBeenCalledTimes(1);
   });
 
@@ -643,7 +657,9 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.shutdownCalls).toEqual(["a"]);
-    expect(rig.sink.records).toEqual([]);
+    expect(rig.sink.records.map((record) => record.fields)).toEqual([
+      { deviceId: "a", reason: "over-budget" },
+    ]);
   });
 
   it("leaves a shut-down device alone that is no longer shut down when its boot comes", async () => {
@@ -718,6 +734,46 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.bootCalls).toEqual([]);
+  });
+
+  it("does nothing while an operator reset holds acquisition closed, and acts again once it is open", async () => {
+    let closed = true;
+    const rig = harness(
+      [device("a", "ready", 5_000), device("b", "ready", 1_000), device("s", "shutdown", 1_000)],
+      { limit: 1, maintenance: () => closed },
+    );
+
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual([]);
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.waitingDemand).not.toHaveBeenCalled();
+
+    closed = false;
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("stops acting on the rest of a pass when an operator reset begins during it", async () => {
+    let closed = false;
+    const rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        maintenance: () => closed,
+        shutdown: async (target) => {
+          closed = true;
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
   });
 
   it("subscribes once however many times it is started", async () => {
@@ -2303,11 +2359,61 @@ describe("warm pool learned kinds", () => {
     const booting = await openMemoryState([warmPoolOwner]);
     new LearnedKinds(booting).learn(phone, "past", now - 2 * 60 * minute);
     new LearnedKinds(booting).ended("past", now - 60 * minute);
-    const restarted = harness([device("shut", "shutdown", 60 * minute)], { state: booting });
+    const restarted = harness([device("shut", "shutdown", 60 * minute)], {
+      catalog: async () => [iosListing],
+      state: booting,
+    });
     restarted.pool.start();
     await restarted.pool.pass();
     await restarted.pool.settle();
     expect(restarted.bootCalls).toEqual(["shut"]);
+  });
+
+  it("keeps a learned kind and plans nothing for it while its platform's catalog read is pending, failed or timed out, and boots it once a read lists the platform", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const rigFor = async (catalog: () => Promise<readonly PlatformCatalog[]>) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(phone, "past", now - 2 * 60 * minute);
+      new LearnedKinds(state).ended("past", now - 60 * minute);
+      return { rig: harness([device("shut", "shutdown", 60 * minute)], { catalog, state }), state };
+    };
+    const later = () => new Promise((resolve) => setImmediate(resolve));
+
+    let release: (value: readonly PlatformCatalog[]) => void = () => undefined;
+    const pending = await rigFor(
+      () =>
+        new Promise<readonly PlatformCatalog[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await pending.rig.pool.pass();
+    await pending.rig.pool.settle();
+    expect(pending.rig.bootCalls).toEqual([]);
+    expect(pending.rig.provisionCalls).toEqual([]);
+    pending.rig.clock.advance(30_000);
+    await pending.rig.pool.pass();
+    expect(pending.rig.bootCalls).toEqual([]);
+    expect(new LearnedKinds(pending.state).kinds(pending.rig.clock.now())).toHaveLength(1);
+    release([iosListing]);
+    await later();
+    await pending.rig.pool.pass();
+    await pending.rig.pool.settle();
+    expect(pending.rig.bootCalls).toEqual(["shut"]);
+
+    const failed = await rigFor(async () => {
+      throw new Error("avdmanager failed");
+    });
+    await failed.rig.pool.pass();
+    await later();
+    await failed.rig.pool.settle();
+    expect(failed.rig.bootCalls).toEqual([]);
+    expect(failed.rig.provisionCalls).toEqual([]);
+    expect(new LearnedKinds(failed.state).kinds(failed.rig.clock.now())).toHaveLength(1);
+
+    const answered = await rigFor(async () => [iosListing]);
+    await answered.rig.pool.pass();
+    await answered.rig.pool.settle();
+    expect(answered.rig.bootCalls).toEqual(["shut"]);
   });
 
   it("forget() empties the record, and the next lease learns its kind again", async () => {
@@ -2452,6 +2558,26 @@ describe("warm pool learned kinds", () => {
       });
       return state;
     };
+
+    it("shuts down the idle device of an older learned kind for a newer one short for a running slot, and logs the reason displaced", async () => {
+      const rig = harness([device("d1", "ready", 30 * minute)], {
+        catalog: async () => [iosListing],
+        limit: 1,
+        maxConcurrentBoots: 2,
+        state: await withLearned([1]),
+      });
+
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(rig.shutdownCalls).toEqual(["d1"]);
+      expect(rig.shutdownArgs).toEqual([["warm-pool", "cleanup"]]);
+      expect(
+        rig.sink.records
+          .filter((record) => record.message === "a warm pool shut a device down")
+          .map((record) => record.fields),
+      ).toEqual([{ deviceId: "d1", reason: "displaced" }]);
+    });
 
     it("lists configured targets only in figures() and the short log, with a learned kind short in the same pass", async () => {
       const short = harness([], { limit: 0, state: await withLearned([1]), targets: [phone] });
@@ -2616,6 +2742,7 @@ describe("warm pool learned kinds", () => {
             if (next() === "fail") throw new Error("simulator did not boot");
             return { ...target, state: "ready" };
           },
+          catalog: async () => [iosListing],
           provision: async () => {
             if (next() === "fail") throw new Error("creation failed");
           },

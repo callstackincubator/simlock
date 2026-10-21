@@ -8,15 +8,15 @@ Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGE
 
 ## Files
 
-| File               | Role                                                                                                                    |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                  |
-| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                |
-| `learned.ts`       | `warmPoolOwner` (`state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased, their 24 h peak |
-| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone              |
-| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                             |
-| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                      |
-| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                  |
+| File               | Role                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                   |
+| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                 |
+| `learned.ts`       | `warmPoolOwner` (`state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased, their 24 h peak  |
+| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone or unanswered |
+| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                              |
+| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                       |
+| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                   |
 
 ## How it works
 
@@ -35,6 +35,7 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
    once in the last 24 h, at least 1; 32 kinds per platform, the oldest dropped.
 3. **Resolve** — each target (a learned kind needs none; the catalog check forgets one whose model,
    OS, image tag or driver is gone, and a third failed boot in a row forgets it too) through `warmPoolDemand.resolve`, downloads off, every pass.
+   A kind whose platform has no catalog answer yet (read pending, failed or timed out) is kept and planned for nothing that pass.
    A refusal is a report. An `unresolvable` target keeps its last spec, so its devices stay spared.
    A device of a platform whose driver was refused at discovery is never proposed — boot or
    shutdown — but still holds its capacity slot, and `targeted()` still lists it to the reaper.
@@ -57,8 +58,8 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
      RAM or `maxConcurrentBoots`.
    - learned kinds, newest first, after the configured targets: the same fill, a kind having its
      ready idle, leased and reclaiming devices. One short for a running slot displaces the least
-     recently used idle ready device of an older learned kind (`displaced`, never a configured
-     target's device).
+     recently used idle ready device of an older learned kind (`displaced`; never a configured
+     target's device, a spared target's, or when the capacity strategy would still refuse the kind after the shutdown).
 5. **Act** — each proposal revalidated (same state, no lease, no claim):
    - shutdown: `lifecycle.shutdown`, initiator `warm-pool`, `cleanup` claim;
    - boot (lock: `tryReserveBoot` + `boot` claim) → `bootWarm` → release both;

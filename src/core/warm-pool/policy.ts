@@ -108,6 +108,8 @@ export interface WarmPolicyView {
   /** Targets whose resolution failed and that keep a stale spec: their devices are spared. */
   readonly spared: readonly ResolvedTarget[];
   readonly learned: readonly LearnedKind[];
+  /** why: learned kinds kept but planned for nothing this pass, as no catalog read has listed their platform yet (ADR 0038 §4). */
+  readonly unplanned: readonly VirtualSpec[];
   /** why: the spec of each boot or creation of the pool still running, for a target or a waiter; they count toward the boot cap. */
   readonly inFlight: readonly VirtualSpec[];
   readonly onItsWay: readonly { readonly spec: VirtualSpec; readonly deviceId?: string }[];
@@ -115,8 +117,9 @@ export interface WarmPolicyView {
   readonly retry: { mayAttempt(spec: VirtualSpec, now: number): boolean };
   /** What the capacity strategy refuses besides the running slots `capacity` already totals. */
   readonly admit: {
-    create(spec: VirtualSpec): CapacityRefusalReason | undefined;
-    boot(device: VirtualDevice): CapacityRefusalReason | undefined;
+    /** why: `down` names devices the plan has already shut down, which no longer hold their RAM. */
+    create(spec: VirtualSpec, down?: ReadonlySet<string>): CapacityRefusalReason | undefined;
+    boot(device: VirtualDevice, down?: ReadonlySet<string>): CapacityRefusalReason | undefined;
   };
   /**
    * A device is on its way to a lease: booted, `ready` and claimed, still counted as running
@@ -134,7 +137,7 @@ export interface WarmPolicyView {
 type Slots = { global: number; ios: number; android: number };
 
 /**
- * The one place the pool decides what to shut down, what to boot back and what to create for a
+ * why: the one place the pool decides what to shut down, what to boot back and what to create for a
  * target. Pure: reads the view, returns proposals in the order they are to run and the state of
  * every target; the converger revalidates each proposal before it acts.
  *
@@ -143,7 +146,7 @@ type Slots = { global: number; ios: number; android: number };
  * that is shut down to bring it back under, and only an idle `shutdown` device is booted into a
  * slot that is free. The operator's `reserveRunning` takes slots off that budget for idle devices
  * only (see `reservedOf`). Apart from the budget, an idle device that never served a lease and that
- * no target keeps is shut down once it has been ready past `idle.shutdownAfterMs`
+ * no target or learned kind keeps is shut down once it has been ready past `idle.shutdownAfterMs`
  * (`neverLeasedIdle`).
  */
 export function evaluate(view: WarmPolicyView): WarmPlan {
@@ -175,9 +178,13 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
   const proposed = new Set([...shutdowns, ...unneeded].map((proposal) => proposal.deviceId));
+  const sparedDevices = targetedDevices({ ...view, learned: [], targets: view.spared });
   const wanted = planTargets(
     view,
-    plannedKinds(targets, view.learned),
+    plannedKinds(
+      targets,
+      view.learned.filter((kind) => !view.unplanned.some((spec) => sameSpec(spec, kind.spec))),
+    ),
     bootable,
     queued,
     room,
@@ -188,6 +195,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
       : running.filter(
           (device) =>
             !proposed.has(device.id) &&
+            !sparedDevices.has(device.id) &&
             !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
         ),
   );
@@ -532,7 +540,7 @@ export function targetedDevices(
 }
 
 /**
- * Shutdowns for the ready, unleased devices that never served a lease and that no target keeps,
+ * why: shutdowns for the ready, unleased devices that never served a lease and that no target or learned kind keeps,
  * once they have been ready longer than `idle.shutdownAfterMs`. The cleanup reaper times an idle
  * device from the end of its last lease, so it never sees one of these; this is the one rule that
  * does. A device a waiting request is about to be granted is spared, as in the budget's choice.
@@ -703,6 +711,8 @@ function displaceFor(plan: TargetPlan, spec: VirtualSpec): boolean {
     return entry > index && device.spec.platform === spec.platform;
   });
   if (victim === undefined) return false;
+  // why: a slot is not all the kind lacks; when the capacity strategy still refuses it with the victim down, the shutdown would free nothing the kind can use and the victim would boot back next pass.
+  if (admitted(plan, spec, new Set([...plan.displaced, victim.id])) !== undefined) return false;
   plan.victims.splice(plan.victims.indexOf(victim), 1);
   plan.displaced.add(victim.id);
   release(plan.room, victim);
@@ -717,18 +727,35 @@ function addDisplacing(plan: TargetPlan, spec: VirtualSpec): TargetShort | undef
   return refused;
 }
 
-/** Proposes one boot of a shut-down device of the kind, else one creation; or why it cannot. */
-function addOne(plan: TargetPlan, spec: VirtualSpec): TargetShort | undefined {
-  const shutDown = plan.bootable.find(
+/** why: the shut-down device a boot of `spec` would use, which decides whether the capacity strategy is asked about a boot or a creation. */
+function bootCandidate(plan: TargetPlan, spec: VirtualSpec): VirtualDevice | undefined {
+  return plan.bootable.find(
     (device) =>
       !plan.taken.has(device.id) &&
       !plan.view.resetDevices.has(device.id) &&
       sameSpec(device.spec, spec),
   );
-  // The order a user reads: device limit, running limit, reserve, then RAM budget.
-  const capacity = shortOf(
-    shutDown === undefined ? plan.view.admit.create(spec) : plan.view.admit.boot(shutDown),
+}
+
+/** why: what the capacity strategy refuses for a boot or creation of `spec` once the `down` devices are shut down. */
+function admitted(
+  plan: TargetPlan,
+  spec: VirtualSpec,
+  down: ReadonlySet<string>,
+): TargetShort | undefined {
+  const shutDown = bootCandidate(plan, spec);
+  return shortOf(
+    shutDown === undefined
+      ? plan.view.admit.create(spec, down)
+      : plan.view.admit.boot(shutDown, down),
   );
+}
+
+/** why: proposes one boot of a shut-down device of the kind, else one creation, or says why it cannot. */
+function addOne(plan: TargetPlan, spec: VirtualSpec): TargetShort | undefined {
+  const shutDown = bootCandidate(plan, spec);
+  // why: the order a user reads: device limit, running limit, reserve, then RAM budget.
+  const capacity = admitted(plan, spec, plan.displaced);
   const refused =
     capacity === "device-limit"
       ? capacity

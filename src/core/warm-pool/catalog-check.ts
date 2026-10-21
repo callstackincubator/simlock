@@ -17,8 +17,8 @@ interface CatalogCheckOptions {
 /**
  * why: reads each platform's catalog beside a pass, never blocking it, and says which learned kinds
  * the last answers no longer list. A read that throws or runs past the limit leaves its platform
- * with no answer, so none of its kinds is judged on it: a stale kind then costs one failed boot,
- * which the retry schedule counts.
+ * with no answer, so none of its kinds is judged on it: they are kept, and planned for nothing
+ * (`unanswered`) until a read lists the platform, which the next pass applies (ADR 0038 §4).
  */
 export class CatalogCheck {
   readonly #answers = new Map<Platform, PlatformCatalog>();
@@ -42,6 +42,14 @@ export class CatalogCheck {
       const answer = this.#answers.get(platform);
       return answer !== undefined && !lists(answer, kind.spec);
     });
+  }
+
+  /** why: the kinds whose platform has a driver and no answer yet: a read pending, failed or timed out. */
+  unanswered(kinds: readonly LearnedKind[]): LearnedKind[] {
+    return kinds.filter(
+      (kind) =>
+        this.options.hasDriver(kind.spec.platform) && !this.#answers.has(kind.spec.platform),
+    );
   }
 
   #read(platform: Platform): void {

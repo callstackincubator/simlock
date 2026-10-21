@@ -162,13 +162,19 @@ function view(
     blocked?: readonly VirtualSpec[];
     refuseProvision?: CapacityRefusalReason;
     refuseBoot?: CapacityRefusalReason;
+    /** why: a creation the capacity strategy refuses until the plan has shut a device down. */
+    refuseProvisionUntilDown?: CapacityRefusalReason;
+    unplanned?: readonly VirtualSpec[];
   } = {},
 ): WarmPolicyView {
   return {
     admit: {
       boot: () => options.refuseBoot,
-      create: () => options.refuseProvision,
+      create: (_spec, down) =>
+        options.refuseProvision ??
+        ((down?.size ?? 0) === 0 ? options.refuseProvisionUntilDown : undefined),
     },
+    unplanned: options.unplanned ?? [],
     inFlight: options.inFlight ?? [],
     onItsWay: options.onItsWay ?? [],
     retry: {
@@ -1656,6 +1662,19 @@ describe("warm pool policy", () => {
         expect(evaluate(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual([]);
       });
 
+      it("keeps a learned kind and its devices but plans nothing for it while it is unplanned, and still plans a configured target of its spec", () => {
+        const learned = [learnedOf(kind, 1, now)];
+        const old = now - shutdownAfterMs - 1;
+        const spare = ofKind("spare", "ready", { createdAt: 1, readyAt: old });
+
+        expect(evaluate(view([], { learned, unplanned: [kind] }))).toEqual([]);
+        expect(evaluate(view([spare], { learned, unplanned: [kind] }))).toEqual([]);
+        expect(evaluate(view([], { learned }))).toEqual([provision(kind)]);
+        expect(
+          evaluate(view([], { learned, targets: [{ count: 1, spec: kind }], unplanned: [kind] })),
+        ).toEqual([provision(kind)]);
+      });
+
       it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request or is already shut down for the budget, for a kind short for ram-budget, device-limit or reserve, or for a configured target", () => {
         const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 2, now - 2 * minute)];
         const recent = device("recent", "ready", { endedAgo: 5 * minute, spec: older });
@@ -1704,6 +1723,13 @@ describe("warm pool policy", () => {
           ),
         ).toEqual([]);
         expect(refused({ limit: 3, refuseProvision: "ram-budget" })).toEqual([]);
+        // why: short for a slot and for RAM the shutdown would not free: no shutdown, or the pool would reboot the victim every pass.
+        expect(refused({ limit: 2, refuseProvision: "ram-budget" })).toEqual([]);
+        expect(refused({ limit: 2, refuseProvisionUntilDown: "ram-budget" })).toEqual([
+          displace,
+          provision(kind),
+        ]);
+        expect(refused({ limit: 2, spared: [{ count: 2, spec: older }] })).toEqual([]);
         expect(refused({ limit: 3, refuseProvision: "device-limit" })).toEqual([]);
         expect(refused({ limit: 3, reserve: { ios: 1 } })).toEqual([]);
 

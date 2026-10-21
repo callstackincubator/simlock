@@ -571,16 +571,20 @@ export class WarmPool {
     // unfiltered: the device holds its slot, or the pool would see a free one and over-subscribe.
     const devices = all.filter((device) => this.options.hasDriver(device.spec.platform));
     const everyDevice = capacityDevices(all);
+    const learned = this.#learnedKinds();
     return {
       admit: {
-        boot: (device) => {
-          const decision = this.options.capacity.canBoot(capacityDevice(device), everyDevice);
+        boot: (device, down) => {
+          const decision = this.options.capacity.canBoot(
+            capacityDevice(device),
+            down === undefined ? everyDevice : capacityDevices(shutDownIn(all, down)),
+          );
           return decision.ok ? undefined : decision.reason;
         },
-        create: (spec) => {
+        create: (spec, down) => {
           const decision = this.options.capacity.canProvision(
             plannedCapacityDevice(spec),
-            everyDevice,
+            down === undefined ? everyDevice : capacityDevices(shutDownIn(all, down)),
           );
           return decision.ok ? undefined : decision.reason;
         },
@@ -600,7 +604,7 @@ export class WarmPool {
       ),
       inFlight: [...this.#flights].map((flight) => flight.spec),
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
-      learned: this.#learnedKinds(),
+      learned,
       leases,
       now: this.options.clock.now(),
       onItsWay: this.#onItsWay(devices),
@@ -608,6 +612,7 @@ export class WarmPool {
       retry: this.#schedule,
       spared: this.#spared,
       targets: this.#resolved,
+      unplanned: this.#catalogCheck.unanswered(learned).map((kind) => kind.spec),
       waiting: this.options.acquisition.waitingDemand(),
     };
   }
@@ -650,7 +655,7 @@ export class WarmPool {
     if (proposal.action === "shutdown") {
       // why: a failed shutdown frees nothing, but any other trigger that comes soon would propose it again, so it is held back for a tick. A boot is held back by the retry schedule, which the policy reads before it proposes one.
       if ((this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()) return;
-      await this.#shutdown(proposal.deviceId);
+      await this.#shutdown(proposal.deviceId, proposal.reason);
       return;
     }
     const owner = this.#ownerOf(proposal);
@@ -695,12 +700,14 @@ export class WarmPool {
       });
   }
 
-  async #shutdown(deviceId: string): Promise<void> {
+  async #shutdown(deviceId: string, reason: string): Promise<void> {
     const device = await this.options.decisions.run(() => this.#unleased(deviceId, "ready"));
     if (device === undefined) return;
     try {
       const done = await this.options.lifecycle.shutdown(device, "warm-pool", "cleanup");
       if (done === undefined) return;
+      // why: `device.shutdown` carries no reason, so the daemon log is where a shutdown is attributed (safety rule 6).
+      this.#logger.info("a warm pool shut a device down", { deviceId, reason });
     } catch (error: unknown) {
       this.#logFailure(device, "shutdown", error);
     }
@@ -818,6 +825,11 @@ export class WarmPool {
       error: stableError(error),
     });
   }
+}
+
+/** why: `devices` with the ones in `down` as they are once shut down, for a capacity question about the plan so far. */
+function shutDownIn(devices: readonly VirtualDevice[], down: ReadonlySet<string>): VirtualDevice[] {
+  return devices.map((device) => (down.has(device.id) ? { ...device, state: "shutdown" } : device));
 }
 
 /**
