@@ -67,10 +67,13 @@ flowchart LR
    `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME`, `JAVA_HOME` and
    `DEVELOPER_DIR`. Nothing else from the shell: no tokens. A variable a
    later change starts reading joins this list in the same change. stdout
-   and stderr are appended to the role's `daemon.log`, as with auto-start.
-   The daemon keeps writing its own log there.
+   and stderr are appended to the role's `daemon.log`, as with auto-start;
+   install creates the file at mode 0600 first, because launchd and
+   systemd would create it world-readable. The daemon keeps writing its
+   own log there.
 4. **Restart after a failure only.** launchd: `KeepAlive` with
-   `SuccessfulExit` false, and its default 10 s throttle. systemd:
+   `SuccessfulExit` false, and its default throttle of one start per
+   10 s. systemd:
    `Restart=on-failure`, `RestartSec=10`, `StartLimitIntervalSec=0`. A
    clean stop (`daemon stop`, SIGTERM) exits 0 and stays stopped until
    the next login or start. Every stop the daemon makes for a failure
@@ -84,31 +87,32 @@ flowchart LR
    systemd `KillMode=process`. A stop gets 300 s before the manager
    force-kills: launchd `ExitTimeOut` 300, systemd `TimeoutStopSec=300`.
 5. **SIGTERM is a clean stop.** The daemon entry handles SIGTERM with the
-   same stop as `daemon.stop`, reason `signal`, then exits 0. A second
-   SIGTERM during the stop changes nothing.
+   same stop as `daemon.stop`, reason `signal`, then exits 0.
 6. **A start goes through the service when it can.** When the role's
    service is installed, loaded in the user's service manager and not
    broken (§9), `daemon start` and every auto-start (CLI and MCP) ask the
    manager to start it (`launchctl kickstart`, `systemctl --user start`)
    instead of spawning a child. The startup deadline and the probe stay
-   as they are, and a daemon that logs `Daemon failed to start` after the
-   start fails the command at once, as a spawned one does. When the
-   service is installed but not loaded (nobody logged in at the screen,
-   no systemd user session) or broken, the start spawns the daemon as
-   today and prints one notice on stderr naming the service and why, so
-   a command never fails only because the service cannot run.
+   as they are. When the service is installed but not loaded (nobody
+   logged in at the screen, no systemd user session) or broken, the start
+   spawns the daemon as today and prints one notice on stderr naming the
+   service and why, so a command never fails only because the service
+   cannot run. Broken wins over not loaded. Every launchctl, systemctl
+   and plutil call has a 10 s limit.
 7. **Install is repeatable and takes over a running daemon.** Install
    stops the role's daemon if one is running (a clean stop; leases
    persist) and waits up to 300 s for it to exit; one still running then
    fails install with exit 1 and nothing changed. It then writes the
    service file, replacing any earlier one, and loads and starts the
    service. A load that fails removes the file it wrote and fails install
-   with exit 1, so a file on disk always means the service was loaded
-   once. Uninstall stops the role's daemon, unloads the service and
-   deletes the file. Both say on stdout what they stopped.
+   with exit 1. Uninstall stops the role's daemon the same way, unloads
+   the service and deletes the file. Both say on stdout what they
+   stopped.
 8. **Start at login, not at boot.** Install changes no system setting. It
    prints one line on how to start after a reboot: automatic login on
-   macOS, `loginctl enable-linger` on Linux.
+   macOS, `loginctl enable-linger` on Linux. On Linux without linger, the
+   last logout stops the user's systemd and with it the daemon and the
+   emulators it booted; the docs say so.
 9. **The state is reported, not assumed.** `simlock daemon status` prints
    a `Service:` line for both roles: not installed, installed, not loaded,
    or broken (a saved Node or `main.js` path no longer exists). A worker's
@@ -129,7 +133,7 @@ sequenceDiagram
   M->>D: node main.js [--gateway]
   C-->>U: Service installed + reboot hint
   D--xM: crash (exit 1 or signal)
-  M->>D: start again after 10 s
+  M->>D: start again (at most one start per 10 s)
   U->>C: simlock daemon stop
   C->>D: daemon.stop
   D-->>M: exit 0, stays stopped
@@ -150,11 +154,9 @@ sequenceDiagram
 - `daemon.log` rotation renames the file under the service manager's open
   descriptor, so crash output after a rotation lands in `daemon.log.1`.
   Auto-start has the same limit today; `daemon logs` reads both files.
-- A CLI from another checkout or version, with the default home, starts
-  the installed service's simlock; a protocol mismatch is answered as it
-  is today.
-- The service-manager error code and the `service-broken` doctor finding
-  are contract shape changes: each bumps the protocol by one.
+- The `service-broken` doctor finding is a contract shape change and
+  bumps the protocol by one. The service-manager error code is raised by
+  the CLI only and bumps nothing.
 
 ## Alternatives considered
 
@@ -169,7 +171,7 @@ sequenceDiagram
   a command after `daemon stop` would run unsupervised until the next
   login, with no visible sign. Rejected.
 - **Copy the whole shell environment into the service file.** Secrets and
-  tokens from the shell would end up in a plist. Rejected for the four
-  named variables.
+  tokens from the shell would end up in a plist. Rejected for the named
+  variables (§3).
 - **Install enables linger on Linux.** It may prompt for a password
   through polkit and changes a system setting. Rejected for a hint.
