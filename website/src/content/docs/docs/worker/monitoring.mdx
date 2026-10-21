@@ -29,7 +29,7 @@ Capacity ios: managed 4/8, running 3 + 1 reserved/4, warm 1
 Capacity android: managed 0/4, running 0 + 0 reserved/2, warm 0
 RAM budget: 11.50 GiB/22.00 GiB used
 warm pool: enabled, reserve ios 0 android 0
-  iPhone 16 / 18.4 / full   wanted 1  ready 1  booting 0
+  iPhone 16 / 18.4 / full   configured   wanted 1  ready 1  booting 0
 Device dev_6f1c2a9e-3b7d-4e0a-9c55-2d8f1e4a7b10: leased, mode full, serves default mode: yes
 Device dev_0b93d4c1-8a2e-4f6b-b1d7-5e9c3a2f8d64: ready, mode full, serves default mode: yes
 Lease lse_9d2e7b14-6c3a-4f81-a0e5-7b1c9d4e2f36: claude-code:5f0e8a3c-1b2d-4c6e-9f7a-0d3b8e1c4a92 since 1761036720000, last renewed 1761037320000
@@ -48,7 +48,7 @@ What each line means:
 | `Running global` | Devices running now, plus slots held for devices that are booting, out of the most that may run at once, and how many of the running ones are warm. |
 | `Capacity ios` / `Capacity android` | Per platform: `managed` is devices that exist out of the device limit; `running` is as above. `(over limit)` means more devices exist than the limit allows, for example after you lowered it. `(at RAM budget)` means no more devices fit in the memory set aside for them. |
 | `RAM budget` | Memory the running devices use out of the budget. Shown only with the `resource` capacity strategy. |
-| `warm pool` | Whether the warm pool is on, the running slots it keeps free per platform, and one row per target: how many devices you want ready, how many are ready, how many are booting, and why a target is short. |
+| `warm pool` | Whether the warm pool is on, the running slots it keeps free per platform, and one row per target and learned kind, with where it came from (`configured` or `learned`): how many devices you want ready, how many are ready, how many are booting, and why a target is short. |
 | `Device` | One line per device: its id, state, and its device mode, or `physical` and its class for an enrolled physical device. Markers in brackets flag a problem, such as `quarantined (purge retry 2, ...)` or `stalled`. |
 | `Lease` | One line per lease: its id, the requester holding it, and when it was granted and last renewed, in milliseconds since 1970. |
 | `Install` | A runtime or system image being downloaded, how long for, and how many requests wait on it. |

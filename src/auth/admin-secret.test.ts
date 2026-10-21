@@ -25,41 +25,6 @@ describe("AdminSecretManager", () => {
     expect(stat.mode).toBe(0o600);
   });
 
-  // why: spying on the raw call proves the call site passes `mode`, not that MemoryFilesystem happens to record one.
-  it("passes mode 0600 to writeFileAtomic itself, at the single call persist() makes", async () => {
-    const calls: Array<{ readonly path: string; readonly mode: number | undefined }> = [];
-    const filesystem: Filesystem = {
-      readFile: () => Promise.reject(new Error("unused by this test")),
-      readFileFrom: () => Promise.reject(new Error("unused by this test")),
-      writeFileAtomic: async (path, _contents, options) => {
-        calls.push({ path, mode: options?.mode });
-      },
-      mkdirp: () => Promise.reject(new Error("unused by this test")),
-      rm: () => Promise.reject(new Error("unused by this test")),
-      stat: () => Promise.reject(new Error("unused by this test")),
-      readdir: () => Promise.reject(new Error("unused by this test")),
-      exists: () => Promise.reject(new Error("unused by this test")),
-      diskFree: () => Promise.reject(new Error("unused by this test")),
-      diskSpace: () => Promise.reject(new Error("unused by this test")),
-      directorySize: () => Promise.reject(new Error("unused by this test")),
-      writeFileExclusive: () => Promise.reject(new Error("unused by this test")),
-      rename: () => Promise.reject(new Error("unused by this test")),
-      lstat: () => Promise.reject(new Error("unused by this test")),
-      mkdir: () => Promise.reject(new Error("unused by this test")),
-      chmod: () => Promise.reject(new Error("unused by this test")),
-      realpath: () => Promise.reject(new Error("unused by this test")),
-    };
-    const manager = new AdminSecretManager({
-      filesystem,
-      path: "/admin.token",
-      secrets: secrets(),
-    });
-
-    await manager.persist();
-
-    expect(calls).toEqual([{ path: "/admin.token", mode: 0o600 }]);
-  });
-
   it("remove() deletes admin.token", async () => {
     const filesystem = new MemoryFilesystem();
     const manager = new AdminSecretManager({

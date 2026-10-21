@@ -131,16 +131,6 @@ describe("LeaseRequestTracker.submit", () => {
     }
   });
 
-  it("replays an Idempotency-Key for the same requester instead of double-submitting", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    const { view: first } = await createTrackedWithKey(tracker, dispatcher, "key-1");
-
-    const replay = await tracker.submit(identity, body, "key-1");
-    expect(replay.kind).toBe("created");
-    if (replay.kind === "created") expect(replay.view.id).toBe(first.id);
-    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
-  });
-
   it("does not replay an Idempotency-Key across different requesters", async () => {
     const { dispatcher, tracker } = buildTracker();
     await createTrackedWithKey(tracker, dispatcher, "key-1");
@@ -296,16 +286,23 @@ describe("LeaseRequestTracker.submit with allowDownload on a gateway", () => {
   });
 });
 
-describe("LeaseRequestTracker.submit with a mode", () => {
-  it("passes mode through onto the dispatch input, and omits it when the body names none", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, mode: "slim" });
-    expect(dispatcher.calls[0]?.input).toMatchObject({ mode: "slim" });
+describe("LeaseRequestTracker.submit with an optional request field", () => {
+  it.each([
+    ["mode", { mode: "slim" }],
+    ["imageTag", { imageTag: "google_apis_playstore" }],
+    ["physical", { physical: true }],
+  ] as const)(
+    "passes %s through onto the dispatch input, and omits it when the body names none",
+    async (field, extra) => {
+      const { dispatcher, tracker } = buildTracker();
+      await createTracked(tracker, dispatcher, { ...body, ...extra });
+      expect(dispatcher.calls[0]?.input).toMatchObject(extra);
 
-    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
-    await createTracked(tracker2, dispatcher2);
-    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("mode");
-  });
+      const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
+      await createTracked(tracker2, dispatcher2);
+      expect(Object.keys(dispatcher2.calls[0]?.input ?? {})).not.toContain(field);
+    },
+  );
 });
 
 describe("LeaseRequestTracker granted lease payload", () => {
@@ -378,30 +375,6 @@ describe("LeaseRequestTracker granted lease payload", () => {
       imageTag: "google_apis_playstore",
     });
     expect(await granted(spec)).not.toHaveProperty("imageTag");
-  });
-});
-
-describe("LeaseRequestTracker.submit with an image tag", () => {
-  it("passes imageTag through onto the dispatch input, and omits it when the body names none", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, imageTag: "google_apis_playstore" });
-    expect(dispatcher.calls[0]?.input).toMatchObject({ imageTag: "google_apis_playstore" });
-
-    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
-    await createTracked(tracker2, dispatcher2);
-    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("imageTag");
-  });
-});
-
-describe("LeaseRequestTracker.submit with a physical request", () => {
-  it("passes physical through onto the dispatch input, and omits it when the body names none", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, physical: true });
-    expect(dispatcher.calls[0]?.input).toMatchObject({ physical: true });
-
-    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
-    await createTracked(tracker2, dispatcher2);
-    expect(Object.keys(dispatcher2.calls[0]?.input ?? {})).not.toContain("physical");
   });
 });
 

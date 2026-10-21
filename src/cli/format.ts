@@ -256,11 +256,11 @@ function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): str
   return [
     `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
     ...targets.map((target) => {
-      const name = [target.model, target.osVersion, target.mode]
+      const name = [target.model, target.osVersion, target.mode, target.imageTag]
         .filter((part) => part !== undefined)
         .join(" / ");
       const short = target.short === undefined ? "" : `  short: ${target.short}`;
-      return `  ${name}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
+      return `  ${name}   ${target.origin}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
     }),
   ];
 }

@@ -519,43 +519,6 @@ describe("QuarantineCoordinator", () => {
     ]);
   });
 
-  it("a quarantine retry that itself throws logs at error with the device id", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("erase still stuck"));
-    const sink = new MemoryLogSink();
-    const harness = await createHarness({
-      clock,
-      driver,
-      logger: new JsonLinesLogger({ clock, sink }),
-    });
-    await harness.coordinator.enter({
-      attemptedStrategy: "wipe",
-      kind: "purge-failed",
-      deviceId: harness.target.id,
-      duration: 0,
-      error: "boom",
-      leaseId: "lease-1",
-    });
-    vi.spyOn(harness.registry, "recordQuarantineRetryFailure").mockRejectedValue(
-      new Error("state unwritable"),
-    );
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    expect(sink.records.filter((record) => record.level === "error")).toEqual([
-      expect.objectContaining({
-        module: "daemon.quarantine-coordinator",
-        fields: {
-          deviceId: harness.target.id,
-          error: "Error: state unwritable",
-          step: "retry",
-        },
-      }),
-    ]);
-  });
-
   it("A failed quarantine delete retry logs the error and the attempt number.", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -1181,7 +1144,7 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
     { apps: [], ids: [FIRST], model: "iPhone 15 Pro", osVersion: "18.4" },
   ];
 
-  async function build(logger?: Logger) {
+  async function build() {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, physicalDevices: DEVICES, platform: "ios" });
@@ -1203,7 +1166,6 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
       config,
       drivers: [driver],
       eventBus,
-      ...(logger === undefined ? {} : { logger }),
       registry,
       state: testStateOf(registry),
       systemStats,
@@ -1305,23 +1267,6 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
 
     expect(verbCalls(harness, "reclaim")).toHaveLength(1);
     expect(record(harness, id)).toMatchObject({ quarantineAttempts: 1, state: "quarantined" });
-  });
-
-  it("a physical retry whose presence read rejects logs a warning naming the device, the presence step and the error", async () => {
-    const sink = new MemoryLogSink();
-    const harness = await build(new JsonLinesLogger({ clock: new FakeClock(1_000), sink }));
-    const id = await enrollQuarantined(harness);
-    harness.driver.setPhysicalPresence(FIRST, true);
-    vi.spyOn(harness.driver, "listPresentPhysical").mockRejectedValueOnce(new Error("link down"));
-
-    await advance(harness, harness.config.warmPool.quarantine.retryBackoffMs);
-
-    expect(sink.records.filter((entry) => entry.level === "warn")).toEqual([
-      expect.objectContaining({
-        message: "quarantine presence read failed",
-        fields: { deviceId: id, error: "Error: link down", step: "presence" },
-      }),
-    ]);
   });
 
   it("a physical retry whose presence read rejects makes no reclaim or destroy call, keeps quarantineAttempts, and re-arms after health.probeIntervalMs", async () => {

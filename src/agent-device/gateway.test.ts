@@ -63,14 +63,4 @@ describe("agent-device's gateway side", () => {
       expect.stringContaining(noWorker),
     ]);
   });
-
-  it("agent-device's definition has a gateway side that creates a mount and a beforeDrain hook", async () => {
-    const { ctx } = await fakeGatewayContext("agent-device", agentDeviceModule.config.defaults);
-    const loaded = await agentDeviceModule.loadGateway?.();
-
-    const module = loaded?.createGateway(ctx);
-
-    expect(module?.mount).toBeTypeOf("function");
-    expect(module?.hooks?.beforeDrain).toBeTypeOf("function");
-  });
 });

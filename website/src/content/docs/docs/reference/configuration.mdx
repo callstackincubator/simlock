@@ -208,7 +208,7 @@ makes the next boot wipe the device once to take a new clean snapshot.
 
 | Key                          | Type                     | Default                               | Meaning                                                                                                    | Applies to |
 | ---------------------------- | ------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------- |
-| `http.enabled`               | boolean                  | `false` on a worker, `true` on a gateway | Serve the HTTP API and the web console. A gateway with `false` does not start.                          | Both       |
+| `http.enabled`               | boolean                  | `false` on a worker, `true` on a gateway | Serve the HTTP API and the web console. A gateway with `false` does not start; a worker with `gateway.url` set must be `false`.                        | Both       |
 | `http.host`                  | string                   | `127.0.0.1`                           | Address to listen on. Simlock does no TLS: put a reverse proxy in front for HTTPS.                          | Both       |
 | `http.port`                  | integer `1`–`65535`      | `4701` on a worker, `4700` on a gateway | Port to listen on.                                                                                       | Both       |
 | `http.proxyAuth`             | object                   | not set (proxy sign-in off)           | Treat a person your sign-in proxy (Cloudflare Access, for example) has signed in as an operator, with no Simlock token. Set `header`, `jwksUrl`, `issuer` and `audience` together, as one object. | Both       |
@@ -241,7 +241,7 @@ connection, so use `wss://`, or `ws://` only on loopback or inside your own tunn
 </Aside>
 
 Setting only one of `gateway.url` and `gateway.token` stops the worker from starting, naming the
-missing key. An `http://` or `https://` URL is refused too.
+missing key. An `http://` or `https://` URL is refused too. A worker with `gateway.url` set also refuses `http.enabled: true`: a joined worker is reached through the gateway.
 
 ## Gateway
 

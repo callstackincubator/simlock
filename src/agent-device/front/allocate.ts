@@ -50,6 +50,8 @@ interface Plan {
   readonly platform: "ios" | "android";
   readonly model?: string;
   readonly class?: "phone" | "tv" | "desktop";
+  readonly imageTag?: string;
+  readonly osVersion?: string;
   readonly ttlMs?: number;
 }
 
@@ -83,6 +85,19 @@ function deviceRefusal(fields: ReturnType<typeof leaseCallFields>): FrontReply |
   return undefined;
 }
 
+function unsupportedSelector(
+  params: Record<string, unknown>,
+  fields: ReturnType<typeof leaseCallFields>,
+): FrontReply | undefined {
+  if (params["physical"] === true) {
+    return refusal("refused: physical devices are not available through agent-device");
+  }
+  if (typeof fields.target === "string" && !Object.hasOwn(CLASS_OF_TARGET, fields.target)) {
+    return refusal(`refused: unknown --target ${fields.target}; use mobile, tv or desktop`);
+  }
+  return undefined;
+}
+
 function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
   const fields = leaseCallFields(params);
   const ttl = fields.ttlMs;
@@ -90,6 +105,8 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
     return refusal("refused: this agent-device is too old for simlock; upgrade it");
   }
   if (notPlain(params)) return refusal("refused: simlock leases only plain devices");
+  const unsupported = unsupportedSelector(params, fields);
+  if (unsupported !== undefined) return unsupported;
   const device = deviceRefusal(fields);
   if (device !== undefined) return device;
   if (present(ttl) && !(typeof ttl === "number" && Number.isFinite(ttl) && ttl > 0)) {
@@ -103,6 +120,13 @@ function holderReply(holder: Awaited<ReturnType<FrontContext["link"]["status"]>>
   return notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING);
 }
 
+function stringFields(fields: ReturnType<typeof leaseCallFields>) {
+  return {
+    ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
+    ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
+  };
+}
+
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
   const device =
@@ -113,6 +137,7 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
     ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
+    ...stringFields(fields),
     ...(ttlMs === undefined ? {} : { ttlMs }),
   };
 }
@@ -152,6 +177,18 @@ async function stillWaiting(
 function requiresOf(context: FrontContext): { readonly requires?: string[] } {
   const required = context.link.leaseRequires ?? [];
   return required.length === 0 ? {} : { requires: [...required] };
+}
+
+function leaseInput(context: FrontContext, plan: Plan) {
+  const { leaseId, platform, ...constraints } = plan;
+  return {
+    ...constraints,
+    leaseId,
+    platform,
+    requesterId: leaseId,
+    timeoutMs: QUEUE_WAIT_MS,
+    ...requiresOf(context),
+  };
 }
 
 async function requestLease(
@@ -200,16 +237,7 @@ async function requestLease(
   try {
     const grant = await context.dispatch(
       "lease.request",
-      {
-        leaseId: plan.leaseId,
-        platform: plan.platform,
-        requesterId: plan.leaseId,
-        timeoutMs: QUEUE_WAIT_MS,
-        ...(plan.model === undefined ? {} : { model: plan.model }),
-        ...(plan.class === undefined ? {} : { class: plan.class }),
-        ...(plan.ttlMs === undefined ? {} : { ttlMs: plan.ttlMs }),
-        ...requiresOf(context),
-      },
+      leaseInput(context, plan),
       buildHttpSession(identity, {
         onRequestAdmitted: () => {
           admitted = true;
@@ -241,7 +269,14 @@ function forwardedBody(
   address: string,
   ceiling: number,
 ) {
-  const { device: _device, deviceKey: _deviceKey, target: _target, ...rest } = call.params;
+  const {
+    device: _device,
+    deviceKey: _deviceKey,
+    imageTag: _imageTag,
+    osVersion: _osVersion,
+    target: _target,
+    ...rest
+  } = call.params;
   return {
     ...call.body,
     params: {
@@ -327,7 +362,7 @@ async function keepOrRelease(
       ttlMs: grant.lease.ttlMs,
       ...replyFacts(reading.result),
     });
-    return relay(reply);
+    return relay(withGrantedDevice(reply, grant.device.spec));
   }
   const lease = replyData(reading.result)?.["lease"];
   const named =
@@ -358,6 +393,23 @@ async function settleNoReply(
     ended.reading.kind === "error" &&
     (ended.reading.code === undefined || !LEASE_GONE.has(ended.reading.code));
   if (!holds) await releaseSimlock(context, identity, plan.leaseId);
+}
+
+// why: agent-device's reply names the lease but not which model, OS and image Simlock picked, so the front adds that beside the lease for the CLI.
+function withGrantedDevice<T extends { text: string | undefined }>(
+  reply: T,
+  spec: Grant["device"]["spec"],
+): T {
+  if (reply.text === undefined) return reply;
+  const body = JSON.parse(reply.text) as Record<string, unknown>;
+  const lease = asRecord(asRecord(asRecord(body["result"])?.["data"])?.["lease"]);
+  if (lease === undefined) return reply;
+  lease["device"] = {
+    model: spec.model,
+    osVersion: spec.osVersion,
+    ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+  };
+  return { ...reply, text: JSON.stringify(body) };
 }
 
 function replyFacts(result: Record<string, unknown>) {

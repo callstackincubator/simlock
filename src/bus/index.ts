@@ -297,6 +297,7 @@ export interface EventMap {
     /** Absent for a target that names none and did not resolve. */
     readonly osVersion?: string;
     readonly mode: "slim" | "full";
+    readonly origin: "configured";
     readonly count: number;
     readonly ready: number;
     /** why: one reason, not all: the first of the reasons the target is short that applies. */

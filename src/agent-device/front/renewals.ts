@@ -6,6 +6,7 @@ import type { FrontContext } from "./context.js";
 export type RenewOutcome =
   | { readonly kind: "renewed" }
   | { readonly kind: "gone" }
+  | { readonly kind: "unlisted" }
   | { readonly kind: "failed"; readonly message: string };
 
 const TICKS_PER_TTL = 3;
@@ -25,7 +26,7 @@ export async function renewLease(
     const listed = leases.find((lease) => lease.id === leaseId);
     if (listed === undefined) {
       if (context.link.stillHeld?.(leaseId) !== true) return { kind: "gone" };
-      return { kind: "failed", message: "the gateway's lease list left the lease out; will retry" };
+      return { kind: "unlisted" };
     }
     if (context.clock.now() + ttlMs > listed.ttlDeadline) {
       await context.dispatch("lease.renew", { leaseId, ttlMs }, session);
@@ -131,7 +132,11 @@ export class Renewals {
     const outcome = await renewLease(context, leaseId, entry.ttlMs);
     if (this.#disposed) return;
     if (outcome.kind === "gone") context.map.markEnded(leaseId);
-    else if (outcome.kind === "failed") {
+    else if (outcome.kind === "unlisted") {
+      context.logger.warn("the gateway's lease list left a simlock lease out; will retry", {
+        leaseId,
+      });
+    } else if (outcome.kind === "failed") {
       context.logger.warn("agent-device front could not renew a simlock lease", {
         leaseId,
         message: outcome.message,

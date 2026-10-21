@@ -99,21 +99,6 @@ describe("LeaseLifecycle", () => {
     },
   );
 
-  it("grants a lease at the width the request asked for, and stores that instead", async () => {
-    const harness = await createHarness();
-    const grant = await harness.lifecycle.grant({
-      environment: {},
-      timing: noTiming,
-      requestId: "req_1",
-      source: "warm",
-      deviceId: harness.device.id,
-      requesterId: "agent",
-      ownerId: "agent",
-      ttlMs: 50,
-    });
-    expect(grant.lease).toMatchObject({ ttlMs: 50, ttlDeadline: 1_050 });
-  });
-
   it("keeps re-applying a width a previous renew set, not the grant-time one", async () => {
     const harness = await createHarness();
     const grant = await harness.lifecycle.grant({

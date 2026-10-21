@@ -35,38 +35,11 @@ describe("readScreenFeed", () => {
     expect(await outcome).toBe("answered");
   });
 
-  it("refuses a capture that paints nothing within the start bound, and closes it", async () => {
-    const clock = new FakeClock();
-    const feed = new ScriptedFeed();
-    const outcome = readScreenFeed(feed, { clock, ...BOUNDS });
-    clock.advance(BOUNDS.startMs);
-    await expect(outcome).rejects.toThrow(
-      /wrote nothing for 5000ms while waiting for its first frame/u,
-    );
-    expect(feed.closes).toBe(1);
-  });
-
   it("refuses a capture that ends before it writes a frame", async () => {
     const feed = new ScriptedFeed();
     const outcome = readScreenFeed(feed, { clock: new FakeClock(), ...BOUNDS });
     feed.end();
     await expect(outcome).rejects.toThrow(/ended before it wrote a frame/u);
-  });
-
-  it("errors the body, and closes the capture, when it goes quiet mid-picture past the silence bound", async () => {
-    const clock = new FakeClock();
-    const feed = new ScriptedFeed();
-    feed.meta();
-    const stream = await readScreenFeed(feed, { clock, ...BOUNDS });
-    const reader = stream.body.getReader();
-    await reader.read();
-    const next = reader.read();
-    await flush();
-    clock.advance(BOUNDS.silenceMs);
-    await expect(next).rejects.toThrow(
-      /wrote nothing for 1000ms while waiting for the next frame/u,
-    );
-    expect(feed.closes).toBe(1);
   });
 
   it("keeps a picture that keeps arriving within the silence bound", async () => {

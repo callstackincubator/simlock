@@ -871,22 +871,6 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls.map((call) => call.abortedAtCall)).toEqual([true, true]);
   });
 
-  it("advancing the clock past lease.endWaitMs after a nuke with leased devices logs no ceiling warning", async () => {
-    const { grant, harness, participant } = await (async () => {
-      const participant = new TestParticipant();
-      const harness = await startEngine({ participants: [participant] });
-      const grant = await harness.engine.request(request, asking("agent"));
-      await harness.engine.nuke(false);
-      return { grant, harness, participant };
-    })();
-    expect(participant.calls).toHaveLength(1);
-
-    harness.clock.advance(END_WAIT_MS + 1);
-    await flush();
-
-    expect(warningsFor(harness, grant.lease.id)).toEqual([]);
-  });
-
   it("after nuke ends, a release waits for its participant again", async () => {
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant] });

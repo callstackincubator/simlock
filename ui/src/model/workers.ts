@@ -71,7 +71,8 @@ export type WarmPoolRow = WarmTarget & { readonly key: string };
 export function warmPoolRows(targets: readonly WarmTarget[]): WarmPoolRow[] {
   const seen = new Map<string, number>();
   return targets.map((target) => {
-    const kind = `${target.platform}-${target.model}-${target.osVersion}-${target.mode}`;
+    const tag = target.imageTag === undefined ? "" : `-${target.imageTag}`;
+    const kind = `${target.platform}-${target.model}-${target.osVersion}-${target.mode}${tag}`;
     const occurrence = seen.get(kind) ?? 0;
     seen.set(kind, occurrence + 1);
     return { ...target, key: `${kind}#${occurrence}` };
