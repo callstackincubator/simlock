@@ -394,6 +394,33 @@ test.describe("the Overview's Inbox lines", () => {
   });
 });
 
+test.describe("the Overview when the workers cannot be read", () => {
+  test("with /v1/workers stubbed to fail, Overview says Could not check: workers and shows no capacity", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      // why: signing in reads /v1/workers, so the stub goes in once the operator is in.
+      await openOverview(page, host);
+      await page.route(
+        (url) => url.pathname === "/v1/workers",
+        (route) =>
+          route.fulfill({
+            json: { error: { code: "INTERNAL", message: "The fleet is down." } },
+            status: 500,
+          }),
+      );
+      await page.reload();
+
+      await expect(page.getByText("Could not check: workers")).toBeVisible();
+      await expect(page.getByRole("region", { name: "Capacity · all workers" })).toHaveCount(0);
+      await expect(page.getByText("Nothing needs you")).toHaveCount(0);
+    } finally {
+      await host.dispose();
+    }
+  });
+});
+
 test.describe("the Overview's five numbers", () => {
   test("show the daemon's values: one lease held of four devices with three ready, one request waiting with its longest wait, two of two workers, Wait p95, and Ending soon counting a lease with 4 minutes left and not one with 10", async ({
     page,
