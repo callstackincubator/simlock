@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer, type Socket } from "node:net";
@@ -8753,6 +8753,79 @@ describe("CLI: a start goes through the service (#830)", () => {
       expect(serviceManager.starts[0]?.name, testCase.label).toBe("com.callstack.simlock.worker");
       expect(spawner.launches, testCase.label).toBe(0);
       expect(notices, testCase.label).toEqual([]);
+    }
+  });
+});
+
+describe("CLI: a start through a service that fails (#830)", () => {
+  it("fails at the 20 s deadline with DAEMON_STARTUP_FAILED and the daemon.log lines written since the start", async () => {
+    const startError =
+      '{"message":"Daemon failed to start","fields":{"message":"EADDRINUSE: socket taken"}}\n';
+    const cases = [
+      { label: "the log holds the start error", written: startError, expected: "EADDRINUSE" },
+      { label: "empty log", written: "", expected: undefined },
+    ];
+    for (const testCase of cases) {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-service-start-"));
+      try {
+        const logPath = join(directory, "daemon.log");
+        await writeFile(logPath, "older line\n");
+        const clock = new FakeClock(0);
+        const serviceManager = new FakeServiceManager({
+          state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+          onStart: async () => {
+            await appendFile(logPath, testCase.written);
+          },
+        });
+        const output = outputCapture({
+          filesystem: new MemoryFilesystem(),
+          clock,
+          systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+          ipc: new MemoryIpcTransport(),
+          launcher: launcherFor({
+            role: "worker",
+            root: directory,
+            dataDirectory: directory,
+            mainPath: "/opt/simlock/dist/daemon/main.js",
+            nodePath: "/opt/node/bin/node",
+            home: "/Users/me",
+            env: {},
+            serviceManager,
+            notify: () => undefined,
+            spawner: new FakeDaemonLauncher(),
+          }),
+          daemonHome: { role: "worker", dataDirectory: directory, gatewayPresent: false },
+        });
+        let settled = false;
+        const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
+          (code) => {
+            settled = true;
+            return code;
+          },
+        );
+        for (let tick = 0; tick < 500 && !settled; tick += 1) {
+          clock.advance(50);
+          await settle();
+          await settle();
+        }
+        expect(settled, `${testCase.label}: not settled at ${String(clock.now())}ms`).toBe(true);
+        expect(await exitCode, testCase.label).toBe(1);
+        const error = (
+          JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "") as {
+            error: { code: string; message: string };
+          }
+        ).error;
+        expect(error.code, testCase.label).toBe("DAEMON_STARTUP_FAILED");
+        expect(error.message, testCase.label).toContain("Timed out starting simlock daemon");
+        expect(error.message, testCase.label).not.toContain("older line");
+        if (testCase.expected === undefined) {
+          expect(error.message, testCase.label).not.toContain("\n");
+        } else {
+          expect(error.message, testCase.label).toContain(testCase.expected);
+        }
+      } finally {
+        await rm(directory, { force: true, recursive: true });
+      }
     }
   });
 });
