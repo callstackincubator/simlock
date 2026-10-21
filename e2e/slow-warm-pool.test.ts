@@ -199,11 +199,14 @@ interface Lane {
 }
 
 /**
- * A real-driver daemon whose pool targets one device of the newest runtime of each platform; with
+ * why: a real-driver daemon whose pool targets one device of the newest runtime of each platform; with
  * `enabled: false` the config is rewritten and the daemon restarted with the pool off, so no
- * device exists until a lease asks.
+ * device exists until a lease asks. With `noTargets` the pool has none to fill: only the kinds it
+ * learns from leases.
  */
-async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise<Lane> {
+async function warmDaemon(
+  options: { readonly enabled?: boolean; readonly noTargets?: boolean } = {},
+): Promise<Lane> {
   await sweepStaleDeviceSets();
   const env = await withDaemon({ driver: "real" });
   const adbServerPort = env.adbServerPort;
@@ -222,7 +225,7 @@ async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise
   };
   await writeWarmPool(env, {
     maxConcurrentBoots: 2,
-    targets: [targets.ios, targets.android],
+    targets: options.noTargets === true ? [] : [targets.ios, targets.android],
     ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
   });
   return { adbServerPort, deviceSet: iosDeviceSet(env.home), env, targets };
@@ -692,6 +695,66 @@ describe(
           );
           await step("release the second emulator lease", RELEASE_TIMEOUT + MINUTE, () =>
             release(env, second.android.grant),
+          );
+        } catch (error: unknown) {
+          if (lane !== undefined) await diagnose(lane.env);
+          throw error;
+        } finally {
+          if (lane !== undefined) await nuke(lane.env);
+        }
+      },
+    );
+
+    it(
+      "with no target, a released simulator and a released emulator are ready again before the next lease, are shut down with the pool off, and are booted again from the record with it on",
+      { timeout: COLD_TEST_TIMEOUT },
+      async (context) => {
+        const missing = await missingPlatform();
+        if (missing !== undefined) context.skip(missing);
+        let lane: Lane | undefined;
+        try {
+          lane = await step("start the daemon with no target", DAEMON_START_BUDGET, () =>
+            warmDaemon({ noTargets: true }),
+          );
+          const { env, targets } = lane;
+          const first = {
+            android: await step("lease the emulator", LEASE_TIMEOUT + MINUTE, () =>
+              lease(env, targets.android, "learn-android"),
+            ),
+            ios: await step("lease the simulator", LEASE_TIMEOUT + MINUTE, () =>
+              lease(env, targets.ios, "learn-ios"),
+            ),
+          };
+          await step("release the simulator", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, first.ios.grant),
+          );
+          await step("release the emulator", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, first.android.grant),
+          );
+          const iosUdid = first.ios.grant.device.driverDeviceId;
+          const androidId = first.android.grant.device.driverDeviceId;
+          await step("both devices are ready again", 2 * READY_TIMEOUT, async () => {
+            await untilState(env, iosUdid, "ready");
+            await untilState(env, androidId, "ready");
+          });
+          await step("both stay ready", HOLD + 2 * MINUTE, async () => {
+            await holdsState(env, iosUdid, "ready", HOLD);
+            await holdsState(env, androidId, "ready", HOLD);
+          });
+
+          await step("the pool off shuts both down", 12 * MINUTE, async () => {
+            await writeWarmPool(env, { enabled: false });
+            await untilState(env, iosUdid, "shutdown", 5 * MINUTE);
+            await untilState(env, androidId, "shutdown", 5 * MINUTE);
+          });
+          await step(
+            "the pool on boots both from the record, before any lease",
+            2 * READY_TIMEOUT,
+            async () => {
+              await writeWarmPool(env, { enabled: true });
+              await untilState(env, iosUdid, "ready");
+              await untilState(env, androidId, "ready");
+            },
           );
         } catch (error: unknown) {
           if (lane !== undefined) await diagnose(lane.env);
