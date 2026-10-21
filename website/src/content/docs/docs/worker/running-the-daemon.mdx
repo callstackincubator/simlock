@@ -73,7 +73,18 @@ Daemon: running (worker)
 
 `starting` means it is still reading the machine's devices; devices, leases and capacity appear once it finishes. See [Monitoring](/simlock/docs/worker/monitoring) for the rest of the report.
 
-Add `--json` for a machine-readable answer: `{"status":"stopped"}` when nothing runs.
+On macOS the last line says what state the service is in, whether the daemon runs or not:
+
+```text
+Service: not installed
+Service: installed (launchd, com.callstack.simlock.worker)
+Service: not loaded (launchd, com.callstack.simlock.worker): commands start the daemon without it
+Service: broken (launchd, com.callstack.simlock.worker): /Users/me/.nvm/versions/node/v22.13.0/bin/node is gone; run simlock daemon install
+```
+
+`not loaded` is what you see over SSH with nobody logged in at the screen. `broken` means the service names a Node or `main.js` that is gone, for example after an nvm or Homebrew upgrade; with two paths gone the line reads `<path>, <path> are gone`. On another platform there is no `Service:` line. A gateway prints its own service name.
+
+Add `--json` for a machine-readable answer: `{"status":"stopped"}` when nothing runs. On macOS the answer gains a `service` field, for example `{"status":"stopped","service":{"state":"broken","manager":"launchd","name":"com.callstack.simlock.worker","path":"/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist","missing":["/Users/me/.nvm/versions/node/v22.13.0/bin/node"]}}`. `state` is `not-installed`, `installed`, `not-loaded` or `broken`; `path` is absent when not installed and `missing` appears only when broken.
 
 ## Stop the daemon
 

@@ -293,14 +293,14 @@ simlock daemon uninstall [--json]
 | --- | --- |
 | `start` | Start the daemon if it is not running and print `Daemon running` with the console address. `simlock --gateway daemon start` creates the gateway on first run. |
 | `stop` | Ask the daemon to stop and print `Daemon stopping`. Needs the admin role. Never starts a daemon. |
-| `status` | Print the daemon's status, or `Daemon stopped` when none is running. Never starts a daemon. Exits 1 when a daemon answers but refuses the connection. |
+| `status` | Print the daemon's status, or `Daemon stopped` when none is running, then on macOS one `Service:` line: `not installed`, `installed (launchd, <name>)`, `not loaded (launchd, <name>): commands start the daemon without it` or `broken (launchd, <name>): <path> is gone; run simlock daemon install` (`<path>, <path> are gone` for two). Never starts a daemon. Exits 1 when a daemon answers but refuses the connection, with no `Service:` line. |
 | `logs` | Print the last 100 lines of `daemon.log`. |
 | `install` | macOS only. Stop a running daemon (leases are kept), add a LaunchAgent for this role and start the daemon through it. Prints `Service installed: <name> (launchd)`, `Daemon running` and the hint `To start after a reboot, turn on automatic login for this user.` On another platform it is a usage error: `daemon install is supported on macOS only`. |
 | `uninstall` | Stop a running daemon, unload the LaunchAgent and delete its file. Prints `Service removed: <name> (launchd)`, or `Service not installed: <name>` when there is none (exit 0). |
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--json` | Print one JSON line in place of the text. `start` prints `{"status":"running"}`, `stop` prints `{"status":"stopping"}`, `status` prints the status or `{"status":"stopped"}`, `logs` prints `{"logs":"..."}`, `install` prints `{"status":"installed","stopped":true,"service":{...}}` (`stopped` only when a daemon was running), `uninstall` prints `{"status":"removed"}` or `{"status":"not-installed"}` plus the same `service` object. | Off |
+| `--json` | Print one JSON line in place of the text. `start` prints `{"status":"running"}`, `stop` prints `{"status":"stopping"}`, `status` prints the status or `{"status":"stopped"}`, each plus the `service` object on macOS, `logs` prints `{"logs":"..."}`, `install` prints `{"status":"installed","stopped":true,"service":{...}}` (`stopped` only when a daemon was running), `uninstall` prints `{"status":"removed"}` or `{"status":"not-installed"}` plus the same `service` object. | Off |
 | `--follow` | `logs` only: keep printing new lines, across log rotations, until Ctrl-C. Cannot be combined with `--json`. | Off |
 
 ## simlock config
@@ -336,6 +336,8 @@ simlock doctor [--fix] [--purge-orphans] [--yes]
 | `--fix` | Apply the safe corrections to the records. Needs the admin role. Never installs a prerequisite. | Off: report only |
 | `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Needs the admin role. Asks for confirmation. | Off |
 | `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
+
+On a worker whose login service names a Node or `main.js` that is gone, the report holds a `service-broken` finding and stderr gets `Service broken: <name> (<manager>) names missing <path>. Run `simlock daemon install` again.` (`<path>, <path>` for two).
 
 A gateway refuses `doctor` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2): run it on each worker.
 

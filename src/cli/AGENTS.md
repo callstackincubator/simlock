@@ -64,7 +64,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 3. **Auto-launch** (`AutoLaunchAdminConnector`) — when nothing listens: load the config
    first (a bad one fails on this stderr), launch the daemon (`launcherFor`: through the
    service when it is loaded and whole, else spawned detached with a stderr notice; `daemon install` and
-   `daemon uninstall` write the service through the `ServiceManager` port), retry every 50 ms
+   `daemon uninstall` write the service through the `ServiceManager` port; `daemon status` only reads its state and prints a `Service:` line, with no line on a refused handshake or an unsupported platform), retry every 50 ms
    for `DAEMON_STARTUP_TIMEOUT_MS`; a launched daemon that exits fails the command at once
    with `startErrorFrom`'s text, unless another daemon answers a last connect; a start through the service never reports an exit, so a daemon it refuses fails at the deadline with the `daemon.log` lines since the start. After a launch, `status.get` probes the connection
    before handing it to a command, within that same deadline. A connection loss during the handshake or this
