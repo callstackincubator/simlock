@@ -230,6 +230,28 @@ test.describe("the Overview's figures", () => {
     }
   });
 
+  test("on a single host, Overview shows all five numbers and both charts", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await openOverview(page, host);
+
+      for (const label of ["Leased", "Waiting", "Workers", "Wait p95", "Ending soon"]) {
+        await expect(tile(page, label), label).toBeVisible();
+      }
+      await expect
+        .poll(() => tileText(page, "Leased"))
+        .toMatch(/^Leased \| 0 \| of \d+ · \d+ ready$/);
+      await expect.poll(() => tileText(page, "Workers")).toBe("Workers | 1 | of 1");
+      await expect.poll(() => tileText(page, "Waiting")).toMatch(/^Waiting \| 0 \|/);
+      await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 0 | under 5 min");
+      await expect(page.getByRole("region", { name: "Leases held" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Requests in the queue" })).toBeVisible();
+      await expect(page.locator("#main details.chart-data")).toHaveCount(2);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("Overview's tiles and links land on /queue, /fleet and /activity, not Not found", async ({
     page,
   }) => {
