@@ -152,4 +152,35 @@ describe("LaunchdServiceManager (#830)", () => {
     expect(await existing.readFile(definition.logPath)).toBe("earlier line\n");
     expect((await existing.stat(definition.logPath)).mode).toBe(0o640);
   });
+
+  it("daemon install on an installed service rewrites the plist and loads it again", async () => {
+    const cases = [
+      { label: "same paths", nodePath: "/opt/node/bin/node" },
+      { label: "a changed Node path", nodePath: "/opt/node-24/bin/node" },
+    ];
+    for (const testCase of cases) {
+      const filesystem = new MemoryFilesystem();
+      const first = definitionFor("worker");
+      await installed(first, filesystem);
+      const second = { ...first, command: testCase.nodePath };
+      const runner = new ScriptedProcessRunner([
+        { match: { command: "launchctl", args: ["bootout", `gui/501/${first.name}`] } },
+        { match: { command: "launchctl", args: ["bootstrap", "gui/501", first.path] } },
+      ]);
+
+      await new LaunchdServiceManager({ runner, filesystem, uid: 501 }).install(second);
+
+      expect(
+        runner.calls.map((call) => call.args.slice(0, 2)),
+        testCase.label,
+      ).toEqual([
+        ["bootout", `gui/501/${first.name}`],
+        ["bootstrap", "gui/501"],
+      ]);
+      const plist = parsePlist(await filesystem.readFile(first.path)) as {
+        ProgramArguments: string[];
+      };
+      expect(plist.ProgramArguments[0], testCase.label).toBe(testCase.nodePath);
+    }
+  });
 });
