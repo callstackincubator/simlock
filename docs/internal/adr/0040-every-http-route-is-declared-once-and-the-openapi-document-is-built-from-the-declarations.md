@@ -58,7 +58,8 @@ carries:
 
 - method and path;
 - path, query and body schemas: every input a route reads, Zod, no hand
-  parsing;
+  parsing. A rule other surfaces share (a usage window, a duration) stays
+  in its one parser, which the route calls on the typed value;
 - the reply schema for each success status. A reply that is an operation's
   answer reuses that operation's `output` schema; a reshaped reply gets its
   own schema in `src/http`, not in the contract;
@@ -93,6 +94,9 @@ The document's `info.version` is the package version.
   `@hono/zod-openapi` gates it with an `HTTPException(415)`, which the
   error mapper turns into that code. Today such a body is read as `{}` and
   refused with 400.
+- **Malformed JSON:** a body that does not parse under a JSON content type
+  is 400 `BAD_REQUEST`, "Invalid JSON body", on every body route. Today it
+  is 500 `INTERNAL` on all but renew.
 
 ### 4. Module and uplink routes are listed, not re-declared
 
@@ -118,7 +122,8 @@ themselves stay as they are: the contract strips unknown keys in
 production. For a module route it refuses a status the module did not
 list and a JSON refusal body that does not match its listed schema;
 binary and proxied bodies are not checked. A mismatch answers 500
-`INTERNAL` naming the route and the problem. The
+`INTERNAL` naming the route and the problem; on an SSE route the stream
+sends an `error` message saying so and ends. The
 switch is on in unit tests and in the e2e daemon
 (`SIMLOCK_CHECK_HTTP_REPLIES=1`, set only by the e2e harness), and off in
 production.
