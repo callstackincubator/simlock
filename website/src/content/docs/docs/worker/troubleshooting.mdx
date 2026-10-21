@@ -1,0 +1,215 @@
+---
+title: Troubleshooting a worker
+description: Find out what is wrong with a worker from its symptoms, and fix it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Each entry below starts from what you see, names the likely cause, and gives the fix. When nothing here matches, start with the log and `simlock doctor`.
+
+## Read the log first
+
+The daemon writes what it does and every failure to `~/.simlock/daemon.log` (a gateway uses `~/.simlock/gateway/daemon.log`).
+
+```sh
+simlock daemon logs            # the last 100 lines
+simlock daemon logs --follow   # keep printing new lines
+```
+
+Each line is one JSON object. Look at the lines with `"level":"error"` or `"level":"warn"` near the time of the problem:
+
+```sh
+simlock daemon logs | grep -E '"level":"(error|warn)"'
+```
+
+```json
+{"timestamp":1761037412907,"level":"warn","module":"daemon.events","message":"History read failed; replaying from memory","fields":{"error":"database disk image is malformed","path":"/Users/dana/.simlock/history.db"}}
+```
+
+For more detail, set `log.level` to `debug` and restart the daemon. See [Monitoring](/simlock/docs/worker/monitoring#read-the-daemon-log).
+
+The event stream tells the same story from the outside: `simlock events --since 1h` shows every lease and device change in the last hour.
+
+Every CLI error is one JSON line on stderr with a `code` and a `message`, and the exit code tells the kind of failure. The [errors reference](/simlock/docs/reference/errors) lists every code.
+
+## Check the machine with doctor
+
+```sh
+simlock doctor
+```
+
+`doctor` compares what Simlock has on record with the devices and processes that really exist on this machine, and checks that the platform tools are installed. It prints a JSON report on stdout, `{"findings":[...]}`. Findings you have to act on also print as one line each on stderr:
+
+```text
+Missing [android] android-emulator: The Android emulator package is not installed in /Users/dana/Library/Android/sdk. Run `sdkmanager --install emulator`.
+```
+
+`simlock doctor --fix` applies the corrections that are safe. It never touches a leased device, never installs anything, and never deletes a device Simlock has no record of.
+
+| Finding | What it means | What `--fix` does |
+| --- | --- | --- |
+| `prerequisite-missing` | A tool a platform needs is missing, such as Xcode, its licence, the Android SDK, the emulator, `adb` or a JDK. The message names it and the remedy says how to install it. | Nothing. Install it yourself, then restart the daemon. |
+| `registry-device-missing` | Simlock has a record of a device that no longer exists, for example one you deleted with `simctl delete`. | Marks the device deleted, unless it is leased. |
+| `foreign-state-change` | A device was booted or shut down outside Simlock. | Updates the record to match, unless the device is leased. |
+| `expired-live-lease` | A lease ran out but its device is still marked leased. | Ends the lease. |
+| `stalled-transition` | A device has been creating or resetting for far longer than it should. | Takes the device out of service and retries the reset, as for a failed reset. |
+| `foreign-provenance-change` | A device no longer carries the marks that show Simlock made it, for example after it was erased by hand. | Nothing. Check the device; delete it if it is not yours. |
+| `orphan-device` | A device sits in Simlock's device folder with no record. | Nothing. See [Orphaned devices](#orphaned-devices). |
+| `orphan-process` | A simulator or emulator is running that Simlock has no record of. | Nothing. |
+| `warm-pool-target-unreachable` | A warm pool target can never be filled: its runtime is not installed, its model is unknown, or it asks for more than capacity allows. | Nothing. Install the runtime or change the target. |
+| `driver-advisory` | A platform tool reported something worth knowing that is not a fault. | Nothing. |
+| `module-unavailable` | An optional feature that is turned on cannot run on this machine. The remedy says why. | Nothing. |
+
+## The daemon will not start
+
+**Symptom.** A command fails with `DAEMON_STARTUP_FAILED`:
+
+```json
+{"error":{"code":"DAEMON_STARTUP_FAILED","message":"The daemon could not start: ..."}}
+```
+
+The CLI starts the daemon on demand and waits up to 20 seconds for it. The message carries the daemon's own start error. Common causes:
+
+- **The config file is wrong.** The CLI checks `~/.simlock/config.json` before it starts the daemon and prints the problem, naming the key, such as `lease.defaultTtlMs` with `at most lease.maxTtlMs`. Fix the key with `simlock config set`, or edit the file. A file that is not valid JSON fails with `Invalid JSON in config file`. A config that still has a `mode` key is refused: remove it.
+- **State from an older Simlock.** The message starts with `Found ~/.simlock/state.json, which this Simlock no longer reads`. Follow the steps in the message; [Running the daemon](/simlock/docs/worker/running-the-daemon) explains them.
+- **Another daemon holds the state.** `state.db is locked by another process`: another Simlock daemon for the same data folder is still running. Stop it with `simlock daemon stop`, then try again.
+- **The state file is damaged.** `state.db is damaged (...)`. Move `~/.simlock/state.db` somewhere else and start again. Simlock starts with empty state and forgets every device and lease it had on record. The devices stay on disk; run `simlock doctor` afterwards and delete orphans as described below.
+- **A newer Simlock wrote the state.** `... is at version 7; this Simlock knows up to 6. Upgrade Simlock, or move state.db away.` Install the newer version again.
+- **Node is too old.** `node:sqlite is not available; Simlock needs Node 22.13 or later.` Upgrade Node.
+
+If the message ends in `Timed out starting simlock daemon`, read `simlock daemon logs` for the line that says why.
+
+## A platform is missing
+
+**Symptom.** Leases for iOS or Android fail with `NO_DRIVER` (exit 12).
+
+**Cause.** A tool the platform needs was missing when the daemon started. Simlock looks for the platform tools once, at start.
+
+**Fix.**
+
+1. Run `simlock doctor` and install what each `Missing` line names.
+2. Restart the daemon: `simlock daemon stop`, then run any command.
+
+If `doctor` says `Every prerequisite is present, but the daemon started without this platform`, only the restart is needed.
+
+## A lease waits in the queue and never starts
+
+**Symptom.** `simlock lease` prints `queued` progress and stays there.
+
+**Cause.** No device can start for it. A request with no `--timeout` waits until one can, however long that takes.
+
+**Fix.** See why it waits:
+
+```sh
+simlock list --requests
+```
+
+```text
+Request req_3c8e1f52-9a4d-4b7e-8f20-6d1a5c9e3b74: codex:7a1d4e9b-2c3f-4e8a-b6d0-1f5c8a3e9d27, ios iPhone 16 18.4, queued at 2, waiting 312s — full: running limit for iOS
+```
+
+- `full: running limit`, `full: device limit` or `full: RAM budget`: every slot is in use. Check `simlock status` for leases nobody uses any more and end them with `simlock release <lease-id>`, or give the machine more room ([Capacity](/simlock/docs/worker/capacity)).
+- `behind an earlier request`: another request is first in line. It starts when the one ahead of it does.
+- `a matching device is starting`: a device is booting for it. A cold boot or a first-time device can take minutes.
+- `every matching device is leased or absent`: for a physical device, all enrolled devices that match are in use, or unplugged, locked or not trusted.
+
+To stop waiting forever, pass `--timeout 5m` (the request fails with `QUEUE_TIMEOUT`, exit 10) or `--no-wait` (it fails at once with `NO_CAPACITY`, exit 11).
+
+A request refused with `REQUESTER_ALREADY_LEASED` (exit 13) did not queue: the same requester already holds a lease or already has a waiting request. One lease per requester is the default (`lease.maxPerRequester`).
+
+## A device will not boot or reset
+
+**Symptom.** A lease fails with `PROVISION_FAILED`, or `simlock status` shows a device as `quarantined (purge retry 2, next retry at ...; purge failed: ...)`.
+
+**Cause.** The platform tools failed to create, boot or reset the device. After a lease ends, Simlock resets the device; when the reset fails, the device leaves service and Simlock retries the reset a few times (`warmPool.quarantine.maxRetries`, 3 by default). When the retries run out, Simlock deletes the device.
+
+**Fix.**
+
+1. Read the reason on the status line and in `simlock daemon logs`.
+2. Check the platform tools work on their own, through Simlock's passthrough: `simlock simctl list devices` or `simlock adb devices`.
+3. Run `simlock doctor`. A `stalled-transition` finding means a device got stuck mid-way; `simlock doctor --fix` takes it out of service and retries.
+4. If one runtime or system image keeps failing, remove it and install it again ([Runtimes and images](/simlock/docs/worker/runtimes-and-images)).
+
+## Android licence not accepted
+
+**Symptom.** A lease or `simlock component install android ...` fails with `LICENSE_NOT_ACCEPTED` (exit 12):
+
+```text
+sdkmanager refused to install system-images;android-35;google_apis;arm64-v8a: an Android SDK license is not accepted. Set "downloads.acceptAndroidLicenses": true in config to accept automatically, or run `sdkmanager --licenses` manually.
+```
+
+**Cause.** Simlock does not accept Android SDK licences for you unless you say so, and `downloads.acceptAndroidLicenses` is `false` by default.
+
+**Fix.** Read and accept the licences yourself with `sdkmanager --licenses`, or let Simlock accept them:
+
+```sh
+simlock config set downloads.acceptAndroidLicenses true
+simlock daemon stop
+```
+
+Then retry the request. [Runtimes and images](/simlock/docs/worker/runtimes-and-images) covers downloads.
+
+## The disk is full
+
+**Symptom.** A download fails with `INSUFFICIENT_DISK_SPACE`, such as `Not enough free disk space to install a ios component: needs ~8.5 GiB free, only 3.1 GiB available`, or the event stream shows `disk.pressure-detected`.
+
+**Cause.** Simulators, emulators, runtimes and system images take many gigabytes each. When free disk falls below `diskPressure.freeBytesThreshold` (10 GiB by default), Simlock deletes idle devices sooner than usual.
+
+**Fix.**
+
+1. See what cleanup would remove: `simlock cleanup --dry-run`. Run `simlock cleanup` to do it now.
+2. List runtimes and images with `simlock component list` and remove the ones you no longer need with `simlock component remove`.
+3. Look for orphaned devices with `simlock doctor`.
+
+[Cleanup](/simlock/docs/worker/cleanup) explains when Simlock deletes devices on its own.
+
+## Orphaned devices
+
+**Symptom.** `simlock doctor` reports `orphan-device` findings.
+
+**Cause.** A device sits inside Simlock's own device folder, but Simlock has no record of it. This happens when the daemon stopped between creating a device and recording it, or after you moved `state.db` away. Orphans use disk and are never leased.
+
+**Fix.** Delete them:
+
+<Aside type="caution">
+`--purge-orphans` permanently deletes every orphaned device it finds, with everything installed on it. It only reaches into Simlock's own device folders, and it stops without deleting anything if it can no longer prove a folder is Simlock's.
+</Aside>
+
+```sh
+simlock doctor --purge-orphans
+```
+
+It asks `Destroy every orphaned device? [y/N]`. Without a terminal, for example in a script, add `--yes`. `doctor --fix` never deletes orphans.
+
+## The event history is not written
+
+**Symptom.** `simlock status` shows a `History:` line, such as `History: the event history is not being written; see daemon.log.`, or `simlock stats` fails with `HISTORY_UNAVAILABLE`.
+
+**Cause and fix.**
+
+- `not being written` or `figures could not be rebuilt`: the history file `~/.simlock/history.db` could not be opened or written. The log line says why, often a full disk.
+- `was damaged and set aside at ...; a fresh one was started`: Simlock moved the damaged file aside and started a new one. Older events and figures are gone from `events` and `stats`; nothing else is lost.
+- `simlock stats` fails with `HISTORY_NOT_KEPT`: the window you asked for ends before the oldest figures the worker keeps. Ask for a later window.
+
+## Start over
+
+When the machine is in a state you cannot untangle, `simlock nuke` resets every device Simlock manages.
+
+<Aside type="danger">
+`simlock nuke` ends every lease at once, cancels every waiting request, and shuts down every simulator and emulator Simlock manages. Agents using those devices lose them mid-task. With `--delete-devices` it also deletes those devices from disk, with everything installed on them.
+</Aside>
+
+```sh
+simlock nuke --delete-devices
+```
+
+It asks `Nuke Simlock-managed devices? [y/N]`; add `--yes` in a script. It prints the ids of the leases it ended and the devices it deleted.
+
+`nuke` never touches devices Simlock did not make. Enrolled physical devices stay enrolled; their leases end like any other. It also forgets what the warm pool learned from past leases, so no device boots again until someone asks for one.
+
+## Related
+
+- [Running the daemon](/simlock/docs/worker/running-the-daemon)
+- [Monitoring](/simlock/docs/worker/monitoring)
+- [Errors reference](/simlock/docs/reference/errors)
+- [CLI reference](/simlock/docs/reference/cli)

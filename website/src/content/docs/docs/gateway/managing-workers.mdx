@@ -1,0 +1,145 @@
+---
+title: Manage workers
+description: List the workers behind a gateway, take one out of service and bring it back, forget one that is gone, install runtimes on many workers at once, and cut a worker off.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+You manage workers from the gateway with `simlock --gateway worker <command>`. These commands need admin rights on the gateway: run them on the gateway machine as the user who runs the gateway, or pass an operator token. See [Access control](/simlock/docs/gateway/access-control#admin-commands-on-the-cli).
+
+## List workers
+
+```sh
+simlock --gateway worker list
+```
+
+```text
+4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68 (mac-mini-2): connected -- ios 2/4, android 1/2, 3 lease(s) -- macOS 15.6 arm64; xcode 16.4 (16F6), emulator 35.4.9 -- agent-device off -- stream off
+  Load: CPU 34% busy (10 cores) · memory 12.3 GiB of 32.0 GiB available · swap 0 B used · pressure normal · disk 210.4 GiB of 926.4 GiB free · read 12s ago
+9e3a7c1f-0b5d-4c2e-8f6a-1d4b7e9c2a50 (mac-studio-1): disconnected, drained -- ios 0/8, android 0/4, 0 lease(s) -- macOS 15.6 arm64; xcode 16.4 (16F6)
+  Load: no reading while disconnected
+```
+
+Each worker shows:
+
+- its id and, in brackets, its label;
+- its state: `connected`, `disconnected` or `incompatible`, then `starting` while it starts up and `drained` when it takes no new leases from the gateway;
+- devices running of the limit per platform, and how many leases it holds;
+- its operating system, platform tools and optional modules;
+- under it, the last load reading, and any runtime or system image being installed.
+
+A disconnected worker shows the last values it reported. The gateway keeps it in the list for `gateway.disconnectedRetentionMs` (24 hours by default), and for as long as it holds a lease made through the gateway.
+
+Add `--json` for the full details as JSON.
+
+## Take a worker out of service
+
+Drain a worker before maintenance, an Xcode update or a reboot. A drained worker gets no new leases from the gateway. Its leases keep running, and their agents can renew and release them as usual.
+
+<Steps>
+
+1. Drain the worker:
+
+   ```sh
+   simlock --gateway worker drain 4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68
+   ```
+
+   ```json
+   {"workerId":"4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68","drained":true}
+   ```
+
+2. Wait until `simlock --gateway worker list` shows `0 lease(s)` for it.
+
+3. Do the maintenance. When you are done, take the worker back:
+
+   ```sh
+   simlock --gateway worker undrain 4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68
+   ```
+
+   ```json
+   {"workerId":"4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68","drained":false}
+   ```
+
+</Steps>
+
+What to know about draining:
+
+- **It lasts until you undrain.** A drained worker stays drained when it disconnects and reconnects, and when the gateway restarts.
+- **It only stops the gateway.** Agents on the worker machine itself can still lease its devices.
+- **Waiting requests may fail.** A request in the fleet queue that only this worker could serve fails with `NO_CAPACITY` when you drain it. See [How requests are routed](/simlock/docs/gateway/routing#when-no-worker-can-serve-a-request).
+- **Draining twice is fine.** Draining a drained worker, or undraining one that is not drained, changes nothing.
+
+An id the gateway does not show fails with `UNKNOWN_WORKER` (exit 12).
+
+## Forget a worker that is gone
+
+When a machine is gone for good, remove it so the gateway stops showing it:
+
+```sh
+simlock --gateway worker remove 9e3a7c1f-0b5d-4c2e-8f6a-1d4b7e9c2a50
+```
+
+```json
+{"workerId":"9e3a7c1f-0b5d-4c2e-8f6a-1d4b7e9c2a50","removed":true}
+```
+
+Removing also ends its drain. The gateway refuses to remove a worker that is still connected:
+
+```json
+{"error":{"code":"WORKER_CONNECTED","message":"Worker 4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68 is still connected; drain it and wait for it to disconnect, or stop it first"}}
+```
+
+It exits 2. Stop the worker's daemon, or take it out of the fleet as in [Leave a gateway](/simlock/docs/gateway/joining-workers#leave-a-gateway), then remove it. A worker that joins again after you remove it shows up again.
+
+An id the gateway does not know answers `"removed":false`. That is not an error.
+
+## Install runtimes and images on workers
+
+The gateway never downloads a runtime or system image while granting a lease, so install what your agents need on the workers ahead of time. Run `component install` on the gateway and name the workers:
+
+```sh
+simlock --gateway component install ios 18.5 --all-workers
+```
+
+```json
+{"results":[{"workerId":"4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68","label":"mac-mini-2","outcome":"installed","version":"18.5"},{"workerId":"9e3a7c1f-0b5d-4c2e-8f6a-1d4b7e9c2a50","label":"mac-studio-1","outcome":"skipped","error":{"code":"WORKER_UNREACHABLE","message":"Worker 9e3a7c1f-0b5d-4c2e-8f6a-1d4b7e9c2a50 is not connected"}}]}
+```
+
+- `--all-workers` asks every connected worker and lists the rest as `skipped`.
+- `--worker <id>` asks one worker. Repeat it to name several. An unknown id fails the whole command with `UNKNOWN_WORKER` (exit 12), and a named worker that is not connected fails it with `WORKER_UNREACHABLE` (exit 1), before any worker is asked.
+- Drained workers are asked too: draining stops leases, not maintenance.
+- Every worker installs at the same time, under its own `downloads.policy` and its own disk checks. Progress lines go to stderr, each with the worker's id.
+
+Each worker gets one outcome:
+
+| Outcome | What it means |
+| --- | --- |
+| `installed` | The worker installed it. |
+| `already-installed` | The worker had it already. |
+| `refused` | The worker's `downloads.policy` does not allow installs. |
+| `failed` | The worker tried and failed. `error` says why. |
+| `skipped` | The gateway did not ask this worker, because it is not connected. |
+| `unknown` | The worker's connection dropped, or it did not answer within its own download timeout plus a minute. The install may still finish on the worker. |
+
+The command exits 0 when every worker answered `installed` or `already-installed`, and 15 otherwise. To retry, run it again for the workers that did not succeed.
+
+How runtimes and images are installed on a single worker, including the Android licences, is in [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+
+## Cut a worker off
+
+To stop a worker from reaching the gateway at once, revoke its join token on the gateway:
+
+```sh
+simlock --gateway token list
+simlock --gateway token revoke tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24
+```
+
+```json
+{"revoked":true}
+```
+
+Revoking closes the worker's connection at once. The worker keeps trying to reconnect, and the gateway refuses every try. Its leases keep running on the worker until their time to live runs out, but agents can no longer reach them through the gateway.
+
+<Aside>
+A worker that keeps dialling with a revoked token raises `worker.rejected` events on the gateway, about every 30 seconds. Remove the `gateway` key from the worker's configuration and restart it to stop that.
+</Aside>

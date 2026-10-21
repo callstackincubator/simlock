@@ -3,7 +3,7 @@
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
 Entry: `src/main.tsx` → `App` (`src/app/app.tsx`).
 Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only).
-Surface: [CONSOLE.md](../docs/CONSOLE.md). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
+Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 ## Layers
 

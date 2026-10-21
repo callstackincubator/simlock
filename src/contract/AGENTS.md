@@ -130,5 +130,5 @@ Three identities:
 6. Frontends as needed: CLI (`src/cli/commands/`), HTTP (`src/http/app.ts`), MCP only for an
    agent session's need.
 7. A new error code: `ErrorDetailsMap` and `ERROR_TABLE` (`errors.ts`).
-8. Docs: [CLIENT.md](../../docs/CLIENT.md), [CLI.md](../../docs/CLI.md),
-   [HTTP-API.md](../../docs/HTTP-API.md).
+8. Docs: the website pages that describe it, at least
+   [errors.mdx](../../website/src/content/docs/docs/reference/errors.mdx) (documentation rule 9).

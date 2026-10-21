@@ -175,8 +175,8 @@ The scenes are generated in `website/src/components/site/dither.ts`.
   console section draws the console's Overview (`ConsoleView.astro`).
 - **404** (`src/pages/404.astro`): the hollow scene behind a card, "This
   device was never leased. *The rest of Simlock is.*"
-- **Docs:** Starlight, dark by default. The reference pages are copied from
-  `docs/*.md` at build time by `website/scripts/sync-docs.mjs`, so the repo's
-  user docs stay the one source. `getting-started.mdx` is written for the
-  site.
+- **Docs:** Starlight, dark by default. Every end-user doc is a page written
+  for the site under `website/src/content/docs/docs/`: guides by section
+  (Getting started, Using devices, Worker, Gateway) and lookup tables under
+  Reference.
 - All copy lives in `website/src/site/content.ts`.

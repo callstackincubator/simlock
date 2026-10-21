@@ -202,7 +202,7 @@ describe("the overview", () => {
   it("lists the eight latest events across a daemon restart, not the eight with the highest seq", () => {
     // why: the console's first load reads the daemon's event file, which survives a restart, so one
     // buffer holds the previous run's events beside the restarted counter's own. `seq` restarts with
-    // every daemon, so only `timestamp` then `seq` orders them (docs/EVENTS.md).
+    // every daemon, so only `timestamp` then `seq` orders them (the events reference).
     const previousGeneration = [91, 92, 93, 94, 95, 96].map((seq, index) => ({
       event: "lease.released",
       id: `before-${seq}`,

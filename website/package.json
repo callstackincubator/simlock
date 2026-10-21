@@ -4,11 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync-docs": "node scripts/sync-docs.mjs",
-    "dev": "node scripts/sync-docs.mjs && astro dev",
-    "build": "node scripts/sync-docs.mjs && astro build",
+    "dev": "astro dev",
+    "build": "astro build",
     "preview": "astro preview",
-    "check": "node scripts/sync-docs.mjs && astro check",
+    "check": "astro check",
     "og": "node scripts/og.mjs"
   },
   "dependencies": {

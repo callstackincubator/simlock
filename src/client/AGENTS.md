@@ -6,4 +6,4 @@ Uses: simlock-client, ports (`NodeIpcTransport` by default). Never imports: core
 
 - Sends no credential, so the session is always `agent`.
 - Types are re-exported from `src/simlock-client/`. No reconnect, retry or renew here.
-- Surface: [CLIENT.md](../../docs/CLIENT.md).
+- Surface: [programmatic-client.mdx](../../website/src/content/docs/docs/using-devices/programmatic-client.mdx).

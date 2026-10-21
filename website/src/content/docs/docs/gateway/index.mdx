@@ -1,0 +1,65 @@
+---
+title: When you need a gateway
+description: Decide whether you need a gateway, see how it fits with your worker machines, and know which daemon each simlock command reaches.
+---
+
+A gateway puts many worker machines behind one URL. Agents ask the gateway for a device; the gateway picks a worker that can serve the request, and the device runs on that worker.
+
+You need a gateway when one machine is not enough:
+
+- Your agents need more devices than one Mac or Linux machine can run at once.
+- Your agents run on several machines, or in CI, and should share one pool of devices.
+- You want one place to see every machine, lease and waiting request.
+
+If one machine runs all the devices your agents need, you do not need a gateway. Run a worker on its own and skip this section.
+
+## How a fleet fits together
+
+- **Workers own the devices.** A worker is the same Simlock daemon you run on a single machine. It has the simulators, emulators and physical devices, and it keeps serving agents on its own machine after it joins.
+- **The gateway owns no devices.** It needs no Xcode and no Android SDK, only Node.js 22.13 or later. It can run on its own machine or on one of the workers.
+- **Workers dial out to the gateway.** Each worker opens one connection to the gateway and keeps it open. Workers need no inbound port and no public address. Only the gateway must be reachable, by the workers and by your agents.
+- **The gateway is the only address agents use.** It routes each request to a worker, then forwards renew, release and every command on the device to the worker that holds the lease.
+
+A gateway is a separate daemon with its own folder, `~/.simlock/gateway`. It has its own configuration, tokens, log and usage history. A machine can run a worker and a gateway side by side.
+
+## What agents use
+
+Agents use the same commands and the same HTTP calls as with a single worker:
+
+- **On the gateway machine**, run the CLI with `--gateway`, for example `simlock --gateway lease --platform ios --device "iPhone 16"`.
+- **On any other machine**, use the gateway's HTTP API with an agent token made on the gateway. See [Remote agents](/simlock/docs/using-devices/remote-agents).
+
+Through a gateway, `simlock simctl` and `simlock adb` run on the worker that holds the device. A file path in the command is a path on that worker, not on your machine, so `simlock --gateway simctl install booted ./MyApp.app` fails unless `MyApp.app` exists on the worker.
+
+A gateway does not do these things a worker does:
+
+- It never downloads a runtime or system image while granting a lease. A request for an OS version that no worker has installed fails with `RUNTIME_MISSING`. Install it on the workers first; see [Managing workers](/simlock/docs/gateway/managing-workers#install-runtimes-and-images-on-workers).
+- `simlock cleanup`, `nuke`, `doctor`, `device add`, `device remove`, `component list`, `component remove`, and `component install` without `--worker` or `--all-workers` fail on a gateway with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2). Run them on the worker.
+
+## Which daemon a command reaches
+
+Every `simlock` command talks to one daemon on the machine where you run it. Two flags choose which one. Each goes anywhere on the command line.
+
+| You run | It reaches |
+| --- | --- |
+| `simlock --gateway <command>` | The gateway on this machine. |
+| `simlock --local <command>` | The worker on this machine, even when only a gateway has run here. |
+| `simlock <command>` | The worker, unless this machine has a gateway and has never run a worker. Then it reaches the gateway. |
+
+`--gateway` and `--local` together are a usage error.
+
+With `--gateway` on a machine with no gateway, every command except `daemon start`, `config set` and `mcp` stops before it connects:
+
+```json
+{"error":{"code":"GATEWAY_NOT_PRESENT","message":"No gateway on this machine. Start one with: simlock --gateway daemon start"}}
+```
+
+On a machine with both, a gateway-only command such as `simlock worker drain` sent to the worker fails with `UNSUPPORTED_IN_WORKER_MODE`, and the message ends with "A gateway also runs on this machine: run the command again with --gateway."
+
+The pages in this section write `simlock --gateway` in every command meant for the gateway, so each one works on any machine.
+
+## Next steps
+
+1. [Set up the gateway](/simlock/docs/gateway/setup): start it, put HTTPS in front of it, and make tokens.
+2. [Join workers](/simlock/docs/gateway/joining-workers) to it.
+3. Read [how the gateway routes requests](/simlock/docs/gateway/routing).

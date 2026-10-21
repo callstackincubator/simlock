@@ -1,0 +1,159 @@
+---
+title: Configuring a worker
+description: Find the worker's config file, read and change settings, and pick the few keys most machines change.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A worker runs on its defaults with no config file at all. You change a setting with `simlock config set`, then restart the daemon. This page covers the keys most people change; the [configuration reference](/simlock/docs/reference/configuration) lists every key.
+
+## Where the file lives
+
+The worker reads `~/.simlock/config.json` (or `$SIMLOCK_HOME/config.json` when `SIMLOCK_HOME` is set). A missing file means every key has its default.
+
+The file is JSON. Keys nest, and this guide writes them with dots: `idle.shutdownAfterMs` is the `shutdownAfterMs` key inside the `idle` object.
+
+```json title="~/.simlock/config.json"
+{
+  "http": { "enabled": true },
+  "idle": { "shutdownAfterMs": 1800000 }
+}
+```
+
+Times are in milliseconds and sizes in bytes.
+
+`simlock config set` writes the file so only your user can read it (mode `0600`), because it can hold secrets such as a gateway join token. A file you create or edit by hand keeps the mode you give it until the next `config set`.
+
+## Change a setting
+
+<Steps>
+
+1. Set the key:
+
+   ```sh
+   simlock config set idle.shutdownAfterMs 1800000
+   ```
+
+   ```text
+   Updated idle.shutdownAfterMs in /Users/dana/.simlock/config.json; takes effect on daemon restart.
+   ```
+
+2. Restart the daemon:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+   If `daemon start` fails with `DAEMON_STOPPING`, the old daemon is still finishing its work. Wait a few seconds and run it again.
+
+</Steps>
+
+The value is read as JSON when it can be: `true`, `4`, `["iPhone 16"]` and `{"phone":"iPhone 16"}` are a boolean, a number, a list and an object. Anything else is stored as a string. Quote JSON values for your shell.
+
+`config set` checks the whole file with the new value in it before it writes anything. A wrong value, or an unknown key anywhere in the file, is refused with exit code 2 and the file is left as it was:
+
+```json
+{"error":{"code":"USAGE","message":"Invalid config after setting idle.shutdownAfter: Unknown config key: \"idle.shutdownAfter\""}}
+```
+
+You can also edit the file by hand. The daemon then checks it when it starts:
+
+- A wrong value stops the daemon from starting. The command that tried to start it prints the error, which names the key: `Invalid config value for "http.port": expected ...`.
+- An unknown key is ignored, with a warning in the daemon log. Check `simlock daemon logs` after a hand edit.
+- A file that is not valid JSON fails with `Invalid JSON in config file`.
+
+<Aside type="caution">
+Do not add a `mode` key. It is not a setting: a daemon started with `--gateway` is a gateway and any other is a worker. A config with `mode` in it is refused.
+</Aside>
+
+## Read the settings
+
+```sh
+simlock config                        # every setting, as one JSON line
+simlock config get idle               # one object
+simlock config get lease.maxTtlMs     # one value
+```
+
+```text
+14400000
+```
+
+Both commands ask the running daemon, and start it when it is not running. They show what the daemon is using now: your values merged with the defaults. A key you set but have not restarted for still shows its old value. To see what you wrote, read `~/.simlock/config.json`.
+
+`config get` with a key that does not exist fails with `Unknown config key: <key>`.
+
+The output includes secrets from the file, such as `gateway.token`. Do not paste it into a public place.
+
+## Settings most machines change
+
+| Goal | Key | Default |
+| --- | --- | --- |
+| Turn on the HTTP API and the console | `http.enabled` | `false` |
+| Choose the address and port HTTP listens on | `http.host`, `http.port` | `127.0.0.1`, `4701` |
+| Keep idle devices booted longer | `idle.shutdownAfterMs` | `600000` (10 min) |
+| Keep shut-down devices on disk longer | `idle.deleteAfterMs` | `3600000` (60 min) |
+| Let Simlock download runtimes and images | `downloads.policy` | `on-request` |
+| Accept the Android SDK licences | `downloads.acceptAndroidLicenses` | `false` |
+| Let one agent hold more than one device | `lease.maxPerRequester` | `1` |
+| Change how long a lease lasts when the agent names no time | `lease.defaultTtlMs` | `900000` (15 min) |
+| Change the longest lease anyone can ask for | `lease.maxTtlMs` | `14400000` (4 h) |
+| Run more or fewer devices | `capacity.strategy` and `capacity.config` | `resource`, sized from this machine |
+| Keep some devices booted and ready | `warmPool.targets` | none |
+| Make iOS devices slim by default | `ios.defaultMode` | `full` |
+| Pick which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | none |
+| Run Android emulators without a window | `android.emulator.headless` | `false` |
+| Write more or less to the log | `log.level` | `info` |
+
+The sections below show the common changes. Each needs a restart.
+
+### Turn on HTTP
+
+```sh
+simlock config set http.enabled true
+```
+
+This is what remote agents and the [console](/simlock/docs/worker/console) need.
+
+<Aside type="caution">
+Turning on HTTP opens a network listener. It listens on `127.0.0.1` by default, so only this machine can reach it. Setting `http.host` to `0.0.0.0` lets any machine that can reach the port try to connect. Simlock does not do TLS: put a reverse proxy in front of it for HTTPS. See [Remote agents](/simlock/docs/using-devices/remote-agents).
+</Aside>
+
+### Let one agent hold several devices
+
+By default each agent identity holds one lease at a time, and a second request fails with `REQUESTER_ALREADY_LEASED`. To allow two:
+
+```sh
+simlock config set lease.maxPerRequester 2
+```
+
+### Pick default models
+
+When an agent asks for a class such as `phone` instead of a model, your list is tried first, most preferred first:
+
+```sh
+simlock config set ios.defaultModels '{"phone":["iPhone 16","iPhone 15"],"tablet":"iPad Air 11-inch (M2)"}'
+```
+
+Each key must be a device class: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`. Any other key is refused. `simlock catalog` shows which models belong to each class. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+
+### Run Android emulators headless
+
+```sh
+simlock config set android.emulator.headless true
+```
+
+The emulator then runs without a window, which suits a machine nobody watches. It applies the next time each emulator boots.
+
+### Capacity, the warm pool, downloads and cleanup
+
+These have their own pages:
+
+- [Capacity](/simlock/docs/worker/capacity): `capacity.*`, `warmPool.*`, `ios.defaultMode`, `lease.identity.*`.
+- [Runtimes and images](/simlock/docs/worker/runtimes-and-images): `downloads.*`.
+- [Cleanup](/simlock/docs/worker/cleanup): `idle.*`, `diskPressure.freeBytesThreshold`.
+- [Monitoring](/simlock/docs/worker/monitoring): `log.level`, `eventLog.*`, `metrics.retention`.
+
+## Undo a change
+
+There is no command to remove a key. To go back to a default, set the default value with `simlock config set`, or delete the key from `~/.simlock/config.json` by hand. Then restart the daemon.

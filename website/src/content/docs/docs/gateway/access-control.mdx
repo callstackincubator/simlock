@@ -1,0 +1,140 @@
+---
+title: Access control
+description: Choose the right token role for agents, people and workers, make and revoke tokens, run admin commands from the CLI, and sign people in to the console through a sign-in proxy.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything that reaches a gateway or a worker over HTTP needs a token made on that daemon, or a sign-in through a sign-in proxy you configured. The CLI on the daemon's own machine needs no token for leasing, and gets admin rights from a file only your user can read.
+
+This page uses the gateway in its examples. Tokens work the same way on a worker: drop `--gateway`.
+
+## Token roles
+
+| Role | Made for | May |
+| --- | --- | --- |
+| `agent` | A coding agent that leases devices over HTTP. | Read the catalog and status, list installed runtimes, request, renew and release its own leases, cancel its own waiting requests, and run commands on the devices it leases. |
+| `operator` | A person, or a script that manages the fleet. | Everything an agent may, for every requester's leases, plus the console, events, usage figures, tokens, worker commands and component installs. |
+| `worker` | A worker machine joining a gateway. | Open the worker's connection to the gateway, and nothing else. Any other request with it is refused with `403`. |
+
+A valid token used for something its role may not do gets `403 FORBIDDEN`. An unknown or revoked token gets `401 UNAUTHENTICATED`.
+
+Tokens never cross machines. A token made on the gateway works only on the gateway; it does not work on a worker, and a worker's tokens do not work on the gateway.
+
+### One agent, one token
+
+Over HTTP, the token is the requester. Every lease and request made with one agent token belongs to the same requester, and a requester holds one lease at a time by default. Give every agent its own token, and a label you will recognise in the console.
+
+### An agent token reaches the worker's machine
+
+<Aside type="caution">
+An agent token is a credential for the worker machine, not for one device. Commands an agent runs on its device, such as `adb pull` or `simctl` commands, run on the worker as the user who runs the worker daemon, and can read and write any file that user can. This holds through a gateway too: the command runs on the worker that holds the lease. Give an agent token only to something you would let run commands on your workers.
+</Aside>
+
+## Make, list and revoke tokens
+
+Make a token. `--label` is optional, and shows wherever the token's leases are listed:
+
+```sh
+simlock --gateway token create --role agent --label ci-ios-runner-3
+```
+
+```json
+{"secret":"slk_Xr8vB2nQ5kLw0pT7yHc4mZs9dFj1gUe6aKo3iVb-Rq0","token":{"id":"tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45","role":"agent","label":"ci-ios-runner-3","createdAt":1792569600000}}
+```
+
+The `secret` is printed once. Simlock keeps only a hash of it, so a lost secret cannot be shown again: make a new token and revoke the old one.
+
+List tokens. The list shows ids, roles and labels, never secrets:
+
+```sh
+simlock --gateway token list
+```
+
+```json
+{"tokens":[{"id":"tok_3f9c2a1e-7b4d-4e8a-9c61-2d5f0b7a8e14","role":"operator","label":"alex-laptop","createdAt":1792569600000},{"id":"tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45","role":"agent","label":"ci-ios-runner-3","createdAt":1792569600000}]}
+```
+
+Revoke a token by its id:
+
+```sh
+simlock --gateway token revoke tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45
+```
+
+```json
+{"revoked":true}
+```
+
+A revoked token stops working at once, on its next request. Revoking a worker token also closes that worker's connection. Leases made with a revoked agent token stay until their time to live runs out or an operator releases them: the agent can no longer renew or release them. An id that names no token answers `"revoked":false`.
+
+## Admin commands on the CLI
+
+The CLI talks to the daemon on its own machine. With no credential it connects as an agent: it can lease, but admin commands such as `token create`, `worker drain` or `config get` fail with `FORBIDDEN`.
+
+For admin rights, the CLI uses the first of these it finds:
+
+1. `--token <secret>` on the command line.
+2. The `SIMLOCK_ADMIN_TOKEN` environment variable.
+3. The `admin.token` file in the daemon's folder: `~/.simlock/gateway/admin.token` for the gateway, `~/.simlock/admin.token` for the worker.
+
+The daemon writes a new `admin.token` each time it starts, readable only by the user who runs it. So as that user on that machine, admin commands work with no setup. As another user, pass an operator token's secret with `--token` or `SIMLOCK_ADMIN_TOKEN`.
+
+When no credential is found, or the daemon refuses it, the CLI goes on as an agent and prints one notice line on stderr:
+
+```json
+{"notice":"admin credential unavailable; connecting as agent (admin-only commands will fail with FORBIDDEN)"}
+```
+
+A rejected `admin.token` usually means the daemon restarted while the command was starting. Run the command again.
+
+## Sign in to the console through a sign-in proxy
+
+If your company signs people in through a proxy such as Cloudflare Access, the gateway can trust it. A person the proxy has signed in opens the console with no token, and the sidebar shows their name.
+
+<Aside type="caution">
+Every person the proxy signs in becomes an operator, with full rights on the gateway and, through it, on every worker. Restrict who may pass the proxy to the people you would give an operator token.
+</Aside>
+
+The proxy must add a signed JWT to each request, and publish its public keys. Simlock checks the signature against those keys, then the issuer, the audience and the time window, before it trusts the JWT. A person is a JWT with a non-empty `sub` (at most 120 characters) and `email`. The console shows the `name` claim, or the email.
+
+Set all four required keys in one command, because Simlock checks the whole configuration on each `config set`. This example is for Cloudflare Access with the team name `acme`:
+
+```sh
+simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://acme.cloudflareaccess.com","audience":"4f1c2b9e7d3a8c6f5e0b1d2a9c8e7f6b5a4d3c2b1e0f9a8d7c6b5a4f3e2d1c0b","signOutUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/logout"}'
+```
+
+Then restart the gateway.
+
+| Key | What it is |
+| --- | --- |
+| `header` | The request header that carries the proxy's JWT. Matched without regard to case. |
+| `jwksUrl` | Where the proxy publishes its public keys. It must be `https://`, or `http://` on `localhost`, `127.0.0.1` or `::1`. |
+| `issuer` | The `iss` the JWT must carry. |
+| `audience` | The `aud` the JWT must carry. For Cloudflare Access, the application's audience tag. |
+| `signOutUrl` | Optional. Where the console's **Sign out** sends a person signed in through the proxy. Without it, such a person sees no **Sign out**. |
+
+Your proxy must also:
+
+- **Let the worker connections through without a sign-in.** Workers connect to `/v1/uplink` with their join token, and carry no proxy JWT.
+- **Let `/v1/healthz` through**, if anything checks the gateway's health.
+- **Let agents through**, by whatever means your proxy offers, such as a bypass rule or service credentials. Agents send their Simlock token, which Simlock checks as usual. When a request carries both a Simlock token and a JWT, the token wins.
+- **Serve the console over HTTPS.** A browser marks its requests as coming from the console only over `https://` or on the local machine. Without that mark, Simlock refuses every request that changes something and is signed in through the proxy.
+
+An operator token pasted into the console still works behind the proxy.
+
+### When the console refuses the proxy's sign-in
+
+The console shows the token form with a line such as "Your sign-in proxy's identity was refused: it has expired. You can still sign in with an operator token." The gateway's log names the reason as a code, and an HTTP client gets it in the `401` answer as `reason`.
+
+| The console says it | Reason | What to check |
+| --- | --- | --- |
+| has expired | `expired` | The JWT expired more than 60 seconds ago. Sign in to the proxy again. |
+| is not valid yet | `not-yet-valid` | The gateway machine's clock. |
+| comes from a different sign-in service | `wrong-issuer` | `issuer` matches the JWT's `iss`. |
+| was made for a different application | `wrong-audience` | `audience` matches the JWT's `aud`. |
+| is signed in a way this daemon does not accept | `algorithm` | The proxy signs with RS256 or ES256. |
+| its signature does not check out | `unknown-key` or `bad-signature` | `jwksUrl` is the proxy's own key URL. |
+| this daemon cannot reach the sign-in service's keys | `keys-unavailable` | The gateway can reach `jwksUrl`. It keeps keys for 10 minutes, so this shows once a fetch has failed for that long. |
+| is not a valid sign-in token | `malformed` | `header` names the header that holds the JWT. A JWT over 8 KiB, with no expiry, or with a `sub` over 120 characters is refused too. |
+
+The console's sign-in, sign-out and token handling are described in [Web console](/simlock/docs/worker/console).

@@ -1,0 +1,94 @@
+---
+title: Errors
+description: The errors an agent meets while leasing and using devices, what each one means, and what to do about it.
+---
+
+When a `simlock` command fails, it prints one JSON line on stderr and exits with a code that tells a script what kind of failure it was:
+
+```json
+{"error":{"code":"QUEUE_TIMEOUT","message":"Timed out waiting for a device: req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241"}}
+```
+
+Branch on the exit code or on `code`; the message is for people and can change. The same codes come back from the HTTP API, inside `{"error":{"code":...,"message":...}}`, and from the programmatic client as a `SimlockError`.
+
+## Exit codes at a glance
+
+| Exit | Meaning | Usual next step |
+| --- | --- | --- |
+| `0` | Success | |
+| `1` | The daemon or a device failed, or you are not allowed | Read the message |
+| `2` | The command was wrong | Fix the command; retrying the same one never helps |
+| `10` | Ran out of time | Retry with more time, or later |
+| `11` | Nothing free right now | Wait or queue, then retry |
+| `12` | This machine cannot provide what you asked for | Ask for something else, or have it installed |
+| `13` | You already hold a lease, or the lease id is taken | Release your lease, or pick another id |
+| `14` | A held `simlock lease` lost its lease | Request a new lease |
+
+## Waiting for a device
+
+| Code | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| `QUEUE_TIMEOUT` | 10 | The request waited longer than `--timeout` and got no device. | Retry later, with a longer `--timeout`, or with a broader request, such as `--class phone` or an `--os` range. |
+| `NO_CAPACITY` | 11 | Nothing is free and you passed `--no-wait`. Through a gateway it also means no worker can take requests at all, for example every worker is drained or disconnected. | Drop `--no-wait` to queue. Over HTTP, wait for the `Retry-After` seconds. Through a gateway, ask an operator which workers are up. |
+| `REQUESTER_ALREADY_LEASED` | 13 | Your requester id already holds a lease or has a request waiting. The message names the lease. | Keep using that lease, or release it with `simlock release <lease-id>`. If two agents collide, give each its own identity (see [Who the requester is](/simlock/docs/using-devices/lease-lifecycle#who-the-requester-is)). |
+| `LEASE_ID_TAKEN` | 13 | The `--lease-id` you chose belongs to an active lease or a waiting request. | Use a new, unique id. |
+
+## Asking for a device the machine cannot provide
+
+| Code | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| `UNKNOWN_MODEL` | 12 | The model is not one this machine knows, no model of the class is listed, or (with `--physical`) no enrolled device could ever match. | Check the spelling against `simlock catalog`. For a class, an admin can name a model in `ios.defaultModels` or `android.defaultModels`. For a physical device, remember `--os` is exact. |
+| `RUNTIME_MISSING` | 12 | The OS version, or the Android image, is not installed. An OS range or `--image-tag` never downloads. | Pass `--allow-download` for an exact version, or ask an admin to install it. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device#when-the-runtime-is-not-installed). |
+| `LICENSE_NOT_ACCEPTED` | 12 | An Android download needs the SDK licences, which this machine has not accepted. | An admin sets `downloads.acceptAndroidLicenses` to `true`. |
+| `INSUFFICIENT_DISK_SPACE` | 12 | The download does not fit on the disk. The message says how much is needed and free. | Free disk space on that machine, or ask for an installed version. |
+| `DOWNLOAD_TIMEOUT` | 10 | The download, including time waiting behind another download, took longer than the machine allows. | Retry; the download may already be further along. Or ask an admin to install the runtime. |
+| `NO_DRIVER` | 12 | The platform is not available here: the tools for it are missing, or no worker in the fleet has it. | Run `simlock doctor` on the machine, or ask for the other platform. |
+| `CAPABILITY_MISSING` | 12 | No worker that could serve the request has a feature it needs, such as agent-device. | Ask an operator to turn the feature on for a worker. |
+
+## Creating or starting the device failed
+
+| Code | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| `PROVISION_FAILED` | 1 | Simlock could not create or boot the device. The message carries the tool's error. | Retry once. If it keeps failing, ask an operator to check `simlock doctor` and `simlock daemon logs`. |
+
+## Keeping and ending a lease
+
+| Code | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| Lease lost | 14 | A held `simlock lease` printed a `lease-lost` line: the lease expired, an operator ended it, or the device was lost. | Stop using the device and request a new lease. See [When a lease is lost](/simlock/docs/using-devices/lease-lifecycle#when-a-lease-is-lost). |
+| `UNKNOWN_LEASE` | 1 | The lease id does not exist, or the lease has already ended. Over HTTP this is `404`. | Request a new lease. Check ids with `simlock status`. |
+| `FORBIDDEN` | 1 | You are not allowed to do this: the lease or request belongs to someone else, or the command needs an admin. Over HTTP this is `403`. | Use your own lease. For admin commands, run them on the daemon's machine as the user that runs it, or pass an operator token with `--token`. |
+
+## Using a device
+
+| Code | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| `USAGE` | 2 | `simlock simctl` or `simlock adb` refused a command that would break a device or affect every agent, such as `erase` or `kill-server`. Over HTTP and the client the code is `PASSTHROUGH_REFUSED` (`422`). | Do what the message says, usually `simlock release` to get a clean device. See [Commands Simlock refuses](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses). |
+| `UNKNOWN_PASSTHROUGH_TOOL` | 2 | `exec` named a tool no platform on that machine provides, such as `xcodebuild`. The CLI reports it as `USAGE`. | Use `simctl` or `adb`, or `devicectl` on a physical iPhone or iPad. `simctl` on a physical lease and `devicectl` on a simulator are refused with `PASSTHROUGH_REFUSED`. |
+| `EXEC_TIMEOUT` | 10 | The command ran longer than the machine allows (10 minutes by default) and was stopped. | Split the work, or ask an operator to raise `exec.timeoutMs`. |
+| `WORKER_UNREACHABLE` | 1 | Through a gateway, the worker that holds your device is not connected. | Retry. The lease is still yours until it expires. |
+
+## Reaching the daemon
+
+| Code | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| `DAEMON_STARTUP_FAILED` | 1 | The CLI started the daemon and it did not come up, often because of a bad config file. The message says why. | Fix what the message names, then run the command again. `simlock daemon logs` shows the daemon's own log. |
+| `DAEMON_CONNECTION_LOST` | 1 | The daemon stopped or crashed while the command was talking to it. A held lease is not released. | Run the command again; the daemon starts on demand. Renew a held lease with `simlock lease renew <lease-id>`. |
+| `DAEMON_STOPPING` | 1 | The daemon is shutting down. | Wait a moment and run the command again. |
+| `GATEWAY_NOT_PRESENT` | 2 | You passed `--gateway`, but no gateway has run on this machine. | Drop `--gateway`, or start one with `simlock --gateway daemon start`. |
+| `PROTOCOL_VERSION_UNSUPPORTED` | 1 | The CLI and the running daemon are different versions that cannot talk. | After an upgrade, restart the daemon: `simlock daemon stop`, then any command. |
+
+If the CLI cannot read the admin credential, it says so on stderr and connects as an agent; admin-only commands then fail with `FORBIDDEN`.
+
+## HTTP-only answers
+
+| Status | Code | What it means |
+| --- | --- | --- |
+| `401` | `UNAUTHENTICATED` | No token, or a token the daemon does not know. |
+| `404` | `UNKNOWN_LEASE_REQUEST` | No such lease request, or it finished more than 10 minutes ago. |
+| `409` | `REQUEST_NOT_CANCELLABLE` | The request can no longer be cancelled: device work has started, or it was granted. Release the lease instead. |
+
+## Related
+
+- Every code with its exit code and HTTP status: [Error reference](/simlock/docs/reference/errors).
+- Problems on the worker itself: [Troubleshooting](/simlock/docs/worker/troubleshooting).
