@@ -564,4 +564,27 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("an error toast's text is in the role=alert element and a success toast's in the aria-live=polite region", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "say-a" }]);
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const openMenu = async (item: string) => {
+        await rowOf(page, "say-a").getByRole("button", { name: "Actions for say-a" }).click();
+        await page.getByRole("menuitem", { name: item, exact: true }).click();
+      };
+      await page.route("**/v1/workers/*/drain", (route) => route.abort());
+      await openMenu("Drain");
+      await expect(page.getByRole("alert")).toContainText("Couldn't drain say-a");
+      await expect(page.getByRole("alert")).toContainText("The daemon did not answer.");
+
+      await page.unroute("**/v1/workers/*/drain");
+      await openMenu("Drain");
+      await expect(page.locator('[aria-live="polite"]')).toContainText("say-a drained");
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
