@@ -400,4 +400,37 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("release from a lease drawer's ⋯ works as from the row, and a worker drawer's button is its first safe action", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "bar-a" }]);
+    try {
+      await leaseOverSocket(fleet.gateway, "drawer-agent");
+      await openPage(page, fleet.gateway, "/leases", "Leases");
+      await rowOf(page, "drawer-agent").getByRole("link").first().click();
+      const drawer = page.getByRole("dialog", { name: "drawer-agent" });
+      await expect(drawer).toBeVisible();
+      await drawer.getByRole("button", { name: "Actions for drawer-agent" }).click();
+      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await page
+        .getByRole("alertdialog", { name: "Release drawer-agent's lease?" })
+        .getByRole("button", { name: "Release lease" })
+        .click();
+      await expect(page.getByText("Released drawer-agent's lease")).toBeVisible();
+      expect(await heldBy(fleet.gateway)).not.toContain("drawer-agent");
+
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      await page.goto(new URL(`/fleet/${id}`, fleet.gateway.url).toString());
+      await expect(page.getByRole("heading", { level: 1, name: "bar-a" })).toBeVisible();
+      await page.getByRole("button", { name: "Drain", exact: true }).click();
+      await expect(page.getByText("bar-a drained", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Actions for bar-a" }).click();
+      await expect(page.getByRole("menuitem", { name: "Undrain" })).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
