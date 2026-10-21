@@ -485,7 +485,7 @@ export class McpSession {
   }
 
   /**
-   * Reconnects lazily: a dead `#client` (cleared by the client's own `onConnectionLost`, below)
+   * why: Reconnects lazily: a dead `#client` (cleared by the client's own `onConnectionLost`, below)
    * makes the next caller build a brand new `SimlockClient` -- the typed client itself never
    * reconnects (ADR 0003 §10), so constructing a fresh one here on every dead connection is
    * what keeps MCP's process-outlives-a-connection lifecycle working.
@@ -496,7 +496,7 @@ export class McpSession {
    * one connection rather than two -- but only in the direction where sharing costs nothing.
    * A renew tick joining a tool call's connect is fine: it wanted a connection, and gets one
    * (the tool call was going to launch a daemon either way, which is not the timer's doing). A
-   * tool call joining a *renew's* connect is not: `docs/CLIENT.md` and `docs/CLI.md` promise a
+   * tool call joining a *renew's* connect is not: the client guide and the CLI reference promise a
    * tool call may start a daemon that is not running, and it would instead fail with the
    * weaker attempt. So it retries once, alone, with the launching connect -- which is exactly
    * what it would have done had it arrived a moment later.

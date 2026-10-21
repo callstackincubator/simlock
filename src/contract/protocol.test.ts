@@ -48,6 +48,6 @@ describe("helloRequestSchema", () => {
 
 describe("PROTOCOL_VERSION_RANGE", () => {
   it("is one above the base branch's, for the alerts.test operation", () => {
-    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 51, min: 51 });
+    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 52, min: 52 });
   });
 });

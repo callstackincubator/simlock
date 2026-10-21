@@ -17,14 +17,14 @@ export const site = {
   // why: the home page title is "Name: subtitle" (src/site/meta.ts), and it must stay within
   // 60 characters in all.
   subtitle: "Self-hosted simulator cloud for coding agents",
-  headline: ["Your own simulator cloud.", "One device per agent."],
-  lede: "Simlock leases iOS simulators and Android emulators to your coding agents, one device each, booted and checked. Start on one Mac, then put your Macs and Linux machines behind one URL.",
+  headline: ["Turn your Mac into a simulator cloud", "that manages itself."],
+  lede: "Simlock leases, serves and manages iOS and Android devices for your coding agents. Start on one Mac, then add machines behind a gateway when you need more. Free and open source.",
   // why: 160 characters at most, so search results show it whole.
   description:
     "Simlock leases iOS simulators and Android emulators to parallel coding agents, from one Mac or a self-hosted fleet of Macs and Linux machines behind one URL.",
   install: "npm i -g simlock",
   skill: undefined as string | undefined,
-  ogAlt: "Simlock by Callstack. Your own simulator cloud. One device per agent.",
+  ogAlt: "Simlock by Callstack. Turn your Mac into a simulator cloud that manages itself.",
   owner: "Callstack",
   callstack: "https://callstack.com/?utm_source=simlock&utm_medium=referral",
   license: {
@@ -41,12 +41,16 @@ export const site = {
 export const docs = {
   intro: at("/docs/introduction"),
   start: at("/docs/getting-started"),
-  cli: at("/docs/cli"),
-  config: at("/docs/configuration"),
-  http: at("/docs/http-api"),
-  client: at("/docs/client"),
-  console: at("/docs/console"),
-  events: at("/docs/events"),
+  connect: at("/docs/getting-started/connect-your-agent"),
+  lifecycle: at("/docs/using-devices/lease-lifecycle"),
+  physical: at("/docs/using-devices/physical-devices"),
+  http: at("/docs/using-devices/remote-agents"),
+  client: at("/docs/using-devices/programmatic-client"),
+  capacity: at("/docs/worker/capacity"),
+  cleanup: at("/docs/worker/cleanup"),
+  console: at("/docs/worker/console"),
+  gateway: at("/docs/gateway/setup"),
+  cli: at("/docs/reference/cli"),
   llms: at("/llms.txt"),
 };
 
@@ -101,7 +105,7 @@ export const faq = [
   },
   {
     q: "Does a worker need an open port to join a fleet?",
-    a: "No. A worker dials out to the gateway over one WebSocket, with the gateway URL and a join token from `simlock token create --role worker`, so a Mac behind NAT joins without an inbound port.",
+    a: "No. A worker dials out to the gateway over one WebSocket, with the gateway URL and a join token from `simlock --gateway token create --role worker`, so a Mac behind NAT joins without an inbound port.",
   },
   {
     q: "Can a Linux machine be a worker?",
@@ -121,40 +125,38 @@ export const code = {
   "mcpServers": {
     "simlock": {
       "command": "simlock",
-      "args": ["mcp"],
-      "env": { "SIMLOCK_AGENT_ID": "agent-1" }
+      "args": ["mcp"]
     }
   }
 }`,
-  client: `import { connectSimlock } from 'simlock/client';
+  client: `import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { connectSimlock } from 'simlock/client';
 
-const client = await connectSimlock({ principal: 'agent-1' });
-const grant = await client.requestLease({ platform: 'ios', model: 'iPhone 17 Pro' });
+const client = await connectSimlock({
+  endpoint: join(homedir(), '.simlock', 'daemon.sock'),
+  principal: 'build-bot-1',
+});
+const grant = await client.requestLease({ platform: 'ios', model: 'iPhone 16' });
 
 await client.releaseLease({ leaseId: grant.lease.id });
 await client.close();`,
   cli: `simlock lease --platform ios --device "iPhone 16"
-simlock simctl install booted ./MyApp.app
-simlock release --all`,
+simlock simctl install <device.address> ./MyApp.app
+simlock release <lease.id>`,
   gateway: [
     "# on the gateway",
-    "simlock config set mode gateway",
-    "simlock config set http.enabled true",
-    "simlock token create --role worker",
+    "simlock --gateway daemon start",
+    "simlock --gateway token create --role worker",
     "",
     "# on each worker, Mac or Linux",
-    "simlock config set gateway.url wss://gw.example:4700",
-    "simlock config set gateway.token slk_...",
+    `simlock config set gateway '{"url":"wss://gw.example","token":"slk_..."}'`,
+    "simlock daemon stop",
+    "simlock daemon start",
   ].join("\n"),
 };
 
 export const home = {
-  setup: [
-    { cmd: site.install },
-    { cmd: 'simlock lease --platform ios --device "iPhone 16"' },
-    { comment: "a booted device, yours until you release it" },
-  ] as ({ cmd: string } | { comment: string })[],
-
   how: {
     label: "How it works",
     headline: ["Start on one Mac.", "Grow into a fleet."],
@@ -172,7 +174,7 @@ export const home = {
       {
         title: "Add machines",
         body: "Run one daemon as a gateway, mint a join token, and point each Mac or Linux worker at it.",
-        cmd: "simlock token create --role worker",
+        cmd: "simlock --gateway token create --role worker",
       },
     ],
     tabs: [
@@ -194,7 +196,7 @@ export const home = {
         code: code.mcp,
         pkg: "simlock mcp",
         note: "Four tools for agents that speak MCP: list, lease, release and status.",
-        href: at("/docs/cli#simlock-mcp"),
+        href: docs.connect,
       },
       {
         id: "http",
@@ -223,7 +225,7 @@ export const home = {
     label: "Fleet",
     headline: ["One URL in front of", "every machine you own."],
     lede: "A gateway owns no devices. Workers dial out to it, so a Mac behind NAT joins with a URL and a token, and each request goes to a warm device first, then to the machine with the most room.",
-    link: { text: "Set up a gateway", href: at("/docs/configuration#modes-gateway-and-worker") },
+    link: { text: "Set up a gateway", href: docs.gateway },
     window: "zsh",
     code: code.gateway,
   },
@@ -254,9 +256,9 @@ export const home = {
       },
       {
         icon: "flag",
-        title: "Attention",
-        body: "Disconnected and drained workers, RAM over budget, and quarantined or stalled devices.",
-        href: `${docs.console}#attention`,
+        title: "Inbox",
+        body: "Disconnected and drained workers, RAM over budget, quarantined, stalled and absent devices, long waits and leases about to end.",
+        href: `${docs.console}#inbox`,
       },
     ] as { icon: IconName; title: string; body: string; href: string }[],
   },
@@ -270,43 +272,43 @@ export const home = {
         icon: "lock",
         title: "One lease, one device",
         body: "A device on lease belongs to one agent until it releases it or the TTL runs out.",
-        href: docs.cli,
+        href: docs.lifecycle,
       },
       {
         icon: "cube",
         title: "Devices on demand",
         body: "Nothing free that fits? Simlock creates one, up to what the machine’s CPU and RAM can hold.",
-        href: docs.config,
+        href: docs.capacity,
       },
       {
         icon: "stack",
         title: "A fair queue",
         body: "Past capacity, requests wait their turn instead of failing. Use `--timeout` or `--no-wait` to change that.",
-        href: docs.cli,
+        href: docs.lifecycle,
       },
       {
         icon: "flame",
         title: "Warm devices",
         body: "Keep the models you use booted and clean, so the first lease is granted without a boot.",
-        href: docs.config,
+        href: docs.capacity,
       },
       {
         icon: "gauge",
         title: "Idle devices cleaned up",
         body: "An unused device is shut down to free RAM, then deleted to free disk.",
-        href: docs.config,
+        href: docs.cleanup,
       },
       {
         icon: "test",
         title: "Crash recovery",
         body: "When a leased device dies, Simlock reboots it under the same lease and tells the holder.",
-        href: docs.cli,
+        href: docs.lifecycle,
       },
       {
         icon: "signpost",
         title: "Physical phones too",
         body: "Enroll iPhones and Android phones; on release, Simlock uninstalls the apps they did not have.",
-        href: at("/docs/cli#leasing-a-physical-device"),
+        href: docs.physical,
       },
       {
         icon: "package",

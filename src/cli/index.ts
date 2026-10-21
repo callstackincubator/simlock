@@ -88,7 +88,7 @@ function extractGlobalFlags(argv: readonly string[]): {
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
  * touching it; only a real command builds an environment. A `SIMLOCK_HOME` whose socket path
  * exceeds the platform limit throws `SocketPathTooLongError`, and this runs inside `runCli`'s
- * try, where that throw becomes the single structured error line `docs/CLI.md` promises instead
+ * try, where that throw becomes the single structured error line the CLI reference promises instead
  * of a raw stack trace. */
 async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment> {
   const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }] = await Promise.all([

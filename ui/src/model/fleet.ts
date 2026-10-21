@@ -14,6 +14,11 @@ export function workerHealth(worker: WorkerView): Toned {
   );
 }
 
+// why: the Issues filter keeps a worker with any finding at all.
+export function hasIssue(worker: WorkerView): boolean {
+  return workerHealth(worker).tone !== "ok";
+}
+
 function stateFindings(worker: WorkerView): Toned[] {
   const findings: Toned[] = [];
   if (worker.connection !== "connected") findings.push({ tone: "error", word: worker.connection });

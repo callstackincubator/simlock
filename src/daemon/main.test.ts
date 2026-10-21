@@ -3683,7 +3683,7 @@ describe("startDaemon state.db", () => {
       await writeFile(oldFile, "[]", "utf8");
 
       await expect(start({ dataDirectory: directory, role })).rejects.toMatchObject({
-        message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${step.replace("<path>", oldFile)} See "Breaking: state moves to state.db" in docs/CLI.md.`,
+        message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${step.replace("<path>", oldFile)} See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.`,
       });
       expect(existsSync(join(directory, "state.db"))).toBe(false);
     },

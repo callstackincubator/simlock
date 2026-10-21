@@ -7,4 +7,4 @@ Uses: simlock-client, ports (`NodeIpcTransport` by default). Never imports: core
 - The session is `admin` only with a valid `credential` (operator token or `admin.token`);
   a wrong one fails `hello` with `ADMIN_AUTHENTICATION_FAILED`. None: an `agent` session.
 - Types are re-exported from `src/simlock-client/`. No reconnect, retry or renew here.
-- Surface: [CLIENT.md](../../docs/CLIENT.md).
+- Surface: [programmatic-client.mdx](../../website/src/content/docs/docs/using-devices/programmatic-client.mdx).

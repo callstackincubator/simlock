@@ -299,7 +299,7 @@ export interface EventMap {
     readonly mode: "slim" | "full";
     readonly count: number;
     readonly ready: number;
-    /** Why it is short: the first of the reasons that apply (`docs/EVENTS.md`). */
+    /** why: one reason, not all: the first of the reasons the target is short that applies. */
     readonly reason: string;
   };
   // ---- gateway facts (ADR 0005 §22) ---------------------------------------------------------

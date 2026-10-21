@@ -9,7 +9,7 @@ export interface RegistryView {
   readonly diskFreeBytes: number;
   readonly leases: readonly LeaseRecord[];
   readonly now: number;
-  /** Devices a warm target keeps: the idle shutdown timer leaves them alone. */
+  /** why: idle shutdown must spare warm targets, learned kinds and devices serving queued demand. */
   readonly targeted: ReadonlySet<string>;
 }
 

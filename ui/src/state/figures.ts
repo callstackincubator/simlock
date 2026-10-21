@@ -1,7 +1,9 @@
 import type { UsageOutput } from "../../../src/contract/index";
 import { type FiguresState, figuresOf } from "../model/figures";
 import { type ConsoleRange, statsPath } from "../model/range";
-export type { FigureChart, FiguresState } from "../model/figures";
+export type { FiguresState } from "../model/figures";
+import { useRef } from "react";
+
 import { useLiveResource, useNow } from "./live";
 import { loadView } from "./resource";
 
@@ -22,13 +24,20 @@ export function useStats<T>(
   | { readonly kind: "ready"; readonly data: T; readonly refusal?: string } {
   const view = loadView(useLiveResource<UsageOutput>(statsPath(range)));
   const now = useNow();
-  if (view.kind === "loading") return view;
+  // why: a new range is a new read; until it answers, the last answer stays drawn, so switching
+  // the range does not swap every chart and tile for a loading note and back.
+  const last = useRef<{ readonly kind: "ready"; readonly data: T; readonly refusal?: string }>(
+    undefined,
+  );
+  if (view.kind === "loading") return last.current ?? view;
   if (view.kind === "unsupported") {
     return { kind: "refused", message: "Not available on a single host." };
   }
   if (view.kind === "refused") return view;
   const data = build(view.data, range, now.server);
-  return view.refusal === undefined
-    ? { data, kind: "ready" }
-    : { data, kind: "ready", refusal: view.refusal };
+  last.current =
+    view.refusal === undefined
+      ? { data, kind: "ready" }
+      : { data, kind: "ready", refusal: view.refusal };
+  return last.current;
 }

@@ -227,7 +227,7 @@ export function buildCliEnvironment(
     // why: Resolved here rather than once during construction, because it can throw: a
     // `SIMLOCK_HOME` whose socket path exceeds the platform limit is a `SocketPathTooLongError`.
     // Every consumer of this path is behind a command already inside `runCli`'s own try, where
-    // that throw becomes the single structured error line `docs/CLI.md` promises instead of a
+    // that throw becomes the single structured error line the CLI reference promises instead of a
     // raw stack trace, and `simlock --help` (which needs no socket at all) never resolves it.
     const connection = await connector.connect(resolveDaemonSocketPath(dataDirectory));
     const credential = await resolveCredential();

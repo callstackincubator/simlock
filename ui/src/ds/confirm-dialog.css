@@ -1,0 +1,67 @@
+/* The confirm dialog: a small centred panel over a dim layer. The confirming button is in the
+ * error colour; orange is never a state. */
+
+.confirm-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.confirm {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 71;
+  display: grid;
+  gap: var(--space-4);
+  width: min(28rem, calc(100% - var(--space-8)));
+  padding: var(--space-6);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  transform: translate(-50%, -50%);
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.confirm-body {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.button.confirm-danger {
+  border-color: var(--status-error);
+  background: var(--status-error);
+  color: var(--bg);
+}
+
+.button.confirm-danger:disabled {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.confirm-typed {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.confirm-input {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  background: var(--field);
+  color: var(--text);
+  font-family: var(--font-mono);
+}

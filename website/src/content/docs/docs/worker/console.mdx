@@ -1,0 +1,197 @@
+---
+title: Web console
+description: Turn on the web console, sign in with an operator token, and read what each page shows about your worker's devices, leases and queue.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The web console is a page in your browser that shows what your worker is doing: its devices, the leases on them, the requests waiting for a device, and anything that needs you. The daemon serves the console itself, so there is nothing to install and nothing is fetched from the internet.
+
+The console is for people who run the worker. It only shows; it does not lease, release or fix anything. Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
+
+On a gateway the same console shows every worker in the fleet. See [Fleet console](/simlock/docs/gateway/fleet-console).
+
+## Turn on the console
+
+The console comes with the HTTP API. It is on whenever HTTP is on, and there is no separate switch. On a worker, HTTP is off by default.
+
+<Aside type="caution">
+Turning on HTTP opens a network listener. By default it listens on `127.0.0.1:4701`, so only this machine can reach it. If you set `http.host` to `0.0.0.0` or another address, anyone who can reach that port can load the sign-in page and call the HTTP API with a token. Simlock does not do TLS: to reach the console from another machine, put a reverse proxy or a tunnel in front of it.
+</Aside>
+
+<Steps>
+
+1. Turn on HTTP:
+
+   ```sh
+   simlock config set http.enabled true
+   ```
+
+   ```text
+   Updated http.enabled in /Users/alex/.simlock/config.json; takes effect on daemon restart.
+   ```
+
+2. Restart the daemon so the setting takes effect:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+   `simlock daemon start` prints the console's address:
+
+   ```text
+   Daemon running
+   Console: http://127.0.0.1:4701/
+   ```
+
+</Steps>
+
+To listen on another address or port, set `http.host` and `http.port` the same way, then restart. See [Configuration](/simlock/docs/worker/configuration).
+
+## Open the console
+
+Open the address `simlock daemon start` printed. `simlock status` prints the same `Console:` line after the daemon's health, and `simlock status --json` has it as `daemon.consoleUrl`. When HTTP is off there is no `Console:` line.
+
+When `http.host` is `0.0.0.0` or `::`, the daemon listens on every interface and the address says `localhost`. From another machine, use this machine's name or address instead.
+
+Every page has its own address, such as `/leases`, so you can bookmark a page, reload it, or share a link to it.
+
+## Sign in with an operator token
+
+The console asks for an operator token. Make one on the worker:
+
+```sh
+simlock token create --role operator --label alex-laptop
+```
+
+```json
+{"secret":"slk_Qm9vdHN0cmFwIHRoZSBjb25zb2xlIGFuZCBzaWduIGl","token":{"id":"tok_3f9c2a1e-7b4d-4e8a-9c61-2d5f0b7a8e14","role":"operator","label":"alex-laptop","createdAt":1792569600000}}
+```
+
+Copy the `secret`, paste it into the **Operator token** field and press **Sign in**. The secret is printed once; Simlock keeps only a hash of it. A token works only on the daemon that made it.
+
+If the console does not accept the token, it says why:
+
+| Message | What it means |
+| --- | --- |
+| This daemon does not know that token. | The token is mistyped, revoked, or from another daemon. |
+| That token is real, but the console needs an operator token. | It is an agent or worker token. Make one with `--role operator`. |
+| The daemon is starting. Try again in a moment. | The daemon answers but has not finished starting. |
+| The daemon cannot be reached. | Nothing answers at this address. Check `simlock daemon status`. |
+| The daemon answered with an error (HTTP 500). | Anything else. The daemon's log says more: `simlock daemon logs`. |
+
+The console keeps the token in this browser tab only. A reload keeps you signed in; a new tab asks again; closing the tab signs you out. **Sign out** at the bottom of the sidebar forgets the token at once. If you revoke the token with `simlock token revoke <token-id>`, the console signs you out the next time it asks the daemon for anything.
+
+To sign people in through a sign-in proxy instead of tokens, see [Access control](/simlock/docs/gateway/access-control).
+
+## Find your way around
+
+The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**.
+
+Every page but the overview is a list on the left and the item you chose on the right. Lists show 25 rows at a time, with a pager for 50 or 100.
+
+Every page keeps itself current: a lease being granted or a device booting shows within about a second, with no reload. The bottom of the sidebar says how the connection is:
+
+| It says | What it means |
+| --- | --- |
+| Connected | Up to date. |
+| Reconnecting — data from 12 s ago | The console lost the daemon. What you see is as old as it says. It keeps trying and catches up by itself. |
+| Daemon is starting | The daemon is back and still starting up. |
+
+## Overview
+
+The console opens on **Overview**, the worker on one page.
+
+- **Range**: **1 hour**, **6 hours**, **24 hours** or **7 days**. It sets the figures and charts below.
+- **Tiles**: **Utilisation** (leases held as a share of the devices the worker may run), **Leases**, **Waiting** (with the longest wait), **Workers** connected, then for the range **Granted** and **Wait p95** (how long the slowest 1 in 20 requests waited).
+- **Charts**: **Leases held**, **Requests in the queue** and **Device slots in use** over the range, each with a table of the numbers under it.
+- **Capacity**: per platform, the devices running of the limit, split into leased, ready and booting.
+- **Workers**, **Attention** and **Activity**: short versions of those pages, each with a link to the full one.
+
+## Workers
+
+**Workers** lists the workers the daemon knows. On a worker that is one row: this machine. Each row has a status square, the worker's name, and its devices running of its limit.
+
+The square shows the worst thing wrong with the worker, and always has a word behind it (point at it to read it):
+
+| Colour | When |
+| --- | --- |
+| Red | The worker's health is `failed`, its memory pressure is `critical`, or its CPU, memory or disk is 95% full or more. |
+| Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, or a figure is 85% full or more. |
+| Green | Nothing is wrong. The word is `connected`. |
+
+**Issues** shows only workers whose square is not green. **Busy** shows workers using three quarters of their device slots or more.
+
+Select the worker to see three tabs:
+
+- **Overview**: CPU, memory and disk, each with a bar; how many leases it holds; a square per device slot for iOS and Android (leased, ready, booting, quarantined or free); and every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
+- **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
+- **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
+
+While the daemon is still starting, devices, capacity and the warm pool are left out. They appear once startup finishes.
+
+## Leases
+
+**Leases** lists every lease on the worker, the same leases `simlock list --leases` shows. Each row has the holder, the time left, the device, and a bar of the time left. A lease with less than 15 minutes left turns amber and counts as expiring. **Expiring**, **iOS** and **Android** narrow the list.
+
+The holder is the identity that took the lease. A lease taken over the HTTP API shows the label of the token that took it, so give each agent's token a label:
+
+```sh
+simlock token create --role agent --label ci-runner-3
+```
+
+A lease taken with the CLI or MCP server on this machine shows the agent identity it was taken with.
+
+Select a lease to see:
+
+- **Expires in**: the time left, counting down, how long it has been held, when it was last renewed, and when it was granted.
+- **Device**: the model, runtime, mode, image tag, physical or virtual, the worker, the device id and the UDID.
+- **Lease**: the lease id, the request it came from, and the holder.
+- **Screen**: the device's live picture. Press **Show screen** to start it and **Stop** to end it. Leaving the page or closing the tab also stops it. The button works only when screen streaming is on for the worker; otherwise the panel says "Streaming is off on" and the worker's name. See [Watching the screen](/simlock/docs/using-devices/watching-the-screen).
+
+A lease that was released or has expired says "Lease not found."
+
+## Waiting
+
+**Waiting** lists every request waiting for a device, the same requests `simlock list --requests` shows. Above the list, **Wait p95** shows how long requests waited in the last hour.
+
+Each row has the request's place in its queue, the agent that asked, how long it has waited, the device it asked for, and its stage: `queued` while it waits its turn, `starting` while the daemon finds, creates, boots or downloads a device for it.
+
+Select a request to see when it was made, its place, its stage and, for a `queued` request, why the daemon could not place it yet:
+
+| Why | What it means |
+| --- | --- |
+| Behind an earlier request | Another request for the same kind of device came first. |
+| Full: device limit | The worker already has as many devices as it may keep. |
+| Full: running limit | The worker runs as many devices as it may. |
+| Full: running limit for iOS | The worker runs as many iOS devices as it may (or Android). |
+| Full: RAM budget | Booting another device would go over the worker's RAM budget. |
+| A matching device is starting | A device that fits is booting and will serve it. |
+| Every matching device is leased or absent | The request names physical devices that are all in use or unplugged. |
+
+A request leaves the list as soon as it gets its device, fails or is cancelled. To change how many devices the worker runs, see [Capacity and the warm pool](/simlock/docs/worker/capacity).
+
+## Attention
+
+**Attention** lists everything on the worker that needs you. Each row is the condition and the worker or device it is about. An item leaves the list as soon as the daemon reports that it cleared, and its page then says "Resolved." The console shows these items; it does not fix them.
+
+| Item | What it means | What to do |
+| --- | --- | --- |
+| `over RAM budget` | The devices on the worker use more RAM than its budget allows. `simlock status` shows the same as `(over limit)`. | Release leases, or lower the device limits. See [Capacity and the warm pool](/simlock/docs/worker/capacity). |
+| `quarantined` | Simlock could not clean up a device. Its **Cause** says what failed: `Purge failed`, `Shutdown failed`, `Delete failed`, or `Stalled while provisioning` or `reclaiming`. Simlock retries the cleanup in the background and leases the device to no one meanwhile. | Wait for the retry, or see [Troubleshooting](/simlock/docs/worker/troubleshooting). |
+| `stalled` | A device has been `provisioning` or `reclaiming` for longer than it should take, with nothing working on it. `simlock doctor` reports the same devices. | See [Troubleshooting](/simlock/docs/worker/troubleshooting). |
+
+On a gateway the list also has `disconnected`, `incompatible` and `drained` workers; a single worker never shows those. See [Fleet console](/simlock/docs/gateway/fleet-console).
+
+Select an item to see the facts that matter for it, such as how much RAM the worker uses of its budget, and the events of the last hour about that device or worker.
+
+## Events
+
+**Events** lists the events of the last hour, newest first, the same events as `simlock events --since 1h`. New events appear at the top as they happen. A chart above the list counts events per minute, and a filter narrows the list to **Leases**, **Devices**, **Workers**, **Components** or **Other**.
+
+Select an event to see its whole payload and a link to the lease, worker, request or attention item it is about. For what each event means, see [Events](/simlock/docs/reference/events).
+
+## Usage
+
+**Usage** shows the figures for a range, the same numbers `simlock stats` gives: requests, grants, rejections, the wait and hold times, grants by source (warm, booted or provisioned), rejections by reason, device incidents, and the figures per platform and per requester. Pick **1 hour**, **6 hours**, **24 hours** or **7 days**. See [Monitoring](/simlock/docs/worker/monitoring).

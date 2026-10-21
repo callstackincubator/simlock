@@ -1711,7 +1711,7 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
     // which costs iOS and nothing else -- the same as every other refusal here. It is not
     // a daemon-fatal error: `"deviceRoot": true` and `"deviceRoot": "devices/ios"` are one
     // keystroke apart, and killing the process over the first would take Android down with
-    // it and leave the reason unreachable, since `doctor` -- where `docs/CLI.md` promises
+    // it and leave the reason unreachable, since `doctor` -- where the CLI reference promises
     // it appears -- needs a daemon to answer. `not-absolute` is the vocabulary term the
     // docs already publish for "this names no usable directory"; nothing new is invented.
     throw new OwnedRootError(

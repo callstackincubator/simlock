@@ -211,7 +211,7 @@ describe("daemon folders (ADR 0034)", () => {
     const lines = (await readFile(join(env.home, "daemon.log"), "utf8")).trim().split("\n");
     expect(JSON.parse(lines.at(-1) ?? "{}")).toMatchObject({
       fields: {
-        message: `Found ${join(env.home, "state.json")}, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run \`simlock nuke --delete-devices\`; then remove ${join(env.home, "state.json")} and start again. See "Breaking: state moves to state.db" in docs/CLI.md.`,
+        message: `Found ${join(env.home, "state.json")}, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run \`simlock nuke --delete-devices\`; then remove ${join(env.home, "state.json")} and start again. See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.`,
       },
       message: "Daemon failed to start",
     });

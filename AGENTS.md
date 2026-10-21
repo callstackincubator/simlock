@@ -44,14 +44,10 @@ never "fix" docs that describe it (ADRs 0004, 0005) back to today's code.
 
 Which doc goes where: [documentation.md](docs/internal/agent-rules/documentation.md).
 
-End-user docs live directly under [docs/](docs/), self-contained (no links
-into `docs/internal/`):
-[ABOUT.md](docs/ABOUT.md),
-[CLI.md](docs/CLI.md),
-[CLIENT.md](docs/CLIENT.md),
-[CONFIGURATION.md](docs/CONFIGURATION.md),
-[HTTP-API.md](docs/HTTP-API.md),
-[CONSOLE.md](docs/CONSOLE.md),
-[EVENTS.md](docs/EVENTS.md).
+End-user docs live only on the website, in
+[website/src/content/docs/](website/src/content/docs/) (sidebar in
+`website/astro.config.mjs`). A change to the public surface (CLI, config,
+HTTP API, MCP tools, client exports, events, console) updates the pages
+that describe it in the same change (documentation rule 9).
 
 Maintainer/agent docs live under [docs/internal/](docs/internal/) (table above).

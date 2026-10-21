@@ -89,7 +89,8 @@ describe("openStateDatabase", () => {
 });
 
 describe("openStateDatabase refusals", () => {
-  const SEE = 'See "Breaking: state moves to state.db" in docs/CLI.md.';
+  const SEE =
+    "See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.";
 
   async function seeded(directory: string): Promise<string> {
     const path = join(directory, STATE_DB_NAME);

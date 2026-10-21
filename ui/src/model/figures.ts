@@ -99,11 +99,12 @@ function chartOf(
     };
   });
   const range = extremes(points);
-  const current = points.at(-1);
+  // why: the newest bucket is still filling and often has no figure yet; "now" is the newest one that does.
+  const current = points.findLast((point) => point.count !== null);
   const summary =
     range === undefined || current === undefined
       ? ""
-      : `Now ${current.count ?? "—"}; highest ${range.highest.count} at ${range.highest.label}; lowest ${range.lowest.count} at ${range.lowest.label}.`;
+      : `Now ${current.count}; highest ${range.highest.count} at ${range.highest.label}; lowest ${range.lowest.count} at ${range.lowest.label}.`;
   return {
     bucketMs,
     heading: spec.heading,

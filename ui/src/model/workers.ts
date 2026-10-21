@@ -15,7 +15,7 @@ export function workerName(worker: WorkerView): string {
 
 // why: ids are opaque, so the id is encoded.
 export function workerPath(id: string): `/${string}` {
-  return `/workers/${encodeURIComponent(id)}`;
+  return `/fleet/${encodeURIComponent(id)}`;
 }
 
 const PLATFORM_NAMES: Readonly<Partial<Record<string, string>>> = {
