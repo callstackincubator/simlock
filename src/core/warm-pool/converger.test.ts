@@ -2042,6 +2042,7 @@ describe("warm pool targets", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -2084,6 +2085,7 @@ describe("warm pool targets", () => {
             count: 1,
             mode: "full",
             model: "iPhone 17",
+            origin: "configured",
             platform: "ios",
             ready: 0,
             reason: "no-driver",
@@ -2647,7 +2649,7 @@ describe("warm pool learned kinds", () => {
       ]);
     });
 
-    it("emits warm-pool.target-missed for a merged entry by its configured count", async () => {
+    it("emits warm-pool.target-missed with origin configured and the configured count, and for no learned kind however short it is", async () => {
       const payloads = (rig: ReturnType<typeof harness>): unknown[] => {
         const seen: unknown[] = [];
         rig.eventBus.subscribe("warm-pool.target-missed", (envelope) =>
@@ -2674,6 +2676,7 @@ describe("warm pool learned kinds", () => {
           count: 1,
           mode: "full",
           model: "iPhone 15",
+          origin: "configured",
           osVersion: "26.0",
           platform: "ios",
           ready: 0,
