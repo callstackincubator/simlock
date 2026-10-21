@@ -46,7 +46,7 @@ flowchart LR
    skips the version gate, but still waits for the daemon to be ready, so
    a starting worker answers once its leases are loaded. It needs
    `admin`. The client sends it on a mismatched connection, as it does
-   `daemon.stop`. Its input (`version?`, `force?`, `cancel?`, `query?`)
+   `daemon.stop`. Its input (`version?`, `force?`, `query?`)
    and its answer (`started`, `upToDate`, `resolved`, `version`, `health`,
    `update`, `lastUpdateFailure`, `latestVersion`) never change shape. `query`
    returns that answer and starts nothing, so it is also how a follower
@@ -54,9 +54,8 @@ flowchart LR
    shows `incompatible`, and the gateway and its workers can be updated
    in any order.
 2. **Every surface reaches the same call.** `simlock update` on the
-   machine, `POST /v1/update` and `DELETE /v1/update` on the daemon's own
-   HTTP API, and, on a gateway, `worker.update` (`POST` and `DELETE
-   /v1/workers/{id}/update`, `simlock worker update <id>`), which sends
+   machine, `POST /v1/update` on the daemon's own HTTP API, and, on a
+   gateway, `worker.update` (`POST /v1/workers/{id}/update`, `simlock worker update <id>`), which sends
    `daemon.update` over that worker's uplink. A worker answers
    `worker.update` with `UNSUPPORTED_IN_WORKER_MODE`, as for the other
    fleet calls.
@@ -64,11 +63,9 @@ flowchart LR
    the call until the daemon exits, a worker is `updating`. It refuses
    new lease requests and cancels queued ones with `DAEMON_UPDATING`, on
    every surface. The gateway's routing skips an `updating` worker as it
-   skips a drained one, and a worker that answers a forwarded lease
-   request with `DAEMON_UPDATING` sends the request on to another
-   worker. The drain set is never touched, so an operator's
+   skips a drained one. The drain set is never touched, so an operator's
    own drain survives the update, and the state ends by itself: at the
-   restart, on cancel, or when the install fails.
+   restart, or when the install fails.
 4. **The state is never stored.** A daemon that stops or crashes while
    `updating` starts as usual. The operator asks again.
 5. **The version is resolved before the call answers.** Without
@@ -80,8 +77,9 @@ flowchart LR
 6. **A worker waits for its leases; a gateway does not.** A worker
    installs once its last lease has ended, or at once with `force`. A
    gateway's leases live on its workers and survive its restart, so it
-   installs at once. `force` on a waiting update stops the wait.
-   `cancel` ends the wait and is refused once the install has started.
+   installs at once. `force` on a waiting update stops the wait;
+   any other call during an update follows it. There is no cancel: a
+   daemon restart ends a wait.
 7. **A detached updater does the install and the restart.** The daemon
    spawns one detached process with the Node that runs it, given the
    target version, the role and `SIMLOCK_HOME`. It runs
@@ -122,7 +120,7 @@ flowchart LR
    never absent, when there is nothing to show, so a gateway's view
    clears them. Events:
    `daemon.update-started` (from, to, forced), `daemon.update-failed`
-   (stage, message), `daemon.update-cancelled`. Success is the existing
+   (stage, message). Success is the existing
    `daemon.started` with the new version.
 12. **A daily notice, never an automatic update.** Every daemon runs
     `npm view simlock version` at start and every 24 h after, unless
@@ -159,7 +157,6 @@ sequenceDiagram
 stateDiagram-v2
   [*] --> serving
   serving --> waiting: daemon.update
-  waiting --> serving: cancel
   waiting --> installing: last lease ended, or force
   installing --> serving: install failed
   installing --> restarting: installed
@@ -174,7 +171,7 @@ stateDiagram-v2
 - Simlock must be published to npm. The release workflow publishing it
   is a prerequisite outside this ADR.
 - A worker with long-lived, always-renewed leases may wait forever. The
-  operator sees the lease count and can force or cancel.
+  operator sees the lease count and can force it.
 - During `installing`, the files of the running daemon are replaced. A
   module it loads lazily after that would come from the new version, so
   the window is kept to the install alone.
