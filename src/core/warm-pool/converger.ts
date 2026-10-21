@@ -151,6 +151,10 @@ export class WarmPool {
       this.#unsubscribe.push(this.options.eventBus.subscribe(event, () => this.#trigger()));
     }
     this.#subscribeLearning();
+    this.#learned.closeOpen(
+      new Set(this.options.registry.snapshot.leases.map((lease) => lease.id)),
+      this.options.clock.now(),
+    );
     this.#armTick();
   }
 

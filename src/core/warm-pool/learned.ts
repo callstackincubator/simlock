@@ -95,7 +95,17 @@ export class LearnedKinds {
       .run(at, leaseId);
   }
 
-  closeOpen(_heldLeaseIds: ReadonlySet<string>, _at: number): void {}
+  /** why: a lease that ended while no daemon ran has no end event, so startup closes the rows the registry no longer holds. */
+  closeOpen(heldLeaseIds: ReadonlySet<string>, at: number): void {
+    this.#state.transaction(() => {
+      const database = this.#state.database;
+      for (const { lease_id: leaseId } of database
+        .prepare("SELECT lease_id FROM warm_kind_leases WHERE ended_at IS NULL")
+        .all()) {
+        if (!heldLeaseIds.has(String(leaseId))) this.ended(String(leaseId), at);
+      }
+    });
+  }
 
   forget(spec: VirtualSpec): void {
     this.#state.transaction(() => {
