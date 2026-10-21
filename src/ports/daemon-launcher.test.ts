@@ -5,7 +5,9 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
+import { FakeDaemonLauncher, NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
+import { launcherFor } from "./service-launcher.js";
+import { FakeServiceManager, type ServiceState } from "./service-manager.js";
 
 describe("NodeDaemonLauncher", () => {
   it("rejects asynchronous spawn failures", async () => {
@@ -238,5 +240,62 @@ describe("startErrorFrom", () => {
     expect(cases.map((c) => ({ label: c.label, error: startErrorFrom(c.exit, c.output) }))).toEqual(
       cases.map((c) => ({ label: c.label, error: c.error })),
     );
+  });
+});
+
+describe("launcherFor's fallback to spawning", () => {
+  const plist = "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist";
+  const name = "com.callstack.simlock.worker";
+
+  it("spawns the daemon as today, with a notice when the service is not loaded or broken", async () => {
+    const cases: readonly {
+      readonly label: string;
+      readonly state: ServiceState;
+      readonly notices: readonly string[];
+    }[] = [
+      { label: "no service", state: { state: "not-installed" }, notices: [] },
+      {
+        label: "not loaded",
+        state: { state: "not-loaded", path: plist },
+        notices: [`Service ${name} is not loaded; started the daemon without it.`],
+      },
+      {
+        label: "broken, one path gone",
+        state: { state: "broken", path: plist, missing: ["/old/node"] },
+        notices: [
+          `Service ${name} is broken (/old/node is gone); started the daemon without it. Run simlock daemon install again.`,
+        ],
+      },
+      {
+        label: "broken, both paths gone",
+        state: { state: "broken", path: plist, missing: ["/old/node", "/old/main.js"] },
+        notices: [
+          `Service ${name} is broken (/old/node, /old/main.js are gone); started the daemon without it. Run simlock daemon install again.`,
+        ],
+      },
+    ];
+    for (const testCase of cases) {
+      const serviceManager = new FakeServiceManager({ state: testCase.state });
+      const spawner = new FakeDaemonLauncher();
+      const notices: string[] = [];
+      const launcher = launcherFor({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: "/Users/me/.simlock",
+        mainPath: "/opt/simlock/dist/daemon/main.js",
+        nodePath: "/opt/node/bin/node",
+        home: "/Users/me",
+        env: {},
+        serviceManager,
+        notify: (line) => notices.push(line),
+        spawner,
+      });
+
+      await launcher.launch();
+
+      expect(spawner.launches, testCase.label).toBe(1);
+      expect(serviceManager.starts, testCase.label).toEqual([]);
+      expect(notices, testCase.label).toEqual(testCase.notices);
+    }
   });
 });
