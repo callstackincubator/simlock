@@ -173,6 +173,11 @@ export class WarmPool {
     this.#armTick();
   }
 
+  /** why: forgets every learned kind, as nuke starts the pool over; the next lease learns its kind again. */
+  forget(): void {
+    this.#learned.clear();
+  }
+
   /** why: the pool learns from committed facts on the bus, never from the lease path (ADR 0017 §3). */
   #subscribeLearning(): void {
     const { clock, eventBus, registry } = this.options;

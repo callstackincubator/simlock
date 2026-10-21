@@ -44,6 +44,8 @@ export interface NukeServiceOptions {
   readonly leases: LeaseMaintenance;
   readonly registry: NukeRegistryView;
   readonly logger?: Logger;
+  /** why: nuke starts the warm pool over, so the kinds it learned are not booted back. */
+  readonly warmPool: { forget(): void };
 }
 
 /**
