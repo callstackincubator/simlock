@@ -249,7 +249,14 @@ function forwardedBody(
   address: string,
   ceiling: number,
 ) {
-  const { device: _device, deviceKey: _deviceKey, target: _target, ...rest } = call.params;
+  const {
+    device: _device,
+    deviceKey: _deviceKey,
+    imageTag: _imageTag,
+    osVersion: _osVersion,
+    target: _target,
+    ...rest
+  } = call.params;
   return {
     ...call.body,
     params: {
