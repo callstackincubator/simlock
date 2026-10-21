@@ -1,6 +1,32 @@
 import type { Page } from "@playwright/test";
 
-import { expect, signIn, test } from "./fixtures.js";
+import { waitFor } from "../helpers/wait.js";
+import { expect, type RunningDaemon, signIn, startDaemon, test } from "./fixtures.js";
+
+const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
+const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
+
+async function readJson<T>(daemon: RunningDaemon, path: string): Promise<T> {
+  const response = await fetch(new URL(path, daemon.url), {
+    headers: { Authorization: `Bearer ${daemon.tokens.operator}` },
+  });
+  return (await response.json()) as T;
+}
+
+// why: a host with one device held by `nav-holder` and one request, `nav-waiter`, waiting behind it.
+async function startHostWithQueue(): Promise<RunningDaemon> {
+  const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
+  const args = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"];
+  const granted = await host.cli([...args, "--detach", "--agent-id", "nav-holder"]);
+  expect(granted.code, granted.stderr).toBe(0);
+  host.cliBackground([...args, "--agent-id", "nav-waiter"]);
+  await waitFor(
+    async () =>
+      (await readJson<{ requests: unknown[] }>(host, "/v1/lease-requests")).requests.length === 1,
+    { label: "the daemon lists the waiting request" },
+  );
+  return host;
+}
 
 async function openConsole(page: Page, token: string, path = "/"): Promise<void> {
   await page.goto(path);
@@ -32,5 +58,41 @@ test.describe("the search box", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(button).toBeFocused();
+  });
+});
+
+test.describe("the search results", () => {
+  test("a typed name and Enter go to its page, worker, device, lease or request", async ({
+    page,
+  }) => {
+    const host = await startHostWithQueue();
+    try {
+      const [worker] = (
+        await readJson<{ workers: { id: string; label?: string }[] }>(host, "/v1/workers")
+      ).workers as [{ id: string; label?: string }];
+      const [lease] = (
+        await readJson<{ leases: { id: string; deviceId: string }[] }>(host, "/v1/leases")
+      ).leases as [{ id: string; deviceId: string }];
+      const [request] = (await readJson<{ requests: { id: string }[] }>(host, "/v1/lease-requests"))
+        .requests as [{ id: string }];
+      await openConsole(page, host.tokens.operator, new URL("/", host.url).toString());
+      const box = page.getByRole("combobox", { name: "Search pages, items and actions" });
+      const goTo = async (typed: string, path: RegExp) => {
+        await page.keyboard.press("Control+k");
+        await box.fill(typed);
+        await page.keyboard.press("Enter");
+        await expect(page.getByRole("dialog", { name: "Search" })).toBeHidden();
+        await expect(page).toHaveURL(path);
+      };
+      const encoded = (id: string) => encodeURIComponent(id).replaceAll(".", "\\.");
+
+      await goTo("fleet", /\/fleet$/);
+      await goTo(worker.label ?? worker.id, new RegExp(`/fleet/${encoded(worker.id)}$`));
+      await goTo("iphone", new RegExp(`/fleet/${encoded(worker.id)}/${encoded(lease.deviceId)}$`));
+      await goTo("nav-holder", new RegExp(`/leases/${encoded(lease.id)}/?$`));
+      await goTo("nav-waiter", new RegExp(`/queue/${encoded(request.id)}$`));
+    } finally {
+      await host.dispose();
+    }
   });
 });
