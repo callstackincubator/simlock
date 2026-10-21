@@ -69,6 +69,25 @@ test.describe("the search box", () => {
   });
 });
 
+test.describe("the search list", () => {
+  test("the first result is highlighted, ↑ and ↓ move the highlight, and Enter runs the highlighted result", async ({
+    daemon,
+    page,
+  }) => {
+    await openConsole(page, daemon.tokens.operator);
+    await page.keyboard.press("Control+k");
+    const highlighted = page.getByRole("dialog", { name: "Search" }).locator("[data-highlighted]");
+    await expect(highlighted).toHaveText("Overview");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(highlighted).toHaveText("Fleet");
+    await page.keyboard.press("ArrowUp");
+    await expect(highlighted).toHaveText("Inbox");
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/inbox$/);
+  });
+});
+
 test.describe("the search results", () => {
   test("a typed name and Enter go to its page, worker, device, lease or request", async ({
     page,
