@@ -88,6 +88,18 @@ test.describe("the search list", () => {
   });
 });
 
+test.describe("the search list when nothing matches", () => {
+  test('no results shows "No results for <text>"', async ({ daemon, page }) => {
+    await openConsole(page, daemon.tokens.operator);
+    await page.keyboard.press("Control+k");
+    const dialog = page.getByRole("dialog", { name: "Search" });
+    await expect(dialog.getByText("No results for")).toBeHidden();
+    await dialog.getByRole("combobox").fill("zzz");
+    await expect(dialog.getByText("No results for zzz", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("option")).toHaveCount(0);
+  });
+});
+
 test.describe("the search results", () => {
   test("a typed name and Enter go to its page, worker, device, lease or request", async ({
     page,
