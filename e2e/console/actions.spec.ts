@@ -587,4 +587,39 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("on a single host no menu, drawer or Inbox row offers Drain, Undrain or Remove", async ({
+    page,
+  }) => {
+    const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(daemon, "solo-agent");
+      const workerAction = /^(Drain|Undrain|Remove)/;
+
+      await openPage(page, daemon, "/fleet", "Fleet");
+      const row = page.locator("main tbody tr");
+      await expect(row).toHaveCount(1);
+      await row.click({ button: "right" });
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await expect(row.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+      await row.getByRole("link").first().click();
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(page.getByRole("button", { name: workerAction })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+
+      await page.goto(new URL("/leases", daemon.url).toString());
+      await rowOf(page, "solo-agent").getByRole("link").first().click();
+      const drawer = page.getByRole("dialog", { name: "solo-agent" });
+      await drawer.getByRole("button", { name: "Actions for solo-agent" }).click();
+      await expect(page.getByRole("menuitem")).toHaveText(["Release lease"]);
+      await page.keyboard.press("Escape");
+
+      await page.goto(new URL("/inbox", daemon.url).toString());
+      await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+      await expect(page.getByRole("button", { name: workerAction })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+    } finally {
+      await daemon.dispose();
+    }
+  });
 });
