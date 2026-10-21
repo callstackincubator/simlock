@@ -362,87 +362,59 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
     return harness.driver.calls.filter((call) => call.operation === operation).length;
   }
 
-  it("refuses a device on a version being removed before the driver creates it, registers nothing and releases the reservation", async () => {
-    const harness = await withSimlockRuntime();
-    harness.driver.holdRemovals();
-    const removing = harness.components.remove(removal);
-    await vi.waitFor(() => expect(driverCalls(harness, "removeComponent")).toBe(1));
-    const reserved = reservation();
+  const tagged = { ...spec, imageTag: "google_apis_playstore" };
 
-    await expect(harness.provisioner.provision(spec, { reservation: reserved })).rejects.toThrow(
-      ComponentBeingRemovedError,
-    );
-
-    expect(driverCalls(harness, "provision")).toBe(0);
-    expect(harness.registry.snapshot.devices).toEqual([]);
-    expect(reserved.releaseCount()).toBe(1);
-    harness.driver.releaseRemovals();
-    await expect(removing).resolves.toMatchObject({ outcome: "removed" });
-  });
-
-  it("counts a device the driver is still creating as in use, so a removal started meanwhile is refused", async () => {
-    const harness = await withSimlockRuntime({ provision: 50 });
-    const provisioning = harness.provisioner.provision(spec, { reservation: reservation() });
-    await vi.waitFor(() => expect(driverCalls(harness, "provision")).toBe(1));
-    expect(harness.registry.snapshot.devices).toEqual([]);
-
-    await expect(harness.components.remove(removal)).rejects.toMatchObject({
-      devices: 1,
-      foreignDevices: 0,
-      name: "ComponentInUseError",
-    });
-    expect(driverCalls(harness, "removeComponent")).toBe(0);
-
-    harness.clock.advance(50);
-    await provisioning;
-    // Once registered the device is counted by the registry alone, not twice.
-    const listed = await harness.components.list("ios");
-    expect(listed.find((component) => component.version === "26.5")).toMatchObject({
-      devices: 1,
-    });
-  });
-
-  describe("for a spec with an image tag, which is still a device of its platform and version", () => {
-    const tagged = { ...spec, imageTag: "google_apis_playstore" };
-
-    it("refuses it while that version is being removed", async () => {
+  it.each([
+    ["a spec", spec],
+    ["a spec with an image tag", tagged],
+  ])(
+    "refuses %s on a version being removed before the driver creates it, registers nothing and releases the reservation",
+    async (_name, candidate) => {
       const harness = await withSimlockRuntime();
       harness.driver.holdRemovals();
       const removing = harness.components.remove(removal);
       await vi.waitFor(() => expect(driverCalls(harness, "removeComponent")).toBe(1));
+      const reserved = reservation();
 
       await expect(
-        harness.provisioner.provision(tagged, { reservation: reservation() }),
+        harness.provisioner.provision(candidate, { reservation: reserved }),
       ).rejects.toThrow(ComponentBeingRemovedError);
 
       expect(driverCalls(harness, "provision")).toBe(0);
+      expect(harness.registry.snapshot.devices).toEqual([]);
+      expect(reserved.releaseCount()).toBe(1);
       harness.driver.releaseRemovals();
       await expect(removing).resolves.toMatchObject({ outcome: "removed" });
-    });
+    },
+  );
 
-    it("counts it as in use while it is created and once it is registered", async () => {
+  it.each([
+    ["a spec", spec],
+    ["a spec with an image tag", tagged],
+  ])(
+    "counts a device of %s the driver is still creating as in use, so a removal started meanwhile is refused",
+    async (_name, candidate) => {
       const harness = await withSimlockRuntime({ provision: 50 });
-      const provisioning = harness.provisioner.provision(tagged, { reservation: reservation() });
+      const provisioning = harness.provisioner.provision(candidate, { reservation: reservation() });
       await vi.waitFor(() => expect(driverCalls(harness, "provision")).toBe(1));
+      expect(harness.registry.snapshot.devices).toEqual([]);
 
       await expect(harness.components.remove(removal)).rejects.toMatchObject({
         devices: 1,
+        foreignDevices: 0,
         name: "ComponentInUseError",
       });
+      expect(driverCalls(harness, "removeComponent")).toBe(0);
 
       harness.clock.advance(50);
       await provisioning;
-      expect(harness.registry.snapshot.devices.map((device) => device.spec)).toEqual([tagged]);
+      expect(harness.registry.snapshot.devices.map((device) => device.spec)).toEqual([candidate]);
       const listed = await harness.components.list("ios");
       expect(listed.find((component) => component.version === "26.5")).toMatchObject({
         devices: 1,
       });
-      await expect(harness.components.remove(removal)).rejects.toMatchObject({
-        devices: 1,
-        name: "ComponentInUseError",
-      });
-    });
-  });
+    },
+  );
 
   it("is the only code in src that asks a driver to provision or registers a device", () => {
     const sources = sourceFilesRecursive(srcDir);

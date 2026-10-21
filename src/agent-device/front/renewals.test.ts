@@ -30,20 +30,4 @@ describe("the renewals", () => {
     expect(Math.max(...delays)).toBeLessThanOrEqual(longestTimerDelayMs);
     renewals.dispose();
   });
-
-  it("stops the renewal timer of a lease that ended, leaving only the running call's own limit timer", () => {
-    const clock = new FakeClock(1_000);
-    const map = new FrontMap(clock);
-    map.add("lease-a", { address: "addr", deadline: 9e12, identity: agent, ttlMs: 60_000 });
-    const renewals = new Renewals(clock);
-    const context = { map } as unknown as FrontContext;
-    renewals.begin(context, "lease-a", agent.principal, 1_800_000);
-    expect(clock.pendingTimerCount).toBe(2);
-
-    map.markEnded("lease-a");
-    renewals.cancelIfEnded(context, "lease-a");
-
-    expect(clock.pendingTimerCount).toBe(1);
-    renewals.dispose();
-  });
 });

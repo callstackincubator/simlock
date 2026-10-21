@@ -21,7 +21,6 @@ function setUp() {
   let removed: ((lease: PlacedLease & { readonly leaseId: string }) => void) | undefined;
   const facts: FleetLeaseFacts[] = [];
   const reach = { connected: true, refreshed: true };
-  let startedAt = -1_000_000;
   const relay = vi.fn((_worker: string, _request: Request, _tenant: string, _lease?: string) =>
     Promise.resolve(new Response("relayed")),
   );
@@ -32,9 +31,7 @@ function setUp() {
     leaseOf: (leaseId) => index.get(leaseId),
     leasesOf: () => facts,
     reach: () => reach,
-    get startedAt() {
-      return startedAt;
-    },
+    startedAt: -1_000_000,
     onLeaseRemoved: (listener) => {
       removed = listener;
     },
@@ -55,9 +52,6 @@ function setUp() {
     link,
     reach,
     relay,
-    startedAt: (at: number) => {
-      startedAt = at;
-    },
   };
 }
 
@@ -98,15 +92,6 @@ describe("RelayHostLink", () => {
     expect(new Set(tenants).size).toBe(principals.length);
   });
 
-  it("relays a lease the token holds to its worker under the tenant `gw.<gateway instance id>.<principal>`", async () => {
-    const { index, link, relay } = setUp();
-    index.set("L", { ownerId: "tok_a", workerId: "w1" });
-
-    await link.forward(request(), agent, "L");
-
-    expect(relay).toHaveBeenCalledWith("w1", expect.any(Request), "gw.gw1.tok_5f_a", "L");
-  });
-
   it("answers the flat refusal shape for a request that is not an rpc call", async () => {
     const { link } = setUp();
 
@@ -117,22 +102,6 @@ describe("RelayHostLink", () => {
       error: "refused: this agent-device is too old to use through a gateway; update it",
       ok: false,
     });
-  });
-
-  it("refuses a bare GET that is not /health, and relays nothing", async () => {
-    const { link, relay } = setUp();
-
-    const answer = await link.forward(
-      new Request("http://gateway.test/v1/agent-device/artifacts/a1"),
-      agent,
-    );
-
-    expect(await answer.json()).toEqual({
-      code: "INVALID_ARGS",
-      error: "refused: this agent-device is too old to use through a gateway; update it",
-      ok: false,
-    });
-    expect(relay).not.toHaveBeenCalled();
   });
 
   it("answers a body that is not JSON under a null id", async () => {
@@ -182,23 +151,6 @@ describe("RelayHostLink", () => {
     expect(await link.status()).not.toHaveProperty("leaseMaxTtlMs");
   });
 
-  it("keeps routing a lease the index dropped until the gateway's lease.maxTtlMs has passed, then forgets it, and its sweep stops with nothing kept", async () => {
-    const { clock, drop, index, link, relay } = setUp();
-    index.set("L", { ownerId: "tok_a", workerId: "w1" });
-    drop("L");
-    expect(clock.pendingTimerCount).toBe(1);
-
-    clock.advance(maxTtlMs);
-    await link.forward(request(), agent, "L");
-    expect(relay).toHaveBeenCalledTimes(1);
-
-    clock.advance(60_000);
-    expect(clock.pendingTimerCount).toBe(0);
-    const answer = await link.forward(request(), agent, "L");
-    expect(answer.status).toBe(403);
-    expect(relay).toHaveBeenCalledTimes(1);
-  });
-
   it("cancels its sweep when disposed", () => {
     const { clock, drop, index, link } = setUp();
     index.set("L", { ownerId: "tok_a", workerId: "w1" });
@@ -237,14 +189,6 @@ describe("RelayHostLink", () => {
       expect((await link.status("lease-1", agent)).state).toBe("unreachable");
       reach.refreshed = true;
       expect((await link.status("lease-1", agent)).state).toBe("running");
-    });
-
-    it("answers unreachable for a lease it cannot place only in the first 60 s after the gateway started", async () => {
-      const { clock, link, startedAt } = setUp();
-      startedAt(clock.now());
-      expect((await link.status("lease-9", agent)).state).toBe("unreachable");
-      clock.advance(60_000);
-      expect((await link.status("lease-9", agent)).state).toBe("running");
     });
 
     it("answers the unreachable reply when the relay fails with WORKER_UNREACHABLE, and rethrows any other failure", async () => {

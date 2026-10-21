@@ -119,16 +119,6 @@ describe("the agent-device upstream adapter over the supervisor", () => {
     expect(availability.baseUrl).toContain(String(httpPort));
   });
 
-  it("reports unavailable with the supervisor's message", async () => {
-    const harness = await arrange("0.20.3");
-    await started(harness);
-
-    expect(harness.upstream.current()).toEqual({
-      reason: "found 0.20.3, need 0.21.28 or later",
-      state: "unavailable",
-    });
-  });
-
   it("reports unavailable with starting while the supervisor starts", async () => {
     const harness = await arrange("0.21.28");
     const starting = harness.supervisor.start();

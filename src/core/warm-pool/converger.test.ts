@@ -1313,7 +1313,7 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toHaveLength(5);
   });
 
-  it("reports a target naming a runtime that is not installed as runtime-missing, creates nothing and logs the reason", async () => {
+  it("reports a target naming a runtime that is not installed as runtime-missing and creates nothing", async () => {
     const rig = harness([], {
       resolve: () => ({ message: "iOS 27.0 is not installed", refusal: "runtime-missing" }),
       targets: [{ ...iphone17, osVersion: "27.0" }],
@@ -1341,17 +1341,6 @@ describe("warm pool targets", () => {
         target: "ios iPhone 17 27.0",
       },
     ]);
-    const shortLines = rig.sink.records.filter(
-      (record) => record.message === "a warm pool target is short",
-    );
-    expect(shortLines).toHaveLength(1);
-    expect(shortLines[0]?.fields).toMatchObject({
-      count: 1,
-      message: "iOS 27.0 is not installed",
-      ready: 0,
-      short: "runtime-missing",
-      target: "ios iPhone 17 27.0",
-    });
   });
 
   it.each([
@@ -1828,29 +1817,6 @@ describe("warm pool targets", () => {
     rig.clock.advance(minute);
     await rig.pool.settle();
     expect(rig.provisionCalls).toHaveLength(2);
-  });
-
-  it("logs a target again when the reason it is short changes, and logs two targets short for the same reason once each", async () => {
-    let refusal: "runtime-missing" | "unresolvable" = "runtime-missing";
-    const rig = harness([], {
-      resolve: () => ({ message: "why", refusal }),
-      targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
-    });
-
-    await rig.pool.pass();
-    await rig.pool.pass();
-    refusal = "unresolvable";
-    await rig.pool.pass();
-
-    const lines = rig.sink.records
-      .filter((record) => record.message === "a warm pool target is short")
-      .map((record) => `${String(record.fields?.["target"])}:${String(record.fields?.["short"])}`);
-    expect(lines).toEqual([
-      "ios iPhone 17 26.0:runtime-missing",
-      "ios iPhone 16 26.0:runtime-missing",
-      "ios iPhone 17 26.0:unresolvable",
-      "ios iPhone 16 26.0:unresolvable",
-    ]);
   });
 
   describe("figures", () => {

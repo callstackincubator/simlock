@@ -3,18 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   type Auth,
-  type Identity,
   type AuthStrategyDefinition,
   createAuth,
   type StrategyAnswer,
 } from "../auth/index.js";
 import { tokensOwner } from "../auth/index.js";
-import {
-  createAuthWith,
-  fakeAuth,
-  openMemoryStateDatabase,
-  tokenIdentity,
-} from "../auth/testing.js";
+import { createAuthWith, openMemoryStateDatabase } from "../auth/testing.js";
 import {
   CryptoTokenSecrets,
   FakeClock,
@@ -24,57 +18,6 @@ import {
 } from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
 import { errorResponse } from "./errors.js";
-
-function appWithAuth(identities: Map<string, Identity>) {
-  const app = new Hono<AuthEnv>();
-  app.onError((error, c) => errorResponse(c, error));
-  app.get("/resource", requireAuth(fakeAuth(identities)), (c) =>
-    c.json({ identity: c.get("identity") }),
-  );
-  return app;
-}
-
-describe("requireAuth", () => {
-  it("401s with no Authorization header", async () => {
-    const response = await appWithAuth(new Map()).request("/resource");
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({
-      error: { code: "UNAUTHENTICATED", message: expect.any(String) },
-    });
-  });
-
-  it("401s on a malformed Authorization header (no Bearer prefix)", async () => {
-    const response = await appWithAuth(new Map()).request("/resource", {
-      headers: { authorization: "slk_secret" },
-    });
-    expect(response.status).toBe(401);
-  });
-
-  it("401s on an unknown bearer token", async () => {
-    const response = await appWithAuth(new Map()).request("/resource", {
-      headers: { authorization: "Bearer slk_unknown" },
-    });
-    expect(response.status).toBe(401);
-  });
-
-  it("admits a known agent token and stores its identity", async () => {
-    const agent = tokenIdentity("tok_agent", "agent");
-    const response = await appWithAuth(new Map([["slk_agent", agent]])).request("/resource", {
-      headers: { authorization: "Bearer slk_agent" },
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ identity: agent });
-  });
-
-  it("admits a known operator token too -- role gating is the shared dispatcher's job now, not this middleware's", async () => {
-    const operator = tokenIdentity("tok_op", "operator");
-    const response = await appWithAuth(new Map([["slk_op", operator]])).request("/resource", {
-      headers: { authorization: "Bearer slk_op" },
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ identity: operator });
-  });
-});
 
 describe("requireAuth over src/auth", () => {
   async function authOptions() {

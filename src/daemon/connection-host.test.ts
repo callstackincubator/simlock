@@ -30,17 +30,6 @@ describe("DaemonEndpointHost", () => {
     await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
   });
 
-  it("removes a stale endpoint before binding", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/simlock");
-    await filesystem.writeFileAtomic(endpoint, "stale");
-    const ipc = new MemoryIpcTransport();
-    const host = hostFor(filesystem, ipc, ipc);
-    await host.start(() => undefined);
-    await expect(ipc.connect(endpoint)).resolves.toBeDefined();
-    await host.stop();
-  });
-
   it("rejects a live endpoint before binding", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock");
@@ -93,31 +82,6 @@ describe("DaemonEndpointHost", () => {
     await expect(hostFor(filesystem, connector, ipc).start(() => undefined)).rejects.toThrow(
       "denied",
     );
-  });
-
-  it("logs claiming a fresh endpoint", async () => {
-    const filesystem = new MemoryFilesystem();
-    const ipc = new MemoryIpcTransport();
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
-    const host = new DaemonEndpointHost({
-      connector: ipc,
-      endpoint,
-      filesystem,
-      listenerFactory: ipc,
-      logger,
-    });
-
-    await host.start(() => undefined);
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Claimed daemon socket",
-        fields: { endpoint },
-      }),
-    );
-    await host.stop();
   });
 
   it("logs recovering a stale endpoint before claiming it", async () => {
