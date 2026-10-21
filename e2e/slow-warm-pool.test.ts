@@ -310,6 +310,32 @@ async function holdsState(
   });
 }
 
+async function untilSettled(env: TestEnv, driverDeviceId: string): Promise<void> {
+  let last: Row[] = [];
+  await waitFor(
+    async () => {
+      last = await devices(env);
+      const row = last.find((entry) => entry.driverDeviceId === driverDeviceId);
+      return row !== undefined && (row.state === "ready" || row.state === "shutdown");
+    },
+    {
+      interval: 1000,
+      label: () =>
+        `${driverDeviceId} is reclaimed; last saw ${JSON.stringify(last.map((r) => [r.driverDeviceId, r.state]))}`,
+      timeout: READY_TIMEOUT,
+    },
+  );
+}
+
+function expectEachPlatformHasReady(rows: readonly Row[]): void {
+  for (const platform of ["ios", "android"] as const) {
+    expect(
+      rows.filter((row) => row.spec.platform === platform).map((row) => row.state),
+      `${platform} devices`,
+    ).toContain("ready");
+  }
+}
+
 /** Per platform, exactly one device, and it is ready. */
 function expectOneReadyPerPlatform(rows: readonly Row[]): void {
   for (const platform of ["ios", "android"] as const) {
@@ -546,7 +572,7 @@ describe(
     );
 
     it(
-      "grants the first lease of each targeted model warm with no booting progress, and after release each device is ready again",
+      "grants the first lease of each targeted model warm with no booting progress, and after release each platform still has a ready device",
       { timeout: WARM_ROUND_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
@@ -574,10 +600,13 @@ describe(
           await expectGrantedWarm(env, granted, readyEvents);
 
           for (const grant of granted) await release(env, grant);
-          // iOS is shut down, erased and booted again by the pool; Android restores its snapshot.
+          // why: the pool booted a second device of each kind while the first was leased (a target counts
+          // ready devices only), so once the released one is reclaimed the kind already has its
+          // ready device: the pool owes the released one nothing, and it may stay down.
           for (const grant of granted) {
-            await untilState(env, grant.device.driverDeviceId, "ready");
+            await untilSettled(env, grant.device.driverDeviceId);
           }
+          expectEachPlatformHasReady(await devices(env));
           // A failed snapshot load falls back to a wipe and the pool boots the device back to ready,
           // so the state alone cannot tell the two apart: the reclaim's own strategy does.
           const android = granted.find((grant) => grant.device.spec.platform === "android");
