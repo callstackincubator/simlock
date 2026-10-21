@@ -197,7 +197,7 @@ export const deviceRecordSchema = z
     driverDeviceId: z.string(),
     spec: deviceSpecSchema,
     state: deviceStateSchema,
-    driverData: z.unknown(),
+    driverData: z.unknown().optional(),
     createdAt: z.number(),
     lastLeaseEndedAt: z.number().optional(),
     foreignStateDetectedAt: z.number().optional(),
@@ -814,7 +814,7 @@ export const cleanupRuleSummarySchema = z.object({ name: z.string() });
  * purpose, exactly as the core treats it. */
 const driverDeviceSchema = z.object({
   deviceId: z.string(),
-  driverData: z.unknown(),
+  driverData: z.unknown().optional(),
   address: z.string(),
   mode: deviceModeSchema.optional(),
 });
@@ -926,7 +926,7 @@ export const eventEnvelopeSchema = z.object({
   /** A claim, bounded to the range a JavaScript date holds so the console can render it. */
   timestamp: z.number().min(-MAX_DATE_MS).max(MAX_DATE_MS),
   event: z.string(),
-  payload: z.unknown(),
+  payload: z.unknown().optional(),
   module: z.string(),
 });
 
