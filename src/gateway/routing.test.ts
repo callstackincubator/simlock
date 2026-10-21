@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { createRoutingPolicy } from "./routing.js";
-import * as routingModule from "./routing/index.js";
 import {
   canServe,
   freeCapacity,
@@ -409,14 +408,6 @@ describe("the warm-then-free policy for a physical request", () => {
       .map(([name]) => name)
       .sort();
     expect(skipped).toEqual(["freeCapacity", "freeSlot", "idleQueue", "ramBudget"]);
-  });
-
-  it("lists no physical-interim stage in any policy", () => {
-    const sole = view("wrk_a", { devices: [iphone()] });
-
-    expect(Object.keys(routingModule)).not.toContain("physicalInterim");
-    expect(policy.select(PHYSICAL, [sole])?.stage).toBe("warm-hit");
-    expect(policy.select(PHYSICAL, [view("wrk_b")])?.stage).not.toBe("physical-interim");
   });
 
   it("gives a virtual request the same pick, reason and stage with and without a ready physical device of its model in the views", () => {

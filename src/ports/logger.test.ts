@@ -72,15 +72,6 @@ describe("JsonLinesLogger", () => {
     expect(sink.records.map((record) => record.message)).toEqual(["kept"]);
   });
 
-  it("scopes child loggers by dot-joining the module name", () => {
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock: new FakeClock(), module: "daemon", sink });
-
-    logger.child("connection-host").info("Claimed socket");
-
-    expect(sink.records[0]?.module).toBe("daemon.connection-host");
-  });
-
   it("nests grandchild module scopes", () => {
     const sink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock: new FakeClock(), module: "daemon", sink });

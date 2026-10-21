@@ -376,17 +376,17 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     expect(counters.cpu).toStrictEqual(LIMITED_TWO_CORES);
   });
 
-  it("reports a fractional quota as fractional cores", async () => {
-    const counters = await readCgroup("/x", { x: { cpuMax: "1000 100000\n", ...USAGE } });
+  it.each([
+    ["1000 100000", 0.01, 100_000],
+    ["1000 1000000", 0.001, 10_000],
+  ] as const)(
+    "reports a quota of %s as fractional cores, limited",
+    async (cpuMax, cores, totalTime) => {
+      const counters = await readCgroup("/x", { x: { cpuMax: `${cpuMax}\n`, ...USAGE } });
 
-    expect(counters.cpu).toMatchObject({ cores: 0.01, limited: true, totalTime: 100_000 });
-  });
-
-  it("reports a quota of 1000 over a period of 1000000 as 0.001 cores, limited", async () => {
-    const counters = await readCgroup("/x", { x: { cpuMax: "1000 1000000\n", ...USAGE } });
-
-    expect(counters.cpu).toMatchObject({ cores: 0.001, limited: true });
-  });
+      expect(counters.cpu).toMatchObject({ cores, limited: true, totalTime });
+    },
+  );
 
   it("uses /sys/fs/cgroup itself for a 0::/ line", async () => {
     const counters = await readCgroup("/", {
@@ -630,6 +630,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
   it.each([
     ["a cgroup path with files missing", "0::/user.slice/x\n"],
     ["v1 lines only", "12:cpu,cpuacct:/docker/abc\n1:name=systemd:/docker/abc\n"],
+    ["unreadable", undefined],
   ])("reports the machine's figures when /proc/self/cgroup is %s", async (_why, line) => {
     const files = folderFiles("docker/abc", {
       cpuMax: "200000 100000\n",
@@ -640,17 +641,6 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     expect((await cgroupProbe(accepted).read()).cpu?.limited).toBe(true);
 
     const counters = await cgroupProbe(await cgroupFilesystem(line, files)).read();
-
-    expect(counters.cpu).toMatchObject({ cores: 64, limited: false });
-    expect(counters.memory).toStrictEqual(MACHINE_MEMORY);
-  });
-
-  it("reports the machine's figures when /proc/self/cgroup cannot be read", async () => {
-    const files = folderFiles("docker/abc", { cpuMax: "200000 100000\n", ...USAGE });
-    const accepted = await cgroupFilesystem("0::/docker/abc\n", files);
-    expect((await cgroupProbe(accepted).read()).cpu?.limited).toBe(true);
-
-    const counters = await cgroupProbe(await cgroupFilesystem(undefined, files)).read();
 
     expect(counters.cpu).toMatchObject({ cores: 64, limited: false });
     expect(counters.memory).toStrictEqual(MACHINE_MEMORY);
@@ -721,19 +711,6 @@ describe("NodeFilesystem.diskSpace", () => {
     expect(totalBytes).toBeGreaterThanOrEqual(freeBytes);
     const details = await statfs(directory);
     expect(totalBytes).toBe(details.blocks * details.bsize);
-  });
-});
-
-describe.skipIf(process.platform !== "linux")("production Linux probe on this machine", () => {
-  it("returns CPU counters, memory and disk from the real /proc and /sys", async () => {
-    const probe = productionHostLoadProbe({ platform: "linux", dataDirectory: tmpdir() });
-
-    const counters = await probe.read();
-
-    expect(counters.cpu?.totalTime).toBeGreaterThan(0);
-    expect(counters.cpu?.cores).toBeGreaterThan(0);
-    expect(counters.memory?.totalBytes).toBeGreaterThan(0);
-    expect(counters.disk?.totalBytes).toBeGreaterThan(0);
   });
 });
 

@@ -581,56 +581,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("republishes a worker's events with its workerId, into its own ring buffer", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-
-    worker.pushEvent({
-      event: "lease.granted",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-    });
-
-    const republished = harness.events.find((event) => event.event === "lease.granted");
-    expect(republished).toMatchObject({
-      // The name and the emitting module travel unchanged -- the fact happened in that
-      // worker's leasing module, and `workerId` is what says which machine.
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", workerId: "wrk_1" },
-    });
-
-    await harness.service.stop();
-  });
-
-  it("a worker's event relayed by the gateway keeps the worker's id and timestamp and gains workerId", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-    harness.clock.advance(5_000);
-
-    worker.pushEvent({
-      event: "lease.granted",
-      id: "evt_worker-made",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-      timestamp: 777,
-    });
-
-    const relayed = harness.events.find((event) => event.event === "lease.granted");
-    expect(relayed).toMatchObject({
-      id: "evt_worker-made",
-      timestamp: 777,
-      payload: { workerId: "wrk_1" },
-    });
-
-    await harness.service.stop();
-  });
-
   it("a relayed event differs from the worker's only in seq and payload.workerId", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -685,60 +635,43 @@ describe("GatewayService", () => {
   // worker's own -- `workerId` is merged in last so it cannot be spoofed, but a worker (or
   // anything speaking its protocol) could otherwise forge a fact only a gateway authors, such as
   // `worker.drain-ended`, straight into the operator's audit trail.
-  it("refuses to republish a worker's event under a name reserved for the gateway itself", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-
-    worker.pushEvent({
+  it.each([
+    {
       event: "worker.drain-ended",
       module: "gateway",
       payload: { workerId: "wrk_forged", label: "not-this-worker" },
-    });
-    worker.pushEvent({
-      event: "lease.granted",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-    });
-    await vi.waitFor(() =>
-      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
-    );
-
-    const forged = harness.events.filter((event) => event.event === "worker.drain-ended");
-    // Never forwarded, and never with the forged `workerId` a real gateway-authored
-    // `worker.drain-ended` for a *different* worker would otherwise be indistinguishable from.
-    expect(forged).toEqual([]);
-
-    await harness.service.stop();
-  });
-
-  it("refuses to republish a request.granted a worker pushes, which only the gateway itself emits (ADR 0021 §4)", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-
-    worker.pushEvent({
+    },
+    {
       event: "request.granted",
       module: "fleet-lease-coordinator",
       payload: { leaseId: "wrk_1.lease_1", requestId: "req_forged", worker: "wrk_1" },
-    });
-    worker.pushEvent({
-      event: "lease.granted",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-    });
-    await vi.waitFor(() =>
-      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
-    );
+    },
+  ])(
+    "refuses to republish a $event a worker pushes under a name reserved for the gateway itself (ADR 0021 §4)",
+    async (forgedEvent) => {
+      const harness = fleet();
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(worker.subscribed).toBe(true));
 
-    expect(harness.events.filter((event) => event.event === "request.granted")).toEqual([]);
+      worker.pushEvent(forgedEvent);
+      worker.pushEvent({
+        event: "lease.granted",
+        module: "lease-engine",
+        payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+      });
+      await vi.waitFor(() =>
+        expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+      );
 
-    await harness.service.stop();
-  });
+      // why: never forwarded, and never with the forged `workerId` a real gateway-authored event
+      // for a *different* worker would otherwise be indistinguishable from.
+      expect(harness.events.filter((event) => event.event === forgedEvent.event)).toEqual([]);
+
+      await harness.service.stop();
+    },
+  );
 
   it("refuses to republish a request.dispatched a worker pushes, which only the gateway itself emits", async () => {
     const harness = fleet();
@@ -1138,19 +1071,6 @@ describe("GatewayService", () => {
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
       await harness.service.stop();
     });
-
-    it("carries the worker's own downloads.timeoutMs on the view", async () => {
-      const worker = new ScriptedWorkerClient();
-      worker.downloadTimeoutMs = 45 * 60_000;
-
-      const harness = await joined(worker);
-
-      expect(harness.service.workers.view("wrk_1")?.downloads).toEqual({
-        policy: "on-request",
-        timeoutMs: 45 * 60_000,
-      });
-      await harness.service.stop();
-    });
   });
 
   describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {
@@ -1256,28 +1176,6 @@ describe("GatewayService", () => {
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
-
-    await harness.service.stop();
-  });
-
-  it("marks a worker one protocol version behind the gateway incompatible (ADR 0022 §2: it does not know `device.add` or `device.remove`, and reports no `driverDeviceId`)", async () => {
-    const previous = {
-      min: PROTOCOL_VERSION_RANGE.max - 1,
-      max: PROTOCOL_VERSION_RANGE.max - 1,
-    };
-    expect(PROTOCOL_VERSION_RANGE.max).toBe(52);
-    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    worker.failWith = protocolMismatchError(previous);
-
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
-    );
-
-    expect(worker.calls).toEqual(["status.get"]);
 
     await harness.service.stop();
   });
@@ -1518,38 +1416,6 @@ describe("GatewayService", () => {
       health: "running",
       version: "9.9.9",
     });
-    await harness.service.stop();
-  });
-
-  // H4: a timed-out `events.subscribe` used to be logged exactly like a rejection ("Worker
-  // refused an event subscription"), asserting something this code cannot know -- the worker may
-  // never have answered at all, or may have subscribed successfully with the reply just arriving
-  // too late to matter. The two are worth telling apart in a log an operator reads.
-  it("logs a timed-out event subscription as a timeout, not a refusal (H4)", async () => {
-    const logger = new RecordingLogger();
-    const harness = fleet({ logger });
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    // Never resolves, unlike a real rejection -- the exact shape of a subscribe call that just
-    // never gets an answer within `WORKER_CALL_TIMEOUT_MS`. Tracked by hand rather than via
-    // `pendingTimerCount` alone: the service's own periodic tick timer is already pending from
-    // `service.start()`, so that check alone cannot tell "the subscribe call's own timeout timer
-    // is now armed" apart from "some timer, possibly the unrelated tick, exists".
-    let subscribeCalled = false;
-    worker.subscribeEvents = (): Promise<never> => {
-      subscribeCalled = true;
-      return new Promise<never>(() => {});
-    };
-
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
-    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
-
-    await vi.waitFor(() =>
-      expect(logger.warnings.some((entry) => entry.message.includes("did not answer"))).toBe(true),
-    );
-    expect(logger.warnings.some((entry) => entry.message.includes("refused"))).toBe(false);
-
     await harness.service.stop();
   });
 

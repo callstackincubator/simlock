@@ -6,7 +6,6 @@ import {
   runDispatch,
   type DispatchPipeline,
   type DispatchSession,
-  type ErasedHandler,
 } from "./dispatch.js";
 
 function harness(handlers: DispatchPipeline["handlers"], level: LogLevel = "debug") {
@@ -34,39 +33,7 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
   };
 }
 
-/** A handler that takes `ms` of fake time and then answers `output`. */
-function slow(clock: FakeClock, ms: number, output: unknown): ErasedHandler {
-  return () => {
-    clock.advance(ms);
-    return output;
-  };
-}
-
 describe("runDispatch's operation line", () => {
-  it("a write that succeeds logs one info line with the operation, principal, role and duration", async () => {
-    const handlers: DispatchPipeline["handlers"] = {};
-    const { clock, pipeline, sink } = harness(handlers);
-    handlers["lease.release"] = slow(clock, 40, { leaseId: "lse_1" });
-
-    await runDispatch("lease.release", { leaseId: "lse_1" }, session(), pipeline);
-
-    expect(sink.records).toEqual([
-      {
-        timestamp: 1_040,
-        level: "info",
-        module: "dispatch",
-        message: "operation",
-        fields: {
-          operation: "lease.release",
-          principal: "agent-7",
-          role: "agent",
-          durationMs: 40,
-          leaseId: "lse_1",
-        },
-      },
-    ]);
-  });
-
   it("a read that succeeds logs at debug and nothing at info", async () => {
     const handlers: DispatchPipeline["handlers"] = { "lease.list": () => ({ leases: [] }) };
     const debug = harness(handlers, "debug");

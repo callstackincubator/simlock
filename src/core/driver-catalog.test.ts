@@ -384,36 +384,41 @@ describe("DriverCatalog", () => {
       ).resolves.toEqual({ phone: "iPhone 17" });
     });
 
-    it("skips a configured name of another class and falls to the next name that counts", async () => {
-      await expect(
-        defaultsOf({
+    it.each([
+      {
+        case: "a configured name of another class",
+        options: {
           classes: { "iPad (A16)": "tablet", "iPhone 17": "phone", "iPhone 16": "phone" },
           models: ["iPad (A16)", "iPhone 17", "iPhone 16"],
-          // The merged list: the configured iPad first, the built-in phones after it.
           preferences: ["iPad (A16)", "iPhone 17", "iPhone 16"],
-        }),
-      ).resolves.toEqual({ phone: "iPhone 17" });
-    });
-
-    it("skips a name whose model has no class", async () => {
-      await expect(
-        defaultsOf({
+        },
+        expected: { phone: "iPhone 17" },
+      },
+      {
+        case: "a name whose model has no class",
+        options: {
           classes: { "iPhone 16": "phone" },
           models: ["Mystery", "iPhone 16"],
           preferences: ["Mystery", "iPhone 16"],
-        }),
-      ).resolves.toEqual({ phone: "iPhone 16" });
-    });
-
-    it("skips a name with no paired runtime for a later one that pairs", async () => {
-      await expect(
-        defaultsOf({
+        },
+        expected: { phone: "iPhone 16" },
+      },
+      {
+        case: "a name with no paired runtime",
+        options: {
           classes: { "iPhone 16": "phone", "iPhone 17": "phone" },
           modelRuntimes: { "iPhone 16": ["18.4"], "iPhone 17": [] },
           models: ["iPhone 17", "iPhone 16"],
           preferences: ["iPhone 17", "iPhone 16"],
-        }),
-      ).resolves.toEqual({ phone: "iPhone 16" });
+        },
+        expected: { phone: "iPhone 16" },
+      },
+    ] satisfies readonly {
+      readonly case: string;
+      readonly options: Parameters<typeof defaultsOf>[0];
+      readonly expected: Readonly<Record<string, string>>;
+    }[])("skips $case and falls to the next name that counts", async ({ options, expected }) => {
+      await expect(defaultsOf(options)).resolves.toEqual(expected);
     });
 
     it("shows the first name of the class when none of them pairs with a runtime", async () => {

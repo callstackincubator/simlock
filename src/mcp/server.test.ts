@@ -146,40 +146,17 @@ describe("MCP server (smoke)", () => {
     }
   });
 
-  it("the lease tool's input schema in tools/list has no fleetRequestId", async () => {
+  it("the lease tool's input schema in tools/list lists noWait and physical, and has no fleetRequestId and no requires", async () => {
     const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
     try {
       const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
       const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      const properties = Object.keys(leaseTool?.inputSchema.properties ?? {});
 
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).not.toContain("fleetRequestId");
-    } finally {
-      await close();
-    }
-  });
-
-  it("the lease tool's input schema in tools/list has no requires", async () => {
-    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
-    try {
-      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
-      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
-
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).not.toContain("requires");
-    } finally {
-      await close();
-    }
-  });
-
-  it("the lease tool's input schema in tools/list lists physical", async () => {
-    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
-    try {
-      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
-      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
-
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("physical");
+      expect(properties).toContain("noWait");
+      expect(properties).not.toContain("fleetRequestId");
+      expect(properties).not.toContain("requires");
+      expect(properties).toContain("physical");
     } finally {
       await close();
     }

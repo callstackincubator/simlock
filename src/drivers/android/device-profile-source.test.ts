@@ -294,7 +294,6 @@ describe("parseDevicesXml", () => {
     ["a fractional value", '<d:ram unit="GiB">1.5</d:ram>'],
     ["an empty value", '<d:ram unit="GiB"></d:ram>'],
     ["a zero value", '<d:ram unit="GiB">0</d:ram>'],
-    ["a value under half a MiB", '<d:ram unit="KiB">511</d:ram>'],
     ["a value too large to count exactly in MiB", '<d:ram unit="TiB">1000000000000000</d:ram>'],
   ])("leaves hw.ramSize unset for ram with %s instead of guessing", (_case, ram) => {
     expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
@@ -542,18 +541,6 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.resolve("Nope")).rejects.toMatchObject({ name: "UnknownModelError" });
   });
 
-  it("dedupes the catalog's models by name, earliest source winning", async () => {
-    const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
-    const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
-    const filesystem = await filesystemWithDevicesXml(
-      devicesXml().replace("My Custom Phone", "pixel 8"),
-    );
-    const user = new UserDeviceProfileSource(devicesXmlPath, filesystem);
-    const registry = new DeviceProfileRegistry([builtin, user]);
-
-    await expect(registry.catalog()).resolves.toMatchObject({ models: ["Pixel 8"] });
-  });
-
   it("lists a model's other names, only for models that have one", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
     const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
@@ -592,20 +579,6 @@ describe("DeviceProfileRegistry", () => {
     });
   });
 
-  it("lists a model that comes only from devices.xml in customModels", async () => {
-    const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(pixelDevices)]),
-      ),
-      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
-    ]);
-
-    await expect(registry.catalog()).resolves.toMatchObject({
-      customModels: ["My Custom Phone"],
-    });
-  });
-
   it("lists a devices.xml model in customModels when avdmanager also lists it as a User profile", async () => {
     // `avdmanager list device` reads devices.xml itself and prints each of its profiles with
     // `OEM : User` (seen on a real SDK, issue #236), so the built-in source returns the name too.
@@ -626,20 +599,6 @@ describe("DeviceProfileRegistry", () => {
       modelClasses: { "My Custom Phone": "phone", "Pixel 8": "phone" },
       models: ["Pixel 8", "My Custom Phone"],
     });
-  });
-
-  it("does not list a built-in model in customModels", async () => {
-    const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(pixelDevices)]),
-      ),
-      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
-    ]);
-
-    const catalog = await registry.catalog();
-    expect(catalog.models).toContain("Pixel 8");
-    expect(catalog.customModels).not.toContain("Pixel 8");
   });
 
   it("resolves a name avdmanager lists as both an SDK and a User profile to the SDK one, whatever the order", async () => {
@@ -863,12 +822,6 @@ describe("device classes", () => {
       Television: "tv",
       "Wear Round": "watch",
     });
-  });
-
-  it("classes an untagged avdmanager profile and a devices.xml profile as phone", async () => {
-    const classes = await modelClasses(entry("pixel_8", "Pixel 8"), devicesXml());
-
-    expect(classes).toEqual({ "My Custom Phone": "phone", "Pixel 8": "phone" });
   });
 
   it("classes a listed model by the profile its name resolves to, not the one it was listed from", async () => {

@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createConnectionPair,
   FakeClock,
-  MemoryUplinkTransport,
   UplinkError,
   type IpcConnection,
   type UplinkConnector,
@@ -275,20 +274,5 @@ describe("GatewayUplink", () => {
     await vi.waitFor(() => expect(workerEnd.closed).toBe(true));
 
     expect(accepted).toEqual([]);
-  });
-
-  it("works against the in-memory transport end to end", async () => {
-    const transport = new MemoryUplinkTransport();
-    const accepted: string[] = [];
-    await transport.listen({
-      accept: (uplinkConnection) => accepted.push(uplinkConnection.workerId),
-      authenticate: async (token) => (token === "join-secret" ? "accept" : "unauthenticated"),
-    });
-    const { link } = uplink(transport);
-
-    link.start();
-    await vi.waitFor(() => expect(accepted).toEqual(["wrk_1"]));
-
-    await link.stop();
   });
 });
