@@ -25,6 +25,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  serviceDefinition,
   type Filesystem,
   type IdGenerator,
   type IpcConnection,
@@ -8512,5 +8513,110 @@ describe("CLI: daemon install (#830)", () => {
         path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
       },
     });
+  });
+
+  it("daemon install stops a running daemon first and waits for its socket to go quiet", async () => {
+    async function installWith(options: {
+      readonly argv: readonly string[];
+      readonly running: boolean;
+      readonly stillAnswering: number;
+    }): Promise<{
+      readonly exitCode: number;
+      readonly output: ReturnType<typeof outputCapture>;
+      readonly stops: number;
+      readonly serviceManager: FakeServiceManager;
+      readonly clock: FakeClock;
+    }> {
+      const root = join(home, ".simlock");
+      const clock = new FakeClock(0);
+      const serviceManager = new FakeServiceManager();
+      let stops = 0;
+      let polls = 0;
+      const connectExistingAdmin: CliEnvironment["connectExistingAdmin"] = async () => {
+        if (!options.running)
+          throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
+        if (stops > 0) {
+          polls += 1;
+          if (polls > options.stillAnswering) {
+            throw new IpcError("connection-refused", "Connection refused", undefined);
+          }
+        }
+        return fakeClient({
+          stopDaemon: async () => {
+            stops += 1;
+            return { stopping: true };
+          },
+        });
+      };
+      const output = outputCapture();
+      const environment = output.environmentWith({
+        clock,
+        daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+        connectExistingAdmin,
+        sleep: async (milliseconds) => {
+          clock.advance(milliseconds);
+        },
+        service: {
+          manager: serviceManager,
+          platform: "darwin",
+          definition: async () =>
+            serviceDefinition({
+              role: "worker",
+              root,
+              dataDirectory: root,
+              home,
+              nodePath,
+              mainPath,
+              env: {},
+            }),
+        },
+      });
+      const exitCode = await runCli(options.argv, environment);
+      return { exitCode, output, stops, serviceManager, clock };
+    }
+
+    const none = await installWith({
+      argv: ["daemon", "install"],
+      running: false,
+      stillAnswering: 0,
+    });
+    expect(none.exitCode).toBe(0);
+    expect(none.stops).toBe(0);
+    expect(none.output.stdout).not.toContain("Stopped");
+
+    const running = await installWith({
+      argv: ["daemon", "install"],
+      running: true,
+      stillAnswering: 3,
+    });
+    expect(running.exitCode).toBe(0);
+    expect(running.stops).toBe(1);
+    expect(running.output.stdout.split("\n").slice(0, 2)).toEqual([
+      "Stopped the running daemon; leases are kept.",
+      "Service installed: com.callstack.simlock.worker (launchd)",
+    ]);
+
+    const json = await installWith({
+      argv: ["daemon", "install", "--json"],
+      running: true,
+      stillAnswering: 0,
+    });
+    expect(JSON.parse(json.output.stdout)).toMatchObject({ status: "installed", stopped: true });
+
+    const stubborn = await installWith({
+      argv: ["daemon", "install"],
+      running: true,
+      stillAnswering: Number.POSITIVE_INFINITY,
+    });
+    expect(stubborn.exitCode).toBe(1);
+    expect(JSON.parse(stubborn.output.stderr)).toEqual({
+      error: {
+        code: "SERVICE_FAILED",
+        message: "The running daemon did not stop within 300 s; nothing was changed.",
+      },
+    });
+    expect(stubborn.serviceManager.installs).toEqual([]);
+    expect(stubborn.clock.now()).toBeGreaterThanOrEqual(300_000);
+    expect(stubborn.clock.now()).toBeLessThan(301_000);
   });
 });
