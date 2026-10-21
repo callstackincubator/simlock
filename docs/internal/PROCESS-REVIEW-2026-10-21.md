@@ -432,3 +432,36 @@ adjudication (#752 regex copies; #752 EPERM liveness), and a measured
 reviewer weakness (2 of 4 replay coordinators self-checked until told
 otherwise). The next replays are the fix-check snapshots in 4.3, and then
 any variant of items 13 to 18.
+
+### 4.8 The review changes, verified by replay
+
+Items 13, 15 and 23 were replayed with the changed rules, briefs and
+protocol (`review-replay.sh <pr> 1 <commit>`), once each, against the
+same snapshots as the baseline runs in 4.5 and 4.6.
+
+| Snapshot | Baseline recall (by hand) | With the changes | USD before / after | Minutes before / after |
+| -------- | ------------------------- | ---------------- | ------------------ | ---------------------- |
+| #752 r1  | 4/6                       | 6/6              | 1.41 / 1.67        | 12 / 17                |
+| #775 r1  | 6/10                      | 8/10             | 6.47 / 8.07        | 34 / 37                |
+
+What changed in the reports:
+
+- **#752:** the safety finding (the sweep deletes a user's own matching
+  directory) came back as a blocking finding with a reproduction, where
+  both baseline runs had lost it at synthesis; the coordinator also kept
+  EPERM-counted-dead blocking "under REVIEW.md's safety rule" because it
+  had no probe showing the input cannot occur. Item 23 does what it says.
+- **#775:** round 1 reported all three STRICT INTEGER columns in one
+  finding, with two probes; the real round 1 found one and round 2 its
+  siblings. Item 13 does what it says. The socket probe (the real review's
+  fix-check R13) was again found in round 1. Still missed: the fake table
+  accepting extra keys. The tests lens reported incomplete on probe
+  budget, which the protocol asks it to say rather than pass.
+- Cost rose about 20 percent per round 1, the price of the probes and the
+  sibling search. The rounds it should remove (the real #775 round 2 cost
+  $1.72) are not in this measurement; the next deliveries' invocation
+  counts are.
+
+Item 14 (the audit proves coverage) has no replay: it changes the
+implementer, and is judged by testing-class review findings per PR on the
+next deliveries.
