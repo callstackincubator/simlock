@@ -1,10 +1,23 @@
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT, waitFor, withDaemon } from "./helpers/index.js";
+import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
+
+function runDaemonEntry(env: TestEnv, args: readonly string[]): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(REPO_ROOT, "dist/daemon/main.js"), ...args], {
+      env: env.env,
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code));
+  });
+}
 
 describe("daemon lifecycle & recovery", () => {
   it.each([
@@ -50,6 +63,42 @@ describe("daemon lifecycle & recovery", () => {
     },
     60_000,
   );
+
+  it("a daemon that stops for a failure exits 1; one that finds another daemon answering exits 0", async () => {
+    const env = await withDaemon({ mode: "auto" });
+
+    await env.startDaemon();
+    const beside = await runDaemonEntry(env, []);
+    expect(beside).toBe(0);
+    expect(await readFile(env.logPath, "utf8")).toContain('"message":"Daemon already running"');
+    const status = await env.cli(["daemon", "status", "--json"]);
+    expect(status.json).toMatchObject({ daemon: { health: "running", mode: "worker" } });
+
+    await env.cli(["daemon", "stop"]);
+    await waitFor(() => !existsSync(env.socketPath), { label: "the worker stopped" });
+    const history = new DatabaseSync(join(env.home, "history.db"));
+    try {
+      history.exec("UPDATE projection_versions SET version = 99 WHERE name = 'usage'");
+    } finally {
+      history.close();
+    }
+    expect(await runDaemonEntry(env, [])).toBe(1);
+
+    const holder = createServer();
+    const port = await new Promise<number>((resolve) => {
+      holder.listen(0, "127.0.0.1", () => {
+        const address = holder.address();
+        resolve(typeof address === "object" && address !== null ? address.port : 0);
+      });
+    });
+    try {
+      const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
+      expect(set.code, set.stderr).toBe(0);
+      expect(await runDaemonEntry(env, ["--gateway"])).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => holder.close(() => resolve()));
+    }
+  }, 60_000);
 
   it("auto-starts on the first CLI call, reports status, and does not double-spawn", async () => {
     const env = await withDaemon({ mode: "auto" });
