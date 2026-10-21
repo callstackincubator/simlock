@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import {
@@ -201,6 +201,45 @@ test.describe("the Inbox view", () => {
       await expect(needsALook).toBeVisible();
     } finally {
       await disposeFleet(fleet);
+    }
+  });
+
+  test("a waiting request stubbed with a createdAt 61 s before the daemon's now shows under Needs a look, and one at 30 s does not", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      // why: a request cannot wait a minute on a real daemon quickly, so the list is stubbed, each
+      // age counted from the daemon's own clock (its Date header).
+      await page.route(
+        (url) => url.pathname === "/v1/lease-requests",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          const request = (id: string, waitedMs: number) => ({
+            createdAt: now - waitedMs,
+            id,
+            platform: "ios",
+            queuePosition: 1,
+            requesterId: id,
+            stage: "queued",
+          });
+          await route.fulfill({
+            json: { requests: [request("long-waiter", 61_000), request("short-waiter", 30_000)] },
+            response,
+          });
+        },
+      );
+
+      await openInbox(page, host);
+
+      const needsALook = page.getByRole("region", { name: "Needs a look" });
+      await expect(
+        needsALook.getByRole("link", { name: /long-waiter has waited 1 min/ }),
+      ).toBeVisible();
+      await expect(page.getByRole("link", { name: /short-waiter/ })).toHaveCount(0);
+    } finally {
+      await host.dispose();
     }
   });
 
