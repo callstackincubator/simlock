@@ -4,6 +4,7 @@ import { waitFor } from "../helpers/wait.js";
 import {
   disposeFleet,
   expect,
+  joinOldWorker,
   type RunningDaemon,
   settled,
   signIn,
@@ -317,6 +318,39 @@ test.describe("the Overview's Inbox lines", () => {
       await expect(panel.getByRole("link", { name: "All in Inbox (1)" })).toBeVisible();
     } finally {
       await disposeFleet(fleet);
+    }
+  });
+
+  test("with five problem items the panel shows four, and a row opens /inbox/<key>", async ({
+    page,
+  }) => {
+    const gateway = await startDaemon("gateway");
+    const hangUps: (() => void)[] = [];
+    try {
+      for (let index = 1; index <= 5; index += 1) {
+        hangUps.push(
+          await joinOldWorker(gateway, { id: `wrk_old_${index}`, label: `old-${index}` }),
+        );
+      }
+      await waitFor(
+        async () => {
+          const { workers } = (await operatorGet(gateway, "/v1/workers")) as {
+            workers: { connection: string }[];
+          };
+          return workers.filter((worker) => worker.connection === "incompatible").length === 5;
+        },
+        { label: "five incompatible workers" },
+      );
+      await openOverview(page, gateway);
+
+      const panel = page.getByRole("region", { name: "Needs you" });
+      await expect(panel.getByRole("listitem")).toHaveCount(4);
+      await expect(panel.getByRole("link", { name: "All in Inbox (5)" })).toBeVisible();
+      await panel.getByRole("listitem").first().getByRole("link").click();
+      await expect(page).toHaveURL(/\/inbox\/wrk_old_\d%2Fincompatible$/);
+    } finally {
+      for (const hangUp of hangUps) hangUp();
+      await gateway.dispose();
     }
   });
 });
