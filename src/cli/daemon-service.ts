@@ -5,18 +5,10 @@ import type { CliEnvironment } from "./types.js";
 const STOP_LIMIT_MS = 300_000;
 const STOP_POLL_MS = 100;
 
-async function answers(environment: CliEnvironment): Promise<boolean> {
-  try {
-    const client = await environment.connectExistingAdmin(async () => undefined);
-    await client.close();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** why: install and uninstall change the service under a daemon that would otherwise keep the old
- * one's files open; a clean stop keeps the leases, and the wait is bounded (architecture rule 11). */
+ * one's files open; a clean stop keeps the leases, and the wait is bounded (architecture rule 11).
+ * A stopping daemon refuses new connections while it still holds its socket, so the wait ends when
+ * the socket is released, not when a connection is refused. */
 export async function stopRunningDaemon(
   environment: CliEnvironment,
   token: string | undefined,
@@ -34,7 +26,7 @@ export async function stopRunningDaemon(
     await client.close();
   }
   const deadline = environment.clock.now() + STOP_LIMIT_MS;
-  while (await answers(environment)) {
+  while (await environment.daemonEndpointPresent()) {
     if (environment.clock.now() >= deadline) {
       const { SimlockError } = await import("../contract/index.js");
       throw new SimlockError(

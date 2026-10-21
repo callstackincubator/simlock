@@ -283,6 +283,10 @@ export function buildCliEnvironment(
     requesterId,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
+    daemonEndpointPresent: async () => {
+      const { resolveDaemonSocketPath } = await import("../ports/index.js");
+      return filesystem.exists(resolveDaemonSocketPath(dataDirectory));
+    },
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
       : { adminTokenFromEnv: env.SIMLOCK_ADMIN_TOKEN }),

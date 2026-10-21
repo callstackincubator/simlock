@@ -7023,7 +7023,7 @@ interface OutputCapture {
   environmentWith(overrides?: Partial<CliEnvironment>): CliEnvironment;
 }
 
-function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
+function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {}): OutputCapture {
   const capture: OutputCapture = {
     stdout: "",
     stderr: "",
@@ -7038,6 +7038,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           requesterId: "test-requester",
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
+          daemonEndpointPresent: async () => false,
           readAdminTokenFile: async () => undefined,
           sleep: async () => {},
           readConfigFile: async () => ({}),
@@ -7064,7 +7065,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           stderr: stderrOut,
           stdout: stdoutOut,
         },
-        {},
+        env,
       );
       return { ...base, ...overrides };
     },
@@ -8417,6 +8418,7 @@ describe("CLI: daemon install (#830)", () => {
     readonly argv: readonly string[];
     readonly role: "worker" | "gateway";
     readonly root: string;
+    readonly env?: NodeJS.ProcessEnv;
   }): Promise<{
     readonly exitCode: number;
     readonly output: ReturnType<typeof outputCapture>;
@@ -8436,15 +8438,18 @@ describe("CLI: daemon install (#830)", () => {
         });
       },
     });
-    const output = outputCapture({
-      filesystem,
-      clock: new FakeClock(0),
-      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
-      ipc: ipcTransport,
-      launcher: new FakeDaemonLauncher(),
-      daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
-      service: { manager: serviceManager, platform: "darwin", home, root, nodePath, mainPath },
-    });
+    const output = outputCapture(
+      {
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: new FakeDaemonLauncher(),
+        daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
+        service: { manager: serviceManager, platform: "darwin", home, root, nodePath, mainPath },
+      },
+      options.env,
+    );
     const exitCode = await runCli(options.argv, output.environmentWith());
     return { exitCode, output, serviceManager };
   }
@@ -8502,6 +8507,19 @@ describe("CLI: daemon install (#830)", () => {
       );
     }
 
+    const withShell = await install({
+      argv: ["daemon", "install"],
+      role: "worker",
+      root: join(home, ".simlock"),
+      env: { PATH: "/opt/bin:/usr/bin", JAVA_HOME: "/jdk", SIMLOCK_ADMIN_TOKEN: "secret" },
+    });
+    expect(withShell.exitCode, withShell.output.stderr).toBe(0);
+    expect(withShell.serviceManager.installs[0]?.environment).toEqual({
+      SIMLOCK_HOME: join(home, ".simlock"),
+      PATH: "/opt/bin:/usr/bin",
+      JAVA_HOME: "/jdk",
+    });
+
     const json = await install({
       argv: ["daemon", "install", "--json"],
       role: "worker",
@@ -8522,7 +8540,7 @@ describe("CLI: daemon install (#830)", () => {
   async function runWithService(options: {
     readonly argv: readonly string[];
     readonly running: boolean;
-    readonly stillAnswering: number;
+    readonly socketHeldPolls: number;
     readonly state?: ServiceState;
     readonly refuse?: boolean;
   }): Promise<{
@@ -8548,12 +8566,8 @@ describe("CLI: daemon install (#830)", () => {
       if (options.refuse === true) {
         throw new SimlockError("FORBIDDEN", "protocol", "The admin token was rejected", {});
       }
-      if (stops > 0) {
-        polls += 1;
-        if (polls > options.stillAnswering) {
-          throw new IpcError("connection-refused", "Connection refused", undefined);
-        }
-      }
+      // why: a stopping daemon refuses new connections while it still holds its socket.
+      if (stops > 0) throw new IpcError("connection-refused", "Connection refused", undefined);
       return fakeClient({
         stopDaemon: async () => {
           stops += 1;
@@ -8566,6 +8580,11 @@ describe("CLI: daemon install (#830)", () => {
       clock,
       daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
       connectExistingAdmin,
+      daemonEndpointPresent: async () => {
+        if (stops === 0) return options.running;
+        polls += 1;
+        return polls <= options.socketHeldPolls;
+      },
       readAdminTokenFile: async () => "admin-token",
       sleep: async (milliseconds) => {
         clock.advance(milliseconds);
@@ -8651,7 +8670,7 @@ describe("CLI: daemon install (#830)", () => {
       const result = await runWithService({
         argv: testCase.argv,
         running: testCase.running ?? false,
-        stillAnswering: 0,
+        socketHeldPolls: 0,
         state: testCase.state,
       });
       expect(result.output.stderr, testCase.label).toBe("");
@@ -8663,11 +8682,11 @@ describe("CLI: daemon install (#830)", () => {
     }
   });
 
-  it("daemon install stops a running daemon first and waits for its socket to go quiet", async () => {
+  it("daemon install stops a running daemon first and waits until its socket is released, even while it refuses connections", async () => {
     const none = await runWithService({
       argv: ["daemon", "install"],
       running: false,
-      stillAnswering: 0,
+      socketHeldPolls: 0,
     });
     expect(none.exitCode).toBe(0);
     expect(none.stops).toBe(0);
@@ -8676,7 +8695,7 @@ describe("CLI: daemon install (#830)", () => {
     const running = await runWithService({
       argv: ["daemon", "install"],
       running: true,
-      stillAnswering: 3,
+      socketHeldPolls: 3,
     });
     expect(running.exitCode).toBe(0);
     expect(running.stops).toBe(1);
@@ -8688,14 +8707,14 @@ describe("CLI: daemon install (#830)", () => {
     const json = await runWithService({
       argv: ["daemon", "install", "--json"],
       running: true,
-      stillAnswering: 0,
+      socketHeldPolls: 0,
     });
     expect(JSON.parse(json.output.stdout)).toMatchObject({ status: "installed", stopped: true });
 
     const stubborn = await runWithService({
       argv: ["daemon", "install"],
       running: true,
-      stillAnswering: Number.POSITIVE_INFINITY,
+      socketHeldPolls: Number.POSITIVE_INFINITY,
     });
     expect(stubborn.exitCode).toBe(1);
     expect(JSON.parse(stubborn.output.stderr)).toEqual({
@@ -8711,7 +8730,7 @@ describe("CLI: daemon install (#830)", () => {
     const refused = await runWithService({
       argv: ["daemon", "install"],
       running: true,
-      stillAnswering: 0,
+      socketHeldPolls: 0,
       refuse: true,
     });
     expect(refused.exitCode).toBe(1);
@@ -8723,7 +8742,7 @@ describe("CLI: daemon install (#830)", () => {
     const uninstall = await runWithService({
       argv: ["daemon", "uninstall"],
       running: true,
-      stillAnswering: 3,
+      socketHeldPolls: 3,
       state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
     });
     expect(uninstall.exitCode).toBe(0);
@@ -8953,7 +8972,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
         expect(result.exitCode, `${platform} ${command}`).toBe(2);
         expect(errorOf(result.stderr), `${platform} ${command}`).toEqual({
           code: "USAGE",
-          message: `daemon ${command} is supported on macOS and Linux only`,
+          message: `daemon ${command} is supported on macOS only`,
         });
       }
     }

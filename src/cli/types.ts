@@ -56,6 +56,8 @@ export interface CliEnvironment {
   readonly connectExistingAdmin: (
     resolveCredential: () => Promise<string | undefined>,
   ) => Promise<SimlockAdminClient>;
+  /** why: a daemon stopping refuses connections while it still holds its socket; the endpoint going away is the proof it is gone. */
+  readonly daemonEndpointPresent: () => Promise<boolean>;
   readonly adminTokenFromEnv?: string;
   readonly readAdminTokenFile: () => Promise<string | undefined>;
   readonly sleep: (milliseconds: number) => Promise<void>;

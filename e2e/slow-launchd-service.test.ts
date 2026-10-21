@@ -9,13 +9,16 @@ import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
 const execFileAsync = promisify(execFile);
 const uid = process.getuid?.() ?? 0;
 
-async function launchctlPrints(target: string): Promise<boolean> {
+async function launchctlPrint(target: string): Promise<string | undefined> {
   try {
-    await execFileAsync("launchctl", ["print", target]);
-    return true;
+    return (await execFileAsync("launchctl", ["print", target])).stdout;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+async function launchctlPrints(target: string): Promise<boolean> {
+  return (await launchctlPrint(target)) !== undefined;
 }
 
 const loggedIn = process.platform === "darwin" && (await launchctlPrints(`gui/${String(uid)}`));
@@ -80,6 +83,10 @@ describe.skipIf(!loggedIn)("the launchd service on a Mac", { tags: ["slow"] }, (
       const status = await env.cli(["status", "--json"]);
       expect(status.code, status.stderr).toBe(0);
       expect(await answering(env)).toBe(true);
+      // why: a daemon spawned outside the service would answer too; launchd reports `running` only
+      // for the process it started itself.
+      const printed = await launchctlPrint(`gui/${String(uid)}/${report.service.name}`);
+      expect(printed, "launchctl print of the service").toMatch(/\bstate = running\b/);
 
       const uninstall = await env.cli(["daemon", "uninstall", "--json"]);
       expect(uninstall.code, uninstall.stderr).toBe(0);
