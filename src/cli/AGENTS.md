@@ -65,7 +65,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
    for `DAEMON_STARTUP_TIMEOUT_MS`; a launched daemon that exits fails the command at once
    with `startErrorFrom`'s text, unless another daemon answers a last connect. After a launch, `status.get` probes the connection
-   before handing it to a command, within that same deadline. A connection loss during this
+   before handing it to a command, within that same deadline. A connection loss during the handshake or this
    probe becomes `DAEMON_STARTUP_FAILED`; a silent probe times out with that code and starts closing
    its client without waiting for the daemon to end its side. An answered probe ends the window, including a `starting` status: subsequent
    command failures retain their original codes even while a lease queues or boots.

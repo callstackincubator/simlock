@@ -640,34 +640,27 @@ test.describe("the Activity page", () => {
     }
   });
 
-  test("a worker joining a gateway shows no join token anywhere in the events page", async ({
+  test("a worker joining a gateway shows no join token anywhere in the gateway's events page", async ({
     page,
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
     try {
-      const worker = fleet.workers[0] as RunningDaemon;
       const joinToken = fleet.gateway.tokens.worker;
-      for (const daemon of [fleet.gateway, worker]) {
-        const name = daemon === worker ? "the worker" : "the gateway";
-        await openEvents(page, daemon);
-        const wanted = daemon === worker ? "daemon.started" : "worker.connected";
-        await expect(rows(page).filter({ hasText: wanted }), name).not.toHaveCount(0);
-        const events = await cliEvents(daemon);
-        await expect.poll(async () => (await shownEvents(page)).length, name).toBe(events.length);
+      await openEvents(page, fleet.gateway);
+      await expect(rows(page).filter({ hasText: "worker.connected" })).not.toHaveCount(0);
+      const events = await cliEvents(fleet.gateway);
+      await expect.poll(async () => (await shownEvents(page)).length).toBe(events.length);
 
-        const seen: string[] = [];
-        for (const event of events) {
-          await openEvent(page, event.id);
-          await expect(title(page)).toHaveText(event.event);
-          seen.push(await page.getByRole("dialog").innerText());
-          await page.keyboard.press("Escape");
-          await expect(page.getByRole("dialog")).toHaveCount(0);
-        }
-        expect(seen.join("\n"), name).not.toContain(joinToken);
-        expect(await page.content(), name).not.toContain(joinToken);
-
-        await page.getByRole("button", { name: "Sign out" }).click();
+      const seen: string[] = [];
+      for (const event of events) {
+        await openEvent(page, event.id);
+        await expect(title(page)).toHaveText(event.event);
+        seen.push(await page.getByRole("dialog").innerText());
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
       }
+      expect(seen.join("\n")).not.toContain(joinToken);
+      expect(await page.content()).not.toContain(joinToken);
     } finally {
       await disposeFleet(fleet);
     }

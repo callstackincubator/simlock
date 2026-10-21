@@ -7,6 +7,7 @@ const REFUSED: WarmTarget = {
   count: 1,
   mode: "full",
   model: "iPhone 17",
+  origin: "configured",
   osVersion: "27.0",
   platform: "ios",
   ready: 0,

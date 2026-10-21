@@ -14,6 +14,7 @@ import {
   leaseGrantSchema,
   leaseRequestRecordSchema,
   platformCatalogSchema,
+  statusWarmPoolSchema,
   statusDeviceSchema,
   waitingRequestSchema,
   workerViewSchema,
@@ -1004,5 +1005,47 @@ describe("waitingRequestSchema's workers", () => {
         { reason: "full", workerId: "wrk_a" },
       ]).success,
     ).toBe(false);
+  });
+});
+
+describe("statusWarmPoolSchema", () => {
+  const entry = {
+    booting: 0,
+    count: 1,
+    mode: "full",
+    model: "Pixel 8",
+    origin: "learned",
+    osVersion: "35",
+    platform: "android",
+    ready: 1,
+  };
+  const block = (targets: readonly unknown[]) => ({
+    enabled: true,
+    reserveRunning: { android: 0, ios: 0 },
+    targets,
+  });
+  const { origin: _origin, ...withoutOrigin } = entry;
+
+  it("accepts origin configured and learned, an optional imageTag, and 320 entries, and refuses an entry without origin or with another word, a tag imageTagSchema refuses, and 321 entries", () => {
+    const cases: readonly { name: string; targets: readonly unknown[]; accepted: boolean }[] = [
+      { accepted: true, name: "learned", targets: [entry] },
+      { accepted: true, name: "configured", targets: [{ ...entry, origin: "configured" }] },
+      { accepted: true, name: "a tag", targets: [{ ...entry, imageTag: "google_apis_playstore" }] },
+      { accepted: true, name: "320 entries", targets: Array.from({ length: 320 }, () => entry) },
+      { accepted: false, name: "no origin", targets: [withoutOrigin] },
+      { accepted: false, name: "another word", targets: [{ ...entry, origin: "remembered" }] },
+      { accepted: false, name: "a bad tag", targets: [{ ...entry, imageTag: "no spaces" }] },
+      { accepted: false, name: "321 entries", targets: Array.from({ length: 321 }, () => entry) },
+    ];
+
+    expect(
+      cases.map(({ name, targets }) => [
+        name,
+        statusWarmPoolSchema.safeParse(block(targets)).success,
+      ]),
+    ).toEqual(cases.map(({ accepted, name }) => [name, accepted]));
+    expect(
+      statusWarmPoolSchema.parse(block([{ ...entry, imageTag: "google_apis" }])).targets[0],
+    ).toMatchObject({ imageTag: "google_apis", origin: "learned" });
   });
 });

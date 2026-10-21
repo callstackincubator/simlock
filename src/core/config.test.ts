@@ -1820,10 +1820,131 @@ describe("loadConfig modes (ADR 0005)", () => {
     await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
   });
 
+  it("refuses a joined worker's own HTTP listener with the exact error, and keeps every valid and invalid neighbour as it was", async () => {
+    const refusal =
+      'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)';
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    type Case = {
+      readonly name: string;
+      readonly contents: Record<string, unknown>;
+      readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly role?: "worker" | "gateway";
+      readonly error?: string;
+      readonly http?: boolean;
+    };
+    const cases: readonly Case[] = [
+      { name: "file only", contents: { gateway: joined, http: { enabled: true } }, error: refusal },
+      {
+        name: "overrides only",
+        contents: {},
+        overrides: { gateway: joined, http: { enabled: true } },
+        error: refusal,
+      },
+      {
+        name: "membership in file, HTTP in overrides",
+        contents: { gateway: joined },
+        overrides: { http: { enabled: true } },
+        error: refusal,
+      },
+      {
+        name: "HTTP in file, membership in overrides",
+        contents: { http: { enabled: true } },
+        overrides: { gateway: joined },
+        error: refusal,
+      },
+      {
+        name: "override false repairs file true",
+        contents: { gateway: joined, http: { enabled: true } },
+        overrides: { http: { enabled: false } },
+        http: false,
+      },
+      {
+        name: "ws URL, HTTP false",
+        contents: { gateway: { ...joined, url: "ws://fleet.example/x" }, http: { enabled: false } },
+        http: false,
+      },
+      { name: "wss URL, HTTP omitted", contents: { gateway: joined }, http: false },
+      { name: "standalone, HTTP true", contents: { http: { enabled: true } }, http: true },
+      { name: "standalone, HTTP false", contents: { http: { enabled: false } }, http: false },
+      { name: "standalone, HTTP omitted", contents: {}, http: false },
+      { name: "gateway, HTTP omitted", contents: {}, role: "gateway", http: true },
+      {
+        name: "gateway, HTTP true",
+        contents: { http: { enabled: true } },
+        role: "gateway",
+        http: true,
+      },
+      {
+        name: "gateway, HTTP false",
+        contents: { http: { enabled: false } },
+        role: "gateway",
+        error: "http.enabled",
+      },
+      {
+        name: "gateway ignoring membership keys",
+        contents: { gateway: joined, http: { enabled: true } },
+        role: "gateway",
+        http: true,
+      },
+      {
+        name: "empty URL",
+        contents: { gateway: { url: "", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "malformed URL",
+        contents: { gateway: { url: "not a url", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "http URL",
+        contents: { gateway: { url: "http://fleet.example", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "https URL",
+        contents: {
+          gateway: { url: "https://fleet.example", token: "t" },
+          http: { enabled: true },
+        },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "URL without token",
+        contents: { gateway: { url: "wss://fleet.example" }, http: { enabled: true } },
+        error: "gateway.token",
+      },
+      {
+        name: "token without URL",
+        contents: { gateway: { token: "t" }, http: { enabled: true } },
+        error: "a gateway URL, since gateway.token is set",
+      },
+      {
+        name: "removed mode key",
+        contents: { mode: "worker", gateway: joined, http: { enabled: true } },
+        error: '"mode" is no longer a config key',
+      },
+    ];
+
+    for (const { name, contents, overrides, role, error, http } of cases) {
+      const outcome = load(contents, {
+        ...(overrides === undefined ? {} : { overrides }),
+        ...(role === undefined ? {} : { role }),
+      });
+      if (error === undefined) {
+        await expect(outcome, name).resolves.toMatchObject({ http: { enabled: http } });
+      } else if (error === refusal) {
+        await expect(outcome, name).rejects.toMatchObject({ message: refusal });
+      } else {
+        await expect(outcome, name).rejects.toThrow(error);
+      }
+    }
+  });
+
   it.each(["http://fleet.example/v1/uplink", "fleet.example", "not a url"])(
     "rejects a gateway.url that is not a WebSocket URL: %s",
     async (url) => {
-      await expect(load({ gateway: { url } })).rejects.toThrow("gateway.url");
+      await expect(load({ gateway: { url } })).rejects.toThrow("a ws:// or wss:// URL");
     },
   );
 

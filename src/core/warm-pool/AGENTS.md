@@ -76,16 +76,17 @@ every call, so cancellation removes this protection. The reaper's `idle-shutdown
 these devices. With no pass yet, it resolves the targets first. With the pool off it returns none.
 
 Figures (`figures()`, read by `status.get`, doctor's `warm-pool-target-unreachable`, the console):
-`enabled`, `reserveRunning`, and per kind `platform`, `model`, `osVersion`, `mode`, `count`, `ready`,
-`booting`, `short`. Before the first pass, or with the pool off, they come from config.
+`enabled`, `reserveRunning`, and per kind `platform`, `model`, `osVersion`, `mode`, `imageTag`, `origin`
+(`configured` or `learned`), `count`, `ready`, `booting`, `short`; learned kinds included, a merged kind once
+with the larger count. Before the first pass, or with the pool off, they are the configured targets from config.
 
 `short`, the first that applies: `disabled`; set in the converger `no-driver`, `runtime-missing`,
 `unknown-model`, `unresolvable`; set in the policy `boot-failed`, `device-limit`, `running-limit`,
 `reserve`, `ram-budget`. None while filling or waiting behind a queued request the pass could not serve.
 
 `warm-pool.target-missed`: once per report that is short now and whose configured targets have not
-missed since they were last met (ready ≥ count). Payload: platform, model, osVersion, mode, count,
-ready, reason.
+missed since they were last met (ready ≥ count). Configured targets only, by the configured count. Payload:
+platform, model, osVersion, mode, origin (`configured`), count, ready, reason.
 
 Stop: `close()` at stop start; `drain()` finishes the pass and running boots, starts nothing;
 `dispose()` cancels the timers.
