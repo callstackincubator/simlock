@@ -169,4 +169,27 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("the Inbox's fix button undrains a drained worker, and the item leaves the Inbox", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "inbox-a" }]);
+    try {
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      expect((await fleet.gateway.cli(["worker", "drain", id])).code).toBe(0);
+      await openPage(page, fleet.gateway, "/inbox", "Inbox");
+      const item = page.locator("main .inbox-list li").filter({ hasText: "inbox-a" });
+      const fix = item.getByRole("button", { name: "Undrain" });
+      await expect(fix).toBeVisible();
+
+      await fix.click();
+      await expect(page.getByText("inbox-a takes leases again")).toBeVisible();
+      await expect(item).toHaveCount(0);
+      const after = await fleet.gateway.cli(["worker", "list", "--json"]);
+      expect((after.json as { workers: { drained: boolean }[] }).workers[0]?.drained).toBe(false);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
