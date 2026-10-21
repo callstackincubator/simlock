@@ -637,6 +637,38 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(bare.driver.calls.map((call) => call.operation)).not.toContain("installComponent");
   });
 
+  it('allocate with `osVersion` "26.0", ">=18 <27" or, on Android, "34" makes a lease request that carries it as typed', async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["18.4", "26.0", "27.0"],
+          clock,
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+          platform: "ios",
+        }),
+        new FakeDriver({
+          availableOsVersions: ["34", "35"],
+          clock,
+          defaultModels: { phone: ["Pixel 8"] },
+          knownModels: ["Pixel 8"],
+          modelClasses: { "Pixel 8": "phone" },
+          platform: "android",
+        }),
+      ],
+      maxRunning: 8,
+    });
+
+    await granted(rig, 1, { osVersion: "26.0" });
+    await granted(rig, 2, { osVersion: ">=18 <27" });
+    await granted(rig, 3, { osVersion: "34", platform: "android" });
+
+    expect(await requestedSpecs(rig, hex(1))).toEqual([{ osVersion: "26.0", platform: "ios" }]);
+    expect(await requestedSpecs(rig, hex(2))).toEqual([{ osVersion: ">=18 <27", platform: "ios" }]);
+    expect(await requestedSpecs(rig, hex(3))).toEqual([{ osVersion: "34", platform: "android" }]);
+  });
+
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
     const rig = await setUp();
 
