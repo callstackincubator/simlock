@@ -1524,6 +1524,50 @@ describe("lease routes", () => {
     expect(response.status).toBe(200);
   });
 
+  it.each([
+    ["renew", "/v1/leases/lse_1/renew", '{"ttlMs":60000}', "lease.renew"],
+    ["exec", "/v1/leases/lse_1/exec", '{"args":["list"],"tool":"simctl"}', "device.exec"],
+  ])(
+    "a caller sends the %s body without a JSON content type and gets 415 UNSUPPORTED_MEDIA_TYPE; with application/json it reaches the dispatcher",
+    async (_route, path, body, operation) => {
+      const { app, dispatcher } = buildHarness();
+      dispatcher.handlers["lease.renew"] = () => ({
+        deviceId: "dev_1",
+        grantedAt: 1_000,
+        id: "lse_1",
+        ownerId: "tok_agent",
+        requesterId: "tok_agent",
+        ttlDeadline: 2_000,
+      });
+      dispatcher.handlers["device.exec"] = () => ({ exitCode: 0 });
+      const send = (contentType: string | undefined) =>
+        app.request(path, {
+          body,
+          headers: {
+            ...agentAuth,
+            ...(contentType === undefined ? {} : { "content-type": contentType }),
+          },
+          method: "POST",
+        });
+
+      for (const contentType of [undefined, "text/plain"]) {
+        const refused = await send(contentType);
+        expect(refused.status).toBe(415);
+        expect(await refused.json()).toEqual({
+          error: {
+            code: "UNSUPPORTED_MEDIA_TYPE",
+            message: "Content-Type must be application/json",
+          },
+        });
+      }
+      expect(dispatcher.calls.filter((call) => call.operation === operation)).toEqual([]);
+
+      const accepted = await send("application/json");
+      expect(accepted.status).toBe(200);
+      expect(dispatcher.calls.filter((call) => call.operation === operation)).toHaveLength(1);
+    },
+  );
+
   it("404s a renew for an unknown lease", async () => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["lease.renew"] = () => {
