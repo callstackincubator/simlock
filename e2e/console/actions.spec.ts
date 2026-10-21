@@ -53,19 +53,23 @@ function rowOf(page: Page, name: string): Locator {
   return page.locator("main tbody tr").filter({ hasText: name });
 }
 
-async function startWithStoppedWorker(label: string) {
-  const fleet = await startFleet([{ driverScript: { ios: IOS }, label }]);
-  const [stopped] = fleet.workers as [RunningDaemon];
-  await stopped.stop();
+async function waitForDisconnected(gateway: RunningDaemon): Promise<void> {
   await waitFor(
     async () => {
-      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const listed = await gateway.cli(["worker", "list", "--json"]);
       return (listed.json as { workers: { connection: string }[] }).workers.some(
         (view) => view.connection === "disconnected",
       );
     },
     { label: "the gateway sees the stopped worker disconnected" },
   );
+}
+
+async function startWithStoppedWorker(label: string) {
+  const fleet = await startFleet([{ driverScript: { ios: IOS }, label }]);
+  const [stopped] = fleet.workers as [RunningDaemon];
+  await stopped.stop();
+  await waitForDisconnected(fleet.gateway);
   return fleet;
 }
 
@@ -219,15 +223,7 @@ test.describe("the console acts", () => {
     try {
       const [stopped] = fleet.workers as [RunningDaemon];
       await stopped.stop();
-      await waitFor(
-        async () => {
-          const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
-          return (listed.json as { workers: { connection: string }[] }).workers.some(
-            (view) => view.connection === "disconnected",
-          );
-        },
-        { label: "the gateway sees the stopped worker disconnected" },
-      );
+      await waitForDisconnected(fleet.gateway);
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
 
       const live = rowOf(page, "live-b");
@@ -378,19 +374,8 @@ test.describe("the console acts", () => {
   test("the row menu shows the dangerous items last, after a separator, in the error colour", async ({
     page,
   }) => {
-    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "menu-a" }]);
+    const fleet = await startWithStoppedWorker("menu-a");
     try {
-      const [stopped] = fleet.workers as [RunningDaemon];
-      await stopped.stop();
-      await waitFor(
-        async () => {
-          const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
-          return (listed.json as { workers: { connection: string }[] }).workers.some(
-            (view) => view.connection === "disconnected",
-          );
-        },
-        { label: "the gateway sees the stopped worker disconnected" },
-      );
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       await rowOf(page, "menu-a").getByRole("button", { name: "Actions for menu-a" }).click();
 
