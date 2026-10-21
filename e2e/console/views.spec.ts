@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
 import {
   expect,
@@ -76,7 +76,7 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
 
 // why: an open drawer hides the page behind it from assistive technology.
 function opensDrawer(path: string): boolean {
-  return /^\/(leases|queue|activity)\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
+  return /^\/(leases|queue|activity|inbox)\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
 }
 
 async function visit(page: Page, host: RunningDaemon, path: string): Promise<void> {
@@ -281,6 +281,43 @@ test.describe("every view", () => {
           await expect(page.locator(".chart-tip")).toBeVisible();
           await page.locator("#main summary").first().click();
         }
+        const found = await page.evaluate(() => ({
+          styles: document.querySelectorAll("style").length,
+          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
+        }));
+        expect(found, path).toEqual({ styles: 0, violations: [] });
+      }
+      // why: a healthy host has nothing in its Inbox, so a request that has waited two minutes is
+      // stubbed to give the Inbox a row and its drawer something to open.
+      await page.route(
+        (url) => url.pathname === "/v1/lease-requests",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          await route.fulfill({
+            json: {
+              requests: [
+                {
+                  createdAt: now - 125_000,
+                  id: "req_busy",
+                  queuePosition: 1,
+                  requesterId: "busy-agent",
+                  spec: { platform: "ios" },
+                  stage: "queued",
+                },
+              ],
+            },
+            response,
+          });
+        },
+      );
+      for (const path of [
+        "/inbox",
+        "/",
+        `/inbox/${encodeURIComponent("request/req_busy/waiting")}`,
+      ]) {
+        await visit(page, host, path);
+        if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
         const found = await page.evaluate(() => ({
           styles: document.querySelectorAll("style").length,
           violations: (window as unknown as { cspViolations: string[] }).cspViolations,
