@@ -18,6 +18,17 @@ function pages(dir) {
   );
 }
 
+// why: a single replace can leave "<script" behind when tags nest ("<<b>script>"), so strip until the text stops changing.
+function text(html) {
+  let previous;
+  let current = html;
+  do {
+    previous = current;
+    current = previous.replace(/<[^>]*>/g, "");
+  } while (current !== previous);
+  return current.trim();
+}
+
 // why: the sidebar is plain nested <details><summary>label</summary>…</details>; this reads that tree.
 function groups(html) {
   const root = { label: "", children: [] };
@@ -28,7 +39,7 @@ function groups(html) {
       const group = { label: "", children: [] };
       stack.at(-1).children.push(group);
       stack.push(group);
-    } else stack.at(-1).label = token[1].replace(/<[^>]*>/g, "").trim();
+    } else stack.at(-1).label = text(token[1]);
   }
   return root;
 }
