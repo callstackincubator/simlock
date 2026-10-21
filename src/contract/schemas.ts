@@ -33,7 +33,7 @@ export const deviceClassSchema = z.enum([
 ]);
 export type DeviceClass = z.infer<typeof deviceClassSchema>;
 
-const deviceStateSchema = z.enum([
+export const deviceStateSchema = z.enum([
   "provisioning",
   "ready",
   "leased",

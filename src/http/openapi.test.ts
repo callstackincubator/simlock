@@ -121,17 +121,17 @@ describe("buildOpenApiDocument", () => {
       lease: streamEvents(operation("/v1/leases/{id}/events", "get")),
       stages: streamEvents(operation("/v1/lease-requests/{id}/events", "get")),
     }).toEqual({
-      exec: ["output", "exit", "error"],
-      lease: ["device_unhealthy", "device_recovered", "lease_lost"],
+      exec: ["error", "exit", "output"],
+      lease: ["device_recovered", "device_unhealthy", "lease_lost"],
       stages: [
-        "queued",
-        "downloading",
-        "reclaiming",
-        "provisioning",
         "booting",
-        "granted",
-        "failed",
         "cancelled",
+        "downloading",
+        "failed",
+        "granted",
+        "provisioning",
+        "queued",
+        "reclaiming",
       ],
     });
     for (const stream of [
@@ -190,7 +190,7 @@ function streamMessage(operation: { responses?: object } | undefined): StreamSch
 }
 
 function streamEvents(operation: { responses?: object } | undefined) {
-  return streamMessage(operation).properties?.event?.enum;
+  return [...(streamMessage(operation).properties?.event?.enum ?? [])].sort();
 }
 
 interface StreamSchema {

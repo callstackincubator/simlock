@@ -1,5 +1,14 @@
 import { z } from "@hono/zod-openapi";
 
+import {
+  deviceClassSchema,
+  deviceStateSchema,
+  imageTagSchema,
+  leaseIdSchema,
+  OPERATIONS,
+  refuseModelWithClass,
+  waitingRequestSchema,
+} from "../contract/index.js";
 import { declareRoute, firstValue, sseMessage } from "./routes.js";
 
 const leaseParamsSchema = z.object({ id: z.string() });
@@ -65,10 +74,17 @@ const waitQuerySchema = z
     }
   });
 
+const deviceUnhealthySchema = z.object({ event: z.literal("device_unhealthy") });
+const deviceRecoveredSchema = z.object({
+  attempts: z.number(),
+  event: z.literal("device_recovered"),
+});
+const leaseLostSchema = z.object({ event: z.literal("lease_lost"), reason: z.string() });
+
 const leaseNoticeSchema = z.discriminatedUnion("event", [
-  z.object({ event: z.literal("device_unhealthy") }),
-  z.object({ attempts: z.number(), event: z.literal("device_recovered") }),
-  z.object({ event: z.literal("lease_lost"), reason: z.string() }),
+  deviceUnhealthySchema,
+  deviceRecoveredSchema,
+  leaseLostSchema,
 ]);
 
 // why: `ttlMs` is read as unknown so that each way it can be wrong keeps its own whole-body message.
@@ -155,4 +171,162 @@ export const leaseRequestGetRoute = declareRoute({
   errors: { 404: ["UNKNOWN_LEASE_REQUEST"] },
 });
 
-export const LEASE_ROUTES = [leaseRenewRoute, leaseExecRoute, leaseRequestGetRoute] as const;
+export const leaseRequestBodySchema = z
+  .object({
+    allowDownload: z.boolean().optional(),
+    class: deviceClassSchema.optional(),
+    device: z.string().min(1).optional(),
+    imageTag: imageTagSchema.optional(),
+    leaseId: leaseIdSchema.optional(),
+    mode: z.enum(["slim", "full"]).optional(),
+    noWait: z.boolean().optional(),
+    // why: forwarded, not dropped: the dispatcher's `lease.request` handler alone decides whether this token may set it.
+    owner: z.string().min(1).optional(),
+    os: z.string().min(1).optional(),
+    physical: z.boolean().optional(),
+    platform: z.enum(["ios", "android"]),
+    timeoutMs: z.number().int().positive().optional(),
+    ttlMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((body, context) =>
+    refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
+  );
+
+export const leaseRequestCreateRoute = declareRoute({
+  method: "post",
+  path: "/v1/lease-requests",
+  tag: "Lease requests",
+  summary: "Ask for a lease",
+  role: "agent",
+  notes: "Answers 201 with the request once the daemon has stored it; read it back by its id.",
+  request: {
+    headers: z.object({
+      "Idempotency-Key": z
+        .string()
+        .optional()
+        .openapi({ description: "A repeat of the same key answers the stored request." }),
+    }),
+    json: leaseRequestBodySchema,
+  },
+  reply: leaseRequestReplySchema,
+  replyHeaders: z.object({ Location: z.string().openapi({ description: "The request's URL." }) }),
+  status: 201,
+  errors: {
+    409: ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+    422: ["UNKNOWN_MODEL"],
+    503: ["NO_CAPACITY"],
+  },
+});
+
+export const requestsReplySchema = z.object({ requests: z.array(waitingRequestSchema) });
+
+export const leaseRequestListRoute = declareRoute({
+  method: "get",
+  path: "/v1/lease-requests",
+  tag: "Lease requests",
+  summary: "Every request waiting for a device",
+  role: "admin",
+  reply: requestsReplySchema,
+});
+
+export const leaseRequestEventsRoute = declareRoute({
+  method: "get",
+  path: "/v1/lease-requests/{id}/events",
+  tag: "Lease requests",
+  summary: "Stream a lease request's stages",
+  role: "agent",
+  notes:
+    "Its owner or an operator. A stream of messages, one per stage, each carrying the request; it ends at granted, failed or cancelled.",
+  request: { params: leaseParamsSchema },
+  stream: sseMessage({
+    queued: leaseRequestViewSchema,
+    downloading: leaseRequestViewSchema,
+    reclaiming: leaseRequestViewSchema,
+    provisioning: leaseRequestViewSchema,
+    booting: leaseRequestViewSchema,
+    granted: leaseRequestViewSchema,
+    failed: leaseRequestViewSchema,
+    cancelled: leaseRequestViewSchema,
+  }),
+  errors: { 404: ["UNKNOWN_LEASE_REQUEST"] },
+});
+
+export const leaseRequestCancelRoute = declareRoute({
+  method: "delete",
+  path: "/v1/lease-requests/{id}",
+  tag: "Lease requests",
+  summary: "Cancel a lease request",
+  role: "agent",
+  notes: "Its owner or an operator. Answers 204.",
+  request: { params: leaseParamsSchema },
+  status: 204,
+  errors: { 404: ["UNKNOWN_LEASE_REQUEST"], 409: ["REQUEST_NOT_CANCELLABLE"] },
+});
+
+export const leaseListRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases",
+  tag: "Leases",
+  summary: "The caller's leases; an operator sees every lease",
+  role: "agent",
+  reply: OPERATIONS["lease.list"].output,
+});
+
+export const leaseGetRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases/{id}",
+  tag: "Leases",
+  summary: "Read one lease",
+  role: "agent",
+  notes: "A lease the caller does not own answers 404, as an unknown one does.",
+  request: { params: leaseParamsSchema },
+  reply: z.object({ lease: leasePayloadSchema }),
+  errors: { 404: ["UNKNOWN_LEASE"] },
+});
+
+export const leaseEventsRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases/{id}/events",
+  tag: "Leases",
+  summary: "Stream a lease's health notices",
+  role: "agent",
+  notes:
+    "A lease the caller does not own answers 404. A stream of messages; it ends on lease_lost.",
+  request: { params: leaseParamsSchema },
+  stream: sseMessage({
+    device_unhealthy: deviceUnhealthySchema,
+    device_recovered: deviceRecoveredSchema,
+    lease_lost: leaseLostSchema,
+  }),
+  errors: { 404: ["UNKNOWN_LEASE"] },
+});
+
+export const leaseReleaseRoute = declareRoute({
+  method: "delete",
+  path: "/v1/leases/{id}",
+  tag: "Leases",
+  summary: "Release a lease",
+  role: "agent",
+  request: { params: leaseParamsSchema },
+  reply: z.object({
+    device: z.object({ id: z.string(), state: deviceStateSchema }),
+    released: z.literal(true),
+  }),
+  status: 202,
+  errors: { 404: ["UNKNOWN_LEASE"] },
+});
+
+export const LEASE_ROUTES = [
+  leaseRequestCreateRoute,
+  leaseRequestListRoute,
+  leaseRequestGetRoute,
+  leaseRequestEventsRoute,
+  leaseRequestCancelRoute,
+  leaseListRoute,
+  leaseGetRoute,
+  leaseRenewRoute,
+  leaseExecRoute,
+  leaseEventsRoute,
+  leaseReleaseRoute,
+] as const;

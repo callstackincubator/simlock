@@ -9,10 +9,6 @@ import {
   describeSchemaIssues,
   eventsPageQuery,
   OPERATIONS,
-  refuseModelWithClass,
-  deviceClassSchema,
-  leaseIdSchema,
-  imageTagSchema,
   parseDurationMs,
   usageWindow,
   type UsageWindowRefusal,
@@ -32,10 +28,20 @@ import {
   unknownRequest,
 } from "./errors.js";
 import {
+  type leaseRequestBodySchema,
+  leaseEventsRoute,
   leaseExecRoute,
+  leaseGetRoute,
+  leaseListRoute,
+  leaseReleaseRoute,
   leaseRenewRoute,
+  leaseRequestCancelRoute,
+  leaseRequestCreateRoute,
+  leaseRequestEventsRoute,
   leaseRequestGetRoute,
+  leaseRequestListRoute,
   type leaseRequestViewSchema,
+  requestsReplySchema,
 } from "./lease-declarations.js";
 import { LeaseNoticeBuffer } from "./notices.js";
 import {
@@ -115,28 +121,6 @@ type Env = AuthEnv;
 
 /** Upper bound on `?wait=` long-polls; bounds how long an abandoned poll can pin resources. */
 const MAX_LONG_POLL_SECONDS = 60;
-
-const leaseRequestBodySchema = z
-  .object({
-    allowDownload: z.boolean().optional(),
-    class: deviceClassSchema.optional(),
-    device: z.string().min(1).optional(),
-    imageTag: imageTagSchema.optional(),
-    leaseId: leaseIdSchema.optional(),
-    mode: z.enum(["slim", "full"]).optional(),
-    noWait: z.boolean().optional(),
-    // Forwarded, not dropped: the dispatcher's `lease.request` handler alone decides whether this token may set it.
-    owner: z.string().min(1).optional(),
-    os: z.string().min(1).optional(),
-    physical: z.boolean().optional(),
-    platform: z.enum(["ios", "android"]),
-    timeoutMs: z.number().int().positive().optional(),
-    ttlMs: z.number().int().positive().optional(),
-  })
-  .strict()
-  .superRefine((body, context) =>
-    refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
-  );
 
 const componentInstallBodySchema = z
   .object({
@@ -296,27 +280,24 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     ),
   );
 
-  app.post("/v1/lease-requests", agentAuth, jsonBody(leaseRequestBodySchema), async (c) => {
+  app.openapi({ ...leaseRequestCreateRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
     const body = c.req.valid("json");
     const idempotencyKey = c.req.header("Idempotency-Key");
     const outcome = await tracker.submit(identity, toLeaseRequestInput(body), idempotencyKey);
-    if (outcome.kind === "rejected") {
-      return errorResponse(c, outcome.error);
-    }
+    if (outcome.kind === "rejected") throw outcome.error;
     c.header("Location", `/v1/lease-requests/${outcome.view.id}`);
     return c.json({ request: serializeRequest(outcome.view) }, 201);
   });
 
-  // Every request waiting for a device, whoever sent it. Operator-role in effect: `list.get` is
-  // an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher.
-  app.get("/v1/lease-requests", agentAuth, async (c) => {
+  // why: operator-role in effect: `list.get` is an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher.
+  app.openapi({ ...leaseRequestListRoute, middleware: [agentAuth] }, async (c) => {
     const requests = await deps.dispatch(
       "list.get",
       { kind: "requests" },
       buildHttpSession(c.get("identity")),
     );
-    return c.json({ requests });
+    return c.json(requestsReplySchema.parse({ requests }), 200);
   });
 
   app.openapi({ ...leaseRequestGetRoute, middleware: [agentAuth] }, async (c) => {
@@ -341,8 +322,8 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json({ request: serializeRequest(view) }, 200);
   });
 
-  app.get("/v1/lease-requests/:id/events", agentAuth, (c) => {
-    const id = c.req.param("id");
+  app.openapi({ ...leaseRequestEventsRoute, middleware: [agentAuth] }, (c) => {
+    const id = c.req.valid("param").id;
     const initial = tracker.get(id);
     if (initial === undefined) throw unknownRequest(id);
     requireOwnRequest(c.get("identity"), initial.ownerId);
@@ -376,8 +357,8 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     );
   });
 
-  app.delete("/v1/lease-requests/:id", agentAuth, async (c) => {
-    const id = c.req.param("id");
+  app.openapi({ ...leaseRequestCancelRoute, middleware: [agentAuth] }, async (c) => {
+    const id = c.req.valid("param").id;
     const existing = tracker.get(id);
     if (existing === undefined) throw unknownRequest(id);
     requireOwnRequest(c.get("identity"), existing.ownerId);
@@ -396,10 +377,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     );
   });
 
-  app.get("/v1/leases/:id", agentAuth, async (c) => {
+  app.openapi({ ...leaseGetRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
-    const lease = await findOwnedLease(deps, session, c.req.param("id"));
+    const lease = await findOwnedLease(deps, session, c.req.valid("param").id);
     const device = findDevice(deps, lease);
     if (device === undefined) throw unknownLease(lease.id);
     // ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
@@ -407,9 +388,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     // per-request value this gateway no longer remembers. `requestId` is still gateway-side
     // bookkeeping, and is still the one field a restart can drop.
     const requestId = tracker.requestIdForLease(lease.id);
-    return c.json({
-      lease: buildLeasePayload(device, lease, requestId === undefined ? {} : { requestId }),
-    });
+    return c.json(
+      { lease: buildLeasePayload(device, lease, requestId === undefined ? {} : { requestId }) },
+      200,
+    );
   });
 
   app.openapi({ ...leaseRenewRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {
@@ -583,9 +565,9 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     });
   });
 
-  app.get("/v1/leases/:id/events", agentAuth, async (c) => {
+  app.openapi({ ...leaseEventsRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
-    const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.param("id"));
+    const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.valid("param").id);
 
     return pipeSse(
       c,
@@ -602,10 +584,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     );
   });
 
-  app.delete("/v1/leases/:id", agentAuth, async (c) => {
+  app.openapi({ ...leaseReleaseRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
-    const id = c.req.param("id");
+    const id = c.req.valid("param").id;
 
     // Best-effort lookup, only to decorate the response with the device id/state --
     // `lease.release`'s output schema is `{ leaseId }` alone (no `deviceId`), so this is still
@@ -624,14 +606,14 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json(
       {
         device: { id: lease?.deviceId ?? id, state: device?.state ?? "reclaiming" },
-        released: true,
+        released: true as const,
       },
       202,
     );
   });
 
-  app.get("/v1/leases", agentAuth, async (c) =>
-    c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity")))),
+  app.openapi({ ...leaseListRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
   // The token records, for a console to name a lease's holder by its token's label. `token.list`
