@@ -36,6 +36,7 @@ import {
   type WarmProposal,
 } from "./policy.js";
 import type { WarmPoolFigures, WarmTargetFigures } from "./figures.js";
+import { CatalogCheck } from "./catalog-check.js";
 import { LearnedKinds } from "./learned.js";
 import { RetrySchedule } from "./retry.js";
 
@@ -109,6 +110,7 @@ export class WarmPool {
   readonly #schedule = new RetrySchedule();
   readonly #flights = new Set<Flight>();
   readonly #learned: LearnedKinds;
+  readonly #catalogCheck: CatalogCheck;
   #again = false;
   #disposed = false;
   /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
@@ -145,6 +147,12 @@ export class WarmPool {
   constructor(private readonly options: WarmPoolOptions) {
     this.#logger = options.logger?.child("warm-pool") ?? new NoopLogger();
     this.#learned = new LearnedKinds(options.state);
+    this.#catalogCheck = new CatalogCheck({
+      catalog: options.catalog,
+      clock: options.clock,
+      hasDriver: options.hasDriver,
+      logger: this.#logger,
+    });
   }
 
   start(): void {
@@ -330,6 +338,7 @@ export class WarmPool {
     try {
       // A pool that is off keeps no target: nothing is resolved, reported or spared.
       const refused = this.options.config.enabled ? await this.#resolveTargets() : [];
+      if (this.options.config.enabled) this.#checkCatalog();
       const plan = await this.options.decisions.run(() => evaluate(this.#view()));
       const reports = [...refused, ...plan.targets];
       this.#note(reports);
@@ -342,6 +351,20 @@ export class WarmPool {
     } catch (error: unknown) {
       this.#logger.error("a warm pool pass failed", { step: "pass", error: stableError(error) });
     }
+  }
+
+  /** why: forgets the kinds the last catalog answers no longer list, then starts the next reads without waiting for them. */
+  #checkCatalog(): void {
+    const kinds = this.#learned.kinds(this.options.clock.now());
+    for (const kind of this.#catalogCheck.gone(kinds)) {
+      this.#learned.forget(kind.spec);
+      this.#logger.info("a warm pool learned kind was forgotten: its model or runtime is gone", {
+        model: kind.spec.model,
+        osVersion: kind.spec.osVersion,
+        platform: kind.spec.platform,
+      });
+    }
+    this.#catalogCheck.start(new Set(kinds.map((kind) => kind.spec.platform)));
   }
 
   /**
