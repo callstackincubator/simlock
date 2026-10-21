@@ -37,7 +37,7 @@ import {
 } from "./policy.js";
 import type { WarmPoolFigures, WarmTargetFigures } from "./figures.js";
 import { CatalogCheck } from "./catalog-check.js";
-import { LearnedKinds } from "./learned.js";
+import { type LearnedKind, LearnedKinds } from "./learned.js";
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
@@ -111,6 +111,10 @@ export class WarmPool {
   readonly #flights = new Set<Flight>();
   readonly #learned: LearnedKinds;
   readonly #catalogCheck: CatalogCheck;
+  /** why: whether the rows left open by a daemon that stopped have been closed against the registry. */
+  #openClosed = false;
+  /** why: whether this pass has already logged that the record could not be read. */
+  #readLogged = false;
   #again = false;
   #disposed = false;
   /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
@@ -162,10 +166,7 @@ export class WarmPool {
       this.#unsubscribe.push(this.options.eventBus.subscribe(event, () => this.#trigger()));
     }
     this.#subscribeLearning();
-    this.#learned.closeOpen(
-      new Set(this.options.registry.snapshot.leases.map((lease) => lease.id)),
-      this.options.clock.now(),
-    );
+    this.#closeOpenRows();
     this.#armTick();
   }
 
@@ -178,15 +179,52 @@ export class WarmPool {
         const device = registry.snapshot.virtualDevices.find(
           (candidate) => candidate.id === payload.deviceId,
         );
-        if (device !== undefined) this.#learned.learn(device.spec, payload.leaseId, clock.now());
+        if (device === undefined) return;
+        this.#recording("learn a lease", () =>
+          this.#learned.learn(device.spec, payload.leaseId, clock.now()),
+        );
       }),
     );
     for (const event of ["lease.released", "lease.expired"] as const) {
       this.#unsubscribe.push(
         eventBus.subscribe(event, ({ payload }) =>
-          this.#learned.ended(payload.leaseId, clock.now()),
+          this.#recording("close a lease", () => this.#learned.ended(payload.leaseId, clock.now())),
         ),
       );
+    }
+  }
+
+  /** why: a failing record costs the pool what it learns, never a lease or a pass: the error is logged and the work goes on. */
+  #recording(step: string, work: () => void): void {
+    try {
+      work();
+    } catch (error: unknown) {
+      this.#logger.warn(`the warm pool's record could not ${step}`, { error: stableError(error) });
+    }
+  }
+
+  /** why: closes the lease rows no lease holds, once; a failure leaves them for the next pass to try again. */
+  #closeOpenRows(): void {
+    if (this.#openClosed || !this.#started) return;
+    const held = new Set(this.options.registry.snapshot.leases.map((lease) => lease.id));
+    this.#recording("close its open lease rows", () => {
+      this.#learned.closeOpen(held, this.options.clock.now());
+      this.#openClosed = true;
+    });
+  }
+
+  /** why: the learned kinds, or none when the record cannot be read; the failure is logged once per pass. */
+  #learnedKinds(): LearnedKind[] {
+    try {
+      return this.#learned.kinds(this.options.clock.now());
+    } catch (error: unknown) {
+      if (!this.#readLogged) {
+        this.#logger.warn("the warm pool's record could not be read", {
+          error: stableError(error),
+        });
+      }
+      this.#readLogged = true;
+      return [];
     }
   }
 
@@ -252,7 +290,7 @@ export class WarmPool {
       devices,
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
-      learned: this.#learned.kinds(this.options.clock.now()),
+      learned: this.#learnedKinds(),
       targets: [...this.#resolved, ...this.#spared],
     });
   }
@@ -335,6 +373,8 @@ export class WarmPool {
       }
       return;
     }
+    this.#readLogged = false;
+    this.#closeOpenRows();
     try {
       // A pool that is off keeps no target: nothing is resolved, reported or spared.
       const refused = this.options.config.enabled ? await this.#resolveTargets() : [];
@@ -355,9 +395,9 @@ export class WarmPool {
 
   /** why: forgets the kinds the last catalog answers no longer list, then starts the next reads without waiting for them. */
   #checkCatalog(): void {
-    const kinds = this.#learned.kinds(this.options.clock.now());
+    const kinds = this.#learnedKinds();
     for (const kind of this.#catalogCheck.gone(kinds)) {
-      this.#learned.forget(kind.spec);
+      this.#recording("forget a kind", () => this.#learned.forget(kind.spec));
       this.#logger.info("a warm pool learned kind was forgotten: its model or runtime is gone", {
         model: kind.spec.model,
         osVersion: kind.spec.osVersion,
@@ -543,7 +583,7 @@ export class WarmPool {
       ),
       inFlight: [...this.#flights].map((flight) => flight.spec),
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
-      learned: this.#learned.kinds(this.options.clock.now()),
+      learned: this.#learnedKinds(),
       leases,
       now: this.options.clock.now(),
       onItsWay: this.#onItsWay(devices),
