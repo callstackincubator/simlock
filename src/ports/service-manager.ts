@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import type { DaemonRole } from "./paths.js";
 export type ServiceManagerName = "launchd" | "systemd";
 
@@ -26,16 +28,18 @@ export interface ServiceDefinitionInput {
 }
 
 export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinition {
+  const name = `com.callstack.simlock.${input.role}`;
   return {
     role: input.role,
-    name: "",
-    path: "",
-    command: "",
-    args: [],
-    environment: {},
-    logPath: "",
+    name,
+    path: join(input.home, "Library", "LaunchAgents", `${name}.plist`),
+    command: input.nodePath,
+    args: [input.mainPath, ...(input.role === "gateway" ? ["--gateway"] : [])],
+    environment: { SIMLOCK_HOME: input.root },
+    logPath: join(input.dataDirectory, "daemon.log"),
   };
 }
+
 export interface ServiceManager {
   readonly manager: ServiceManagerName;
   state(definition: ServiceDefinition): Promise<ServiceState>;

@@ -3,7 +3,35 @@ import { connectDaemonClient } from "../connect.js";
 import { commandArgs, isHelp, subcommand, writeResult } from "../args.js";
 import { consoleLines, formatStatus } from "../format.js";
 import type { StatusGetOutput } from "../../admin/index.js";
+import type { ServiceDefinition, ServiceManager } from "../../ports/index.js";
 import type { CommandContext } from "../tree.js";
+
+function serviceAccess(environment: CommandContext["environment"]): {
+  readonly manager: ServiceManager;
+  readonly definition: () => Promise<ServiceDefinition>;
+} {
+  const { service } = environment;
+  if (service?.manager === undefined) {
+    throw new UsageError("daemon install is supported on macOS and Linux only");
+  }
+  return { manager: service.manager, definition: service.definition };
+}
+
+async function startDaemon(context: CommandContext, json: boolean): Promise<void> {
+  const { environment, token } = context;
+  const client = await connectDaemonClient(environment, token, { launch: true });
+  let status: StatusGetOutput;
+  try {
+    status = await client.getStatus();
+  } finally {
+    await client.close();
+  }
+  if (json) writeResult((value) => environment.stdout.write(value), { status: "running" });
+  else {
+    const lines = ["Daemon running", ...consoleLines(status.daemon)];
+    environment.stdout.write(`${lines.join("\n")}\n`);
+  }
+}
 
 // fallow-ignore-next-line complexity -- daemon subcommand parsing is a single CLI boundary.
 async function run(argv: readonly string[], context: CommandContext): Promise<number> {
@@ -15,24 +43,24 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     json: { type: "boolean" },
   });
   if (command === undefined || isHelp(command) || values.help) {
-    environment.stdout.write("Usage: simlock daemon <start|stop|status|logs [--follow]>\n");
+    environment.stdout.write(
+      "Usage: simlock daemon <start|stop|status|logs [--follow]|install|uninstall>\n",
+    );
     return 0;
   }
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
   if (values.follow && command !== "logs") throw new UsageError("--follow applies only to logs");
   if (command === "start") {
-    const client = await connectDaemonClient(environment, token, { launch: true });
-    let status: StatusGetOutput;
-    try {
-      status = await client.getStatus();
-    } finally {
-      await client.close();
-    }
-    if (values.json) writeResult((value) => environment.stdout.write(value), { status: "running" });
-    else {
-      const lines = ["Daemon running", ...consoleLines(status.daemon)];
-      environment.stdout.write(`${lines.join("\n")}\n`);
-    }
+    await startDaemon(context, values.json === true);
+    return 0;
+  }
+  if (command === "install") {
+    const { manager, definition } = serviceAccess(environment);
+    const service = await definition();
+    await manager.install(service);
+    environment.stdout.write(`Service installed: ${service.name} (${manager.manager})\n`);
+    await startDaemon(context, false);
+    environment.stdout.write("To start after a reboot, turn on automatic login for this user.\n");
     return 0;
   }
   if (command === "stop") {

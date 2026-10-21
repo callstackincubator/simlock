@@ -253,10 +253,31 @@ export function buildCliEnvironment(
     checkConfig,
   );
 
+  const service = ports.service;
   return {
     clock,
     configPath,
     daemonHome,
+    ...(service === undefined
+      ? {}
+      : {
+          service: {
+            manager: service.manager,
+            platform: service.platform,
+            definition: async () => {
+              const { serviceDefinition } = await import("../ports/index.js");
+              return serviceDefinition({
+                role: daemonHome.role,
+                root: service.root,
+                dataDirectory,
+                home: service.home,
+                nodePath: service.nodePath,
+                mainPath: service.mainPath,
+                env,
+              });
+            },
+          },
+        }),
     requesterId,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
