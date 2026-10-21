@@ -36,6 +36,7 @@ describe("LearnedKinds", () => {
       readonly name: string;
       readonly run: (kinds: LearnedKinds) => number;
       readonly count: number;
+      readonly rows?: number;
     }[] = [
       {
         count: 3,
@@ -97,6 +98,7 @@ describe("LearnedKinds", () => {
       {
         count: 1,
         name: "no lease rows left",
+        rows: 1,
         run: (kinds) => {
           kinds.learn(phone, "old", T0 - 30 * HOUR);
           kinds.ended("old", T0 - 29 * HOUR);
@@ -106,9 +108,15 @@ describe("LearnedKinds", () => {
       },
     ];
 
-    for (const { count, name, run } of cases) {
-      const { kinds } = await open();
+    for (const { count, name, rows, run } of cases) {
+      const { kinds, state } = await open();
       const now = run(kinds);
+      if (rows !== undefined) {
+        expect(
+          state.database.prepare("SELECT COUNT(*) AS n FROM warm_kind_leases").get()?.n,
+          name,
+        ).toBe(rows);
+      }
       expect(kinds.kinds(now).find((kind) => kind.spec.model === "iPhone 16")?.count, name).toBe(
         count,
       );

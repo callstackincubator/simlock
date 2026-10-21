@@ -760,6 +760,28 @@ describe("warm pool converger", () => {
     expect(rig.kick).toHaveBeenCalledTimes(1);
   });
 
+  it("does not try a failed shutdown of a device again within a tick, and does after", async () => {
+    const attempts: string[] = [];
+    const rig = harness([device("a", "ready", 5_000), device("b", "ready", 1_000)], {
+      limit: 1,
+      shutdown: async (target) => {
+        attempts.push(target.id);
+        throw new Error("simctl shutdown failed");
+      },
+    });
+
+    await rig.pool.pass();
+    rig.clock.advance(WARM_POOL_TICK_MS - 1);
+    await rig.pool.pass();
+
+    expect(attempts).toEqual(["a"]);
+
+    rig.clock.advance(1);
+    await rig.pool.pass();
+
+    expect(attempts).toEqual(["a", "a"]);
+  });
+
   it("runs a pass on each trigger event and on the tick, and none once disposed", async () => {
     const triggers = [
       ["daemon.started", { configSnapshot: {}, version: "test" }],
@@ -2288,6 +2310,20 @@ describe("warm pool learned kinds", () => {
     expect(restarted.bootCalls).toEqual(["shut"]);
   });
 
+  it("forget() empties the record, and the next lease learns its kind again", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(phone, "past", now - 2 * minute);
+    const rig = harness([device("d1", "leased", 0)], { state });
+    rig.pool.start();
+
+    rig.pool.forget();
+
+    expect(new LearnedKinds(state).kinds(rig.clock.now())).toEqual([]);
+    granted(rig, "next", "d1");
+    expect(new LearnedKinds(state).kinds(rig.clock.now()).map((kind) => kind.count)).toEqual([1]);
+  });
+
   it("starts one catalog read per platform with a learned kind beside a pass, never two at once, forgets a kind whose model, OS, tag image or driver is gone, and keeps a platform's kinds when its read throws or passes 30 s", async () => {
     const phone = device("d1", "ready", 0).spec;
     const catalogOf = (entry: Partial<PlatformCatalog>): PlatformCatalog => ({
@@ -2326,17 +2362,26 @@ describe("warm pool learned kinds", () => {
       };
     };
 
-    const listed = await run(async () => [catalogOf({})]);
+    const listed = await run(async () => [
+      catalogOf({ modelRuntimes: {}, models: [], platform: "android" }),
+      catalogOf({}),
+    ]);
     expect(listed.kinds).toBe(1);
     expect(listed.calls).toEqual([1, 2]);
+    listed.rig.clock.advance(30_000);
+    expect(
+      listed.rig.sink.records.filter(
+        (record) => record.message === "a warm pool catalog read took too long",
+      ),
+    ).toEqual([]);
 
-    const unlistedModel = await run(async () => [catalogOf({ models: [], modelRuntimes: {} })]);
+    const unlistedModel = await run(async () => [catalogOf({ models: [] })]);
     expect(unlistedModel.kinds).toBe(0);
     expect(
       (await run(async () => [catalogOf({ modelRuntimes: { "iPhone 15": ["18.0"] } })])).kinds,
     ).toBe(0);
     const tagged = { ...phone, imageTag: "google_apis" };
-    const images = (tag: string) => [{ abi: "arm64", runtime: "26.0", tag }];
+    const images = (tag: string, runtime = "26.0") => [{ abi: "arm64", runtime, tag }];
     expect(
       (await run(async () => [catalogOf({ images: images("default") })], { spec: tagged })).kinds,
     ).toBe(0);
@@ -2344,7 +2389,16 @@ describe("warm pool learned kinds", () => {
       (await run(async () => [catalogOf({ images: images("google_apis") })], { spec: tagged }))
         .kinds,
     ).toBe(1);
-    expect((await run(async () => [catalogOf({})], { refused: true })).kinds).toBe(0);
+    expect(
+      (
+        await run(async () => [catalogOf({ images: images("google_apis", "18.0") })], {
+          spec: tagged,
+        })
+      ).kinds,
+    ).toBe(0);
+    const refused = await run(async () => [catalogOf({})], { refused: true });
+    expect(refused.kinds).toBe(0);
+    expect(refused.listCatalog).not.toHaveBeenCalled();
 
     const throwing = await run(async () => {
       throw new Error("avdmanager failed");
@@ -2405,7 +2459,7 @@ describe("warm pool learned kinds", () => {
       await short.pool.settle();
       const met = harness([device("d1", "ready", 0)], {
         limit: 1,
-        state: await withLearned([1]),
+        state: await withLearned([1, 2]),
         targets: [phone],
       });
       await met.pool.pass();
@@ -2427,9 +2481,9 @@ describe("warm pool learned kinds", () => {
         (record) => record.message === "a warm pool target is short",
       );
       expect(shortLogs.map((record) => record.fields?.target)).toEqual(["ios iPhone 15 26.0"]);
-      expect(met.pool.figures().targets.map((target) => [target.model, target.ready])).toEqual([
-        ["iPhone 15", 1],
-      ]);
+      expect(
+        met.pool.figures().targets.map((target) => [target.model, target.ready, target.short]),
+      ).toEqual([["iPhone 15", 1, undefined]]);
       expect(
         met.sink.records.filter((record) => record.message === "a warm pool target is short"),
       ).toEqual([]);
@@ -2527,12 +2581,29 @@ describe("warm pool learned kinds", () => {
       granted(rig, "again", "d1");
 
       expect(new LearnedKinds(real).kinds(rig.clock.now()).map((kind) => kind.count)).toEqual([1]);
+
+      new LearnedKinds(real).learn(phone, "ghost", rig.clock.now());
+      await rig.pool.pass();
+
+      expect(
+        real.database.prepare("SELECT lease_id FROM warm_kind_leases WHERE ended_at IS NULL").all(),
+      ).toEqual([{ lease_id: "again" }, { lease_id: "ghost" }]);
     });
   });
 
-  it("forgets a learned kind on its third failed boot or creation in a row with one warning, and a success in between resets the count", async () => {
+  it("forgets a learned kind on its third failed boot or creation in a row with one warning, and a success in between or a forgetting resets the count, and a configured target's kind is never forgotten", async () => {
     const phone = device("d1", "ready", 0).spec;
-    const run = async (outcomes: readonly ("fail" | "ok")[], creation: boolean) => {
+    const configured: WarmTarget = {
+      count: 1,
+      model: "iPhone 15",
+      osVersion: "26.0",
+      platform: "ios",
+    };
+    const run = async (
+      outcomes: readonly ("fail" | "ok")[],
+      creation: boolean,
+      options: { relearnAt?: number; targets?: WarmTarget[] } = {},
+    ) => {
       const state = await openMemoryState([warmPoolOwner]);
       new LearnedKinds(state).learn(phone, "l1", now - 2 * minute);
       new LearnedKinds(state).ended("l1", now - minute);
@@ -2549,9 +2620,14 @@ describe("warm pool learned kinds", () => {
             if (next() === "fail") throw new Error("creation failed");
           },
           state,
+          ...(options.targets === undefined ? {} : { targets: options.targets }),
         },
       );
       for (let round = 0; round < outcomes.length; round += 1) {
+        if (round === options.relearnAt) {
+          new LearnedKinds(state).learn(phone, "l2", rig.clock.now() - 2 * minute);
+          new LearnedKinds(state).ended("l2", rig.clock.now() - minute);
+        }
         await rig.pool.pass();
         await rig.pool.settle();
         rig.clock.advance(10 * minute);
@@ -2578,6 +2654,30 @@ describe("warm pool learned kinds", () => {
       expect(reset.warnings).toEqual([]);
       const two = await run(["fail", "fail"], creation);
       expect(two.kinds, `creation ${creation}`).toBe(1);
+      const again = await run(["fail", "fail", "fail", "fail"], creation, { relearnAt: 3 });
+      expect(again.kinds, `creation ${creation}`).toBe(1);
+      const kept = await run(["fail", "fail", "fail"], creation, { targets: [configured] });
+      expect(kept.kinds, `creation ${creation}`).toBe(1);
+      expect(kept.warnings).toEqual([]);
     }
+
+    const behind = { ...phone, model: "iPhone 16" };
+    const waiters = harness([], {
+      maxConcurrentBoots: 2,
+      provision: async () => {
+        throw new Error("creation failed");
+      },
+      state: await openMemoryState([warmPoolOwner]),
+      waiting: () => [waiter({ ...phone, model: "iPhone 15" }, true), waiter(behind)],
+    });
+    for (let round = 0; round < 3; round += 1) {
+      await waiters.pool.pass();
+      await waiters.pool.settle();
+      waiters.clock.advance(10 * minute);
+    }
+    expect(waiters.provisionCalls).toHaveLength(3);
+    expect(
+      waiters.sink.records.filter((record) => record.message.includes("was forgotten")),
+    ).toEqual([]);
   });
 });

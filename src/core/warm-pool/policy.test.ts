@@ -1585,7 +1585,7 @@ describe("warm pool policy", () => {
         target: wanted,
       });
 
-      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating, and counts a learned kind's leased and reclaiming devices as had", () => {
+      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating, and counts a learned kind's leased, reclaiming and claimed devices as had", () => {
         const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 1, now - 2 * minute)];
 
         const first = plan(view([], { learned, limit: 1, maxConcurrentBoots: 2 }));
@@ -1609,6 +1609,10 @@ describe("warm pool policy", () => {
 
         const held = [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")];
         expect(evaluate(view(held, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
+        const claimed = ofKind("claimed", "ready");
+        expect(
+          evaluate(view([claimed], { claimed: ["claimed"], learned: [learnedOf(kind, 1, now)] })),
+        ).toEqual([]);
         const reclaiming = [
           ofKind("a", "leased"),
           ofKind("b", "leased"),
@@ -1652,7 +1656,7 @@ describe("warm pool policy", () => {
         expect(evaluate(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual([]);
       });
 
-      it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request, for a kind short for ram-budget, device-limit or reserve, or for a configured target", () => {
+      it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request or is already shut down for the budget, for a kind short for ram-budget, device-limit or reserve, or for a configured target", () => {
         const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 2, now - 2 * minute)];
         const recent = device("recent", "ready", { endedAgo: 5 * minute, spec: older });
         const stale = device("stale", "ready", { endedAgo: 30 * minute, spec: older });
@@ -1675,6 +1679,16 @@ describe("warm pool policy", () => {
           provision(kind),
         ]);
         expect(refused({ handoffInFlight: true, limit: 2 })).toEqual([]);
+        const holder = device("holder", "leased", { spec: spec("iPad Air") });
+        expect(
+          evaluate(
+            view([holder, stale], {
+              learned: [learnedOf(kind, 2, now - minute), learnedOf(older, 1, now - 2 * minute)],
+              limit: 1,
+              maxConcurrentBoots: 2,
+            }),
+          ),
+        ).toEqual([{ action: "shutdown", deviceId: "stale", reason: "over-budget" }]);
         const droid = device("droid", "ready", {
           endedAgo: 40 * minute,
           spec: spec("Pixel 8", { platform: "android" }),

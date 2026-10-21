@@ -88,15 +88,15 @@ Stop: `close()` at stop start; `drain()` finishes the pass and running boots, st
 
 ## State and timers
 
-| What                                        | Default                             | Key                              |
-| ------------------------------------------- | ----------------------------------- | -------------------------------- |
-| Pool on                                     | `true`                              | `warmPool.enabled`               |
-| Running slots idle devices may not fill     | 0 per platform, capped at its limit | `warmPool.reserveRunning`        |
-| Targets                                     | none, at most 256                   | `warmPool.targets`               |
-| Boots and creations in flight at once       | `max(1, floor(cpuCount / 4))`       | `warmPool.maxConcurrentBoots`    |
-| Never-leased idle                           | 10 min                              | `idle.shutdownAfterMs`           |
-| Tick; pause after a failed boot or shutdown | 30 s                                | `WARM_POOL_TICK_MS`              |
-| Target retry                                | 60 s, doubling, cap 10 min          | `RETRY_FIRST_MS`, `RETRY_MAX_MS` |
+| What                                    | Default                             | Key                              |
+| --------------------------------------- | ----------------------------------- | -------------------------------- |
+| Pool on                                 | `true`                              | `warmPool.enabled`               |
+| Running slots idle devices may not fill | 0 per platform, capped at its limit | `warmPool.reserveRunning`        |
+| Targets                                 | none, at most 256                   | `warmPool.targets`               |
+| Boots and creations in flight at once   | `max(1, floor(cpuCount / 4))`       | `warmPool.maxConcurrentBoots`    |
+| Never-leased idle                       | 10 min                              | `idle.shutdownAfterMs`           |
+| Tick; pause after a failed shutdown     | 30 s                                | `WARM_POOL_TICK_MS`              |
+| Target retry                            | 60 s, doubling, cap 10 min          | `RETRY_FIRST_MS`, `RETRY_MAX_MS` |
 
 Target keys: `platform`, `model`, `count` required; `osVersion` (version or range), `mode`.
 Any other key, a class included, fails the load. Targets are config; the learned kinds are the
