@@ -72,7 +72,7 @@ carries:
   `INTERNAL`; `BAD_REQUEST` on a route with input; `UNSUPPORTED_MEDIA_TYPE`
   on a route with a JSON body;
 - a tag (System, Devices, Lease requests, Leases, Workers, Components,
-  Tokens, Events; `agent-device`, `stream` and `Uplink` for §4) and a
+  Tokens, Events; `stream` for §4) and a
   description that names the role the operation needs and any mode that
   answers 501.
 
@@ -102,23 +102,28 @@ The document's `info.version` is the package version.
   is 400 `BAD_REQUEST`, "Invalid JSON body", on every body route. Today it
   is 500 `INTERNAL` on all but renew.
 
-### 4. Module and uplink routes are listed, not re-declared
+### 4. The document lists only what outside callers rely on
 
-The `agent-device` and `stream` mounts stay one handler each, served at
-`/v1/<name>` and `/v1/<name>/*`. Each module's definition carries its
-routes as plain data (`http.routes`: method, path, statuses), so the
-document needs no module loaded. This extends ADR 0030's definition by one
-optional field; `definition.ts` stays light. agent-device's own route check
-is derived from the same list. The routes go into the document tagged with the module and the config key that
-turns it on (`capabilities.<name>.enabled`). Bodies simlock owns are typed
-(the stream's refusals, the agent-device front's own refusals);
-agent-device's own protocol bodies are not copied, the route links to
-agent-device. Each module's routes carry its own tag, `agent-device` or
-`stream`. `GET /v1/uplink` is listed as gateway only, tagged `Uplink`, with
-101, 400, 401, 403 and 404. A test keeps each module's list equal to the paths its
-handler answers. The coverage check (§6) counts a mount as covered when
-its module lists at least one path under it, and matches the uplink
-against `UPLINK_PATH`, since the upgrade is not a route of the app.
+The document describes the routes an integrator calls: the core routes of
+§2 and the stream module's `GET /v1/stream/leases/{id}`. It leaves out the
+routes only simlock's own tools call:
+
+- `/v1/agent-device/*`, agent-device's proxy URL. The agent-device CLI is
+  its only caller, and what it relies on is the base URL, which the
+  document's overview names.
+- `/v1/uplink`, the connection a worker dials to join a gateway.
+
+A module's definition says which kind it is, as plain data
+(`http: { public: false }`, or `http: { public: true, routes }` with each
+route's method, path, statuses and refusal schemas), so the document needs
+no module loaded. This extends ADR 0030's definition by one optional field;
+`definition.ts` stays light. The host copies the data onto each mount, so
+the HTTP app reads it without naming a module, and refuses a module that
+mounts routes without saying which kind they are. A public module's routes
+go into the document under the module's tag, which names the config key
+that turns it on (`capabilities.<name>.enabled`). The coverage check (§6)
+counts a mount as covered when its module is public with at least one
+route, or not public.
 
 ### 5. Replies are checked in tests
 
@@ -126,10 +131,9 @@ against `UPLINK_PATH`, since the upgrade is not a route of the app.
 declared schema, with unknown keys refused at every depth, and refuses an
 error code that is neither declared nor a base code. The schemas
 themselves stay as they are: the contract strips unknown keys in
-production. For the stream module it refuses a status the module did not
-list and a refusal body that does not match its listed schema.
-agent-device's routes are not checked: its front passes agent-device's
-own replies through on the same statuses as its refusals. A mismatch answers 500
+production. For a public module's routes it refuses a status the module
+did not list and a refusal body that does not match its listed schema.
+A non-public module's routes are not checked. A mismatch answers 500
 `INTERNAL` naming the route and the problem; on an SSE route the stream
 sends an `error` message, `{error:{code:"INTERNAL",message}}`, and ends.
 The fast e2e lane runs with the switch on; the slow lane, with real
@@ -167,5 +171,6 @@ sequenceDiagram
 - A caller that sends a body without a JSON content type gets 415 instead
   of 400.
 - Zod's default 400 texts change once, with the move to Zod 4.
-- The spec does not type event payloads or agent-device's protocol; it
-  links to where they are documented.
+- The spec does not type event payloads; it links to the Events reference.
+- agent-device's proxy routes and the uplink stay undocumented in the spec:
+  changing them breaks no integrator.
