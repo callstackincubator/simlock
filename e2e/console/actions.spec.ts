@@ -358,4 +358,46 @@ test.describe("the console acts", () => {
       await daemon.dispose();
     }
   });
+
+  test("the row menu shows the dangerous items last, after a separator, in the error colour", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "menu-a" }]);
+    try {
+      const [stopped] = fleet.workers as [RunningDaemon];
+      await stopped.stop();
+      await waitFor(
+        async () => {
+          const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+          return (listed.json as { workers: { connection: string }[] }).workers.some(
+            (view) => view.connection === "disconnected",
+          );
+        },
+        { label: "the gateway sees the stopped worker disconnected" },
+      );
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      await rowOf(page, "menu-a").getByRole("button", { name: "Actions for menu-a" }).click();
+
+      const items = page.getByRole("menuitem");
+      await expect(items).toHaveCount(2);
+      await expect(items.nth(0)).toHaveText("Drain");
+      await expect(items.nth(1)).toHaveText("Remove worker");
+      await expect(page.getByRole("separator")).toHaveCount(1);
+      const colours = await items.evaluateAll((nodes) =>
+        nodes.map((node) => getComputedStyle(node).color),
+      );
+      const error = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--status-error)";
+        document.body.append(probe);
+        const colour = getComputedStyle(probe).color;
+        probe.remove();
+        return colour;
+      });
+      expect(colours[1]).toBe(error);
+      expect(colours[0]).not.toBe(error);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
