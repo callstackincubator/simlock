@@ -1,6 +1,6 @@
 # 0041. The daemon can run under the user's service manager
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-21
 - **Issue:** [#818](https://github.com/callstackincubator/simlock/issues/818)
 - **Supersedes:** nothing. Builds on [ADR
