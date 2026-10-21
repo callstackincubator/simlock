@@ -20,45 +20,26 @@ function worker(overrides: Partial<WorkerView> = {}): WorkerView {
   };
 }
 
-function render(workers: readonly WorkerView[], key?: string): string {
-  const page = inboxPageOf({ events: [], key, now: NOW, workers });
-  return renderToStaticMarkup(<InboxBody page={page} />);
+function render(workers: readonly WorkerView[]): string {
+  const page = inboxPageOf({ events: [], key: undefined, now: NOW, workers });
+  return renderToStaticMarkup(<InboxBody rows={page.rows} filter="all" />);
 }
 
 describe("the Inbox screen", () => {
   it("says so when the Inbox is empty", () => {
-    const html = render([worker()]);
-
-    expect(html).toContain("Nothing needs you.");
-    expect(html).toContain("0 open");
+    expect(render([worker()])).toContain("Nothing needs you.");
   });
 
-  it("counts the open items and links each row to its item, with its condition as its name", () => {
+  it("links each row to its item, with its condition as its name, under its group", () => {
     const html = render([
       worker({ connection: "disconnected", id: "wrk_a", label: "mac-mini-1" }),
       worker({ drained: true, id: "wrk_b" }),
     ]);
 
-    expect(html).toContain("2 open");
+    expect(html).toContain("Broken");
+    expect(html).toContain("Needs a look");
     expect(html).toContain('aria-label="disconnected"');
     expect(html).toContain('href="/inbox/wrk_a%2Fdisconnected"');
     expect(html).toContain('href="/inbox/wrk_b%2Fdrained"');
-  });
-
-  it("shows the first item in the inspector with its worker linked and an Open worker button", () => {
-    const html = render([worker({ drained: true, id: "wrk/1", label: "mac-mini-1" })]);
-
-    expect(html).toContain("Leases still held");
-    expect(html).toContain('href="/fleet/wrk%2F1"');
-    expect(html).toContain("Open worker");
-    expect(html).toContain("Recent events");
-    expect(html).toContain("No events in the last hour.");
-  });
-
-  it("says Resolved. with a link back when the URL names an item that is no longer in the Inbox", () => {
-    const html = render([worker()], "wrk_1/drained");
-
-    expect(html).toContain("Resolved.");
-    expect(html).toContain('<a href="/inbox">Back to Inbox</a>');
   });
 });

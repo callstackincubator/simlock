@@ -167,6 +167,20 @@ export function inboxTone(condition: InboxItem["condition"]): Tone {
 
 export type InboxGroup = "Broken" | "Needs a look" | "Heads-up";
 
+export type InboxFilter = "all" | InboxGroup;
+
+export const INBOX_FILTERS: readonly { readonly value: InboxFilter; readonly label: string }[] = [
+  { label: "All", value: "all" },
+  ...GROUPS.map((group) => ({ label: group, value: group })),
+];
+
+export function filterInboxRows(
+  rows: readonly InboxRow[],
+  filter: InboxFilter,
+): readonly InboxRow[] {
+  return filter === "all" ? rows : rows.filter((row) => row.group === filter);
+}
+
 export interface InboxRow {
   readonly group: InboxGroup;
   readonly key: string;
@@ -371,9 +385,9 @@ export function inboxPageOf(input: {
   readonly events: readonly ConsoleEvent[];
   readonly now: number;
   readonly key: string | undefined;
-  readonly requests?: readonly WaitingRequest[];
-  readonly leases?: readonly LeaseRecord[];
-  readonly tokens?: readonly TokenRecord[];
+  readonly requests?: readonly WaitingRequest[] | undefined;
+  readonly leases?: readonly LeaseRecord[] | undefined;
+  readonly tokens?: readonly TokenRecord[] | undefined;
 }): InboxPage {
   const items = inboxItems(input.workers, input);
   const rows = inGroupOrder(items).map((item) => ({
