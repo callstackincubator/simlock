@@ -11,17 +11,7 @@ import { DECLARED_ROUTES } from "./route-declarations.js";
 import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from "./test-fakes.js";
 
 // why: a task that declares a route deletes its line, so the list shrinks to nothing.
-const UNDECLARED_ROUTES = [
-  "GET /v1/components",
-  "DELETE /v1/components/{platform}/{version}",
-  "GET /v1/tokens",
-  "GET /v1/workers",
-  "POST /v1/workers/{id}/drain",
-  "DELETE /v1/workers/{id}/drain",
-  "DELETE /v1/workers/{id}",
-  "GET /v1/events",
-  "GET /v1/events/stream",
-];
+const UNDECLARED_ROUTES: readonly string[] = [];
 
 function coverageProblems(
   registered: readonly string[],

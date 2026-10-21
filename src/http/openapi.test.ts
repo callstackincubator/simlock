@@ -206,6 +206,136 @@ describe("buildOpenApiDocument", () => {
       expect(Object.keys(streamMessage(stream).properties ?? {})).toEqual(["data", "event"]);
     }
   });
+
+  it("an integrator reads the admin routes in the document, with the side that answers 501, each route's own codes, the events query and install's two sides", () => {
+    const paths = buildOpenApiDocument([]).paths ?? {};
+    const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
+    const routes = [
+      ["get", "/v1/workers", "Workers"],
+      ["post", "/v1/workers/{id}/drain", "Workers"],
+      ["delete", "/v1/workers/{id}/drain", "Workers"],
+      ["delete", "/v1/workers/{id}", "Workers"],
+      ["get", "/v1/components", "Components"],
+      ["delete", "/v1/components/{platform}/{version}", "Components"],
+      ["post", "/v1/components/install", "Components"],
+      ["get", "/v1/tokens", "Tokens"],
+      ["get", "/v1/events", "Events"],
+      ["get", "/v1/events/stream", "Events"],
+    ] as const;
+
+    expect(
+      Object.fromEntries(
+        routes.map(([method, path]) => [`${method} ${path}`, operation(path, method)?.tags]),
+      ),
+    ).toEqual(
+      Object.fromEntries(routes.map(([method, path, tag]) => [`${method} ${path}`, [tag]])),
+    );
+    const sideOf = (method: "get" | "post" | "delete", path: string) => {
+      const found = operation(path, method);
+      return {
+        codes501: errorCodes(found, "501"),
+        gatewayOnly: found?.description?.includes("gateway only"),
+        workerOnly: found?.description?.includes("worker only"),
+      };
+    };
+    expect({
+      drain: sideOf("post", "/v1/workers/{id}/drain"),
+      undrain: sideOf("delete", "/v1/workers/{id}/drain"),
+      remove: sideOf("delete", "/v1/workers/{id}"),
+      list: sideOf("get", "/v1/components"),
+      componentRemove: sideOf("delete", "/v1/components/{platform}/{version}"),
+      install: sideOf("post", "/v1/components/install"),
+    }).toEqual({
+      drain: { codes501: ["UNSUPPORTED_IN_WORKER_MODE"], gatewayOnly: true, workerOnly: false },
+      undrain: { codes501: ["UNSUPPORTED_IN_WORKER_MODE"], gatewayOnly: true, workerOnly: false },
+      remove: { codes501: ["UNSUPPORTED_IN_WORKER_MODE"], gatewayOnly: true, workerOnly: false },
+      list: { codes501: ["UNSUPPORTED_IN_GATEWAY_MODE"], gatewayOnly: false, workerOnly: true },
+      componentRemove: {
+        codes501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+        gatewayOnly: false,
+        workerOnly: true,
+      },
+      install: {
+        codes501: ["UNSUPPORTED_IN_GATEWAY_MODE", "UNSUPPORTED_IN_WORKER_MODE"],
+        gatewayOnly: true,
+        workerOnly: true,
+      },
+    });
+    expect(operation("/v1/components/install", "post")?.description).toContain("without `workers`");
+
+    expect(
+      Object.fromEntries(
+        (
+          [
+            ["post", "/v1/workers/{id}/drain", "404"],
+            ["delete", "/v1/workers/{id}/drain", "404"],
+            ["delete", "/v1/workers/{id}", "409"],
+            ["post", "/v1/components/install", "403"],
+            ["post", "/v1/components/install", "404"],
+            ["post", "/v1/components/install", "422"],
+            ["post", "/v1/components/install", "503"],
+            ["post", "/v1/components/install", "504"],
+            ["get", "/v1/events", "422"],
+            ["get", "/v1/events", "503"],
+          ] as const
+        ).map(([method, path, status]) => [
+          `${method} ${path} ${status}`,
+          errorCodes(operation(path, method), status),
+        ]),
+      ),
+    ).toEqual({
+      "delete /v1/workers/{id} 409": ["WORKER_CONNECTED"],
+      "delete /v1/workers/{id}/drain 404": ["UNKNOWN_WORKER"],
+      "get /v1/events 422": ["HISTORY_NOT_KEPT"],
+      "get /v1/events 503": ["HISTORY_UNAVAILABLE", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
+      "post /v1/components/install 403": ["DOWNLOADS_DISABLED", "FORBIDDEN"],
+      "post /v1/components/install 404": ["UNKNOWN_WORKER"],
+      "post /v1/components/install 422": ["NO_DRIVER"],
+      "post /v1/components/install 503": [
+        "WORKER_UNREACHABLE",
+        "DAEMON_STOPPING",
+        "DAEMON_STARTUP_FAILED",
+      ],
+      "post /v1/components/install 504": ["DOWNLOAD_TIMEOUT"],
+      "post /v1/workers/{id}/drain 404": ["UNKNOWN_WORKER"],
+    });
+    expect({
+      components: queryNames(operation("/v1/components", "get")),
+      componentRemove: queryNames(operation("/v1/components/{platform}/{version}", "delete")),
+      events: queryNames(operation("/v1/events", "get")),
+    }).toEqual({
+      components: ["platform"],
+      componentRemove: ["dryRun"],
+      events: ["before", "limit", "since"],
+    });
+    expect(
+      Object.keys(replySchema(operation("/v1/events", "get"), "200").properties ?? {}),
+    ).toEqual(["events"]);
+
+    const install = operation("/v1/components/install", "post");
+    expect(streamEvents(install)).toEqual(["error", "progress", "result"]);
+    expect(dataKeys(install)).toEqual([
+      ["component", "outcome", "platform", "version"],
+      ["error"],
+      ["fraction", "stage", "workerId"],
+      ["results"],
+      ["stage", "workerId"],
+    ]);
+    const stream = operation("/v1/events/stream", "get");
+    const message = streamMessage(stream).properties as {
+      event?: { type?: string; enum?: unknown };
+      data?: { properties?: Record<string, object> };
+    };
+    expect(message.event?.type).toBe("string");
+    expect(message.event?.enum).toBeUndefined();
+    expect(Object.keys(message.data?.properties ?? {}).sort()).toEqual(
+      ["event", "id", "module", "payload", "seq", "timestamp"].sort(),
+    );
+    expect(message.data?.properties?.payload).not.toHaveProperty("type");
+    expect(operation("/v1/events/stream", "get")?.description).toContain(
+      "/simlock/docs/reference/events",
+    );
+  });
 });
 
 function summarize(
@@ -283,4 +413,22 @@ function errorFields(operation: { responses?: object } | undefined, status: stri
 
 function errorCodes(operation: { responses?: object } | undefined, status: string) {
   return replySchema(operation, status).properties?.error?.properties?.code?.enum;
+}
+
+function queryNames(operation: { parameters?: unknown } | undefined) {
+  return ((operation?.parameters ?? []) as { in: string; name: string }[])
+    .filter((parameter) => parameter.in === "query")
+    .map((parameter) => parameter.name);
+}
+
+function dataKeys(operation: { responses?: object } | undefined) {
+  const flatten = (shape: Shape & { anyOf?: Shape[]; oneOf?: Shape[] }): string[][] => {
+    const branches = shape.anyOf ?? shape.oneOf;
+    return branches === undefined
+      ? [Object.keys(shape.properties ?? {}).sort()]
+      : branches.flatMap((branch) => flatten(branch as never));
+  };
+  return flatten(streamMessage(operation).properties?.data as never).sort((a, b) =>
+    a.join().localeCompare(b.join()),
+  );
 }
