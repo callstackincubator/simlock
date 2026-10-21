@@ -15,8 +15,6 @@ export interface MenuEntry {
   readonly onSelect: () => void;
 }
 
-// why: a click inside the popup reaches the table row through React's tree (the popup is a portal),
-// and a row that opens its item must not open it for a menu entry.
 function MenuItems({ entries }: { readonly entries: readonly MenuEntry[] }) {
   const first = entries.findIndex((entry) => entry.danger);
   return entries.map((entry, index) => (
@@ -64,6 +62,8 @@ export function MenuRow(props: {
   );
 }
 
+// why: a click in the ⋯ popup reaches the table row through React's tree (the popup is a portal),
+// and a row that opens its item must not open it for a menu entry.
 export function RowMenu(props: { readonly label: string; readonly entries: readonly MenuEntry[] }) {
   const { entries, label } = props;
   if (entries.length === 0) return null;

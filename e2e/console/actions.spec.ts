@@ -336,6 +336,39 @@ test.describe("the console acts", () => {
     }
   });
 
+  test("a write the daemon answers with 401 shows no error toast and signs the operator out", async ({
+    page,
+  }) => {
+    const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(daemon, "expired-agent");
+      await openPage(page, daemon, "/leases", "Leases");
+      await page.route("**/v1/leases/*", (route) =>
+        route.request().method() === "DELETE"
+          ? route.fulfill({
+              json: { error: { code: "UNAUTHENTICATED", message: "Unknown bearer token" } },
+              status: 401,
+            })
+          : route.continue(),
+      );
+      const row = rowOf(page, "expired-agent");
+      const menuButton = row.getByRole("button", { name: "Actions for expired-agent" });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await page
+        .getByRole("alertdialog", { name: "Release expired-agent's lease?" })
+        .getByRole("button", { name: "Release lease" })
+        .click();
+
+      await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+      await expect(page.getByText("Couldn't release expired-agent's lease")).toHaveCount(0);
+      await expect(page.getByRole("alert")).toHaveCount(0);
+    } finally {
+      await daemon.dispose();
+    }
+  });
+
   test("while a release is in flight its button reads Releasing… and is disabled, and a second click sends no second DELETE", async ({
     page,
   }) => {
@@ -388,6 +421,14 @@ test.describe("the console acts", () => {
       await expect(items.nth(0)).toHaveText("Drain");
       await expect(items.nth(1)).toHaveText("Remove worker");
       await expect(page.getByRole("separator")).toHaveCount(1);
+      const order = await page
+        .getByRole("menu")
+        .evaluate((menu) =>
+          [...menu.querySelectorAll('[role="menuitem"], [role="separator"]')].map((node) =>
+            node.getAttribute("role"),
+          ),
+        );
+      expect(order).toEqual(["menuitem", "separator", "menuitem"]);
       const colours = await items.evaluateAll((nodes) =>
         nodes.map((node) => getComputedStyle(node).color),
       );
@@ -416,6 +457,7 @@ test.describe("the console acts", () => {
       await rowOf(page, "drawer-agent").getByRole("link").first().click();
       const drawer = page.getByRole("dialog", { name: "drawer-agent" });
       await expect(drawer).toBeVisible();
+      await expect(drawer.getByRole("button", { name: "Release lease" })).toHaveCount(0);
       await drawer.getByRole("button", { name: "Actions for drawer-agent" }).click();
       await page.getByRole("menuitem", { name: "Release lease" }).click();
       await page
@@ -434,6 +476,16 @@ test.describe("the console acts", () => {
       await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Actions for bar-a" }).click();
       await expect(page.getByRole("menuitem", { name: "Undrain" })).toBeVisible();
+      await page.keyboard.press("Escape");
+
+      const [stopped] = fleet.workers as [RunningDaemon];
+      await stopped.stop();
+      await waitForDisconnected(fleet.gateway);
+      await page.getByRole("button", { name: "Actions for bar-a" }).click();
+      await expect(page.getByRole("menuitem")).toHaveText(["Undrain", "Remove worker"]);
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Remove worker" })).toHaveCount(0);
     } finally {
       await disposeFleet(fleet);
     }
@@ -526,23 +578,30 @@ test.describe("the console acts", () => {
       await act("toast-a", "Drain");
       const drained = toastOf("toast-a drained");
       await expect(drained).toBeVisible();
-      await page.clock.fastForward(5_000);
+      await page.clock.fastForward(5_500);
       await expect(drained).toBeVisible();
-      await drained.hover();
-      await page.clock.fastForward(10_000);
-      await expect(drained).toBeVisible();
-      await page.mouse.move(0, 0);
-      await page.clock.fastForward(6_500);
+      await page.clock.fastForward(1_000);
       await page.clock.runFor(500);
       await expect(drained).toBeHidden();
 
       await act("toast-a", "Undrain");
+      const undrained = toastOf("toast-a takes leases again");
+      await expect(undrained).toBeVisible();
+      await undrained.hover();
+      await page.clock.fastForward(10_000);
+      await expect(undrained).toBeVisible();
+      await page.mouse.move(0, 0);
+      await page.clock.fastForward(6_500);
+      await page.clock.runFor(500);
+      await expect(undrained).toBeHidden();
+
+      await act("toast-a", "Drain");
       await act("toast-b", "Drain");
       await act("toast-c", "Drain");
       await act("toast-d", "Drain");
       await expect(toastOf("toast-d drained")).toBeVisible();
       await expect(toasts.locator(".toast:visible")).toHaveCount(3);
-      await expect(toastOf("toast-a takes leases again")).toBeHidden();
+      await expect(toastOf("toast-a drained")).toBeHidden();
 
       await expect(
         toastOf("toast-d drained").getByRole("button", { name: "Close", includeHidden: true }),
@@ -551,7 +610,7 @@ test.describe("the console acts", () => {
         .getByRole("button", { name: "Close", includeHidden: true })
         .click();
       await page.clock.runFor(500);
-      await expect(toastOf("toast-a takes leases again")).toBeVisible();
+      await expect(toastOf("toast-a drained")).toBeVisible();
       await expect(toasts.locator(".toast:visible")).toHaveCount(3);
     } finally {
       await disposeFleet(fleet);
@@ -607,8 +666,22 @@ test.describe("the console acts", () => {
       await expect(page.getByRole("menuitem")).toHaveText(["Release lease"]);
       await page.keyboard.press("Escape");
 
+      // why: a single host has no drained worker, so the list says one is, to give the Inbox a row
+      // that offers Undrain on a gateway.
+      await page.route(
+        (url) => url.pathname === "/v1/workers",
+        async (route) => {
+          const response = await route.fetch();
+          const body = (await response.json()) as { workers: Record<string, unknown>[] };
+          await route.fulfill({
+            json: { ...body, workers: body.workers.map((view) => ({ ...view, drained: true })) },
+            response,
+          });
+        },
+      );
       await page.goto(new URL("/inbox", daemon.url).toString());
       await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+      await expect(page.locator("main .inbox-list li")).toHaveCount(1);
       await expect(page.getByRole("button", { name: workerAction })).toHaveCount(0);
       await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
     } finally {
@@ -648,6 +721,33 @@ test.describe("the console acts", () => {
       await menuButton.click();
       await expect(page.getByRole("menuitem", { name: "Undrain", exact: true })).toBeEnabled();
       expect(posts).toHaveLength(1);
+      await page.keyboard.press("Escape");
+
+      const undrains: string[] = [];
+      let answerUndrain: (() => Promise<void>) | undefined;
+      await page.route("**/v1/workers/*/drain", async (route) => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        undrains.push(route.request().url());
+        answerUndrain = () => route.continue();
+        return undefined;
+      });
+      await rowOf(page, "busy-a").getByRole("link").first().click();
+      const pageButton = page.getByRole("button", { name: "Undrain", exact: true });
+      await pageButton.click();
+      await expect.poll(() => undrains.length).toBe(1);
+      await expect(pageButton).toBeDisabled();
+      await page.getByRole("navigation").getByRole("link", { name: /Inbox/ }).click();
+      const fix = page
+        .locator("main .inbox-list li")
+        .filter({ hasText: "busy-a" })
+        .getByRole("button", { name: "Undrain", exact: true });
+      await expect(fix).toBeDisabled();
+      await fix.click({ force: true });
+      expect(undrains).toHaveLength(1);
+
+      await answerUndrain?.();
+      await expect(page.getByText("busy-a takes leases again")).toBeVisible();
+      expect(undrains).toHaveLength(1);
     } finally {
       await disposeFleet(fleet);
     }
