@@ -20,7 +20,6 @@ export {
   type DaemonExit,
   type DaemonLauncher,
   FakeDaemonLauncher,
-  launcherFor,
   type LaunchedDaemon,
   NodeDaemonLauncher,
   startErrorFrom,
@@ -37,6 +36,7 @@ export {
 export type { IpcErrorCode } from "./ipc.js";
 // fallow-ignore-next-line unused-type -- public listener lifecycle contract.
 export type { IpcListener } from "./ipc.js";
+export { launcherFor } from "./service-launcher.js";
 export {
   FakeServiceManager,
   LaunchdServiceManager,

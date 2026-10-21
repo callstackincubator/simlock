@@ -100,7 +100,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
       import("node:os"),
     ]);
   const {
-    NodeDaemonLauncher,
+    launcherFor,
     NodeFilesystem,
     NodeIpcTransport,
     NodeProcessRunner,
@@ -113,27 +113,29 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
   const root = resolveSimlockHome(process.env);
   const filesystem = new NodeFilesystem();
   const daemonHome = await resolveDaemonHome({ root, flag, filesystem });
-  const logPath = join(daemonHome.dataDirectory, "daemon.log");
   const mainPath = join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js");
+  const serviceManager = productionServiceManager(process.platform, {
+    runner: new NodeProcessRunner(),
+    filesystem,
+    uid: process.getuid?.() ?? 0,
+  });
   return buildCliEnvironment(
     {
       filesystem,
       clock: new SystemClock(),
       systemStats: new NodeSystemStats(),
       ipc: new NodeIpcTransport(),
-      launcher: new NodeDaemonLauncher({
-        args: [mainPath, ...(daemonHome.role === "gateway" ? ["--gateway"] : [])],
-        command: process.execPath,
-        logPath,
-        simlockHome: root,
+      launcher: launcherFor({
+        role: daemonHome.role,
+        root,
+        dataDirectory: daemonHome.dataDirectory,
+        mainPath,
+        serviceManager,
+        notify: (line) => process.stderr.write(`${line}\n`),
       }),
       daemonHome,
       service: {
-        manager: productionServiceManager(process.platform, {
-          runner: new NodeProcessRunner(),
-          filesystem,
-          uid: process.getuid?.() ?? 0,
-        }),
+        manager: serviceManager,
         platform: process.platform,
         home: homedir(),
         root,
