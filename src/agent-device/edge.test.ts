@@ -715,6 +715,43 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion }` on iOS and on Android without a tag, and `{ model, osVersion, imageTag }` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["18.4", "26.0", "27.0"],
+          clock,
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+          platform: "ios",
+        }),
+        taggedAndroidDriver(clock),
+      ],
+      maxRunning: 8,
+    });
+    const cases = [
+      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0" }],
+      [2, {}, { model: "iPhone 16", osVersion: "27.0" }],
+      [
+        3,
+        { imageTag: "google_apis_playstore", platform: "android" },
+        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34" },
+      ],
+      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35" }],
+    ] as const;
+
+    for (const [n, extra, device] of cases) {
+      rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
+      const result = (await envelopeOf(await allocate(rig, n, extra, {}))).result as {
+        data: { device: unknown; lease: Record<string, unknown> };
+      };
+      expect(result.data.lease["device"]).toEqual(device);
+      expect(result.data.lease["deviceKey"]).toBe(`key-${n}`);
+      expect(result.data.device).toMatchObject({ id: expect.any(String) });
+    }
+  });
+
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
     const rig = await setUp();
 
