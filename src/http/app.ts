@@ -8,6 +8,7 @@ import {
   type ComponentProgress,
   describeSchemaIssues,
   eventsPageQuery,
+  OPERATIONS,
   refuseModelWithClass,
   deviceClassSchema,
   leaseIdSchema,
@@ -31,7 +32,17 @@ import {
   unknownRequest,
 } from "./errors.js";
 import { LeaseNoticeBuffer } from "./notices.js";
-import { deviceAddRoute, healthzRoute, statusRoute } from "./route-declarations.js";
+import {
+  catalogRoute,
+  deviceAddRoute,
+  deviceRemoveRoute,
+  devicesReplySchema,
+  devicesRoute,
+  healthzRoute,
+  identityRoute,
+  statsRoute,
+  statusRoute,
+} from "./route-declarations.js";
 import { validationHook } from "./routes.js";
 import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
@@ -234,18 +245,16 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     c.json(await deps.dispatch("status.get", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
-  app.get("/v1/catalog", agentAuth, async (c) => {
-    const platform = c.req.query("platform");
-    if (platform !== undefined && platform !== "ios" && platform !== "android") {
-      throw badRequest("platform must be ios or android");
-    }
-    const result = await deps.dispatch(
-      "catalog.get",
-      platform === undefined ? {} : { platform },
-      buildHttpSession(c.get("identity")),
-    );
-    return c.json(result);
-  });
+  app.openapi({ ...catalogRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "catalog.get",
+        OPERATIONS["catalog.get"].input.parse(c.req.valid("query")),
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
+    ),
+  );
 
   app.get("/v1/components", agentAuth, async (c) => {
     const platform = c.req.query("platform");
@@ -284,14 +293,16 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     ),
   );
 
-  app.delete("/v1/devices/:id", agentAuth, async (c) => {
-    const result = await deps.dispatch(
-      "device.remove",
-      { id: c.req.param("id") },
-      buildHttpSession(c.get("identity")),
-    );
-    return c.json(result);
-  });
+  app.openapi({ ...deviceRemoveRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "device.remove",
+        { id: c.req.valid("param").id },
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
+    ),
+  );
 
   app.post("/v1/lease-requests", agentAuth, jsonBody(leaseRequestBodySchema), async (c) => {
     const identity = c.get("identity");
@@ -639,17 +650,17 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity")))),
   );
 
-  app.get("/v1/identity", agentAuth, async (c) =>
-    c.json(await deps.dispatch("identity.get", {}, buildHttpSession(c.get("identity")))),
+  app.openapi({ ...identityRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("identity.get", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
-  app.get("/v1/devices", agentAuth, async (c) => {
+  app.openapi({ ...devicesRoute, middleware: [agentAuth] }, async (c) => {
     const devices = await deps.dispatch(
       "list.get",
       { kind: "devices" },
       buildHttpSession(c.get("identity")),
     );
-    return c.json({ devices });
+    return c.json(devicesReplySchema.parse({ devices }), 200);
   });
 
   // ADR 0005 §23's worker routes, registered in both modes (ADR 0012 §3). A worker answers them
@@ -709,14 +720,13 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json({ events });
   });
 
-  app.get("/v1/stats", agentAuth, async (c) => {
-    const ledger = c.req.query("ledger");
-    if (ledger !== undefined && ledger !== "1") throw badRequest("ledger must be 1");
+  app.openapi({ ...statsRoute, middleware: [agentAuth] }, async (c) => {
+    const query = c.req.valid("query");
     const asked = usageWindow(
       {
-        ...optionalQuery(c.req.query("from"), "from"),
-        ...optionalQuery(c.req.query("since"), "since"),
-        ...optionalQuery(c.req.query("to"), "to"),
+        ...optionalQuery(query.from, "from"),
+        ...optionalQuery(query.since, "since"),
+        ...optionalQuery(query.to, "to"),
       },
       deps.clock.now(),
     );
@@ -724,9 +734,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json(
       await deps.dispatch(
         "usage.get",
-        ledger === undefined ? asked.window : { ...asked.window, includeLedger: true },
+        query.ledger === undefined ? asked.window : { ...asked.window, includeLedger: true },
         buildHttpSession(c.get("identity")),
       ),
+      200,
     );
   });
 

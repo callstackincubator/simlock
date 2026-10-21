@@ -12,10 +12,8 @@ import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from ".
 
 // why: a task that declares a route deletes its line, so the list shrinks to nothing.
 const UNDECLARED_ROUTES = [
-  "GET /v1/catalog",
   "GET /v1/components",
   "DELETE /v1/components/{platform}/{version}",
-  "DELETE /v1/devices/{id}",
   "POST /v1/lease-requests",
   "GET /v1/lease-requests",
   "GET /v1/lease-requests/{id}",
@@ -29,14 +27,11 @@ const UNDECLARED_ROUTES = [
   "DELETE /v1/leases/{id}",
   "GET /v1/leases",
   "GET /v1/tokens",
-  "GET /v1/identity",
-  "GET /v1/devices",
   "GET /v1/workers",
   "POST /v1/workers/{id}/drain",
   "DELETE /v1/workers/{id}/drain",
   "DELETE /v1/workers/{id}",
   "GET /v1/events",
-  "GET /v1/stats",
   "GET /v1/events/stream",
 ];
 

@@ -1,6 +1,6 @@
 import { z } from "@hono/zod-openapi";
 
-import { OPERATIONS } from "../contract/index.js";
+import { deviceRecordSchema, OPERATIONS, statusDeviceSchema } from "../contract/index.js";
 import { declareRoute } from "./routes.js";
 
 export const healthzRoute = declareRoute({
@@ -38,4 +38,96 @@ export const deviceAddRoute = declareRoute({
   },
 });
 
-export const DECLARED_ROUTES = [healthzRoute, statusRoute, deviceAddRoute] as const;
+function firstValue<Schema extends z.ZodType>(schema: Schema) {
+  return z.preprocess((value) => (Array.isArray(value) ? value[0] : value), schema);
+}
+
+const catalogQuerySchema = z
+  .object({ platform: firstValue(z.string().openapi({ enum: ["ios", "android"] })).optional() })
+  .superRefine((query, context) => {
+    if (query.platform !== undefined && query.platform !== "ios" && query.platform !== "android") {
+      context.addIssue({ code: "custom", message: "platform must be ios or android", path: [] });
+    }
+  });
+
+export const catalogRoute = declareRoute({
+  method: "get",
+  path: "/v1/catalog",
+  tag: "System",
+  summary: "The platforms, runtimes and models a lease can ask for",
+  role: "agent",
+  request: { query: catalogQuerySchema },
+  reply: OPERATIONS["catalog.get"].output,
+});
+
+const statsQuerySchema = z
+  .object({
+    from: firstValue(z.string()).optional(),
+    ledger: firstValue(z.string()).optional(),
+    since: firstValue(z.string()).optional(),
+    to: firstValue(z.string()).optional(),
+  })
+  .superRefine((query, context) => {
+    if (query.ledger !== undefined && query.ledger !== "1") {
+      context.addIssue({ code: "custom", message: "ledger must be 1", path: [] });
+    }
+  });
+
+export const statsRoute = declareRoute({
+  method: "get",
+  path: "/v1/stats",
+  tag: "System",
+  summary: "Usage over a window of time",
+  role: "admin",
+  request: { query: statsQuerySchema },
+  reply: OPERATIONS["usage.get"].output,
+  errors: { 422: ["HISTORY_NOT_KEPT"], 503: ["HISTORY_UNAVAILABLE"] },
+});
+
+export const identityRoute = declareRoute({
+  method: "get",
+  path: "/v1/identity",
+  tag: "System",
+  summary: "Who the token in the request is",
+  role: "agent",
+  reply: OPERATIONS["identity.get"].output,
+});
+
+export const deviceRemoveRoute = declareRoute({
+  method: "delete",
+  path: "/v1/devices/{id}",
+  tag: "Devices",
+  summary: "Remove an enrolled device",
+  role: "admin",
+  request: { params: z.object({ id: z.string() }) },
+  reply: OPERATIONS["device.remove"].output,
+  errors: {
+    404: ["UNKNOWN_DEVICE"],
+    409: ["DEVICE_BUSY"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+  },
+});
+
+export const devicesReplySchema = z.object({
+  devices: z.union([z.array(deviceRecordSchema), z.array(statusDeviceSchema)]),
+});
+
+export const devicesRoute = declareRoute({
+  method: "get",
+  path: "/v1/devices",
+  tag: "Devices",
+  summary: "The devices this daemon holds",
+  role: "admin",
+  reply: devicesReplySchema,
+});
+
+export const DECLARED_ROUTES = [
+  healthzRoute,
+  statusRoute,
+  catalogRoute,
+  deviceAddRoute,
+  deviceRemoveRoute,
+  identityRoute,
+  devicesRoute,
+  statsRoute,
+] as const;

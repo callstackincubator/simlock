@@ -2174,7 +2174,7 @@ describe("operator-only listing routes", () => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["list.get"] = (input) => {
       expect(input).toEqual({ kind: "devices" });
-      return [{ id: "dev_1" }, { id: "dev_2" }];
+      return [makeDevice({ id: "dev_1" }), makeDevice({ id: "dev_2" })];
     };
 
     const response = await app.request("/v1/devices", { headers: operatorAuth });
