@@ -87,7 +87,13 @@ test.describe("the shell", () => {
         ),
       );
     }
-    expect(controls).toEqual(["Skip to content", ...NAV_LABELS, "Sign out", "Collapse sidebar"]);
+    expect(controls).toEqual([
+      "Skip to content",
+      "Search or jump to…",
+      ...NAV_LABELS,
+      "Sign out",
+      "Collapse sidebar",
+    ]);
     expect(visited).toEqual(controls);
 
     // why: focus is on the sidebar toggle; walk back past Sign out to the last page link, then open
@@ -101,7 +107,7 @@ test.describe("the shell", () => {
       await expect(page.getByRole("heading", { level: 1, name: entry.label })).toBeVisible();
     }
 
-    await page.keyboard.press(back);
+    await pressTimes(back, 2);
     await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toBeFocused();
