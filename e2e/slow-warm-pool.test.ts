@@ -327,13 +327,21 @@ async function untilSettled(env: TestEnv, driverDeviceId: string): Promise<void>
   );
 }
 
-function expectEachPlatformHasReady(rows: readonly Row[]): void {
-  for (const platform of ["ios", "android"] as const) {
-    expect(
-      rows.filter((row) => row.spec.platform === platform).map((row) => row.state),
-      `${platform} devices`,
-    ).toContain("ready");
-  }
+async function untilEachPlatformHasReady(env: TestEnv): Promise<void> {
+  let last: Row[] = [];
+  await waitFor(
+    async () => {
+      last = await devices(env);
+      return (["ios", "android"] as const).every((platform) =>
+        last.some((row) => row.spec.platform === platform && row.state === "ready"),
+      );
+    },
+    {
+      interval: 1000,
+      label: () => `a ready device on each platform; last saw ${JSON.stringify(last)}`,
+      timeout: READY_TIMEOUT,
+    },
+  );
 }
 
 /** Per platform, exactly one device, and it is ready. */
@@ -606,7 +614,7 @@ describe(
           for (const grant of granted) {
             await untilSettled(env, grant.device.driverDeviceId);
           }
-          expectEachPlatformHasReady(await devices(env));
+          await untilEachPlatformHasReady(env);
           // A failed snapshot load falls back to a wipe and the pool boots the device back to ready,
           // so the state alone cannot tell the two apart: the reclaim's own strategy does.
           const android = granted.find((grant) => grant.device.spec.platform === "android");
