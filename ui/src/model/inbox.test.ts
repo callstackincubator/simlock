@@ -567,6 +567,10 @@ describe("the Inbox page", () => {
   it("links each item to its worker's page", () => {
     const page = pageOf([worker({ drained: true, id: "wrk/1", label: "mac-mini-1" })]);
 
-    expect(shownOf(page).worker).toEqual({ name: "mac-mini-1", to: "/fleet/wrk%2F1" });
+    expect(shownOf(page).about).toEqual({
+      name: "mac-mini-1",
+      open: "Open worker",
+      to: "/fleet/wrk%2F1",
+    });
   });
 });

@@ -1,14 +1,15 @@
-.fact-label {
-  margin: 0 0 var(--space-1);
-  color: var(--text-muted);
-  font-size: var(--text-xs);
+.inbox-drawer {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
 }
 
-.fact-value {
+.inbox-what p {
+  margin: 0 0 var(--space-2);
+}
+
+.inbox-what p:last-child {
   margin: 0;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
 }
 
 .inbox-events {
@@ -68,11 +69,6 @@
   .inbox-event-text {
     grid-column: 1 / -1;
   }
-}
-
-.inbox-worker {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .inbox-list {

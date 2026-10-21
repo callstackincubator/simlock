@@ -3,13 +3,15 @@ import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
 import { inboxPath, itemPath } from "./paths";
 import {
   deviceOfLease,
+  eventsOfLease,
   holderName,
   isExpiring,
   type LeaseRecord,
+  leasePath,
   type TokenRecord,
 } from "./leases";
 import { formatDuration } from "./time";
-import type { WaitingRequest } from "./waiting";
+import { requestedDevice, type WaitingRequest } from "./waiting";
 import type { Tone } from "./tones";
 import {
   stateEnteredAt,
@@ -209,7 +211,9 @@ export interface InboxDetail {
   readonly title: string;
   readonly tone: Tone;
   readonly word: string;
-  readonly worker: { readonly name: string; readonly to: string };
+  // why: the box at the top of the drawer, saying in a sentence what the Inbox found.
+  readonly what: string;
+  readonly about: { readonly name: string; readonly to: string; readonly open: string };
   readonly facts: readonly InboxFact[];
   readonly events: readonly InboxEvent[];
 }
@@ -258,8 +262,54 @@ export function inboxSubject(item: InboxItem): string {
     : workerName(item.worker);
 }
 
-function factsOf(item: WorkerItem, now: number): readonly InboxFact[] {
+function factsOf(item: InboxItem, now: number): readonly InboxFact[] {
+  if (item.condition === "waiting") {
+    return [
+      { label: "Waited", value: formatDuration(item.waitedMs) },
+      { label: "Device", value: requestedDevice(item.request.spec) },
+      { label: "Request", value: item.request.id },
+    ];
+  }
+  if (item.condition === "ending") {
+    return [
+      { label: "Time left", value: timeLeft(item.leftMs) },
+      { label: "Device", value: item.model },
+      { label: "Holder", value: item.holder },
+      { label: "Lease", value: item.lease.id },
+    ];
+  }
   return "device" in item ? deviceFacts(item, now) : workerFacts(item, now);
+}
+
+function timeLeft(leftMs: number): string {
+  return leftMs <= 0 ? "now" : minutesAndSeconds(leftMs);
+}
+
+// why: each sentence says what the daemon found and what it means, so the drawer opens on the
+// reason before the details.
+function whatHappened(item: InboxItem): string {
+  switch (item.condition) {
+    case "disconnected":
+      return `${workerName(item.worker)} has lost its connection to the gateway.`;
+    case "incompatible":
+      return `${workerName(item.worker)} runs a protocol this gateway cannot talk to.`;
+    case "drained":
+      return `${workerName(item.worker)} is drained: it takes no new leases.`;
+    case "over RAM budget":
+      return `${workerName(item.worker)} uses more memory than its budget allows.`;
+    case "quarantined":
+      return `${item.device.spec.model} is quarantined and cannot be leased until it is dealt with.`;
+    case "stalled":
+      return `${item.device.spec.model} has stayed in one state longer than expected.`;
+    case "absent":
+      return `${inboxSubject(item)}: the phone cannot be reached.`;
+    case "waiting":
+      return `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)} for a device.`;
+    case "ending":
+      return `${item.holder}'s lease on ${item.model} ${
+        item.leftMs <= 0 ? "ends now" : `ends in ${minutesAndSeconds(item.leftMs)}`
+      }.`;
+  }
 }
 
 function deviceFacts(
@@ -330,19 +380,50 @@ function workerFacts(
       ];
 }
 
-function namesItem(event: ConsoleEvent, item: WorkerItem): boolean {
-  if (workerIdOf(event) === item.worker.id) return true;
-  if (!("device" in item)) return false;
+function payloadField(event: ConsoleEvent, field: string): unknown {
   const { payload } = event;
-  return (
-    typeof payload === "object" &&
-    payload !== null &&
-    (payload as Record<string, unknown>).deviceId === item.device.id
+  return typeof payload === "object" && payload !== null
+    ? (payload as Record<string, unknown>)[field]
+    : undefined;
+}
+
+function eventsOfItem(item: InboxItem, events: readonly ConsoleEvent[]): readonly ConsoleEvent[] {
+  if (item.condition === "ending") return eventsOfLease(events, item.lease.id);
+  if (item.condition === "waiting") {
+    return events.filter((event) => payloadField(event, "requestId") === item.request.id);
+  }
+  return events.filter(
+    (event) =>
+      workerIdOf(event) === item.worker.id ||
+      ("device" in item && payloadField(event, "deviceId") === item.device.id),
   );
 }
 
+function aboutOf(item: InboxItem): InboxDetail["about"] {
+  if (item.condition === "waiting") {
+    return {
+      name: item.request.requesterId,
+      open: "Open request",
+      to: itemPath("/queue", item.request.id),
+    };
+  }
+  if (item.condition === "ending") {
+    return {
+      name: `${item.holder} · ${item.model}`,
+      open: "Open lease",
+      to: leasePath(item.lease.id),
+    };
+  }
+  return { name: workerName(item.worker), open: "Open worker", to: workerPath(item.worker.id) };
+}
+
+function titleOf(item: InboxItem): string {
+  if ("device" in item) return `${item.device.spec.model} ${item.device.spec.osVersion}`;
+  return aboutOf(item).name;
+}
+
 function detailOf(
-  item: WorkerItem,
+  item: InboxItem,
   input: {
     readonly workers: readonly WorkerView[];
     readonly events: readonly ConsoleEvent[];
@@ -351,9 +432,12 @@ function detailOf(
 ): InboxDetail {
   const { events, now, workers } = input;
   return {
-    events: events
-      .filter((event) => event.timestamp > now - HOUR && namesItem(event, item))
-      .sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
+    about: aboutOf(item),
+    events: eventsOfItem(
+      item,
+      events.filter((event) => event.timestamp > now - HOUR),
+    )
+      .toSorted((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
       .slice(0, EVENT_ROWS)
       .map((event) => {
         const tone = eventTone(event.event);
@@ -368,13 +452,10 @@ function detailOf(
       }),
     facts: factsOf(item, now),
     key: item.key,
-    title:
-      "device" in item
-        ? `${item.device.spec.model} ${item.device.spec.osVersion}`
-        : workerName(item.worker),
+    title: titleOf(item),
     tone: inboxTone(item.condition),
+    what: whatHappened(item),
     word: item.condition,
-    worker: { name: workerName(item.worker), to: workerPath(item.worker.id) },
   };
 }
 
@@ -401,7 +482,7 @@ export function inboxPageOf(input: {
   const named = input.key !== undefined;
   const chosen = named ? items.find((item) => item.key === input.key) : items[0];
   const problems = items.filter((item) => inboxGroup(item) !== "Heads-up").length;
-  if (chosen !== undefined && "worker" in chosen) {
+  if (chosen !== undefined) {
     return { named, problems, rows, shown: detailOf(chosen, input) };
   }
   return { named, problems, rows, shown: named ? "resolved" : undefined };
