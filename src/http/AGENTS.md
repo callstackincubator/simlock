@@ -17,6 +17,7 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
 | `lease-declarations.ts` | The declared lease and lease-request routes (`LEASE_ROUTES`), their reply and SSE message schemas                                              |
 | `admin-declarations.ts` | The declared worker, component, token and event routes (`ADMIN_ROUTES`), which side answers 501, install's and the event stream's SSE messages |
 | `openapi.ts`            | `buildOpenApiDocument(modules)`: the OpenAPI 3.1 document                                                                                      |
+| `module-routes.ts`      | `moduleRoutes`: the routes a module definition's `http` carries, as registrable paths                                                          |
 | `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403                                                                                     |
 | `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession`                                                                               |
 | `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources                                                                                             |
@@ -59,7 +60,7 @@ codes: `UNAUTHENTICATED` and `FORBIDDEN` (not on `/v1/healthz`), `DAEMON_STOPPIN
 `UNSUPPORTED_MEDIA_TYPE` on a route with a JSON body. `errorExtras` adds a status's body fields and headers (`capacityReason`, `Retry-After`). The code lists are documentation: nothing
 enforces them. `app.openapi` registers the declaration, and a handler's JSON reply is type-checked
 against it (never at run time; a stream, which declares `stream: sseMessage({...})`, or a bodiless 204 returns any `Response`). `route-declarations.ts` holds them, `buildOpenApiDocument` writes
-the document from the same list, and `pnpm openapi <file>` saves it. The route-coverage test in
+the document from the same list plus the routes of every definition that carries `http` (`module-routes.ts`; the stream's, none for agent-device), and `pnpm openapi <file>` saves it. The route-coverage test in
 `core-routes.test.ts` holds a list of routes not declared yet, which is empty: every route is declared.
 
 `HttpMount` adds a prefix (`/v1/<prefix>`, `/v1/<prefix>/*`) behind the same auth. Today: the

@@ -24,7 +24,7 @@ Off unless `capabilities.stream.enabled` (false). Off: nothing loaded, and the `
 | `refusal.ts`              | `StreamRefusalError`, each refusal's status and code, a relayed refusal checked   |
 | `caller.ts`               | Who asks                                                                          |
 | `test-fixtures.ts`        | `TestRegistry`, `ScriptedFeed` for tests                                          |
-| `testing.ts`              | What other components' tests may import: `createStreamMount`, `ScriptedFeed`      |
+| `testing.ts`              | What other components' tests may import: `createStreamMount`                      |
 
 ## How it works
 

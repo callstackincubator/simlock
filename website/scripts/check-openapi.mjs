@@ -12,9 +12,16 @@ function fail(message) {
   process.exit(1);
 }
 
+// why: a tag that has a description gets a page under operations/tags; it is not an operation.
 function pages(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-    entry.isDirectory() ? pages(join(dir, entry.name)) : entry.name.endsWith(".html") ? [entry] : [],
+    entry.isDirectory()
+      ? entry.name === "tags"
+        ? []
+        : pages(join(dir, entry.name))
+      : entry.name.endsWith(".html")
+        ? [entry]
+        : [],
   );
 }
 
