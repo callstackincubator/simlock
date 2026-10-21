@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 
-import { AppFrame, Button, Icon, Sidebar, Status, StatusDot } from "../ds";
+import { AppFrame, Button, CommandPalette, Icon, Sidebar, Status, StatusDot } from "../ds";
 import { NotFoundScreen } from "../screens/not-found";
 import { usePath } from "../state/router";
+import { useSearchPalette } from "../state/search";
 import {
   useInboxCount,
   useConnectionStatus,
@@ -18,7 +19,21 @@ export function Shell() {
   const route = routeFor(path);
   const inbox = useInboxCount();
   const sidebar = useSidebar();
+  const palette = useSearchPalette();
   useTokenCheck();
+
+  // why: ⌘K on a Mac and Ctrl+K elsewhere both open the search; the browser's own use of the
+  // chord is stopped while the console has focus.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        palette.show();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [palette.show]);
 
   useEffect(() => {
     document.title = route === undefined ? "Simlock" : `${route.label} · Simlock`;
@@ -40,11 +55,13 @@ export function Shell() {
           entries={entries}
           collapsed={sidebar.collapsed}
           onToggle={sidebar.toggle}
+          onSearch={palette.show}
           footer={(collapsed) => <SidebarFoot collapsed={collapsed} />}
         />
       }
     >
       {route === undefined ? <NotFoundScreen /> : <route.Screen />}
+      {palette.open ? <CommandPalette onClose={palette.hide} /> : null}
     </AppFrame>
   );
 }

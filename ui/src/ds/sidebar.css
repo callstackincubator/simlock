@@ -382,3 +382,40 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 40px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sidebar-search:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.sidebar-search .icon {
+  flex: none;
+}
+
+.sidebar-collapsed .sidebar-search {
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
+@media (max-width: 767.98px) {
+  .sidebar-collapsed .sidebar-search {
+    justify-content: flex-start;
+    gap: var(--space-3);
+    padding: 0 var(--space-3);
+  }
+}
