@@ -288,4 +288,35 @@ test.describe("the console acts", () => {
       await daemon.dispose();
     }
   });
+
+  test("a write that gets no answer shows The daemon did not answer. and the operator stays signed in", async ({
+    page,
+  }) => {
+    const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(daemon, "silent-agent");
+      await openPage(page, daemon, "/leases", "Leases");
+      await page.route("**/v1/leases/*", (route) =>
+        route.request().method() === "DELETE" ? route.abort() : route.continue(),
+      );
+      const row = rowOf(page, "silent-agent");
+      const menuButton = row.getByRole("button", { name: "Actions for silent-agent" });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await page
+        .getByRole("alertdialog", { name: "Release silent-agent's lease?" })
+        .getByRole("button", { name: "Release lease" })
+        .click();
+
+      const toasts = page.getByRole("region", { name: "Notifications" });
+      await expect(toasts.getByText("Couldn't release silent-agent's lease")).toBeVisible();
+      await expect(toasts.getByText("The daemon did not answer.", { exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Sign in" })).toHaveCount(0);
+      await expect(row).toBeVisible();
+    } finally {
+      await daemon.dispose();
+    }
+  });
 });
