@@ -610,7 +610,7 @@ export class Doctor {
     const { enabled, targets } = this.options.config.warmPool;
     if (warmPool === undefined || !enabled) return [];
     const limits = warmPool.runningCapacity();
-    const figures = warmPool.figures().targets;
+    const figures = warmPool.figures().targets.filter((target) => target.origin === "configured");
     const catalogs = await this.#catalogsOfMissingRuntimes(figures);
     const findings = figures.flatMap((target) =>
       unreachableTarget(target, catalogs.get(target.platform)),
