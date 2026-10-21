@@ -9,7 +9,7 @@ export { Facts } from "./facts";
 export { Icon, type IconName } from "./icon";
 export { Link, NavigationProvider } from "./link";
 export { Loaded, type LoadView, Refusal } from "./loaded";
-export { Inspector, InspectorEmpty, List, ListPane, ListRow, MasterDetail } from "./master-detail";
+export { List, ListRow } from "./master-detail";
 export { Meter } from "./meter";
 export { Pager, type Paging } from "./pager";
 export { DesignProvider } from "./provider";
