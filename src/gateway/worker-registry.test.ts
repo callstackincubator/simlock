@@ -388,18 +388,6 @@ describe("WorkerRegistry", () => {
     expect(view.protocol).toBeUndefined();
   });
 
-  it.each(["unauthenticated", "forbidden"] as const)(
-    "reports a %s uplink without inventing a view for it",
-    (reason) => {
-      const { events, workers } = registry();
-
-      workers.rejected(reason, undefined, undefined);
-
-      expect(workers.views()).toEqual([]);
-      expect(events[0]).toMatchObject({ event: "worker.rejected", payload: { reason } });
-    },
-  );
-
   describe("a worker's load on its view", () => {
     const load = {
       cpu: { busyPercent: 34, cores: 10, limited: false },

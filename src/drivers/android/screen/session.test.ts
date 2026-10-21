@@ -452,10 +452,11 @@ describe("Android screen capture: open", () => {
     expect(phoneOptions.filter((o) => o !== "stay_awake=true")).toEqual(emulatorOptions);
   });
 
-  it("reads no screen state for an emulator", async () => {
-    const world = await setup();
+  it("reads no screen state and sends no wake for an emulator, even when the screen would read asleep", async () => {
+    const world = await setup({ power: { code: 0, stdout: "  mWakefulness=Asleep\n" } });
     await opened(world);
     expect(world.target.powerReads).toEqual([]);
+    expect(world.target.wakes).toEqual([]);
     expect(world.target.log).not.toContainEqual(expect.stringContaining("dumpsys"));
   });
 
@@ -715,21 +716,6 @@ describe("Android screen capture: a phone's screen state", () => {
         expect(world.target.connects, name).toEqual([]);
       }
     }
-  });
-
-  it("sends no wake to a phone whose screen is on, and none to an emulator", async () => {
-    const world = await setup({ device: PHONE });
-    await drive(
-      world.clock,
-      waitThenStart(
-        world.target,
-        world.capture.open(PHONE, SETTINGS, new AbortController().signal),
-      ),
-    );
-    expect(world.target.wakes).toEqual([]);
-    const emulator = await setup({ power: { code: 0, stdout: "  mWakefulness=Asleep\n" } });
-    await opened(emulator);
-    expect(emulator.target.wakes).toEqual([]);
   });
 
   it.each([

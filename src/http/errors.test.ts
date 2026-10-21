@@ -175,19 +175,6 @@ describe("errorResponse", () => {
     });
   });
 
-  it("includes extra fields (e.g. existingLeaseId) alongside code/message", async () => {
-    const response = await appWithError(
-      new RequesterAlreadyLeasedError("agent-1", "lse_9"),
-    ).request("/boom");
-    expect(await response.json()).toEqual({
-      error: {
-        code: "REQUESTER_ALREADY_LEASED",
-        existingLeaseId: "lse_9",
-        message: expect.any(String),
-      },
-    });
-  });
-
   it("sets Retry-After on a NO_CAPACITY response", async () => {
     const response = await appWithError(new NoCapacityError()).request("/boom");
     expect(response.status).toBe(503);

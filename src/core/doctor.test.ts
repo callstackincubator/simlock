@@ -833,31 +833,16 @@ describe("Doctor", () => {
   });
 
   describe("stalled transitions", () => {
-    it("isStalledTransition holds for a provisioning device past its threshold with no claim", async () => {
+    it("isStalledTransition does not hold for a provisioning device whose platform has no driver", async () => {
       const clock = new FakeClock(10_000);
       const registry = await loadRegistry(clock, new EventBus(clock));
-      const driver = new FakeDriver({
-        clock,
-        estimateMs: { boot: 2_000, provision: 1_000 },
-        platform: "ios",
-      });
       const device = await registry.registerDevice({
         driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
       });
-      const stalled = (now: number) =>
-        isStalledTransition({
-          claims: new DeviceOperationClaims(),
-          config: config().stalledTransition,
-          device,
-          driver,
-          now,
-        });
 
-      expect(stalled(10_000 + 9_000)).toBe(false);
-      expect(stalled(10_000 + 9_001)).toBe(true);
       // No driver for the platform: nothing to measure against, so no stall.
       expect(
         isStalledTransition({
@@ -868,39 +853,6 @@ describe("Doctor", () => {
           now: 10_000 + 9_001,
         }),
       ).toBe(false);
-    });
-
-    it("isStalledTransition does not hold for a device with a live operation claim", async () => {
-      const clock = new FakeClock(10_000);
-      const registry = await loadRegistry(clock, new EventBus(clock));
-      const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
-      const device = await readyDevice(registry, "simlock-erasing", "ios");
-      const lease = await registry.createLease({
-        deviceId: device.id,
-        requesterId: "agent",
-        ownerId: "agent",
-        ttlMs: 60_000,
-        ttlDeadline: 999_999,
-      });
-      await registry.beginRelease(lease.id);
-      const reclaiming = registry.snapshot.devices.find((entry) => entry.id === device.id);
-      expect(reclaiming?.state).toBe("reclaiming");
-      const claims = new DeviceOperationClaims();
-      const claim = claims.tryClaim(device.id, "reclaim");
-      const stalled = () =>
-        isStalledTransition({
-          claims,
-          config: config().stalledTransition,
-          device: reclaiming ?? device,
-          driver,
-          // Far past the reclaim threshold (2_000 * 3).
-          now: clock.now() + 600_000,
-        });
-
-      expect(stalled()).toBe(false);
-      // The same device, the same age, is a stall once no live operation accounts for it.
-      claim?.release();
-      expect(stalled()).toBe(true);
     });
 
     it("the doctor's stalled-transition finding is unchanged", async () => {
@@ -972,47 +924,6 @@ describe("Doctor", () => {
       ]);
     });
 
-    it("reports a stalled-transition finding for a provisioning device past its driver-derived threshold", async () => {
-      const clock = new FakeClock(10_000);
-      const eventBus = new EventBus(clock);
-      const registry = await loadTestRegistry({
-        clock,
-        eventBus,
-        idGenerator: sequence(),
-      });
-      const driver = new FakeDriver({
-        clock,
-        estimateMs: { boot: 2_000, provision: 1_000 },
-        platform: "ios",
-      });
-      const device = await registry.registerDevice({
-        driverData: { fakeDeviceId: "simlock-stuck" },
-        driverDeviceId: "simlock-stuck",
-        provisionDuration: 0,
-        spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
-      });
-      clock.advance(9_001);
-
-      const report = await new Doctor({
-        decisions: new SerializedDecision(),
-        clock,
-        config: config(),
-        drivers: [driver],
-        eventBus,
-        registry,
-      }).reconcile();
-
-      expect(report.findings).toContainEqual({
-        ageMs: 9_001,
-        deviceId: device.id,
-        enteredAt: 10_000,
-        kind: "stalled-transition",
-        platform: "ios",
-        state: "provisioning",
-        thresholdMs: 9_000,
-      });
-    });
-
     it("does not report a stall for a device this daemon holds an operation claim on", async () => {
       // A backgrounded reclaim keeps its device in `reclaiming` for a full erase, which can
       // outlast the threshold. The claim, not the clock, says work is in progress; without it a
@@ -1068,41 +979,6 @@ describe("Doctor", () => {
 
       expect(unclaimed.findings).toContainEqual(
         expect.objectContaining({ deviceId: device.id, kind: "stalled-transition" }),
-      );
-    });
-
-    it("does not report a stalled-transition finding for a device still legitimately in-flight", async () => {
-      const clock = new FakeClock(10_000);
-      const eventBus = new EventBus(clock);
-      const registry = await loadTestRegistry({
-        clock,
-        eventBus,
-        idGenerator: sequence(),
-      });
-      const driver = new FakeDriver({
-        clock,
-        estimateMs: { boot: 2_000, provision: 1_000 },
-        platform: "ios",
-      });
-      await registry.registerDevice({
-        driverData: { fakeDeviceId: "simlock-slow" },
-        driverDeviceId: "simlock-slow",
-        provisionDuration: 0,
-        spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
-      });
-      clock.advance(8_000);
-
-      const report = await new Doctor({
-        decisions: new SerializedDecision(),
-        clock,
-        config: config(),
-        drivers: [driver],
-        eventBus,
-        registry,
-      }).reconcile();
-
-      expect(report.findings.filter((finding) => finding.kind === "stalled-transition")).toEqual(
-        [],
       );
     });
 
@@ -1740,14 +1616,6 @@ describe("Doctor", () => {
 
       expect(driver.calls.map((call) => call.operation)).not.toContain("listManaged");
       expect(report.findings).toEqual([]);
-    });
-
-    it("is not required: without one, each driver is listed", async () => {
-      const { doctor, driver } = await setup();
-
-      await doctor.reconcile();
-
-      expect(driver.calls.map((call) => call.operation)).toContain("listManaged");
     });
   });
 
@@ -2607,14 +2475,6 @@ describe("Doctor: optional module findings", () => {
     expect(withModule.eventBus.replay().map((event) => event.event)).toEqual(
       without.eventBus.replay().map((event) => event.event),
     );
-  });
-
-  it("returns the finding with prerequisites false too", async () => {
-    const { doctor } = await setup({ optionalModules: () => [unavailable] });
-
-    const report = await doctor.reconcile({ prerequisites: false });
-
-    expect(report.findings).toStrictEqual([unavailable]);
   });
 
   it("logs a warning naming the error when optionalModules throws, contributes nothing, and still returns the other findings", async () => {

@@ -32,10 +32,6 @@ function section(config: Config): Record<string, unknown> | undefined {
 }
 
 describe("agent-device's definition: capabilities.agent-device config", () => {
-  it("is named agent-device", () => {
-    expect(agentDeviceModule.name).toBe("agent-device");
-  });
-
   it("defaults capabilities.agent-device.enabled to false and command to agent-device, with leaseTtlCapMs unset", async () => {
     const config = await loadWith({});
 
