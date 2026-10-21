@@ -8405,57 +8405,112 @@ describe("CLI: stats", () => {
 
 describe("CLI: daemon install (#830)", () => {
   const home = "/Users/me";
+  const nodePath = "/opt/node/bin/node";
+  const mainPath = "/opt/simlock/dist/daemon/main.js";
 
-  it("an operator runs daemon install on macOS: the service is installed, the daemon answers, install prints the name, Daemon running and the hint", async () => {
-    const root = join(home, ".simlock");
+  async function install(options: {
+    readonly argv: readonly string[];
+    readonly role: "worker" | "gateway";
+    readonly root: string;
+  }): Promise<{
+    readonly exitCode: number;
+    readonly output: ReturnType<typeof outputCapture>;
+    readonly serviceManager: FakeServiceManager;
+  }> {
+    const { root } = options;
+    const dataDirectory = options.role === "gateway" ? join(root, "gateway") : root;
     const filesystem = new MemoryFilesystem();
     const ipcTransport = new MemoryIpcTransport();
     const serviceManager = new FakeServiceManager({
       onInstall: async () => {
         await startInMemoryDaemon({
-          adminTokenPath: join(root, "admin.token"),
+          adminTokenPath: join(dataDirectory, "admin.token"),
           filesystem,
           ipcTransport,
-          socketPath: join(root, "daemon.sock"),
+          socketPath: join(dataDirectory, "daemon.sock"),
         });
       },
     });
-    const ports: CliEnvironmentPorts = {
+    const output = outputCapture({
       filesystem,
       clock: new FakeClock(0),
       systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
       ipc: ipcTransport,
       launcher: new FakeDaemonLauncher(),
-      daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
-      service: {
-        manager: serviceManager,
-        platform: "darwin",
-        home,
-        root,
-        nodePath: "/opt/node/bin/node",
-        mainPath: "/opt/simlock/dist/daemon/main.js",
-      },
-    };
-    const output = outputCapture(ports);
-
-    const exitCode = await runCli(["daemon", "install"], output.environmentWith());
-
-    expect(output.stderr).toBe("");
-    expect(exitCode).toBe(0);
-    expect(serviceManager.installs).toHaveLength(1);
-    expect(serviceManager.installs[0]).toMatchObject({
-      name: "com.callstack.simlock.worker",
-      path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
-      command: "/opt/node/bin/node",
-      args: ["/opt/simlock/dist/daemon/main.js"],
-      logPath: "/Users/me/.simlock/daemon.log",
+      daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
+      service: { manager: serviceManager, platform: "darwin", home, root, nodePath, mainPath },
     });
-    expect(output.stdout.split("\n").slice(0, 2)).toEqual([
-      "Service installed: com.callstack.simlock.worker (launchd)",
-      "Daemon running",
-    ]);
-    expect(output.stdout.trimEnd().split("\n").at(-1)).toBe(
-      "To start after a reboot, turn on automatic login for this user.",
-    );
+    const exitCode = await runCli(options.argv, output.environmentWith());
+    return { exitCode, output, serviceManager };
+  }
+
+  it("an operator runs daemon install on macOS: the service is installed, the daemon answers, install prints the name, Daemon running and the hint, and --json prints the status and service", async () => {
+    const cases = [
+      {
+        label: "worker, default home",
+        argv: ["daemon", "install"],
+        role: "worker" as const,
+        root: join(home, ".simlock"),
+        name: "com.callstack.simlock.worker",
+        args: [mainPath],
+        logPath: "/Users/me/.simlock/daemon.log",
+      },
+      {
+        label: "gateway on a host with no gateway folder yet",
+        argv: ["--gateway", "daemon", "install"],
+        role: "gateway" as const,
+        root: join(home, ".simlock"),
+        name: "com.callstack.simlock.gateway",
+        args: [mainPath, "--gateway"],
+        logPath: "/Users/me/.simlock/gateway/daemon.log",
+      },
+      {
+        label: "another SIMLOCK_HOME",
+        argv: ["daemon", "install"],
+        role: "worker" as const,
+        root: "/tmp/x",
+        name: "com.callstack.simlock.worker.2e56aa",
+        args: [mainPath],
+        logPath: "/tmp/x/daemon.log",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { exitCode, output, serviceManager } = await install(testCase);
+      const label = testCase.label;
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(serviceManager.installs, label).toHaveLength(1);
+      expect(serviceManager.installs[0], label).toMatchObject({
+        name: testCase.name,
+        path: `/Users/me/Library/LaunchAgents/${testCase.name}.plist`,
+        command: nodePath,
+        args: testCase.args,
+        logPath: testCase.logPath,
+      });
+      expect(output.stdout.split("\n").slice(0, 2), label).toEqual([
+        `Service installed: ${testCase.name} (launchd)`,
+        "Daemon running",
+      ]);
+      expect(output.stdout.trimEnd().split("\n").at(-1), label).toBe(
+        "To start after a reboot, turn on automatic login for this user.",
+      );
+    }
+
+    const json = await install({
+      argv: ["daemon", "install", "--json"],
+      role: "worker",
+      root: join(home, ".simlock"),
+    });
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.output.stdout)).toEqual({
+      status: "installed",
+      service: {
+        state: "installed",
+        manager: "launchd",
+        name: "com.callstack.simlock.worker",
+        path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+      },
+    });
   });
 });
