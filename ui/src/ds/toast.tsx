@@ -46,23 +46,30 @@ export function createToaster(): Toaster {
 
 function ToastList() {
   const { toasts } = Toast.useToastManager();
-  return toasts.map((toast) => (
-    <Toast.Root key={toast.id} toast={toast} className="toast">
-      <Toast.Content className="toast-content">
-        <Toast.Close
-          className="toast-close"
-          render={
-            <IconButton aria-label="Close">
-              <Icon name="close" />
-            </IconButton>
-          }
-        />
-        <Toast.Title className="toast-title" />
-        <Toast.Description className="toast-description" />
-        <Toast.Action className="button button-secondary toast-action" />
-      </Toast.Content>
-    </Toast.Root>
-  ));
+  return toasts.map((toast) => {
+    // why: an error toast's text is announced by the manager's role="alert" copy, so the visible
+    // text is hidden from assistive technology, while the toast itself stays exposed, because its
+    // Retry and Close buttons inside must never sit under an aria-hidden root.
+    const copied = toast.priority === "high";
+    return (
+      <Toast.Root key={toast.id} toast={toast} className="toast" aria-hidden={false}>
+        <Toast.Content className="toast-content">
+          <Toast.Close
+            className="toast-close"
+            aria-hidden={false}
+            render={
+              <IconButton aria-label="Close">
+                <Icon name="close" />
+              </IconButton>
+            }
+          />
+          <Toast.Title className="toast-title" aria-hidden={copied} />
+          <Toast.Description className="toast-description" aria-hidden={copied} />
+          <Toast.Action className="button button-secondary toast-action" />
+        </Toast.Content>
+      </Toast.Root>
+    );
+  });
 }
 
 export function ToastHost({ toaster }: { readonly toaster: Toaster }) {
