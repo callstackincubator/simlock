@@ -14,6 +14,8 @@ import {
 import { useSidebar } from "../state/sidebar";
 import { ROUTES, routeFor } from "./routes";
 
+const PAGES = ROUTES.map((route) => ({ label: route.label, path: route.path }));
+
 const MODAL_DIALOG =
   '[role="dialog"]:not([aria-modal="false"]), [role="alertdialog"]:not([aria-modal="false"])';
 
@@ -132,10 +134,7 @@ function SignOutButton(props: {
 }
 
 function SearchDialog({ hide }: { readonly hide: () => void }) {
-  const session = useSearchSession(
-    ROUTES.map((route) => ({ label: route.label, path: route.path })),
-    hide,
-  );
+  const session = useSearchSession(PAGES, hide);
   return (
     <CommandPalette
       groups={session.groups}

@@ -31,9 +31,12 @@ export type SearchTarget =
   | { readonly kind: "go"; readonly to: `/${string}` }
   | { readonly kind: "run"; readonly action: ItemAction };
 
+export type GroupStatus = "loading" | "failed";
+
 export interface SearchGroup {
   readonly name: SearchGroupName;
   readonly results: readonly SearchResult[];
+  readonly note?: string;
 }
 
 export interface SearchInput {
@@ -151,19 +154,25 @@ function isExact(label: string, typed: readonly string[]): boolean {
 export function searchGroups(
   results: readonly SearchResult[],
   typed: string,
+  statuses: Partial<Record<SearchGroupName, GroupStatus>> = {},
 ): readonly SearchGroup[] {
   const words = wordsOf(typed);
   if (words.length === 0) {
     return [{ name: "Pages", results: results.filter((result) => result.group === "Pages") }];
   }
-  return SEARCH_GROUPS.map((name) => ({
-    name,
-    results: results
+  return SEARCH_GROUPS.flatMap((name): SearchGroup[] => {
+    const found = results
       .filter((result) => result.group === name && matches(result.label, words))
       .sort(
         (a, b) =>
           Number(isExact(b.label, words)) - Number(isExact(a.label, words)) ||
           a.label.localeCompare(b.label, "en"),
-      ),
-  })).filter((group) => group.results.length > 0);
+      );
+    const status = statuses[name];
+    if (status !== undefined) {
+      const note = status === "loading" ? "Loading…" : `Could not load ${name.toLowerCase()}.`;
+      return [{ name, note, results: found }];
+    }
+    return found.length === 0 ? [] : [{ name, results: found }];
+  });
 }
