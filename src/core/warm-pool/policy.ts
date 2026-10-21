@@ -192,12 +192,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
     idle,
     view.handoffInFlight
       ? []
-      : running.filter(
-          (device) =>
-            !proposed.has(device.id) &&
-            !sparedDevices.has(device.id) &&
-            !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
-        ),
+      : running.filter((device) => !proposed.has(device.id) && !sparedDevices.has(device.id)),
   );
   return {
     proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
@@ -569,8 +564,7 @@ function neverLeasedIdle(
       device.lastLeaseEndedAt !== undefined ||
       kept.has(device.id) ||
       already.has(device.id) ||
-      view.now - readySince(device) <= view.config.shutdownAfterMs ||
-      view.waiting.some((demand) => !demand.inFlight && serves(device, demand))
+      view.now - readySince(device) <= view.config.shutdownAfterMs
     ) {
       continue;
     }

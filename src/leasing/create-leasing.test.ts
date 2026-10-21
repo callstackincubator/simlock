@@ -31,7 +31,7 @@ import {
   MemoryLogSink,
   MemoryFilesystem,
 } from "../ports/index.js";
-import { createLeasing } from "./create-leasing.js";
+import { createLeasing } from "./index.js";
 import { NoCapacityError, ProvisionFailedError } from "./lease-acquisition-coordinator.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { createTestEngine } from "./testing.js";

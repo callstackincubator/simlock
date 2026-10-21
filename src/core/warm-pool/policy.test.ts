@@ -204,6 +204,7 @@ function view(
   };
 }
 
+// why: the pure planner needs many capacity, matching and ordering cases through its policy seam.
 describe("warm pool policy", () => {
   it("proposes, for waiters behind the head and in queue order, one creation of each waiter's spec, up to maxConcurrentBoots, and nothing for the head", () => {
     const creation = (model: string) => ({
@@ -1571,6 +1572,35 @@ describe("warm pool policy", () => {
         const waiting = [classDemand()];
         const cases = [
           ["matching class", view([ready], { waiting }), ["ready"]],
+          [
+            "matching exact model",
+            view([ready], { waiting: [modelDemand("iPhone 15")] }),
+            ["ready"],
+          ],
+          ["no devices", view([], { waiting }), []],
+          [
+            "later active waiter",
+            view([ready], {
+              waiting: [classDemand("slim"), classDemand("full", "ios", true), ...waiting],
+            }),
+            ["ready"],
+          ],
+          [
+            "union with configured and learned kinds",
+            view(
+              [
+                ofKind("targeted", "ready"),
+                device("learned", "ready", { spec: spec("iPad Pro") }),
+                ready,
+              ],
+              {
+                targets: [target(1)],
+                learned: [learnedOf(spec("iPad Pro"))],
+                waiting,
+              },
+            ),
+            ["targeted", "learned", "ready"],
+          ],
           [
             "another matching model",
             view([{ ...ready, spec: spec("iPhone 17") }], { waiting }),
