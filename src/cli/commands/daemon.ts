@@ -7,13 +7,16 @@ import type { StatusGetOutput } from "../../admin/index.js";
 import type { ServiceDefinition, ServiceManager } from "../../ports/index.js";
 import type { CommandContext } from "../tree.js";
 
-function serviceAccess(environment: CommandContext["environment"]): {
+function serviceAccess(
+  environment: CommandContext["environment"],
+  command: "install" | "uninstall",
+): {
   readonly manager: ServiceManager;
   readonly definition: () => Promise<ServiceDefinition>;
 } {
   const { service } = environment;
   if (service?.manager === undefined) {
-    throw new UsageError("daemon install is supported on macOS and Linux only");
+    throw new UsageError(`daemon ${command} is supported on macOS and Linux only`);
   }
   return { manager: service.manager, definition: service.definition };
 }
@@ -56,7 +59,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (command === "install") {
-    const { manager, definition } = serviceAccess(environment);
+    const { manager, definition } = serviceAccess(environment, "install");
     const service = await definition();
     const stopped = await stopRunningDaemon(environment, token);
     await manager.install(service);
@@ -81,7 +84,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (command === "uninstall") {
-    const { manager, definition } = serviceAccess(environment);
+    const { manager, definition } = serviceAccess(environment, "uninstall");
     const service = await definition();
     const state = await manager.state(service);
     const writeJson = (status: string, extra: Record<string, unknown>): void =>

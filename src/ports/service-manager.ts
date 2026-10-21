@@ -174,6 +174,19 @@ function savedPaths(json: string): readonly string[] {
   return args.slice(0, 2).filter((value): value is string => typeof value === "string");
 }
 
+export class ServiceFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ServiceFailedError";
+  }
+}
+
+function failure(command: string, args: readonly string[], result: ProcessResult): never {
+  const commandLine = [command, ...args].join(" ");
+  const reason = result.stderr.split("\n")[0] ?? "";
+  throw new ServiceFailedError(`${commandLine} failed: ${reason}`);
+}
+
 function isExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
@@ -193,8 +206,14 @@ export class LaunchdServiceManager implements ServiceManager {
     return `gui/${String(this.options.uid)}`;
   }
 
-  private run(command: string, args: readonly string[]): Promise<ProcessResult> {
-    return this.options.runner.run(command, args, { timeoutMs: LAUNCHCTL_TIMEOUT_MS });
+  private async run(command: string, args: readonly string[]): Promise<ProcessResult> {
+    const result = await this.options.runner.run(command, args, {
+      timeoutMs: LAUNCHCTL_TIMEOUT_MS,
+    });
+    if (result.code === null) {
+      throw new ServiceFailedError(`${[command, ...args].join(" ")} did not finish within 10 s`);
+    }
+    return result;
   }
 
   private launchctl(args: readonly string[]): Promise<ProcessResult> {
@@ -204,7 +223,9 @@ export class LaunchdServiceManager implements ServiceManager {
   async state(definition: ServiceDefinition): Promise<ServiceState> {
     const { filesystem } = this.options;
     if (!(await filesystem.exists(definition.path))) return { state: "not-installed" };
-    const converted = await this.run("plutil", ["-convert", "json", "-o", "-", definition.path]);
+    const convertArgs = ["-convert", "json", "-o", "-", definition.path];
+    const converted = await this.run("plutil", convertArgs);
+    if (converted.code !== 0) failure("plutil", convertArgs, converted);
     const saved = savedPaths(converted.stdout);
     const missing: string[] = [];
     for (const path of saved) if (!(await filesystem.exists(path))) missing.push(path);
@@ -224,7 +245,14 @@ export class LaunchdServiceManager implements ServiceManager {
     }
     await filesystem.mkdirp(dirname(definition.path));
     await filesystem.writeFileAtomic(definition.path, plistFor(definition));
-    await this.launchctl(["bootstrap", this.domain(), definition.path]);
+    const bootstrapArgs = ["bootstrap", this.domain(), definition.path];
+    let loaded: ProcessResult | undefined;
+    try {
+      loaded = await this.launchctl(bootstrapArgs);
+    } finally {
+      if (loaded?.code !== 0) await filesystem.rm(definition.path);
+    }
+    if (loaded.code !== 0) failure("launchctl", bootstrapArgs, loaded);
   }
 
   async uninstall(definition: ServiceDefinition): Promise<void> {
@@ -233,7 +261,9 @@ export class LaunchdServiceManager implements ServiceManager {
   }
 
   async start(definition: ServiceDefinition): Promise<void> {
-    await this.launchctl(["kickstart", `${this.domain()}/${definition.name}`]);
+    const args = ["kickstart", `${this.domain()}/${definition.name}`];
+    const started = await this.launchctl(args);
+    if (started.code !== 0) failure("launchctl", args, started);
   }
 }
 

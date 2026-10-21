@@ -41,6 +41,7 @@ export {
   FakeServiceManager,
   LaunchdServiceManager,
   productionServiceManager,
+  ServiceFailedError,
   type ServiceDefinition,
   type ServiceDefinitionInput,
   type ServiceManager,
