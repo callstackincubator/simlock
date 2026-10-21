@@ -49,14 +49,13 @@ const STALLING = {
 } as const;
 
 async function workers(daemon: RunningDaemon): Promise<readonly WorkerView[]> {
-  const response = await fetch(new URL("/v1/workers", daemon.url), {
-    headers: { Authorization: `Bearer ${daemon.tokens.operator}` },
-  });
-  return ((await response.json()) as { workers: WorkerView[] }).workers;
+  const listed = await daemon.cli(["worker", "list", "--json"]);
+  expect(listed.code, listed.stderr).toBe(0);
+  return (listed.json as { workers: WorkerView[] }).workers;
 }
 
 /**
- * why: Waits, asking every 20 ms, until the daemon's own `GET /v1/workers` says what `predicate`
+ * why: Waits, asking every 20 ms, until the daemon's own `worker list` (over its socket, so a joined worker without HTTP answers too) says what `predicate`
  * looks for. The console's second starts there: it cannot show a fact before its daemon has it.
  */
 async function untilTheDaemonSays(
