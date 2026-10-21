@@ -172,7 +172,7 @@ put together from them and draws nothing of its own that one of them already dra
   `--border` line, in `--status-error`, never `--accent`. A disabled entry is `--text-muted`. A
   list with no entry draws no **⋯**. Arrow keys move, Escape closes. It floats above drawers and
   toasts.
-- **Dialog.** A confirmation is a modal alert dialog (`ConfirmDialog`): a title that asks the
+- **Dialog.** A confirmation is a modal alert dialog (`ConfirmHost`): a title that asks the
   question, one or two sentences, and two buttons, the keeping one first ("Keep") and the action
   second, named by its verb ("Release lease"). While it runs the action button is disabled and reads
   its progress ("Releasing…"). A dialog that asks for a typed name keeps the action disabled until

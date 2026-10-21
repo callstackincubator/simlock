@@ -103,7 +103,7 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 - Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
 - Actions: `RowMenu` (a ⋯ button and its menu), `MenuRow` (a table row that opens the same menu on a
   right-click), `ActionBar` (a drawer's or page's first safe action and its ⋯; Base UI Menu and
-  ContextMenu), `ConfirmDialog` (Base UI AlertDialog, type-to-confirm, one host), `createToaster`
+  ContextMenu), `createConfirmer` and `ConfirmHost` (Base UI AlertDialog, type-to-confirm, one host), `createToaster`
   and `ToastHost` (Base UI Toast: its manager is the only queue, and owns the timer, the limit and
   closing). `DataTable` takes a `menu` for its last column.
 
