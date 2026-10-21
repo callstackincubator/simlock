@@ -1,6 +1,6 @@
 # 0040. Every HTTP route is declared once, and the OpenAPI document is built from the declarations
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-21
 - **Issue:** [#813](https://github.com/callstackincubator/simlock/issues/813)
 - **Supersedes:** nothing. Builds on [ADR
