@@ -89,7 +89,7 @@ agent-device close
 
 The URL is the worker's HTTP address, or the gateway's (port 4700 by default), followed by `/v1/agent-device`.
 
-- **`open` takes a lease.** `--platform ios` or `android` is required. `--device "iPhone 16"` asks for that model. `--target mobile`, `tv` or `desktop` asks for a phone, TV or desktop device. With neither, Simlock leases a phone. If every match is taken, `open` waits in Simlock's queue for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
+- **`open` takes a lease.** `--platform ios` or `android` is required. `--device "iPhone 16"` asks for that model. `--target mobile`, `tv` or `desktop` asks for a phone, TV or desktop device. `--os` names an OS version or a range (`26.0`, `>=18 <27`, `18 - 26`; a range gets the newest installed version in it), and on Android `--image-tag` names a system image tag such as `google_apis_playstore`. With none of these, Simlock leases a phone. The reply to `open` names the model, OS and image tag you got. If every match is taken, `open` waits in Simlock's queue for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
 - **The lease is an ordinary Simlock lease.** `simlock status` and the console show it, held by the token. Its id is the one agent-device chose.
 - **Commands keep the lease alive.** agent-device renews it before each command and while a command runs. An agent that stops sending commands loses the device one TTL later. The TTL is the one agent-device asks for, or the worker's default (15 minutes) when it asks for none. An admin can cap it with `capabilities.agent-device.leaseTtlCapMs`.
 - **`close` gives the device back.** Simlock ends the lease and wipes the device for the next agent.
@@ -124,7 +124,10 @@ Restarting a worker's daemon ends every agent-device lease on that worker, even 
 | `refused: name --platform ios or android` | `open` needs `--platform`. |
 | `refused: simlock picks the device` | A `--udid`, `--serial` or `--device` names a device that is not the one Simlock leased to you. |
 | `refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set` | Simlock decides which devices agent-device sees. |
-| `refused by simlock: <message>` | Simlock refused the lease, for example a model it does not know. |
+| `refused: physical devices are not available through agent-device` | `open` asked for a physical device; agent-device leases only simulators and emulators through Simlock. |
+| `refused: unknown --target <value>; use mobile, tv or desktop` | `--target` named a device class Simlock does not map. |
+| `refused: malformed osVersion`, `refused: malformed imageTag` | `--os` or `--image-tag` was not a string. |
+| `refused by simlock: <message>` | Simlock refused the lease, for example a model it does not know, an OS range it cannot read, or an image tag on iOS. |
 | `refused: this agent-device is too old to use through a gateway; update it` | Upgrade the agent's agent-device. |
 | `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. |
 
