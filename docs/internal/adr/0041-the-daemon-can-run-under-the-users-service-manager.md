@@ -75,7 +75,10 @@ flowchart LR
    clean stop (`daemon stop`, SIGTERM) exits 0 and stays stopped until
    the next login or start. Every stop the daemon makes for a failure
    (`convergence-failed`, `http-start-failed`, `history-refused`, a start
-   that throws) exits 1, as it does today.
+   that throws) exits 1, as it does today. One start is not a failure: a
+   daemon that finds another daemon answering on its socket logs
+   `Daemon already running` and exits 0, so a service started at login
+   beside a daemon a command spawned earlier stops retrying.
    A stop kills the daemon only, never the devices and tools it started,
    which outlive it as they do today: launchd `AbandonProcessGroup` true,
    systemd `KillMode=process`. A stop gets 300 s before the manager
