@@ -294,7 +294,11 @@ function expectedRow(view: WorkerView): {
 } {
   const name = view.label ?? view.id;
   if (view.connection === "incompatible") {
-    return { bars: 0, slots: "No devices", text: [name, "incompatible", "", "—", "—", "—", "—"] };
+    return {
+      bars: 0,
+      slots: "No devices",
+      text: [name, "incompatible", "", "—", "—", "—", "—", ""],
+    };
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
@@ -310,6 +314,7 @@ function expectedRow(view: WorkerView): {
       "12%",
       "50%",
       "40%",
+      "",
     ],
   };
 }

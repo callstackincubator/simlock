@@ -88,7 +88,9 @@ test.describe("the Queue page", () => {
       await expect(page.getByText("2 waiting")).toBeVisible();
 
       await expect(row(page, "agent-b")).toContainText("Full: device limit");
-      await expect(row(page, "agent-b").locator("td").last()).toHaveText(/^\d+ s|\d+ min/);
+      await expect(row(page, "agent-b").locator("td:not(.table-menu)").last()).toHaveText(
+        /^\d+ s|\d+ min/,
+      );
       await expect(page.getByRole("dialog")).toHaveCount(0);
       expect(new URL(page.url()).pathname).toBe("/queue");
 

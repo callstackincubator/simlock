@@ -297,7 +297,7 @@ test.describe("long lists page", () => {
     await open(page, daemon, "/leases?page=2");
     const row = leaseRows(page).locator("tr").nth(2);
     const link = row.getByRole("link");
-    const expires = row.locator("td").last();
+    const expires = row.locator("td:not(.table-menu)").last();
     await expect(link).toHaveAttribute("href", "/leases/lse_0028/?page=2");
     await link.focus();
     await expect(link).toBeFocused();
@@ -737,6 +737,12 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     await page.keyboard.press("5");
     await expect(range).toHaveText("251–300 of 300");
 
+    await page.keyboard.press(back);
+    await expect(
+      leaseRows(page)
+        .getByRole("button", { name: /^Actions for/ })
+        .last(),
+    ).toBeFocused();
     await page.keyboard.press(back);
     const link = leaseRows(page).getByRole("link").last();
     await expect(link).toBeFocused();
