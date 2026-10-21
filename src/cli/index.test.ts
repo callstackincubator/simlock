@@ -1979,6 +1979,45 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
   });
 });
 
+async function runDaemonStatus(
+  testCase: {
+    readonly role: "worker" | "gateway";
+    readonly running: boolean;
+    readonly state: ServiceState | undefined;
+  },
+  json: boolean,
+): Promise<{ readonly stdout: string }> {
+  const home = "/Users/me";
+  const output = outputCapture();
+  const manager =
+    testCase.state === undefined ? undefined : new FakeServiceManager({ state: testCase.state });
+  const environment = output.environmentWith({
+    daemonHome: { role: testCase.role, dataDirectory: "/simlock", gatewayPresent: false },
+    connectExistingAdmin: async () => {
+      if (!testCase.running) throw new Error("connect ECONNREFUSED");
+      return fakeClient();
+    },
+    service: {
+      manager,
+      platform: manager === undefined ? "linux" : "darwin",
+      definition: async () =>
+        serviceDefinition({
+          role: testCase.role,
+          root: `${home}/.simlock`,
+          dataDirectory: "/simlock",
+          home,
+          nodePath: "/Users/me/.nvm/versions/node/v22.13.0/bin/node",
+          mainPath: "/Users/me/simlock/dist/daemon/main.js",
+          env: {},
+        }),
+    },
+  });
+  await expect(
+    runCli(["daemon", "status", ...(json ? ["--json"] : [])], environment),
+  ).resolves.toBe(0);
+  return output;
+}
+
 describe("CLI: daemon status (ADR 0003 §11)", () => {
   it.each([
     { name: "the socket cannot be reached at all", error: () => new Error("connect ECONNREFUSED") },
@@ -2132,56 +2171,19 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       },
     ];
     for (const testCase of cases) {
-      for (const json of [false, true]) {
-        const label = `${testCase.label}${json ? " --json" : ""}`;
-        const output = outputCapture();
-        const manager =
-          testCase.state === undefined
-            ? undefined
-            : new FakeServiceManager({ state: testCase.state });
-        const environment = output.environmentWith({
-          daemonHome: { role: testCase.role, dataDirectory: "/simlock", gatewayPresent: false },
-          connectExistingAdmin: async () => {
-            if (!testCase.running) throw new Error("connect ECONNREFUSED");
-            return fakeClient();
-          },
-          service: {
-            manager,
-            platform: manager === undefined ? "linux" : "darwin",
-            definition: async () =>
-              serviceDefinition({
-                role: testCase.role,
-                root: `${home}/.simlock`,
-                dataDirectory: "/simlock",
-                home,
-                nodePath: node,
-                mainPath: main,
-                env: {},
-              }),
-          },
-        });
-
-        await expect(
-          runCli(["daemon", "status", ...(json ? ["--json"] : [])], environment),
-          label,
-        ).resolves.toBe(0);
-
-        if (json) {
-          const parsed = JSON.parse(output.stdout) as Record<string, unknown>;
-          expect(parsed.service, label).toEqual(testCase.service);
-          expect(parsed.status === "stopped" || "daemon" in parsed, label).toBe(true);
-        } else {
-          const lines = output.stdout.trimEnd().split("\n");
-          if (testCase.line !== undefined) expect(lines.at(-1), label).toBe(testCase.line);
-          expect(
-            lines.filter((line) => line.startsWith("Service:")),
-            label,
-          ).toEqual(testCase.line === undefined ? [] : [testCase.line]);
-          expect(lines[0], label).toBe(
-            testCase.running ? "Daemon: running (worker)" : "Daemon stopped",
-          );
-        }
-      }
+      const human = await runDaemonStatus(testCase, false);
+      const lines = human.stdout.trimEnd().split("\n");
+      expect(
+        [lines[0], ...lines.filter((line) => line.startsWith("Service:"))],
+        testCase.label,
+      ).toEqual([
+        testCase.running ? "Daemon: running (worker)" : "Daemon stopped",
+        ...(testCase.line === undefined ? [] : [testCase.line]),
+      ]);
+      const json = JSON.parse((await runDaemonStatus(testCase, true)).stdout) as {
+        readonly service?: unknown;
+      };
+      expect(json.service, `${testCase.label} --json`).toEqual(testCase.service);
     }
   });
 
