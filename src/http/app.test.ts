@@ -446,6 +446,68 @@ describe("POST /v1/devices and DELETE /v1/devices/{id}", () => {
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
   });
 
+  it.each([
+    [
+      "no content type, with a body",
+      undefined,
+      '{"id":"A","platform":"ios"}',
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "Content-Type must be application/json",
+    ],
+    [
+      "text/plain",
+      "text/plain",
+      '{"id":"A","platform":"ios"}',
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "Content-Type must be application/json",
+    ],
+    [
+      "application/json; charset=utf-8",
+      "application/json; charset=utf-8",
+      '{"id":"A","platform":"ios"}',
+      200,
+      undefined,
+      undefined,
+    ],
+    [
+      "application/json with malformed JSON",
+      "application/json",
+      '{"id":',
+      400,
+      "BAD_REQUEST",
+      "Invalid JSON body",
+    ],
+  ])(
+    "POST /v1/devices with %s answers 415 without a JSON content type, 400 for malformed JSON, else the dispatcher",
+    async (_case, contentType, body, status, code, message) => {
+      const { app, dispatcher } = buildHarness();
+      const seen: unknown[] = [];
+      dispatcher.handlers["device.add"] = (input) => {
+        seen.push(input);
+        return enrolled;
+      };
+
+      const response = await app.request("/v1/devices", {
+        body: new TextEncoder().encode(body),
+        headers: {
+          ...operatorAuth,
+          ...(contentType === undefined ? {} : { "content-type": contentType }),
+        },
+        method: "POST",
+      });
+
+      expect(response.status).toBe(status);
+      if (code === undefined) {
+        expect(seen).toEqual([{ id: "A", platform: "ios" }]);
+      } else {
+        expect(await response.json()).toEqual({ error: { code, message } });
+        expect(seen).toEqual([]);
+      }
+    },
+  );
+
   it("dispatches device.remove with the path's id, and answers its result as JSON", async () => {
     const { app, dispatcher } = buildHarness();
     const seen: unknown[] = [];
