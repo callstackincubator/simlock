@@ -72,8 +72,10 @@ Validation happens when config is loaded; there is no live listener shutdown, ne
 
 One implementation task covers merged config validation and real CLI validation/startup with fake ports. Startup refusal at the CLI is checked with no daemon already listening; connecting to an existing daemon does not reload config.
 
-Two existing fixtures depend on joined-worker HTTP at `d8404072`: `src/agent-device/gateway-front.test.ts:252-265,821-831,1175-1196` and `e2e/slow-agent-device-gateway.test.ts:169-178,355-389`. Adapt the direct allocation test to use a standalone worker; remove the simultaneous direct-and-gateway HTTP tenant-isolation case. Preserve gateway isolation tests and production tenant-prefix behavior.
+Affected fixtures at `d8404072` include `src/agent-device/gateway-front.test.ts:252-265,821-831,1175-1196` and `e2e/slow-agent-device-gateway.test.ts:169-178,355-389`, and the console startup fixture `e2e/console/fixtures.ts:95,119-131,150-177,207-223`. Adapt the direct allocation test to use a standalone worker; remove the simultaneous direct-and-gateway HTTP tenant-isolation case. Preserve gateway isolation tests and production tenant-prefix behavior.
 
-The maintainer chose to remove the direct-versus-gateway upload timing comparison, including its now-unused helpers. The joined slow-lane worker starts with HTTP off; keep the existing gateway install/upload correctness test and the rest of the gateway suite. Run that suite through the slow-lane script on real simulators/emulators. This removes the timing comparison's coverage; it makes no change to production upload behavior or performance limits in ADR 0028.
+The maintainer chose to remove the direct-versus-gateway upload timing comparison, including its now-unused helpers. The joined slow-lane worker starts with HTTP off, keeping its configured numeric port because `withSharedDaemon` requires it (`e2e/helpers/env.ts:384-388`); keep the existing gateway install/upload correctness test and the rest of the gateway suite. Run that suite through the slow-lane script on real simulators/emulators. This removes the timing comparison's coverage; it makes no change to production upload behavior or performance limits in ADR 0028.
+
+Console fixtures start joined workers with HTTP off, use socket/CLI readiness, and skip HTTP log/health/URL expectations for those workers. Standalone workers and gateways retain HTTP readiness and bind-failure checks. Run the console lane in Chromium.
 
 No wire shape or event is changed.
