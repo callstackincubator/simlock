@@ -88,7 +88,7 @@ const leaseNoticeSchema = z.discriminatedUnion("event", [
 ]);
 
 // why: `ttlMs` is read as unknown so that each way it can be wrong keeps its own whole-body message.
-export const renewBodySchema = z
+const renewBodySchema = z
   .object(
     {
       ttlMs: z
@@ -125,7 +125,7 @@ export const leaseRenewRoute = declareRoute({
 });
 
 // why: `stdin` and `requesterId` also accept `null` and normalize it to omitted: the documented example sends them as `null`.
-export const execBodySchema = z
+const execBodySchema = z
   .object({
     tool: z.string().min(1),
     args: z.array(z.string()),
