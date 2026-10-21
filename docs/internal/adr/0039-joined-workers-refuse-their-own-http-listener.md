@@ -44,7 +44,7 @@ sequenceDiagram
   participant C as CLI
   participant V as Config loader
   participant D as Daemon launcher
-  O->>C: --local daemon start
+  O->>C: --local daemon start (no daemon listening)
   C->>V: Load worker config
   alt Joined worker with HTTP on
     V-->>C: ConfigError naming http.enabled
@@ -70,4 +70,10 @@ Validation happens when config is loaded; there is no live listener shutdown, ne
 
 ## Verification
 
-One implementation task covers merged config validation and real CLI validation/startup with fake ports. Existing socket and uplink tests cover those transports. No new wire shape, event or hardware requirement is introduced.
+One implementation task covers merged config validation and real CLI validation/startup with fake ports. Startup refusal at the CLI is checked with no daemon already listening; connecting to an existing daemon does not reload config.
+
+Two existing fixtures depend on joined-worker HTTP at `d8404072`: `src/agent-device/gateway-front.test.ts:252-265,821-831,1175-1196` and `e2e/slow-agent-device-gateway.test.ts:169-178,355-389`. Adapt the direct allocation test to use a standalone worker; remove the simultaneous direct-and-gateway HTTP tenant-isolation case. Preserve gateway isolation tests and production tenant-prefix behavior.
+
+The maintainer chose to remove the direct-versus-gateway upload timing comparison, including its now-unused helpers. The joined slow-lane worker starts with HTTP off; keep the existing gateway install/upload correctness test and the rest of the gateway suite. Run that suite through the slow-lane script on real simulators/emulators. This removes the timing comparison's coverage; it makes no change to production upload behavior or performance limits in ADR 0028.
+
+No wire shape or event is changed.
