@@ -1743,10 +1743,19 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       const launcher = new FakeDaemonLauncher(() => {
         launched = true;
       });
+      let probeSent = false;
       const ipc: IpcConnector = {
         connect: async () => {
           if (!launched) throw new IpcError("endpoint-not-found", "not yet", undefined);
-          return real.connect(socketPath);
+          const connection = await real.connect(socketPath);
+          const write = connection.write.bind(connection);
+          connection.write = async (contents) => {
+            await write(contents);
+            if ((JSON.parse(contents.trim()) as { type: string }).type === "status.get") {
+              probeSent = true;
+            }
+          };
+          return connection;
         },
       };
       const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
@@ -1762,6 +1771,9 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(hellos).toBe(1);
+      // why: the server observing hello does not mean the client has read its reply and armed
+      // the probe deadline; advance the fake clock only after the client sends that probe.
+      await expect.poll(() => probeSent).toBe(true);
       clock.advance(20_000);
       await expect.poll(() => settled, { timeout: 2_000 }).toBe(true);
       expect(await run).toBe(1);
@@ -1774,61 +1786,72 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     }
   });
 
-  it("fails a start with DAEMON_STARTUP_FAILED, exit 1, when the daemon it launched closes the socket before the CLI's hello", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-closed-"));
-    temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
-    let accepted = 0;
-    // why: the daemon that refuses its history accepts the CLI's connection, then stops and
-    // closes it; the CLI is still reading `admin.token` then, so the close lands before `hello`.
-    const server = createServer((socket) => {
-      accepted += 1;
-      socket.destroy();
-    });
-    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
-    try {
-      const real = new NodeIpcTransport();
-      let launched = false;
-      const clock = new FakeClock(0);
-      const launcher = new FakeDaemonLauncher(
-        () => {
-          launched = true;
-        },
-        { exit: { code: 1, signal: null } },
-      );
-      const ipc: IpcConnector = {
-        connect: async () => {
-          if (!launched) throw new IpcError("endpoint-not-found", "not yet", undefined);
-          const connection = await real.connect(socketPath);
-          await expect.poll(() => connection.closed).toBe(true);
-          return connection;
-        },
-      };
-      const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
-      let settled = false;
-      const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
-        (code) => {
-          settled = true;
-          return code;
-        },
-      );
-      for (let tick = 0; tick < 100 && !settled; tick += 1) {
-        clock.advance(50);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(launcher.launches).toBe(1);
-      expect(accepted).toBe(1);
-      expect(
-        settled,
-        `simlock daemon start still had not settled at ${String(clock.now())}ms`,
-      ).toBe(true);
-      expect(await run).toBe(1);
-      expect(output.stdout).toBe("");
-      expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toMatchObject({
-        error: { code: "DAEMON_STARTUP_FAILED" },
+  it("exits 1 for a socket closed before hello and reports DAEMON_STARTUP_FAILED only after launch", async () => {
+    for (const scenario of [
+      { launch: false, afterExit: false, code: "DAEMON_CONNECTION_LOST", connects: 1 },
+      { launch: true, afterExit: false, code: "DAEMON_STARTUP_FAILED", connects: 2 },
+      { launch: true, afterExit: true, code: "DAEMON_STARTUP_FAILED", connects: 3 },
+    ]) {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-closed-"));
+      temporaryDirectories.push(directory);
+      const socketPath = join(directory, "daemon.sock");
+      let accepted = 0;
+      // why: the daemon that refuses its history accepts the CLI's connection, then stops and
+      // closes it; the CLI is still reading `admin.token` then, so the close lands before `hello`.
+      const server = createServer((socket) => {
+        accepted += 1;
+        socket.destroy();
       });
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const real = new NodeIpcTransport();
+        let launched = !scenario.launch;
+        const clock = new FakeClock(0);
+        const launcher = new FakeDaemonLauncher(
+          () => {
+            launched = true;
+          },
+          { exit: { code: 1, signal: null } },
+        );
+        let connects = 0;
+        const ipc: IpcConnector = {
+          connect: async () => {
+            connects += 1;
+            if (!launched || (scenario.afterExit && connects === 2)) {
+              throw new IpcError("endpoint-not-found", "not yet", undefined);
+            }
+            const connection = await real.connect(socketPath);
+            await expect.poll(() => connection.closed).toBe(true);
+            return connection;
+          },
+        };
+        const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
+        let settled = false;
+        const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+          (code) => {
+            settled = true;
+            return code;
+          },
+        );
+        for (let tick = 0; tick < 100 && !settled; tick += 1) {
+          clock.advance(50);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(launcher.launches).toBe(scenario.launch ? 1 : 0);
+        expect(accepted).toBe(1);
+        expect(connects).toBe(scenario.connects);
+        expect(
+          settled,
+          `simlock daemon start still had not settled at ${String(clock.now())}ms`,
+        ).toBe(true);
+        expect(await run).toBe(1);
+        expect(output.stdout).toBe("");
+        expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toMatchObject({
+          error: { code: scenario.code },
+        });
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   });
 

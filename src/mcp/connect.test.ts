@@ -164,11 +164,37 @@ describe("MCP: auto-launch's daemon that exits while starting (#760)", () => {
 // why: the stdio host mocks this connector; this seam can force a socket to close before hello
 // both in the launch loop and in the final connection after the launched process exits.
 describe("MCP: a socket closed before hello (#790)", () => {
-  it("reports a closed handshake as a failed start only after launching the daemon", async () => {
+  it("reports only a closed handshake after launching the daemon as a failed start", async () => {
     for (const scenario of [
-      { launch: false, afterExit: false, code: "DAEMON_CONNECTION_LOST", connects: 1 },
-      { launch: true, afterExit: false, code: "DAEMON_STARTUP_FAILED", connects: 2 },
-      { launch: true, afterExit: true, code: "DAEMON_STARTUP_FAILED", connects: 3 },
+      {
+        launch: false,
+        afterExit: false,
+        refused: false,
+        code: "DAEMON_CONNECTION_LOST",
+        connects: 1,
+      },
+      {
+        launch: true,
+        afterExit: false,
+        refused: false,
+        code: "DAEMON_STARTUP_FAILED",
+        connects: 2,
+      },
+      { launch: true, afterExit: true, refused: false, code: "DAEMON_STARTUP_FAILED", connects: 3 },
+      {
+        launch: true,
+        afterExit: false,
+        refused: true,
+        code: "ADMIN_AUTHENTICATION_FAILED",
+        connects: 2,
+      },
+      {
+        launch: true,
+        afterExit: true,
+        refused: true,
+        code: "ADMIN_AUTHENTICATION_FAILED",
+        connects: 3,
+      },
     ]) {
       const transport = new MemoryIpcTransport();
       const socketPath = "/simlock/daemon.sock";
@@ -176,7 +202,20 @@ describe("MCP: a socket closed before hello (#790)", () => {
       const listen = () =>
         transport.listen(socketPath, (connection) => {
           accepted += 1;
-          void connection.close();
+          if (scenario.refused) {
+            connection.onData((chunk) => {
+              const frame = JSON.parse(chunk.trim()) as { id: number };
+              void connection.write(
+                `${JSON.stringify({
+                  id: frame.id,
+                  ok: false,
+                  error: { code: "ADMIN_AUTHENTICATION_FAILED", message: "refused" },
+                })}\n`,
+              );
+            });
+          } else {
+            void connection.close();
+          }
         });
       if (!scenario.launch) await listen();
       const launcher = new FakeDaemonLauncher(
