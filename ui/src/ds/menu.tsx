@@ -41,6 +41,13 @@ export function MenuRow(props: {
   readonly children: ReactNode;
 }) {
   const { children, className, entries, onClick } = props;
+  if (entries.length === 0) {
+    return (
+      <tr className={className} onClick={onClick}>
+        {children}
+      </tr>
+    );
+  }
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger render={<tr className={className} onClick={onClick} />}>
@@ -59,6 +66,7 @@ export function MenuRow(props: {
 
 export function RowMenu(props: { readonly label: string; readonly entries: readonly MenuEntry[] }) {
   const { entries, label } = props;
+  if (entries.length === 0) return null;
   return (
     <Menu.Root>
       <Menu.Trigger
