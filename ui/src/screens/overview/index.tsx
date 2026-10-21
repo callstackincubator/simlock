@@ -26,7 +26,7 @@ import {
   type Gauge,
   type Overview,
   type OverviewActivity,
-  type OverviewItem,
+  type OverviewInbox,
   type OverviewWorker,
   type PlatformUse,
   useOverview,
@@ -121,9 +121,7 @@ export function OverviewBody(props: {
           <WorkerTable workers={overview.workers} />
         </Panel>
         <div className="overview-side">
-          <Panel title="Attention" flush>
-            <AttentionList items={overview.attention} />
-          </Panel>
+          <NeedsYou inbox={overview.inbox} />
           <Panel title="Activity" flush actions={<Link to="/activity">All events</Link>}>
             <ActivityList rows={overview.activity} />
           </Panel>
@@ -215,19 +213,24 @@ function WorkerTable({ workers }: { readonly workers: readonly OverviewWorker[] 
   );
 }
 
-function AttentionList({ items }: { readonly items: readonly OverviewItem[] }) {
-  if (items.length === 0) return <Empty>Nothing needs attention.</Empty>;
+function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
+  if (inbox.problems === 0) return <p className="muted">Nothing needs you</p>;
   return (
-    <ul className="overview-list">
-      {items.map((item) => (
-        <li key={item.key}>
-          <Link to={item.to} className="overview-row">
-            <Status tone={item.tone}>{item.word}</Status>
-            <span className="overview-row-aside">{item.subject}</span>
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <Panel title="Needs you" flush>
+      <ul className="overview-list">
+        {inbox.needsYou.map((item) => (
+          <li key={item.key}>
+            <Link to={item.to} className="overview-row">
+              <Status tone={item.tone}>{item.word}</Status>
+              <span className="overview-row-aside">{item.subject}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <p className="overview-all">
+        <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
+      </p>
+    </Panel>
   );
 }
 

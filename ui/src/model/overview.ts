@@ -1,5 +1,5 @@
 import { eventSummary, eventTone } from "./activity";
-import { inboxItems, inboxSubject, inboxTone } from "./inbox";
+import { inboxGroup, inboxItems, inGroupOrder, inboxSubject, inboxTone } from "./inbox";
 import type { ConsoleEvent } from "./events";
 import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import type { FiguresState } from "./figures";
@@ -64,16 +64,22 @@ export interface OverviewActivity {
   readonly to: string;
 }
 
+export interface OverviewInbox {
+  readonly problems: number;
+  readonly needsYou: readonly OverviewItem[];
+}
+
 export interface Overview {
   readonly tiles: readonly OverviewTile[];
   readonly figures: FiguresState;
   readonly platforms: readonly PlatformUse[];
   readonly workers: readonly OverviewWorker[];
-  readonly attention: readonly OverviewItem[];
+  readonly inbox: OverviewInbox;
   readonly activity: readonly OverviewActivity[];
 }
 
 const ACTIVITY_ROWS = 8;
+const NEEDS_YOU_ROWS = 4;
 
 function percentOf(part: number, whole: number): number {
   return whole === 0 ? 0 : (part / whole) * 100;
@@ -167,6 +173,27 @@ function tiles(
   ];
 }
 
+// why: Needs you lists problems only, in the Inbox's own order, so its first rows are the Inbox's.
+function inboxOf(
+  workers: readonly WorkerView[],
+  requests: readonly WaitingRequest[],
+  now: number,
+): OverviewInbox {
+  const problems = inGroupOrder(inboxItems(workers, { now, requests })).filter(
+    (item) => inboxGroup(item) !== "Heads-up",
+  );
+  return {
+    needsYou: problems.slice(0, NEEDS_YOU_ROWS).map((item) => ({
+      key: item.key,
+      subject: inboxSubject(item),
+      to: itemPath("/inbox", item.key),
+      tone: inboxTone(item.condition),
+      word: item.condition,
+    })),
+    problems: problems.length,
+  };
+}
+
 // why: the overview reads three routes the other pages read too, and every figure on it is worked
 // out here from those, so a figure on the overview and the same figure on its page always agree.
 export function overviewOf(input: {
@@ -193,13 +220,7 @@ export function overviewOf(input: {
           ...(tone === undefined ? {} : { tone }),
         };
       }),
-    attention: inboxItems(workers).map((item) => ({
-      key: item.key,
-      subject: inboxSubject(item),
-      to: itemPath("/inbox", item.key),
-      tone: inboxTone(item.condition),
-      word: item.condition,
-    })),
+    inbox: inboxOf(workers, requests, now),
     figures,
     platforms,
     tiles: [

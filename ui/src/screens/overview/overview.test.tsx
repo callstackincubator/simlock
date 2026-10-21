@@ -16,19 +16,19 @@ function text(html: string): string {
 
 const quiet: Overview = {
   activity: [],
-  attention: [],
   figures: { kind: "loading" },
+  inbox: { needsYou: [], problems: 0 },
   platforms: [],
   tiles: [],
   workers: [],
 };
 
 describe("the overview screen", () => {
-  it("says so in one line where a fleet has no workers, nothing needs attention and nothing happened", () => {
+  it("says so in one line where a fleet has no workers, nothing needs you and nothing happened", () => {
     const shown = text(renderToStaticMarkup(<OverviewBody overview={quiet} />));
 
     expect(shown).toContain("No workers have connected.");
-    expect(shown).toContain("Nothing needs attention.");
+    expect(shown).toContain("Nothing needs you");
     expect(shown).toContain("No events in the last hour.");
   });
 
@@ -150,7 +150,14 @@ describe("the overview screen", () => {
 
     expect(shown.split("The stats are not allowed.")).toHaveLength(3);
     expect(shown.indexOf("The stats are not allowed.")).toBeGreaterThan(shown.indexOf("Workers 0"));
-    for (const kept of ["Utilisation", "Leases", "Waiting", "Capacity", "Attention", "Activity"]) {
+    for (const kept of [
+      "Utilisation",
+      "Leases",
+      "Waiting",
+      "Capacity",
+      "Nothing needs you",
+      "Activity",
+    ]) {
       expect(shown, kept).toContain(kept);
     }
     expect(shown).toContain("No workers have connected.");

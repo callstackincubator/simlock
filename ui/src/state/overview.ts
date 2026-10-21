@@ -11,6 +11,7 @@ import { bothViews, loadView, mapView } from "./resource";
 export type {
   Overview,
   OverviewActivity,
+  OverviewInbox,
   OverviewItem,
   OverviewWorker,
   Gauge,

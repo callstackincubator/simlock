@@ -160,13 +160,14 @@ describe("the overview", () => {
     ]);
   });
 
-  it("lists what needs attention, each linked to its own page and toned by how bad it is", () => {
-    const { attention } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
+  it("lists what needs you in the Inbox's order, each linked to its own page and toned by how bad it is", () => {
+    const { inbox } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
 
-    expect(attention.map((item) => [item.word, item.tone, item.subject, item.to])).toEqual([
-      ["drained", "warn", "mini-2", "/inbox/mini-2%2Fdrained"],
+    expect(inbox.problems).toBe(3);
+    expect(inbox.needsYou.map((item) => [item.word, item.tone, item.subject, item.to])).toEqual([
       ["quarantined", "error", "Pixel 8 on mini-2", "/inbox/mini-2%2Fd%2Fquarantined"],
       ["disconnected", "error", "down-1", "/inbox/down-1%2Fdisconnected"],
+      ["drained", "warn", "mini-2", "/inbox/mini-2%2Fdrained"],
     ]);
   });
 

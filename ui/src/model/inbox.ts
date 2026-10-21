@@ -153,7 +153,7 @@ export function inboxGroup(item: InboxItem): InboxGroup {
 }
 
 // why: the Inbox lists its groups in a fixed order, each keeping the order its items came in.
-function inGroupOrder(items: readonly InboxItem[]): readonly InboxItem[] {
+export function inGroupOrder(items: readonly InboxItem[]): readonly InboxItem[] {
   return GROUPS.flatMap((group) => items.filter((item) => inboxGroup(item) === group));
 }
 
