@@ -119,7 +119,7 @@ Assessment: complete | incomplete — <missing scope>
 tests: <green>/<spec tests>  cycles: <built>/<Tests lines>
 remaining:
   <Tests line, in build order>
-audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>
+audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>  covered <c>/<f>
 fixes:
   <finding path:line> -> found <n> fixed <n>
 run: pass | fail <test file:line>  ci: pass | fail | running | unchecked

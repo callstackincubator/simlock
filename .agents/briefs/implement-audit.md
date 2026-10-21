@@ -29,6 +29,16 @@ when and assumptions; retain earlier evidence for unaffected claims.
 - **Promised.** For every Scope and Done when line, name the hunk or test
   that delivers it. None: do it, or leave the line unticked and say why
   under `open`. Never tick a box on intent.
+- **Covered.** List every function whose body the diff adds or changes,
+  one line per file, as the review's behaviour lens will. For each: what
+  a caller, a user, a stored record or an event sees when it runs, and
+  which test goes red when its body, its new branch or its new argument
+  is deleted (testing rule 3). Delete it once and run that test's file to
+  see. No test goes red: write the one that does, through the module's
+  surface (rule 6), or put the line under `open`. Report `covered <c>/<f>`
+  on the `audit:` line: `f` functions listed, `c` with a red test. The
+  review's tests lens asks the same question on a far costlier model;
+  every gap it still finds is this step's miss.
 
 **Check every test you added or changed**, including setup or assertions
 edited after its `test:` commit:

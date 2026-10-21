@@ -22,8 +22,13 @@ requires an explicit maintainer-authorized amendment to the affected rule
 or ADR. Review such amendments as changes, not as automatic self-exemptions.
 Accepted future-state ADRs remain targets until implemented.
 
-Round 1 covers the whole PR diff. Inspect surrounding code, module manuals,
-callers and shared state as needed. Claims review blocks changed claims and
+Round 1 covers the whole PR diff, and reports every site of each defect
+class it confirms: a lens that finds one STRICT INTEGER column refused a
+fractional value searches the diff for every other such column before it
+reports. The targeted round verifies fixes and looks for what the fixes
+changed; a sibling it finds is round 1's miss, and counts as one in the
+ledger (`round: 2` on a finding whose class round 1 already had). Inspect
+surrounding code, module manuals, callers and shared state as needed. Claims review blocks changed claims and
 claims the PR makes false, including affected untouched documentation. Read
 manuals and flows for context, not as a request to repair unrelated debt.
 Unchanged lines can contain PR regressions; demonstrate the causal link.
@@ -63,7 +68,12 @@ separate worktrees for probes; do not share findings until synthesis.
 Assign stable PR-local IDs (R1, R2, ...) by defect class, affected contract
 and failure mechanism, not line number. Deduplicate across lenses before
 verification. Verify each distinct defect once with source evidence or a
-focused reproducer. Consolidate fixes by class. Keep a resolution ledger:
+focused reproducer. A candidate in a safety class (data a user owns
+deleted or overwritten, files Simlock did not write touched, a credential
+exposed, ownership or liveness assumed) is never downgraded to a note or
+dismissed at synthesis on reasoning alone: the coordinator runs, or has a
+lens run, the one probe that shows the input cannot occur, and records it
+in the ledger; without that evidence the candidate blocks. Consolidate fixes by class. Keep a resolution ledger:
 ID, originating roles, evidence, impact, outcome, reason, fix commit and
 verification commit. Outcomes: open, fixed, duplicate (points to canonical
 ID), incorrect, intentional, nonblocking. Only incorrect findings are
@@ -85,6 +95,12 @@ a focused claims check; unchanged claims need no repeat review. Use actual
 hunks, not the intended fix label, to choose follow-up. A lens whose input
 `fix.patch` does not touch does not run: claims needs a changed doc,
 comment, test title or printed string; code a changed code or test line.
+A fix-check whose every hunk is mechanical (a merge that keeps both sides
+unchanged, a timeout or retry constant, a doc line, a renamed symbol with
+no call changed) spawns no lens: the coordinator reads the exact diff,
+records `verified by: coordinator` with the hunks in the ledger, and
+reports. One semantic hunk among them sends only the lens that hunk
+reaches.
 
 There is one full round, one targeted round 2, and one final targeted
 fix-check. Count every invocation, including that fix-check. After the cap,

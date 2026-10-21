@@ -41,6 +41,12 @@ Then answer, for each of them:
    processes, timers or locks)? Find each with a search, not from memory.
    For each: what happens when both act, in either order or at once?
 
+3. For each blocking finding: what else in the diff has the same shape?
+   Search `diff.patch` and the files it touches for every other site of
+   the same class (the same column type, the same copied format, the same
+   missing guard) before you report, and list every site in the one
+   finding. A sibling the next round finds is this round's miss.
+
 Blocking: the change breaks behaviour, leaves wrong state, or breaches a
 rule or an accepted ADR; a user or a later change pays for it. When unsure,
 ask "what breaks, and for whom?"; no answer means drop it.
@@ -60,6 +66,10 @@ Then answer:
    test compares. A test that stays green is a finding.
 2. Does the diff break any rule in `rules/`? Cite the file and the rule
    number.
+3. For each blocking finding: which other tests in the diff have the same
+   shape (the same unproven order, the same loosened compare, the same
+   column left untested)? Search for them and list every site in the one
+   finding.
 
 Blocking: a test that cannot fail for the reason its title gives, or a
 breach of a rule or an accepted ADR.
