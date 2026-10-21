@@ -55,16 +55,18 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    whenever the chosen role is the gateway (`SIMLOCK_HOME` still the root). When a worker
    answers `UNSUPPORTED_IN_WORKER_MODE`, no `--gateway` was given and a gateway is present,
    the printed message gets the `--gateway` hint appended. With `--gateway` and no gateway
-   present every command but `daemon start`, `config set` and `mcp` (and any `--help`, except after `adb`/`simctl`)
+   present every command but `daemon start`, `daemon install`, `daemon uninstall`, `config set` and `mcp` (and any `--help`, except after `adb`/`simctl`)
    stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects.
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
    `SIMLOCK_ADMIN_TOKEN` → `admin.token` in the data directory (3 reads, 50 ms apart).
    None, or a rejected one → an `agent` session and one stderr `notice` line.
 3. **Auto-launch** (`AutoLaunchAdminConnector`) — when nothing listens: load the config
-   first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
+   first (a bad one fails on this stderr), launch the daemon (`launcherFor`: through the
+   service when it is loaded and whole, else spawned detached with a stderr notice; `daemon install` and
+   `daemon uninstall` write the service through the `ServiceManager` port), retry every 50 ms
    for `DAEMON_STARTUP_TIMEOUT_MS`; a launched daemon that exits fails the command at once
-   with `startErrorFrom`'s text, unless another daemon answers a last connect. After a launch, `status.get` probes the connection
+   with `startErrorFrom`'s text, unless another daemon answers a last connect; a start through the service never reports an exit, so a daemon it refuses fails at the deadline with the `daemon.log` lines since the start. After a launch, `status.get` probes the connection
    before handing it to a command, within that same deadline. A connection loss during the handshake or this
    probe becomes `DAEMON_STARTUP_FAILED`; a silent probe times out with that code and starts closing
    its client without waiting for the daemon to end its side. An answered probe ends the window, including a `starting` status: subsequent

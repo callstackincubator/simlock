@@ -41,7 +41,9 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
    use builds a new one:
    - a tool call → `connectWithAutoLaunch`: launches the daemon only when nothing listens
      (`connection-refused`, `endpoint-not-found`), retries every 50 ms for
-     `startupTimeoutMs` (default `DAEMON_STARTUP_TIMEOUT_MS`), else `DAEMON_STARTUP_FAILED`;
+     `startupTimeoutMs` (default `DAEMON_STARTUP_TIMEOUT_MS`), else `DAEMON_STARTUP_FAILED` with
+     the `daemon.log` lines since the start; the launcher is `launcherFor` (the service when
+     loaded, else a spawn; `McpStdioEnvironment.serviceManager` lets a test pass a fake);
      a launched daemon that exits fails at once with `startErrorFrom`'s text, unless another
      daemon answers a last connect; a connection lost during the launched daemon's handshake
      is `DAEMON_STARTUP_FAILED`, while a pre-existing daemon keeps `DAEMON_CONNECTION_LOST`;

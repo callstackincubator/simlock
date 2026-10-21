@@ -28,11 +28,36 @@ Console: http://127.0.0.1:4701/
 
 If the daemon is already running, `daemon start` does nothing and prints the same lines. A daemon process started by hand beside a running one logs `Daemon already running` to `daemon.log` and exits 0.
 
-The daemon runs detached from your terminal: closing the terminal does not stop it. It does not survive a reboot.
+The daemon runs detached from your terminal: closing the terminal does not stop it. Without a service, it does not survive a reboot. See [Start at login](#start-at-login-macos).
 
-<Aside type="note">
-Simlock does not install a service that starts the daemon at login or at boot. The first `simlock` command after a reboot starts it again.
-</Aside>
+## Start at login (macOS)
+
+```sh
+simlock daemon install
+```
+
+```text
+Stopped the running daemon; leases are kept.
+Service installed: com.callstack.simlock.worker (launchd)
+Daemon running
+To start after a reboot, turn on automatic login for this user.
+```
+
+This adds a per-user LaunchAgent for this role (`com.callstack.simlock.gateway` for `--gateway`; another `SIMLOCK_HOME` adds six hex characters to the name). launchd then starts the daemon at login and starts it again after a failure exit, at most once every 10 seconds. `Stopped the running daemon; leases are kept.` appears only when a daemon was running. Run it again to rewrite the service after you move Node or Simlock.
+
+`simlock daemon stop` still stops the daemon, and launchd leaves it stopped; the next command starts it again through launchd. A LaunchAgent runs only while the user is logged in at the screen, so turn on automatic login for the machine to come back after a reboot.
+
+The service saves `SIMLOCK_HOME` and, when set at install time, `PATH`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME`, `ANDROID_USER_HOME`, `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME`, `JAVA_HOME`, `DEVELOPER_DIR` and `SIMLOCK_DRIVERS_MODULE`. Run `daemon install` again after changing one.
+
+When the service cannot run (nobody is logged in at the screen, or a saved Node or `main.js` path is gone), a command still works: it starts the daemon without the service and says so on stderr, for example `Service com.callstack.simlock.worker is not loaded; started the daemon without it.`
+
+If a start through the service fails, the command reports `DAEMON_STARTUP_FAILED` after 20 seconds with the `daemon.log` lines written since the start. If `launchctl` fails, the command fails with `SERVICE_FAILED`.
+
+```sh
+simlock daemon uninstall
+```
+
+stops the daemon, unloads the service and deletes its file, and prints `Service removed: <name> (launchd)`. On Linux and Windows both commands are a usage error.
 
 ## Check whether it is running
 
