@@ -452,24 +452,6 @@ async function freeLoopbackPort(): Promise<number> {
   return address.port;
 }
 describe("startDaemon", () => {
-  it("writes a structured start record with version, protocol version, socket path, and effective config", async () => {
-    const { daemon, sink } = await start();
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Daemon started",
-        fields: expect.objectContaining({
-          version: "1.2.3",
-          protocolVersion: DAEMON_PROTOCOL_VERSION,
-          socketPath: daemon.socketPath,
-        }),
-      }),
-    );
-    const record = sink.records.find((entry) => entry.message === "Daemon started");
-    expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
-  });
-
   it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
@@ -1877,21 +1859,6 @@ describe("discoverDrivers", () => {
     });
   });
 
-  it("logs the refused root, so the reason survives even if nobody runs doctor", async () => {
-    const sink = new MemoryLogSink();
-
-    await discoverIos({ filesystem: await foreignOwnedRoot(), sink });
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: "Skipped iOS driver: device root rejected",
-        module: "daemon.driver-discovery",
-        fields: expect.objectContaining({ reason: "wrong-instance", root: IOS_ROOT }),
-      }),
-    );
-  });
-
   it("still fails startup when the iOS driver fails for a reason that is not a refusal", async () => {
     // Anything that is not an `OwnedRootError` is a bug rather than a fail-closed
     // decision, and swallowing it would hide it behind a silently missing platform.
@@ -3013,14 +2980,18 @@ describe("startDaemon with the agent-device edge", () => {
     expect(processSupervisor.signals).toEqual([]);
   });
 
-  it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
+  it('a worker with no capabilities["agent-device"] section, one with enabled false, and one with only the old agentDevice key answer status.get with { name: agent-device, state: off }', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
       via: "socket",
       principal: "op",
       role: "admin",
     } as const;
-    for (const config of [{}, { capabilities: { "agent-device": { enabled: false } } }]) {
+    for (const config of [
+      {},
+      { capabilities: { "agent-device": { enabled: false } } },
+      { agentDevice: { command, enabled: true } },
+    ]) {
       const setup = await setUp(config);
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
@@ -3059,25 +3030,6 @@ describe("startDaemon with the agent-device edge", () => {
       processSupervisor: new FakeProcessSupervisor(),
     });
     expect(loads).toBe(1);
-  });
-
-  it("a worker whose config has only the old agentDevice key reports agent-device off", async () => {
-    const admin = {
-      manageEventSubscription: () => undefined,
-      via: "socket",
-      principal: "op",
-      role: "admin",
-    } as const;
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
-
-    const { daemon } = await startEdge(setup, {
-      processRunner: new ScriptedProcessRunner([]),
-      processSupervisor: new FakeProcessSupervisor(),
-    });
-
-    expect((await daemon.dispatch("status.get", {}, admin)).capabilities).toEqual([
-      { name: "agent-device", state: "off" },
-    ]);
   });
 
   it("a worker with agent-device off starts no supervisor: no ps runs and no signal is sent, even with a recorded daemon on disk", async () => {

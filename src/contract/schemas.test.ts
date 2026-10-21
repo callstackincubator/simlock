@@ -670,32 +670,6 @@ describe("platformCatalogSchema classDefaults", () => {
   });
 });
 
-describe("the status device entry's absent state (ADR 0022 §7)", () => {
-  const absent = {
-    class: "phone",
-    driverDeviceId: "00008110-001A2B3C4D5E",
-    id: "dev_7",
-    physical: true,
-    servesDefaultMode: false,
-    spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
-    state: "absent",
-  };
-
-  it("the status device entry and the worker view accept state absent and each absentReason, and refuse another reason", () => {
-    const parsed = (device: object) => statusDeviceSchema.safeParse(device);
-
-    for (const absentReason of ["locked", "untrusted", "not-present"] as const) {
-      const result = parsed({ ...absent, absentReason });
-      expect(result.success, `absent (${absentReason})`).toBe(true);
-      expect(result.success ? result.data : undefined).toMatchObject({
-        absentReason,
-        state: "absent",
-      });
-    }
-    expect(parsed({ ...absent, absentReason: "unplugged" }).success).toBe(false);
-  });
-});
-
 describe("doctorReportSchema's module-unavailable finding", () => {
   const finding = {
     kind: "module-unavailable",

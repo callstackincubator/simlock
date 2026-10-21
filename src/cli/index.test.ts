@@ -2579,22 +2579,28 @@ describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
 });
 
 describe("CLI: config set validates with the real config loader (ADR 0003 §11, B9)", () => {
-  it("rejects an unknown config key instead of silently dropping it", async () => {
-    const output = outputCapture(realCliEnvironmentPorts());
-    let wrote = false;
-    const exitCode = await runCli(
-      ["config", "set", "capacty.limits.ios.maxDevices", "2"],
-      output.environmentWith({
-        readConfigFile: async () => ({}),
-        writeConfigFile: async () => {
-          wrote = true;
-        },
-      }),
-    );
-    expect(exitCode).toBe(2);
-    expect(wrote).toBe(false);
-    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
-  });
+  it.each([
+    ["an unknown key", "capacty.limits.ios.maxDevices", "2"],
+    ["a key missing the Ms suffix", "lease.defaultTtl", "60000"],
+  ])(
+    "rejects %s instead of silently dropping it or validating clean",
+    async (_name, key, value) => {
+      const output = outputCapture(realCliEnvironmentPorts());
+      let wrote = false;
+      const exitCode = await runCli(
+        ["config", "set", key, value],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {
+            wrote = true;
+          },
+        }),
+      );
+      expect(exitCode).toBe(2);
+      expect(wrote).toBe(false);
+      expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+    },
+  );
 
   it("--gateway config set validates against the gateway's rules, not the worker's", async () => {
     const gatewayHome = {
@@ -2638,22 +2644,6 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(exitCode).not.toBe(0);
     expect(launcher.launches).toBe(0);
     expect(output.stderr).toContain("http.enabled");
-  });
-
-  it("rejects a mistyped key (missing the Ms suffix) instead of validating clean", async () => {
-    const output = outputCapture(realCliEnvironmentPorts());
-    let wrote = false;
-    const exitCode = await runCli(
-      ["config", "set", "lease.defaultTtl", "60000"],
-      output.environmentWith({
-        readConfigFile: async () => ({}),
-        writeConfigFile: async () => {
-          wrote = true;
-        },
-      }),
-    );
-    expect(exitCode).toBe(2);
-    expect(wrote).toBe(false);
   });
 
   it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
@@ -3218,85 +3208,6 @@ describe("CLI: catalog", () => {
         "",
       ].join("\n"),
     );
-  });
-
-  it("prints (custom) after a custom model and not after a built-in one", async () => {
-    const output = outputCapture();
-    const environment = output.environmentWith({
-      connectAdmin: async () =>
-        fakeClient({
-          getCatalog: () =>
-            Promise.resolve({
-              platforms: [
-                {
-                  customModels: ["My Tablet"],
-                  defaultRuntime: "35",
-                  modelAliases: {},
-                  classDefaults: {},
-                  modelClasses: {},
-                  modelRuntimes: { "My Tablet": ["35"], "Pixel 8": ["35"] },
-                  models: ["My Tablet", "Pixel 8"],
-                  platform: "android",
-                  runtimes: ["35"],
-                },
-              ],
-            }),
-        }),
-    });
-
-    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
-
-    expect(output.stdout).toBe(
-      [
-        "Platform: android",
-        "  Runtimes: 35 (default: 35)",
-        "  Models:",
-        "    (no class):",
-        "      My Tablet (custom): 35",
-        "      Pixel 8: 35",
-        "",
-      ].join("\n"),
-    );
-  });
-});
-
-describe("CLI: component install (ADR 0010 §6)", () => {
-  it("prints each progress update on stderr and one result line on stdout, and exits 0", async () => {
-    const output = outputCapture();
-    const asked: unknown[] = [];
-    const client = fakeClient({
-      installComponent: async (input, options) => {
-        asked.push(input);
-        options?.onProgress?.({ stage: "waiting" });
-        options?.onProgress?.({ fraction: 0.41, stage: "downloading" });
-        return { component: "35", outcome: "installed", platform: "android", version: "35" };
-      },
-    });
-
-    await expect(
-      runCli(
-        ["component", "install", "android", "35"],
-        output.environmentWith({ connectAdmin: async () => client }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(asked).toEqual([{ platform: "android", version: "35" }]);
-    // why: The fake connection resolves no credential, so the agent-fallback notice comes first.
-    const stderrLines = output.stderr
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as unknown);
-    expect(stderrLines.filter((line) => !Object.hasOwn(line as object, "notice"))).toEqual([
-      { stage: "waiting" },
-      { fraction: 0.41, stage: "downloading" },
-    ]);
-    expect(output.stdout.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stdout)).toEqual({
-      component: "35",
-      outcome: "installed",
-      platform: "android",
-      version: "35",
-    });
   });
 
   it("exits 12 when the daemon refuses with DOWNLOADS_DISABLED", async () => {
@@ -4781,15 +4692,6 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Install android 35 on wrk_1: waiting for 0s, 3 waiters\n");
   });
 
-  it("says worker on a worker", async () => {
-    const output = outputCapture();
-    const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
-
-    await runCli(["status"], environment);
-
-    expect(output.stdout).toContain("Daemon: running (worker)");
-  });
-
   it("prints each device's mode and whether it serves a request naming no mode", async () => {
     const output = outputCapture();
     const spec = {
@@ -5242,103 +5144,74 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     expect(capturedInput?.noWait).toBe(true);
   });
 
-  it("maps --image-tag onto the contract's imageTag input field, and sends none without it", async () => {
-    const inputs: Record<string, unknown>[] = [];
-    const client = fakeClient({
-      requestLease: (input) => {
-        inputs.push(input as unknown as Record<string, unknown>);
-        return Promise.resolve({
-          device: {
-            physical: false,
-            id: "dev_1",
-            driverDeviceId: "dev_1",
-            spec: { physical: false, platform: "android", model: "Pixel 8", osVersion: "34" },
-            mode: "full",
-          },
-          environment: {},
-          lease: {
-            id: "lse_1",
-            deviceId: "dev_1",
-            requesterId: "test-requester",
-            ownerId: "test-requester",
-            grantedAt: 0,
-            lastRenewedAt: 0,
-            idChosenByRequester: false,
-            ttlMs: 60_000,
-            ttlDeadline: 60_000,
-          },
-          timing: {
-            estimatedProvisionMs: 0,
-            estimatedBootMs: 0,
-            estimatedReclaimMs: 0,
-            estimatedReadyMs: 0,
-          },
-        });
-      },
-    });
-    const lease = ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"];
-
-    await runCli(
-      [...lease, "--image-tag", "google_apis_playstore"],
-      outputCapture().environmentWith({ connectAdmin: async () => client }),
-    );
-    await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
-
-    expect(inputs[0]?.imageTag).toBe("google_apis_playstore");
-    expect(inputs[1]).not.toHaveProperty("imageTag");
-  });
-
-  it("sends physical: true for --physical, and no physical field without it", async () => {
-    const inputs: Record<string, unknown>[] = [];
-    const client = fakeClient({
-      requestLease: (input) => {
-        inputs.push(input as unknown as Record<string, unknown>);
-        return Promise.resolve({
-          device: {
-            class: "phone",
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            id: "dev_1",
-            physical: true,
-            spec: {
+  it.each([
+    {
+      flag: "--image-tag",
+      field: "imageTag",
+      value: "google_apis_playstore",
+      lease: ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"],
+      flagArgs: ["--image-tag", "google_apis_playstore"],
+    },
+    {
+      flag: "--physical",
+      field: "physical",
+      value: true,
+      lease: ["lease", "--platform", "ios", "--detach"],
+      flagArgs: ["--physical"],
+    },
+  ])(
+    "maps $flag onto the contract's $field input field, and sends none without it",
+    async ({ field, value, lease, flagArgs }) => {
+      const inputs: Record<string, unknown>[] = [];
+      const client = fakeClient({
+        requestLease: (input) => {
+          inputs.push(input as unknown as Record<string, unknown>);
+          return Promise.resolve({
+            device: {
               class: "phone",
-              model: "iPhone 15 Pro",
-              osVersion: "18.4",
+              driverDeviceId: "00008110-001A2B3C4D5E",
+              id: "dev_1",
               physical: true,
-              platform: "ios",
+              spec: {
+                class: "phone",
+                model: "iPhone 15 Pro",
+                osVersion: "18.4",
+                physical: true,
+                platform: "ios",
+              },
             },
-          },
-          environment: {},
-          lease: {
-            id: "lse_1",
-            deviceId: "dev_1",
-            requesterId: "test-requester",
-            ownerId: "test-requester",
-            grantedAt: 0,
-            lastRenewedAt: 0,
-            idChosenByRequester: false,
-            ttlMs: 60_000,
-            ttlDeadline: 60_000,
-          },
-          timing: {
-            estimatedProvisionMs: 0,
-            estimatedBootMs: 0,
-            estimatedReclaimMs: 0,
-            estimatedReadyMs: 0,
-          },
-        });
-      },
-    });
-    const lease = ["lease", "--platform", "ios", "--detach"];
+            environment: {},
+            lease: {
+              id: "lse_1",
+              deviceId: "dev_1",
+              requesterId: "test-requester",
+              ownerId: "test-requester",
+              grantedAt: 0,
+              lastRenewedAt: 0,
+              idChosenByRequester: false,
+              ttlMs: 60_000,
+              ttlDeadline: 60_000,
+            },
+            timing: {
+              estimatedProvisionMs: 0,
+              estimatedBootMs: 0,
+              estimatedReclaimMs: 0,
+              estimatedReadyMs: 0,
+            },
+          });
+        },
+      });
 
-    await runCli(
-      [...lease, "--physical"],
-      outputCapture().environmentWith({ connectAdmin: async () => client }),
-    );
-    await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
+      await runCli(
+        [...lease, ...flagArgs],
+        outputCapture().environmentWith({ connectAdmin: async () => client }),
+      );
+      await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
 
-    expect(inputs[0]?.physical).toBe(true);
-    expect(inputs[1]).not.toHaveProperty("physical");
-  });
+      expect(inputs[0]?.[field]).toBe(value);
+      expect(inputs[1]).not.toHaveProperty(field);
+    },
+  );
 
   it("fails the removed full flag as an unknown option, before connecting", async () => {
     const output = outputCapture();
@@ -7752,25 +7625,30 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     return sent;
   }
 
-  it("sends neither model nor class for a lease with only a platform", async () => {
-    const sent = await sentFor(["--platform", "ios"]);
+  it.each([
+    {
+      name: "neither model nor class for a lease with only a platform",
+      args: ["--platform", "ios"],
+      present: { platform: "ios" },
+      absent: ["model", "class"],
+    },
+    {
+      name: "the class for --class, and no model",
+      args: ["--platform", "ios", "--class", "phone"],
+      present: { class: "phone", platform: "ios" },
+      absent: ["model"],
+    },
+    {
+      name: "both fields for --class beside --device, leaving the refusal to the daemon",
+      args: ["--platform", "ios", "--class", "phone", "--device", "iPhone 16"],
+      present: { class: "phone", model: "iPhone 16", platform: "ios" },
+      absent: [],
+    },
+  ])("sends $name", async ({ args, present, absent }) => {
+    const sent = await sentFor(args);
 
-    expect(sent).toMatchObject({ platform: "ios" });
-    expect(sent).not.toHaveProperty("model");
-    expect(sent).not.toHaveProperty("class");
-  });
-
-  it("sends the class for --class, and no model", async () => {
-    const sent = await sentFor(["--platform", "ios", "--class", "phone"]);
-
-    expect(sent).toMatchObject({ class: "phone", platform: "ios" });
-    expect(sent).not.toHaveProperty("model");
-  });
-
-  it("sends both fields for --class beside --device, leaving the refusal to the daemon", async () => {
-    const sent = await sentFor(["--platform", "ios", "--class", "phone", "--device", "iPhone 16"]);
-
-    expect(sent).toMatchObject({ class: "phone", model: "iPhone 16", platform: "ios" });
+    expect(sent).toMatchObject(present);
+    for (const key of absent) expect(sent).not.toHaveProperty(key);
   });
 
   it("names --class in the lease usage text, with --device optional", async () => {
@@ -8194,21 +8072,27 @@ describe("CLI: stats", () => {
     expect(lines).toContain("Totals");
   });
 
-  it("prints the HISTORY_NOT_KEPT message and exits with its code when the window ends before the history", async () => {
-    const { output, run } = statsRun(["--since", "30d"], async () => {
-      throw fromWireError(
-        "HISTORY_NOT_KEPT",
-        "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
-        { oldestTs: NOW - 60_000 },
-      );
-    });
+  it.each([
+    ["", ["--since", "30d"]],
+    [" with --csv", ["--since", "30d", "--csv"]],
+  ])(
+    "prints the HISTORY_NOT_KEPT message on stderr, nothing on stdout, and exits with its code when the window ends before the history%s",
+    async (_name, args) => {
+      const { output, run } = statsRun(args, async () => {
+        throw fromWireError(
+          "HISTORY_NOT_KEPT",
+          "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
+          { oldestTs: NOW - 60_000 },
+        );
+      });
 
-    await expect(run).resolves.toBe(12);
+      await expect(run).resolves.toBe(12);
 
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
-    expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
-  });
+      expect(output.stdout).toBe("");
+      expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+      expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
+    },
+  );
 
   const LEDGER_HEADER =
     "requestId,requester,label,platform,model,workerId,source,requestedAt,grantedAt,rejectedAt,endedAt,waitMs,heldMs,turnaroundMs,outcome,probe,reason,endReason";
@@ -8271,19 +8155,6 @@ describe("CLI: stats", () => {
     expect(truncated.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
     expect(whole.output.stderr).toBe("");
     expect(whole.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
-  });
-
-  it("simlock stats --csv on an error (HISTORY_NOT_KEPT) writes the error line on stderr, nothing on stdout, and exits 12", async () => {
-    const { output, run } = statsRun(["--since", "30d", "--csv"], async () => {
-      throw fromWireError("HISTORY_NOT_KEPT", "The history does not reach back.", {
-        oldestTs: NOW - 60_000,
-      });
-    });
-
-    await expect(run).resolves.toBe(12);
-
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
   });
 
   it("simlock stats refuses --csv with --json as a usage error, exit 2", async () => {

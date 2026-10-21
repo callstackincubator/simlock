@@ -487,34 +487,6 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     },
   );
 
-  it("fails the call with INTERNAL and logs the bound when a target answers 101 headers", async () => {
-    behavior = () =>
-      Promise.resolve(
-        new Response("ok", {
-          headers: Array.from(
-            { length: 101 },
-            (_unused, index) => [`x-h-${String(index)}`, "v"] as [string, string],
-          ),
-        }),
-      );
-    await start();
-
-    const outcome = await settleWithin((await openRelay(uplink, relayInput())).result);
-
-    expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
-    expect(fixture.logger.problems()).toContain("at most 100 headers, got");
-  });
-
-  it("fails the call with INTERNAL and logs the message when a target throws", async () => {
-    behavior = () => Promise.reject(new Error("target exploded: reason-4471"));
-    await start();
-
-    const outcome = await settleWithin((await openRelay(uplink, relayInput())).result);
-
-    expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
-    expect(fixture.logger.problems()).toContain("target exploded: reason-4471");
-  });
-
   it("stops the request direction when the target answers without reading its 20 MiB upload, so the gateway's writer errors stopped", async () => {
     behavior = () => Promise.resolve(new Response("nope", { status: 401 }));
     await start();

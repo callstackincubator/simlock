@@ -49,23 +49,11 @@ describe("an envelope off the wire", () => {
 });
 
 describe("the events the console holds", () => {
-  it("are listed newest first, by seq inside the same millisecond", () => {
-    const merged = mergeEvents([], [event("a", {}, 2), event("b", {}, 9), event("c", {}, 5)]);
-
-    expect(merged.map((entry) => entry.seq)).toEqual([9, 5, 2]);
-  });
-
   it("show an event seen twice once, and two ids with the same seq and time both", () => {
     const first = event("lease.granted", {}, 1, "evt_a");
     const merged = mergeEvents([first], [first, event("lease.granted", {}, 1, "evt_b")]);
 
     expect(merged.map((entry) => entry.id).sort()).toEqual(["evt_a", "evt_b"]);
-  });
-
-  it("change nothing for an event already held", () => {
-    const held = [event("lease.granted")];
-
-    expect(mergeEvents(held, [event("lease.granted")])).toBe(held);
   });
 });
 

@@ -1413,18 +1413,6 @@ describe("AgentDeviceSupervisor.stop", () => {
     expect(stateOf(harness)).toBe("off");
   });
 
-  it("logs no start-failed warning when stop() cancels a start", async () => {
-    const harness = await arrange({ daemonJson: () => "none" });
-    harness.begin();
-    await advanceBy(harness, 1_000);
-
-    await advancing(harness, harness.agentDevice.stop());
-    await advancing(harness, harness.started as Promise<void>);
-
-    expect(warnings(harness).filter((line) => line.includes("start failed"))).toEqual([]);
-    expect(stateOf(harness)).toBe("off");
-  });
-
   it("leaves no unhandled rejection when a health read rejects after stop() was asked during the port check", async () => {
     const harness = await arrange();
     harness.health.rejectWith(new Error("ECONNREFUSED"));

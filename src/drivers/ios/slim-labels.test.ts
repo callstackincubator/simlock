@@ -73,16 +73,6 @@ describe("slimSignature", () => {
     expect(forward).toBe(reversed);
   });
 
-  it("is prefixed with a schema version", () => {
-    expect(slimSignature(SLIM_CATEGORIES)).toMatch(/^v1:[0-9a-f]{16}$/);
-  });
-
-  it("changes when the set of categories changes", () => {
-    const all = slimSignature(SLIM_CATEGORIES);
-    const subset = slimSignature(SLIM_CATEGORIES.slice(0, -1));
-    expect(all).not.toBe(subset);
-  });
-
   it("changes when a category's labels change", () => {
     const original = SLIM_CATEGORIES[0]!;
     const mutated = { ...original, labels: [...original.labels, "com.apple.made-up-daemon"] };

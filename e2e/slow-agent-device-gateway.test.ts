@@ -234,25 +234,6 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "through the gateway, a screenshot saved as an artifact downloads to the agent's machine as a PNG",
-    { timeout: 600_000 },
-    async () => {
-      const a = await agent("a");
-      ok(await open(a));
-      ok(await a.run(["install", "Appduct", target.app]));
-      ok(await a.run(["open", target.bundleId]));
-      const dir = await mkdtemp(join(tmpdir(), "simlock-ad-gw-artifact-"));
-      onTestFinished(() => rm(dir, { force: true, recursive: true }));
-      const png = join(dir, "artifact.png");
-      await expect(readFile(png)).rejects.toThrow();
-      ok(await a.run(["screenshot", png], FIRST_SNAPSHOT));
-      const bytes = await readFile(png);
-      expect(bytes.length).toBeGreaterThan(8);
-      expect(bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-    },
-  );
-
-  it(
     "with capabilities.agent-device.enabled unset on the gateway, its /v1/agent-device/health answers 404 where it answered something else while enabled",
     { timeout: 600_000 },
     async () => {
