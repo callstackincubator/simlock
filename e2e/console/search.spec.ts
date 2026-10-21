@@ -88,6 +88,28 @@ test.describe("the search list", () => {
   });
 });
 
+test.describe("the search shortcut", () => {
+  test("⌘K does nothing while a drawer is open", async ({ page }) => {
+    const host = await startHostWithQueue();
+    try {
+      const [request] = (await readJson<{ requests: { id: string }[] }>(host, "/v1/lease-requests"))
+        .requests as [{ id: string }];
+      await page.goto(new URL(`/queue/${request.id}`, host.url).toString());
+      await signIn(page, host.tokens.operator);
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toHaveCount(1);
+      await expect(drawer).toContainText("nav-waiter");
+      await page.keyboard.press("Control+k");
+      await page.keyboard.press("Meta+k");
+      await expect(page.getByRole("dialog", { name: "Search" })).toHaveCount(0);
+      await expect(drawer).toHaveCount(1);
+      await expect(drawer).toContainText("nav-waiter");
+    } finally {
+      await host.dispose();
+    }
+  });
+});
+
 test.describe("the search list when nothing matches", () => {
   test('no results shows "No results for <text>"', async ({ daemon, page }) => {
     await openConsole(page, daemon.tokens.operator);
