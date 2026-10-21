@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "./filesystem.js";
@@ -201,5 +203,98 @@ describe("LaunchdServiceManager (#830)", () => {
       expect(runner.calls[0]?.options.timeoutMs, `code ${String(bootoutCode)}`).toBe(10_000);
       expect(await filesystem.exists(definition.path), `code ${String(bootoutCode)}`).toBe(false);
     }
+  });
+
+  it("state answers not-installed without asking launchd, broken before not-loaded, else installed or not-loaded by launchctl print", async () => {
+    const definition = definitionFor("worker");
+    const nodePath = definition.command;
+    const mainPath = definition.args[0] ?? "";
+    const plutil = {
+      command: "plutil",
+      args: ["-convert", "json", "-o", "-", definition.path],
+    };
+    const printed = { command: "launchctl", args: ["print", `gui/501/${definition.name}`] };
+    const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+    const programArguments = ok(JSON.stringify({ ProgramArguments: [nodePath, mainPath] }));
+    const cases = [
+      {
+        label: "no plist",
+        present: [],
+        plist: false,
+        script: [],
+        state: { state: "not-installed" },
+      },
+      {
+        label: "Node path gone",
+        present: [mainPath],
+        plist: true,
+        script: [{ match: plutil, result: programArguments }],
+        state: { state: "broken", path: definition.path, missing: [nodePath] },
+      },
+      {
+        label: "both paths gone, launchd not asked",
+        present: [],
+        plist: true,
+        script: [{ match: plutil, result: programArguments }],
+        state: { state: "broken", path: definition.path, missing: [nodePath, mainPath] },
+      },
+      {
+        label: "whole and loaded",
+        present: [nodePath, mainPath],
+        plist: true,
+        script: [
+          { match: plutil, result: programArguments },
+          { match: printed, result: ok("") },
+        ],
+        state: { state: "installed", path: definition.path },
+      },
+      {
+        label: "whole, launchd has not loaded it",
+        present: [nodePath, mainPath],
+        plist: true,
+        script: [
+          { match: plutil, result: programArguments },
+          { match: printed, result: { code: 113, stdout: "", stderr: "Could not find service" } },
+        ],
+        state: { state: "not-loaded", path: definition.path },
+      },
+    ];
+    for (const testCase of cases) {
+      const filesystem = new MemoryFilesystem();
+      for (const present of testCase.present) {
+        await filesystem.mkdirp(dirname(present));
+        await filesystem.writeFileAtomic(present, "");
+      }
+      if (testCase.plist) {
+        await filesystem.mkdirp(dirname(definition.path));
+        await filesystem.writeFileAtomic(definition.path, "<plist/>");
+      }
+      const runner = new ScriptedProcessRunner(testCase.script);
+
+      const state = await new LaunchdServiceManager({ runner, filesystem, uid: 501 }).state(
+        definition,
+      );
+
+      expect(state, testCase.label).toEqual(testCase.state);
+      expect(runner.calls.length, testCase.label).toBe(testCase.script.length);
+      for (const call of runner.calls) expect(call.options.timeoutMs, testCase.label).toBe(10_000);
+    }
+  });
+
+  it("start kickstarts the loaded service", async () => {
+    const definition = definitionFor("worker");
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { command: "launchctl", args: ["kickstart", `gui/501/${definition.name}`] },
+        result: { code: 0, stdout: "", stderr: "" },
+      },
+    ]);
+
+    await new LaunchdServiceManager({ runner, filesystem: new MemoryFilesystem(), uid: 501 }).start(
+      definition,
+    );
+
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.options.timeoutMs).toBe(10_000);
   });
 });

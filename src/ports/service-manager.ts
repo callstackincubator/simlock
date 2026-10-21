@@ -168,6 +168,12 @@ ${variables}
 `;
 }
 
+function savedPaths(json: string): readonly string[] {
+  const parsed = JSON.parse(json) as { ProgramArguments?: unknown };
+  const args = Array.isArray(parsed.ProgramArguments) ? (parsed.ProgramArguments as unknown[]) : [];
+  return args.slice(0, 2).filter((value): value is string => typeof value === "string");
+}
+
 function isExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
@@ -187,12 +193,24 @@ export class LaunchdServiceManager implements ServiceManager {
     return `gui/${String(this.options.uid)}`;
   }
 
-  private launchctl(args: readonly string[]): Promise<ProcessResult> {
-    return this.options.runner.run("launchctl", args, { timeoutMs: LAUNCHCTL_TIMEOUT_MS });
+  private run(command: string, args: readonly string[]): Promise<ProcessResult> {
+    return this.options.runner.run(command, args, { timeoutMs: LAUNCHCTL_TIMEOUT_MS });
   }
 
-  async state(_definition: ServiceDefinition): Promise<ServiceState> {
-    return { state: "not-installed" };
+  private launchctl(args: readonly string[]): Promise<ProcessResult> {
+    return this.run("launchctl", args);
+  }
+
+  async state(definition: ServiceDefinition): Promise<ServiceState> {
+    const { filesystem } = this.options;
+    if (!(await filesystem.exists(definition.path))) return { state: "not-installed" };
+    const converted = await this.run("plutil", ["-convert", "json", "-o", "-", definition.path]);
+    const saved = savedPaths(converted.stdout);
+    const missing: string[] = [];
+    for (const path of saved) if (!(await filesystem.exists(path))) missing.push(path);
+    if (missing.length > 0) return { state: "broken", path: definition.path, missing };
+    const printed = await this.launchctl(["print", `${this.domain()}/${definition.name}`]);
+    return { state: printed.code === 0 ? "installed" : "not-loaded", path: definition.path };
   }
 
   async install(definition: ServiceDefinition): Promise<void> {
@@ -214,7 +232,9 @@ export class LaunchdServiceManager implements ServiceManager {
     await this.options.filesystem.rm(definition.path);
   }
 
-  async start(_definition: ServiceDefinition): Promise<void> {}
+  async start(definition: ServiceDefinition): Promise<void> {
+    await this.launchctl(["kickstart", `${this.domain()}/${definition.name}`]);
+  }
 }
 
 export function productionServiceManager(
