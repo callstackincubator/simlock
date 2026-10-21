@@ -700,6 +700,21 @@ describe("the agent-device front, through the whole worker daemon", () => {
     ]);
   });
 
+  it("the allocate the agent-device daemon receives carries neither `osVersion` nor `imageTag`, whether the CLI sent one or both", async () => {
+    const rig = await setUp({ drivers: (clock) => [taggedAndroidDriver(clock)], maxRunning: 8 });
+    const android = { platform: "android" };
+
+    await granted(rig, 1, { ...android, osVersion: "34" });
+    await granted(rig, 2, { ...android, imageTag: "google_apis_playstore" });
+    await granted(rig, 3, { ...android, imageTag: "google_apis_playstore", osVersion: "33" });
+
+    for (const n of [1, 2, 3]) {
+      const received = receivedAllocate(rig, n);
+      expect(received).not.toHaveProperty("osVersion");
+      expect(received).not.toHaveProperty("imageTag");
+    }
+  });
+
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
     const rig = await setUp();
 
