@@ -3499,7 +3499,7 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`", async () => {
+    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` and an `imageTag` that is an object with `refused: malformed imageTag`, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       await forwarded(rig, () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } }));
@@ -3514,6 +3514,15 @@ describe("the agent-device front's request rules", () => {
         () => runCommand(rig, "test", 1, { flags: { shardAll: "2" } }),
         "refused: malformed shardAll",
       );
+      await refused(rig, () => allocate(rig, 2, { osVersion: 26 }), "refused: malformed osVersion");
+      await refused(rig, () => allocate(rig, 2, { imageTag: {} }), "refused: malformed imageTag");
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { osVersion: 26 } }),
+        "refused: malformed osVersion",
+      );
+      await granted(rig, 3, { osVersion: null });
+      expect(await requestedSpecs(rig, hex(3))).toEqual([{ platform: "ios" }]);
     });
 
     it("after simlock ended the lease, a command with that lease's udid is forwarded and agent-device's answer reaches the CLI; one TTL later the same command is refused with `refused: simlock picks the device`", async () => {
