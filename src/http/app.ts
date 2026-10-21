@@ -31,7 +31,12 @@ import {
   unknownLease,
   unknownRequest,
 } from "./errors.js";
-import { leaseExecRoute, leaseRenewRoute } from "./lease-declarations.js";
+import {
+  leaseExecRoute,
+  leaseRenewRoute,
+  leaseRequestGetRoute,
+  type leaseRequestViewSchema,
+} from "./lease-declarations.js";
 import { LeaseNoticeBuffer } from "./notices.js";
 import {
   catalogRoute,
@@ -314,26 +319,26 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json({ requests });
   });
 
-  app.get("/v1/lease-requests/:id", agentAuth, async (c) => {
-    const id = c.req.param("id");
+  app.openapi({ ...leaseRequestGetRoute, middleware: [agentAuth] }, async (c) => {
+    const id = c.req.valid("param").id;
     const initial = tracker.get(id);
     if (initial === undefined) throw unknownRequest(id);
     requireOwnRequest(c.get("identity"), initial.ownerId);
 
-    const waitParam = c.req.query("wait");
-    if (waitParam !== undefined) {
-      const seconds = Number(waitParam);
-      if (!Number.isFinite(seconds) || seconds < 0) {
-        throw badRequest("wait must be a non-negative number of seconds");
-      }
+    const { wait } = c.req.valid("query");
+    if (wait !== undefined) {
       // Clamped, not rejected: an oversized wait still long-polls correctly -- the client
       // simply re-polls sooner than it asked -- and the clamp bounds how long an abandoned
       // poll can pin its listener and timer. Aborting the request releases them immediately.
-      await tracker.waitForChange(id, Math.min(seconds, MAX_LONG_POLL_SECONDS), c.req.raw.signal);
+      await tracker.waitForChange(
+        id,
+        Math.min(Number(wait), MAX_LONG_POLL_SECONDS),
+        c.req.raw.signal,
+      );
     }
 
     const view = tracker.get(id) ?? initial;
-    return c.json({ request: serializeRequest(view) });
+    return c.json({ request: serializeRequest(view) }, 200);
   });
 
   app.get("/v1/lease-requests/:id/events", agentAuth, (c) => {
@@ -820,26 +825,26 @@ async function findLeaseForDecoration(
 
 function serializeRequest(
   view: Pick<TrackedRequestView, "id" | "createdAt" | "state">,
-): Record<string, unknown> {
-  const base = { createdAt: view.createdAt, id: view.id, state: view.state.stage };
+): z.infer<typeof leaseRequestViewSchema> {
+  const base = { createdAt: view.createdAt, id: view.id };
   switch (view.state.stage) {
     case "queued":
-      return { ...base, queuePosition: view.state.queuePosition };
+      return { ...base, queuePosition: view.state.queuePosition, state: "queued" };
     case "downloading": {
       // `component`, `waiting` and `percent` when there is one, as the tracker built them.
       const { stage: _stage, ...download } = view.state;
-      return { ...base, ...download };
+      return { ...base, ...download, state: "downloading" };
     }
     case "provisioning":
     case "booting":
     case "reclaiming":
-      return { ...base, etaSeconds: view.state.etaSeconds };
+      return { ...base, etaSeconds: view.state.etaSeconds, state: view.state.stage };
     case "granted":
-      return { ...base, lease: view.state.lease };
+      return { ...base, lease: view.state.lease, state: "granted" };
     case "failed":
-      return { ...base, error: view.state.error };
+      return { ...base, error: view.state.error, state: "failed" };
     case "cancelled":
-      return base;
+      return { ...base, state: "cancelled" };
   }
 }
 

@@ -1,8 +1,69 @@
 import { z } from "@hono/zod-openapi";
 
-import { declareRoute, sseMessage } from "./routes.js";
+import { declareRoute, firstValue, sseMessage } from "./routes.js";
 
 const leaseParamsSchema = z.object({ id: z.string() });
+
+const leasePayloadSchema = z.object({
+  createdAt: z.string(),
+  dataPlane: z.null(),
+  device: z.string(),
+  deviceId: z.string(),
+  expiresAt: z.string(),
+  id: z.string(),
+  imageTag: z.string().optional(),
+  mode: z.enum(["slim", "full"]).optional(),
+  os: z.string(),
+  platform: z.string(),
+  requestId: z.string().optional(),
+  ttlMs: z.number(),
+  udid: z.string(),
+  worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
+  workerId: z.string().optional(),
+});
+
+const requestErrorSchema = z.object({ code: z.string(), message: z.string() });
+
+const requestBaseShape = { createdAt: z.string(), id: z.string() };
+
+export const leaseRequestViewSchema = z.discriminatedUnion("state", [
+  z.object({ ...requestBaseShape, queuePosition: z.number(), state: z.literal("queued") }),
+  z.object({
+    ...requestBaseShape,
+    component: z.string(),
+    percent: z.number().optional(),
+    state: z.literal("downloading"),
+    waiting: z.boolean(),
+  }),
+  z.object({
+    ...requestBaseShape,
+    etaSeconds: z.number(),
+    state: z.enum(["reclaiming", "provisioning", "booting"]),
+  }),
+  z.object({ ...requestBaseShape, lease: leasePayloadSchema, state: z.literal("granted") }),
+  z.object({ ...requestBaseShape, error: requestErrorSchema, state: z.literal("failed") }),
+  z.object({ ...requestBaseShape, state: z.literal("cancelled") }),
+]);
+
+const leaseRequestReplySchema = z.object({ request: leaseRequestViewSchema });
+
+const waitQuerySchema = z
+  .object({
+    wait: firstValue(z.string())
+      .optional()
+      .openapi({ description: "Seconds to wait for the request to change; at most 60." }),
+  })
+  .superRefine((query, context) => {
+    if (query.wait === undefined) return;
+    const seconds = Number(query.wait);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      context.addIssue({
+        code: "custom",
+        message: "wait must be a non-negative number of seconds",
+        path: [],
+      });
+    }
+  });
 
 const leaseNoticeSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("device_unhealthy") }),
@@ -16,6 +77,7 @@ export const renewBodySchema = z
     {
       ttlMs: z
         .unknown()
+        .optional()
         .openapi({ description: "The new width of the lease, in ms.", type: "number" }),
     },
     { error: "Body must be a JSON object" },
@@ -81,4 +143,16 @@ export const leaseExecRoute = declareRoute({
   errors: { 404: ["UNKNOWN_LEASE"], 501: ["UNSUPPORTED_IN_GATEWAY_MODE"], 504: ["EXEC_TIMEOUT"] },
 });
 
-export const LEASE_ROUTES = [leaseRenewRoute, leaseExecRoute] as const;
+export const leaseRequestGetRoute = declareRoute({
+  method: "get",
+  path: "/v1/lease-requests/{id}",
+  tag: "Lease requests",
+  summary: "Read a lease request, optionally waiting for it to change",
+  role: "agent",
+  notes: "Its owner or an operator.",
+  request: { params: leaseParamsSchema, query: waitQuerySchema },
+  reply: leaseRequestReplySchema,
+  errors: { 404: ["UNKNOWN_LEASE_REQUEST"] },
+});
+
+export const LEASE_ROUTES = [leaseRenewRoute, leaseExecRoute, leaseRequestGetRoute] as const;

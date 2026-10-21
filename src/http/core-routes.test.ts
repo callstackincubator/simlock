@@ -16,7 +16,6 @@ const UNDECLARED_ROUTES = [
   "DELETE /v1/components/{platform}/{version}",
   "POST /v1/lease-requests",
   "GET /v1/lease-requests",
-  "GET /v1/lease-requests/{id}",
   "GET /v1/lease-requests/{id}/events",
   "DELETE /v1/lease-requests/{id}",
   "GET /v1/leases/{id}",

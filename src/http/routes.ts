@@ -201,6 +201,10 @@ export function declareRoute<
   });
 }
 
+export function firstValue<Schema extends z.ZodType>(schema: Schema) {
+  return z.preprocess((value) => (Array.isArray(value) ? value[0] : value), schema);
+}
+
 export function validationHook(
   result: { success: true } | { success: false; error: z.ZodError },
   c: Context,

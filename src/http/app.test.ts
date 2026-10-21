@@ -120,6 +120,11 @@ const otherAgentAuth = { authorization: "Bearer slk_other" };
 const operatorAuth = { authorization: "Bearer slk_operator" };
 const defaultBody = { device: "iPhone 17 Pro", platform: "ios" };
 
+// why: a route's validators add microtask hops before its handler runs, so a test cannot count ticks.
+function settle(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function postLeaseRequest(
   app: App,
   body: Record<string, unknown>,
@@ -1017,8 +1022,7 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=30`, { headers: agentAuth });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     dispatcher.calls[callIndex]?.session.onProgress?.({ etaMs: 10_000, stage: "provisioning" });
     const response = await waitPromise;
     const body = (await response.json()) as { request: { state: string } };
@@ -1030,8 +1034,7 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     const { id } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=5`, { headers: agentAuth });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     clock.advance(5_000);
     const response = await waitPromise;
     const body = (await response.json()) as { request: { state: string; queuePosition: number } };
@@ -2484,8 +2487,7 @@ describe("hardening from review", () => {
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=999999`, {
       headers: agentAuth,
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     clock.advance(60_000);
     const response = await waitPromise;
     expect(((await response.json()) as { request: { state: string } }).request.state).toBe(
