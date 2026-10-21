@@ -39,7 +39,11 @@ afterAll(async () => {
 
 async function answering(env: TestEnv): Promise<boolean> {
   const result = await env.cli(["daemon", "status", "--json"]);
-  return result.code === 0;
+  // why: `daemon status` exits 0 with `{"status":"stopped"}` when nothing listens; only a status
+  // report without that marker means a daemon answered.
+  return (
+    result.code === 0 && (result.json as { status?: unknown } | undefined)?.status !== "stopped"
+  );
 }
 
 describe.skipIf(!loggedIn)("the launchd service on a Mac", { tags: ["slow"] }, () => {
