@@ -122,6 +122,22 @@ function androidDriver(clock: FakeClock): FakeDriver {
   });
 }
 
+function taggedAndroidDriver(clock: FakeClock): FakeDriver {
+  return new FakeDriver({
+    availableOsVersions: ["33", "34", "35"],
+    clock,
+    defaultModels: { phone: ["Pixel 8"] },
+    images: [
+      { abi: "arm64-v8a", runtime: "33", tag: "google_apis_playstore" },
+      { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+      { abi: "arm64-v8a", runtime: "35", tag: "default" },
+    ],
+    knownModels: ["Pixel 8"],
+    modelClasses: { "Pixel 8": "phone" },
+    platform: "android",
+  });
+}
+
 async function freeLoopbackPort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -667,6 +683,21 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await requestedSpecs(rig, hex(1))).toEqual([{ osVersion: "26.0", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(2))).toEqual([{ osVersion: ">=18 <27", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(3))).toEqual([{ osVersion: "34", platform: "android" }]);
+  });
+
+  it('allocate on Android with `imageTag` "google_apis_playstore", with and without `osVersion`, makes a lease request that carries it', async () => {
+    const rig = await setUp({ drivers: (clock) => [taggedAndroidDriver(clock)], maxRunning: 8 });
+    const android = { platform: "android" };
+
+    await granted(rig, 1, { ...android, imageTag: "google_apis_playstore" });
+    await granted(rig, 2, { ...android, imageTag: "google_apis_playstore", osVersion: "33" });
+
+    expect(await requestedSpecs(rig, hex(1))).toEqual([
+      { imageTag: "google_apis_playstore", platform: "android" },
+    ]);
+    expect(await requestedSpecs(rig, hex(2))).toEqual([
+      { imageTag: "google_apis_playstore", osVersion: "33", platform: "android" },
+    ]);
   });
 
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
