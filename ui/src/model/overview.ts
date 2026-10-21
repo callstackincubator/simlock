@@ -79,7 +79,19 @@ export interface OverviewInbox {
   readonly needsYou: readonly OverviewItem[];
 }
 
+export interface CapacityPart {
+  readonly count: number;
+  readonly word: string;
+}
+
+export interface PlatformCapacity {
+  readonly name: string;
+  readonly parts: readonly CapacityPart[];
+  readonly notRead: number;
+}
+
 export interface Overview {
+  readonly capacity: readonly PlatformCapacity[];
   readonly tiles: readonly OverviewTile[];
   readonly wait?: OverviewTile;
   readonly ending: OverviewTile;
@@ -254,6 +266,7 @@ export function overviewOf(input: {
           ...(tone === undefined ? {} : { tone }),
         };
       }),
+    capacity: [],
     ending: endingSoon(leases, now),
     inbox: inboxOf({
       context: { leases, now, requests, tokens },

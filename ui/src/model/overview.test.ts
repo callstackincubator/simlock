@@ -273,4 +273,56 @@ describe("the overview", () => {
       ["mini-3", undefined, "Not reported"],
     ]);
   });
+
+  it("counts every read device per platform by part: a drained worker's ready device is drained, a disconnected worker's devices are offline, a shutdown device is shut down, a deleted one is not counted, and a worker not read yet adds nothing", () => {
+    const workers = [
+      worker("w1", [
+        device("a", "leased", "ios"),
+        device("b", "ready", "ios"),
+        device("c", "provisioning", "ios"),
+        device("d", "reclaiming", "ios"),
+        device("e", "shutdown", "ios"),
+        device("f", "deleted", "ios"),
+        device("g", "absent", "ios"),
+        device("h", "quarantined", "android"),
+      ]),
+      worker("w2", [device("i", "ready", "ios"), device("j", "leased", "ios")], { drained: true }),
+      worker("w3", [device("k", "ready", "ios"), device("l", "leased", "android")], {
+        connection: "disconnected",
+      }),
+      unread("w4"),
+    ];
+
+    const { capacity } = overviewOf({ events: [], now: NOW, requests: [], workers });
+
+    expect(
+      capacity.map((platform) => [
+        platform.name,
+        platform.notRead,
+        platform.parts.map((part) => [part.count, part.word]),
+      ]),
+    ).toEqual([
+      [
+        "iOS",
+        1,
+        [
+          [2, "leased"],
+          [1, "ready"],
+          [2, "booting"],
+          [1, "drained"],
+          [1, "absent"],
+          [1, "shut down"],
+          [1, "offline"],
+        ],
+      ],
+      [
+        "Android",
+        1,
+        [
+          [1, "quarantined"],
+          [1, "offline"],
+        ],
+      ],
+    ]);
+  });
 });
