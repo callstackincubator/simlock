@@ -1,5 +1,6 @@
 import { zValidator } from "@hono/zod-validator";
-import { type Context, Hono } from "hono";
+import { OpenAPIHono } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
@@ -30,6 +31,7 @@ import {
   unknownRequest,
 } from "./errors.js";
 import { LeaseNoticeBuffer } from "./notices.js";
+import { healthzRoute, statusRoute } from "./route-declarations.js";
 import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
 import type { Auth, Identity } from "../auth/index.js";
@@ -185,8 +187,8 @@ export interface HttpAppDisposable {
 }
 
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
-export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposable {
-  const app = new Hono<Env>();
+export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpAppDisposable {
+  const app = new OpenAPIHono<Env>();
   const logger = deps.logger.child("http");
   const tracker = new LeaseRequestTracker({
     clock: deps.clock,
@@ -227,10 +229,10 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     });
   });
 
-  app.get("/v1/healthz", (c) => c.json({ ok: true }));
+  app.openapi(healthzRoute, (c) => c.json({ ok: true as const }, 200));
 
-  app.get("/v1/status", agentAuth, async (c) =>
-    c.json(await deps.dispatch("status.get", {}, buildHttpSession(c.get("identity")))),
+  app.openapi({ ...statusRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("status.get", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
   app.get("/v1/catalog", agentAuth, async (c) => {
