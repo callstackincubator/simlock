@@ -160,3 +160,93 @@ describe("MCP: auto-launch's daemon that exits while starting (#760)", () => {
     expect(result).toBe("The daemon exited with code 3 while starting; see `simlock daemon logs`");
   });
 });
+
+// why: the stdio host mocks this connector; this seam can force a socket to close before hello
+// both in the launch loop and in the final connection after the launched process exits.
+describe("MCP: a socket closed before hello (#790)", () => {
+  it("reports only a closed handshake after launching the daemon as a failed start", async () => {
+    for (const scenario of [
+      {
+        launch: false,
+        afterExit: false,
+        refused: false,
+        code: "DAEMON_CONNECTION_LOST",
+        connects: 1,
+      },
+      {
+        launch: true,
+        afterExit: false,
+        refused: false,
+        code: "DAEMON_STARTUP_FAILED",
+        connects: 2,
+      },
+      { launch: true, afterExit: true, refused: false, code: "DAEMON_STARTUP_FAILED", connects: 3 },
+      {
+        launch: true,
+        afterExit: false,
+        refused: true,
+        code: "ADMIN_AUTHENTICATION_FAILED",
+        connects: 2,
+      },
+      {
+        launch: true,
+        afterExit: true,
+        refused: true,
+        code: "ADMIN_AUTHENTICATION_FAILED",
+        connects: 3,
+      },
+    ]) {
+      const transport = new MemoryIpcTransport();
+      const socketPath = "/simlock/daemon.sock";
+      let accepted = 0;
+      const listen = () =>
+        transport.listen(socketPath, (connection) => {
+          accepted += 1;
+          if (scenario.refused) {
+            connection.onData((chunk) => {
+              const frame = JSON.parse(chunk.trim()) as { id: number };
+              void connection.write(
+                `${JSON.stringify({
+                  id: frame.id,
+                  ok: false,
+                  error: { code: "ADMIN_AUTHENTICATION_FAILED", message: "refused" },
+                })}\n`,
+              );
+            });
+          } else {
+            void connection.close();
+          }
+        });
+      if (!scenario.launch) await listen();
+      const launcher = new FakeDaemonLauncher(
+        async () => {
+          await listen();
+        },
+        { exit: { code: 1, signal: null } },
+      );
+      let connects = 0;
+      const result = await connectWithAutoLaunch({
+        clock: new FakeClock(0),
+        ipc: {
+          connect: async (endpoint) => {
+            connects += 1;
+            if (scenario.afterExit && connects === 2) {
+              throw new IpcError("endpoint-not-found", "not yet listening", undefined);
+            }
+            return transport.connect(endpoint);
+          },
+        },
+        launcher,
+        principal: "agent-1",
+        socketPath,
+      }).then(
+        () => ({ code: "connected" }),
+        (error: unknown) => error,
+      );
+      expect(result, JSON.stringify(scenario)).toMatchObject({ code: scenario.code });
+      expect(launcher.launches).toBe(scenario.launch ? 1 : 0);
+      expect(connects).toBe(scenario.connects);
+      expect(accepted).toBe(1);
+    }
+  });
+});

@@ -91,7 +91,15 @@ A worker shown as `incompatible` is connected, but it and the gateway run Simloc
 ## What changes on a joined worker
 
 - **Local agents keep working.** Agents on the worker machine still lease devices from it directly. They share the worker's devices with requests from the gateway: a device a local agent holds is not free for the fleet, and the other way round.
-- **The worker's own HTTP API keeps working.** Joining does not turn it on or off. The worker never needs it to join, so you can leave it off.
+- **The worker's own HTTP API and console must stay off.** A joined worker is reached through the gateway, so a worker with `gateway.url` set refuses to start while `http.enabled` is `true`, and `simlock config set http.enabled true` is refused. The worker never needs HTTP to join. Use the gateway's console and HTTP API instead.
+
+  If a worker already has both set, it fails to start with `Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)`. A running worker is not changed until you restart it. Repair it, then restart:
+
+  ```sh
+  simlock --local config set http.enabled false
+  simlock --local daemon stop
+  simlock --local daemon start
+  ```
 - **The worker's own settings still apply.** Capacity, the warm pool, cleanup and downloads are set on each worker. The gateway's lease settings apply to leases made through the gateway.
 - **The worker starts without the gateway.** If the gateway is down when the worker starts, the worker starts anyway, serves local agents, and keeps trying to join.
 

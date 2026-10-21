@@ -1743,10 +1743,19 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       const launcher = new FakeDaemonLauncher(() => {
         launched = true;
       });
+      let probeSent = false;
       const ipc: IpcConnector = {
         connect: async () => {
           if (!launched) throw new IpcError("endpoint-not-found", "not yet", undefined);
-          return real.connect(socketPath);
+          const connection = await real.connect(socketPath);
+          const write = connection.write.bind(connection);
+          connection.write = async (contents) => {
+            await write(contents);
+            if ((JSON.parse(contents.trim()) as { type: string }).type === "status.get") {
+              probeSent = true;
+            }
+          };
+          return connection;
         },
       };
       const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
@@ -1762,6 +1771,9 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(hellos).toBe(1);
+      // why: the server observing hello does not mean the client has read its reply and armed
+      // the probe deadline; advance the fake clock only after the client sends that probe.
+      await expect.poll(() => probeSent).toBe(true);
       clock.advance(20_000);
       await expect.poll(() => settled, { timeout: 2_000 }).toBe(true);
       expect(await run).toBe(1);
@@ -1771,6 +1783,75 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     } finally {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("exits 1 for a socket closed before hello and reports DAEMON_STARTUP_FAILED only after launch", async () => {
+    for (const scenario of [
+      { launch: false, afterExit: false, code: "DAEMON_CONNECTION_LOST", connects: 1 },
+      { launch: true, afterExit: false, code: "DAEMON_STARTUP_FAILED", connects: 2 },
+      { launch: true, afterExit: true, code: "DAEMON_STARTUP_FAILED", connects: 3 },
+    ]) {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-closed-"));
+      temporaryDirectories.push(directory);
+      const socketPath = join(directory, "daemon.sock");
+      let accepted = 0;
+      // why: the daemon that refuses its history accepts the CLI's connection, then stops and
+      // closes it; the CLI is still reading `admin.token` then, so the close lands before `hello`.
+      const server = createServer((socket) => {
+        accepted += 1;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const real = new NodeIpcTransport();
+        let launched = !scenario.launch;
+        const clock = new FakeClock(0);
+        const launcher = new FakeDaemonLauncher(
+          () => {
+            launched = true;
+          },
+          { exit: { code: 1, signal: null } },
+        );
+        let connects = 0;
+        const ipc: IpcConnector = {
+          connect: async () => {
+            connects += 1;
+            if (!launched || (scenario.afterExit && connects === 2)) {
+              throw new IpcError("endpoint-not-found", "not yet", undefined);
+            }
+            const connection = await real.connect(socketPath);
+            await expect.poll(() => connection.closed).toBe(true);
+            return connection;
+          },
+        };
+        const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
+        let settled = false;
+        const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+          (code) => {
+            settled = true;
+            return code;
+          },
+        );
+        for (let tick = 0; tick < 100 && !settled; tick += 1) {
+          clock.advance(50);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(launcher.launches).toBe(scenario.launch ? 1 : 0);
+        expect(accepted).toBe(1);
+        expect(connects).toBe(scenario.connects);
+        expect(
+          settled,
+          `simlock daemon start still had not settled at ${String(clock.now())}ms`,
+        ).toBe(true);
+        expect(await run).toBe(1);
+        expect(output.stdout).toBe("");
+        expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toMatchObject({
+          error: { code: scenario.code },
+        });
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   });
 
@@ -2644,6 +2725,93 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(exitCode).not.toBe(0);
     expect(launcher.launches).toBe(0);
     expect(output.stderr).toContain("http.enabled");
+  });
+
+  describe("a joined worker's own HTTP listener (#811)", () => {
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    const homeWithGateway = {
+      role: "worker",
+      dataDirectory: "/simlock",
+      gatewayPresent: true,
+    } as const;
+
+    async function workerFiles(contents: unknown) {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/simlock");
+      await filesystem.writeFileAtomic("/simlock/config.json", JSON.stringify(contents));
+      return filesystem;
+    }
+
+    it.each([
+      [
+        "enabling HTTP on a joined worker",
+        ["http.enabled", "true"],
+        { gateway: joined },
+        'Invalid config after setting http.enabled: Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      ],
+      [
+        "adding the gateway object to a standalone worker with HTTP on",
+        ["gateway", JSON.stringify(joined)],
+        { http: { enabled: true } },
+        'Invalid config after setting gateway: Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      ],
+    ] as const)(
+      "refuses a config set that creates the conflict with exit 2, USAGE and the file untouched: %s",
+      async (_name, [key, value], contents, message) => {
+        const filesystem = await workerFiles(contents);
+        const before = await filesystem.readFile("/simlock/config.json");
+        const output = outputCapture({
+          ...realCliEnvironmentPorts(filesystem),
+          daemonHome: homeWithGateway,
+        });
+        const exitCode = await runCli(
+          ["--local", "config", "set", key, value],
+          output.environmentWith(),
+        );
+        expect(exitCode).toBe(2);
+        expect(JSON.parse(output.stderr).error).toMatchObject({ code: "USAGE", message });
+        expect(await filesystem.readFile("/simlock/config.json")).toBe(before);
+      },
+    );
+
+    it("repairs a conflicting file with config set http.enabled false and prints the restart notice", async () => {
+      const filesystem = await workerFiles({ gateway: joined, http: { enabled: true } });
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(filesystem),
+        daemonHome: homeWithGateway,
+      });
+      const exitCode = await runCli(
+        ["--local", "config", "set", "http.enabled", "false"],
+        output.environmentWith(),
+      );
+      expect(exitCode).toBe(0);
+      expect(output.stdout).toBe(
+        "Updated http.enabled in /simlock/config.json; takes effect on daemon restart.\n",
+      );
+      expect(JSON.parse(await filesystem.readFile("/simlock/config.json"))).toMatchObject({
+        http: { enabled: false },
+      });
+    });
+
+    it("--local daemon start with no daemon listening refuses a joined worker's HTTP conflict before any launch", async () => {
+      const filesystem = await workerFiles({
+        gateway: { url: "ws://127.0.0.1:1", token: "join-secret" },
+        http: { enabled: true },
+      });
+      // why: a launcher that exits at once, so a start that wrongly launches fails the launches assertion instead of waiting out the test.
+      const launcher = new FakeDaemonLauncher(undefined, { exit: { code: 1, signal: null } });
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(filesystem),
+        daemonHome: homeWithGateway,
+        launcher,
+      });
+      const exitCode = await runCli(["--local", "daemon", "start"], output.environmentWith());
+      expect(exitCode).not.toBe(0);
+      expect(launcher.launches).toBe(0);
+      expect(JSON.parse(output.stderr).error.message).toBe(
+        'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      );
+    });
   });
 
   it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
@@ -4112,6 +4280,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           count: 2,
           mode: "full" as const,
           model: "iPhone 17",
+          origin: "configured" as const,
           osVersion: "26.0",
           platform: "ios" as const,
           ready: 1,
@@ -4121,17 +4290,29 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           count: 1,
           mode: "full" as const,
           model: "iPhone 17",
+          origin: "learned" as const,
           osVersion: "27.0",
           platform: "ios" as const,
           ready: 0,
           short: "runtime-missing" as const,
+        },
+        {
+          booting: 0,
+          count: 1,
+          imageTag: "google_apis_playstore",
+          mode: "full" as const,
+          model: "Pixel 8",
+          origin: "learned" as const,
+          osVersion: "35",
+          platform: "android" as const,
+          ready: 1,
         },
       ],
     };
     const statusWith = (block: StatusGetOutput["warmPool"]) =>
       fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, warmPool: block }) });
 
-    it("simlock status prints whether the pool is on, the reserve, and each target with how many are wanted, ready and booting, and why it is short", async () => {
+    it("simlock status prints the origin word on every warm pool line, learned lines included, the tag in the name, and a learned line's short:", async () => {
       const output = outputCapture();
 
       await runCli(
@@ -4141,8 +4322,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: enabled, reserve ios 1 android 0\n" +
-          "  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1\n" +
-          "  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 1  booting 1\n" +
+          "  iPhone 17 / 27.0 / full   learned   wanted 1  ready 0  booting 0  short: runtime-missing\n" +
+          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n",
       );
     });
 
@@ -4157,6 +4339,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
             count: 1,
             mode: "slim" as const,
             model: "iPhone 17",
+            origin: "configured" as const,
             platform: "ios" as const,
             ready: 0,
           },
@@ -4170,7 +4353,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: enabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+          "  iPhone 17 / slim   configured   wanted 1  ready 0  booting 0\n",
       );
     });
 
@@ -4194,7 +4377,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: disabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / 26.0 / full   wanted 2  ready 0  booting 0  short: disabled\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 0  booting 0  short: disabled\n",
       );
     });
 
