@@ -67,6 +67,7 @@ interface Envelope {
 
 interface SetUpOptions {
   readonly leaseTtlCapMs?: number;
+  readonly downloads?: "always";
   readonly drivers?: (clock: FakeClock) => FakeDriver[];
   readonly enabled?: boolean | "unset";
   readonly endWaitMs?: number;
@@ -184,6 +185,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
               },
             }),
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
+        ...(options.downloads === undefined ? {} : { downloads: { policy: options.downloads } }),
         http: { enabled: true, host: "127.0.0.1", port },
         lease: {
           defaultTtlMs,
@@ -750,6 +752,42 @@ describe("the agent-device front, through the whole worker daemon", () => {
       expect(result.data.lease["deviceKey"]).toBe(`key-${n}`);
       expect(result.data.device).toMatchObject({ id: expect.any(String) });
     }
+  });
+
+  it('allocate with `osVersion` "^18", with `imageTag` on iOS (with a model and without) or with an OS the driver lacks answers `refused by simlock:` with simlock\'s own message and leaves no lease; under `downloads.policy: always` the missing OS is installed for a named model and still refused without one', async () => {
+    const rig = await setUp();
+    const refusals: readonly Record<string, unknown>[] = [
+      { osVersion: "^18" },
+      { device: "iPhone 17 Pro", imageTag: "default" },
+      { imageTag: "default" },
+      { osVersion: "26.1" },
+    ];
+
+    for (const [index, extra] of refusals.entries()) {
+      const expected = await simlockMessage(rig, {
+        leaseId: hex(90 + index),
+        platform: "ios",
+        ...(typeof extra["device"] === "string" ? { model: extra["device"] } : {}),
+        ...(extra["imageTag"] === undefined ? {} : { imageTag: extra["imageTag"] }),
+        ...(extra["osVersion"] === undefined ? {} : { osVersion: extra["osVersion"] }),
+      });
+      const answer = await envelopeOf(await allocate(rig, index + 1, extra));
+      expect(answer.error?.message).toBe(`refused by simlock: ${expected}`);
+    }
+    expect(await leases(rig)).toEqual([]);
+    expect(rig.driver.calls.map((call) => call.operation)).not.toContain("installComponent");
+
+    const always = await setUp({ downloads: "always" });
+    const installs = () =>
+      always.driver.calls.filter((call) => call.operation === "installComponent").length;
+    const bare = await envelopeOf(await allocate(always, 1, { osVersion: "26.1" }));
+    expect(bare.error?.message).toContain("refused by simlock: ");
+    expect(installs()).toBe(0);
+    const named = await envelopeOf(
+      await allocate(always, 2, { device: "iPhone 17 Pro", osVersion: "26.1" }),
+    );
+    expect(named.result).toMatchObject({ ok: true });
+    expect(installs()).toBe(1);
   });
 
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
