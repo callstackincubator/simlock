@@ -1,5 +1,5 @@
-/* The drawer: a modal panel at the right edge over a dim layer. It moves in once, when it opens;
- * nothing replays it, since the animation belongs to the popup's first paint alone. */
+/* The drawer: a modal panel at the right edge over a dim layer. It slides in once, when it opens,
+ * and slides out when it closes; nothing replays the slide-in. */
 
 .drawer-dim {
   position: fixed;
@@ -38,9 +38,31 @@
   }
 }
 
+.drawer[data-ending-style] {
+  animation: drawer-out var(--duration-move) var(--ease) forwards;
+}
+
+.drawer-dim[data-ending-style] {
+  animation: drawer-dim-out var(--duration-move) var(--ease) forwards;
+}
+
+@keyframes drawer-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes drawer-dim-out {
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .drawer,
-  .drawer-dim {
+  .drawer-dim,
+  .drawer[data-ending-style],
+  .drawer-dim[data-ending-style] {
     animation: none;
   }
 }

@@ -2,7 +2,7 @@ import "./drawer.css";
 
 import { Dialog } from "@base-ui/react/dialog";
 import { Tabs } from "@base-ui/react/tabs";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import { IconButton } from "./button";
 import { Icon } from "./icon";
@@ -18,11 +18,15 @@ export function Drawer(props: {
   readonly children: ReactNode;
 }) {
   const { actions, children, finalFocus, onClose, title } = props;
+  // why: closing changes the address, which unmounts the drawer at once; it closes itself first,
+  // and the address changes once Base UI has played the slide-out.
+  const [open, setOpen] = useState(true);
   return (
     <Dialog.Root
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
+      open={open}
+      onOpenChange={setOpen}
+      onOpenChangeComplete={(isOpen) => {
+        if (!isOpen) onClose();
       }}
     >
       <Dialog.Portal>
