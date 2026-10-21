@@ -1,4 +1,8 @@
 import { createRoute, z } from "@hono/zod-openapi";
+import type { Context } from "hono";
+
+import { describeSchemaIssues } from "../contract/index.js";
+import { badRequest, errorResponse } from "./errors.js";
 
 export type RouteRole = "public" | "agent" | "admin";
 export type RouteTag = "System" | "Devices";
@@ -137,4 +141,12 @@ export function declareRoute<
     } as DeclaredRequest<Request>,
     responses,
   });
+}
+
+export function validationHook(
+  result: { success: true } | { success: false; error: z.ZodError },
+  c: Context,
+): Response | undefined {
+  if (result.success) return undefined;
+  return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
 }

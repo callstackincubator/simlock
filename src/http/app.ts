@@ -31,7 +31,8 @@ import {
   unknownRequest,
 } from "./errors.js";
 import { LeaseNoticeBuffer } from "./notices.js";
-import { healthzRoute, statusRoute } from "./route-declarations.js";
+import { deviceAddRoute, healthzRoute, statusRoute } from "./route-declarations.js";
+import { validationHook } from "./routes.js";
 import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
 import type { Auth, Identity } from "../auth/index.js";
@@ -138,8 +139,6 @@ const componentInstallBodySchema = z
   })
   .strict();
 
-const deviceAddBodySchema = z.object({ id: z.string(), platform: z.string() }).strict();
-
 function jsonBody<Schema extends z.ZodType>(schema: Schema) {
   return zValidator("json", schema, (result, c) => {
     if (!result.success) {
@@ -188,7 +187,7 @@ export interface HttpAppDisposable {
 
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
 export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpAppDisposable {
-  const app = new OpenAPIHono<Env>();
+  const app = new OpenAPIHono<Env>({ defaultHook: validationHook });
   const logger = deps.logger.child("http");
   const tracker = new LeaseRequestTracker({
     clock: deps.clock,
@@ -278,14 +277,12 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json(result);
   });
 
-  app.post("/v1/devices", agentAuth, jsonBody(deviceAddBodySchema), async (c) => {
-    const result = await deps.dispatch(
-      "device.add",
-      c.req.valid("json"),
-      buildHttpSession(c.get("identity")),
-    );
-    return c.json(result);
-  });
+  app.openapi({ ...deviceAddRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(
+      await deps.dispatch("device.add", c.req.valid("json"), buildHttpSession(c.get("identity"))),
+      200,
+    ),
+  );
 
   app.delete("/v1/devices/:id", agentAuth, async (c) => {
     const result = await deps.dispatch(
