@@ -42,19 +42,30 @@ export function useActions(): Actions {
   const notify = useNotify();
   const busy = useSyncExternalStore(subscribe, current, current);
   const run = useCallback(
-    async (action: ItemAction) => {
+    async (action: ItemAction): Promise<void> => {
       if (inFlight.has(action.itemKey)) return;
       const perform = async () => {
         setInFlight(action.itemKey, true);
         try {
           await api.write(action.method, action.path);
           const { description, title, view } = action.success;
+          const { undo } = action;
           notify({
             title,
             ...(description === undefined ? {} : { description }),
             ...(view === undefined
               ? {}
               : { action: { label: view.label, onClick: () => navigate(view.to) } }),
+            ...(undo === undefined
+              ? {}
+              : {
+                  action: {
+                    label: "Undo",
+                    onClick: () => {
+                      void run(undo);
+                    },
+                  },
+                }),
           });
         } finally {
           setInFlight(action.itemKey, false);

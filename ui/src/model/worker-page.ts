@@ -59,6 +59,8 @@ export interface RowMeter {
 
 export interface WorkerRow {
   readonly id: string;
+  readonly connection: WorkerView["connection"];
+  readonly takesLeases: boolean;
   readonly slots: readonly DeviceSlot[];
   readonly slotsLabel: string;
   readonly meters: readonly RowMeter[];
@@ -90,6 +92,8 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const system = systemOf(worker);
   const slots = workerSlots(worker);
   return {
+    connection: worker.connection,
+    takesLeases: !worker.drained,
     health: workerHealth(worker),
     id: worker.id,
     meters: loadFigures(worker).map((card) => ({

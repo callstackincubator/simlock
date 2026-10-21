@@ -1,6 +1,8 @@
+import type { MenuEntry } from "../ds";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
 import type { LeaseDetails, LeaseList, TokenList } from "../model/leases";
+import { workerActions } from "../model/actions";
 import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging";
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
@@ -21,6 +23,7 @@ import {
 import { type WorkerList, workerPath } from "../model/workers";
 import { type EventRow, eventRows } from "../model/event-list";
 import { eventsOfWorker } from "../model/events";
+import { useActions } from "./actions";
 import { useRecentEvents } from "./events";
 import { useDaemonMode, useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
@@ -44,6 +47,14 @@ export type {
 // no model, so the builders pass through here.
 export { WORKER_FILTERS, workerPageOf, workerRow } from "../model/worker-page";
 export type { WorkerView } from "../model/workers";
+
+// why: the row's ⋯ menu reads the one list of actions a worker offers (ADR 0037 §3); on a single host
+// or before the mode is known it is empty.
+export function useWorkerMenu(): (row: WorkerRow) => readonly MenuEntry[] {
+  const { entries } = useActions();
+  const mode = useDaemonMode();
+  return (row) => entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
+}
 
 export interface WorkerPageView extends WorkerPage {
   readonly back: string;

@@ -1,4 +1,4 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { inConsole } from "../../state/test-support";
 import { describe, expect, it } from "vitest";
 
 import type { Paging } from "../../ds";
@@ -124,7 +124,7 @@ function page(worker: WorkerView, tab?: WorkerTab): WorkerPageView {
 }
 
 function html(view: WorkerPageView): string {
-  return renderToStaticMarkup(<WorkerPageBody page={view} />);
+  return inConsole(<WorkerPageBody page={view} />);
 }
 
 function text(markup: string): string {
@@ -138,7 +138,7 @@ function text(markup: string): string {
 describe("the fleet table", () => {
   it("says no workers have connected, or that none matches the filter", () => {
     const none = (empty: boolean, filter: FleetPage["filter"]) =>
-      text(renderToStaticMarkup(<FleetBody page={fleet([], { empty }, filter)} />));
+      text(inConsole(<FleetBody page={fleet([], { empty }, filter)} />));
 
     expect(none(true, "all")).toContain("No workers have connected.");
     expect(none(false, "issues")).toContain("No worker matches.");

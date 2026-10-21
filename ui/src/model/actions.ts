@@ -30,6 +30,8 @@ export interface ItemAction {
   readonly path: `/v1/${string}`;
   readonly confirm?: ActionConfirm;
   readonly success: ActionToast;
+  // why: an action that asks nothing can be undone from its toast, by running this one.
+  readonly undo?: ItemAction;
 }
 
 export interface LeaseActionInput {
@@ -111,30 +113,29 @@ export function workerActions(
   if (mode !== "gateway") return [];
   const itemKey = `worker/${worker.id}`;
   const path = `/v1/workers/${encodeURIComponent(worker.id)}` as const;
-  const actions: ItemAction[] = [
-    worker.drained
-      ? {
-          danger: false,
-          id: "undrain",
-          itemKey,
-          label: "Undrain",
-          method: "DELETE",
-          path: `${path}/drain`,
-          success: { title: `${worker.name} takes leases again` },
-        }
-      : {
-          danger: false,
-          id: "drain",
-          itemKey,
-          label: "Drain",
-          method: "POST",
-          path: `${path}/drain`,
-          success: {
-            description: "Its leases keep running. New leases go to other workers.",
-            title: `${worker.name} drained`,
-          },
-        },
-  ];
+  const undrain: ItemAction = {
+    danger: false,
+    id: "undrain",
+    itemKey,
+    label: "Undrain",
+    method: "DELETE",
+    path: `${path}/drain`,
+    success: { title: `${worker.name} takes leases again` },
+  };
+  const drain: ItemAction = {
+    danger: false,
+    id: "drain",
+    itemKey,
+    label: "Drain",
+    method: "POST",
+    path: `${path}/drain`,
+    success: {
+      description: "Its leases keep running. New leases go to other workers.",
+      title: `${worker.name} drained`,
+    },
+    undo: undrain,
+  };
+  const actions: ItemAction[] = [worker.drained ? undrain : drain];
   if (worker.connection === "disconnected") {
     actions.push({
       confirm: {

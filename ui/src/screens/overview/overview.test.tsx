@@ -1,4 +1,4 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { inConsole } from "../../state/test-support";
 import { describe, expect, it } from "vitest";
 
 import { figuresOf } from "../../model/figures";
@@ -25,7 +25,7 @@ const quiet: Overview = {
 
 describe("the overview screen", () => {
   it("says so in one line where a fleet has no workers and nothing needs you", () => {
-    const shown = text(renderToStaticMarkup(<OverviewBody overview={quiet} />));
+    const shown = text(inConsole(<OverviewBody overview={quiet} />));
 
     expect(shown).toContain("No workers have connected.");
     expect(shown).toContain("Nothing needs you");
@@ -33,7 +33,7 @@ describe("the overview screen", () => {
   });
 
   it("shows the Needs you panel with its rows and the Inbox link, and no Nothing needs you", () => {
-    const shown = renderToStaticMarkup(
+    const shown = inConsole(
       <OverviewBody
         overview={{
           ...quiet,
@@ -62,7 +62,7 @@ describe("the overview screen", () => {
 
   it("says Could not check, and not Nothing needs you, when a read failed and no problem is known", () => {
     const shown = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={{
             ...quiet,
@@ -78,7 +78,7 @@ describe("the overview screen", () => {
 
   it("shows the Needs you panel and the Could not check line together when a read failed and a problem is known", () => {
     const shown = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={{
             ...quiet,
@@ -107,7 +107,7 @@ describe("the overview screen", () => {
   });
 
   it("links the workers table to Fleet and says 2 workers not read yet in the plural", () => {
-    const shown = renderToStaticMarkup(
+    const shown = inConsole(
       <OverviewBody overview={{ ...quiet, capacity: [{ name: "iOS", notRead: 2, parts: [] }] }} />,
     );
 
@@ -117,7 +117,7 @@ describe("the overview screen", () => {
   });
 
   it("draws the workers with Fleet's table, every row and no pager, and notes capacity not read yet", () => {
-    const html = renderToStaticMarkup(
+    const html = inConsole(
       <OverviewBody
         overview={{
           ...quiet,
@@ -133,6 +133,8 @@ describe("the overview screen", () => {
             },
           ],
           workers: Array.from({ length: 12 }, (_, index) => ({
+            connection: "connected" as const,
+            takesLeases: true,
             health: { tone: "ok" as const, word: "connected" },
             id: `w${index}`,
             meters: [],
@@ -159,7 +161,7 @@ describe("the overview screen", () => {
   });
 
   it("draws the range picker as a radio group of four with the chosen range checked, two chart panels and the Capacity panel", () => {
-    const shown = renderToStaticMarkup(
+    const shown = inConsole(
       <OverviewBody overview={withFigures({})} range="6h" onRange={() => undefined} />,
     );
 
@@ -186,7 +188,7 @@ describe("the overview screen", () => {
 
   it("shows the partial note above the tiles when the figures carry one, and no note otherwise", () => {
     const partial = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={withFigures({ coversFrom: NOW - 90 * 60_000, partial: true })}
           range="1h"
@@ -195,9 +197,7 @@ describe("the overview screen", () => {
       ),
     );
     const whole = text(
-      renderToStaticMarkup(
-        <OverviewBody overview={withFigures({})} range="1h" onRange={() => undefined} />,
-      ),
+      inConsole(<OverviewBody overview={withFigures({})} range="1h" onRange={() => undefined} />),
     );
 
     expect(partial).toContain("Figures cover from today 10:30.");
@@ -207,7 +207,7 @@ describe("the overview screen", () => {
 
   it("shows a refused stats read as one item after Workers and as one panel, and leaves the fleet's tiles and panels", () => {
     const shown = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={overviewOf({
             figures: { kind: "refused", message: "The stats are not allowed." },
@@ -239,7 +239,7 @@ describe("the overview screen", () => {
       figures: { ...kept.figures, refusal: "The stats are not allowed." },
     } as Overview;
     const shown = text(
-      renderToStaticMarkup(<OverviewBody overview={stale} range="6h" onRange={() => undefined} />),
+      inConsole(<OverviewBody overview={stale} range="6h" onRange={() => undefined} />),
     );
 
     expect(shown.split("The stats are not allowed.")).toHaveLength(2);
@@ -250,7 +250,7 @@ describe("the overview screen", () => {
 
   it("shows Loading… in the same two places while the stats read is loading", () => {
     const shown = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={overviewOf({ now: NOW, requests: [], workers: [] })}
           range="1h"

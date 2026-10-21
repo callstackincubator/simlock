@@ -26,13 +26,14 @@ export interface Now {
   readonly server: number;
 }
 
-interface Live {
+export interface Live {
   readonly connection: LiveConnection;
   readonly mode: ModeStore;
   readonly ticker: Ticker;
 }
 
-const LiveContext = createContext<Live | undefined>(undefined);
+// why: exported so a screen test can stand in a fixed daemon mode without a connection.
+export const LiveContext = createContext<Live | undefined>(undefined);
 
 export function LiveProvider({ children }: { readonly children: ReactNode }) {
   const api = useApi();
@@ -75,7 +76,7 @@ export function useLiveResource<T>(path: ApiPath): ResourceState<T> {
 // why: `undefined` until a read of `GET /v1/status` has said which kind of daemon this is.
 export function useDaemonMode(): DaemonMode | undefined {
   const { mode } = useLive();
-  return useSyncExternalStore(mode.subscribe, mode.mode);
+  return useSyncExternalStore(mode.subscribe, mode.mode, mode.mode);
 }
 
 export function useConnection(): ConnectionState {

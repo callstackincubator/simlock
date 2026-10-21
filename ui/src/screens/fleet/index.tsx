@@ -17,6 +17,7 @@ import {
 import {
   type FleetPage,
   useFleet,
+  useWorkerMenu,
   useFleetAddress,
   WORKER_FILTERS,
   type WorkerRow,
@@ -73,6 +74,7 @@ export function WorkersTable(props: {
   readonly empty: string;
   readonly paging?: Paging;
 }) {
+  const entries = useWorkerMenu();
   return (
     <DataTable
       label="Workers"
@@ -80,6 +82,7 @@ export function WorkersTable(props: {
       columns={COLUMNS}
       rowId={(row) => row.id}
       rowTo={(row) => row.to}
+      menu={{ entries, label: (row) => `Actions for ${row.name}` }}
       empty={props.empty}
       {...(props.paging === undefined ? {} : { paging: props.paging })}
       wide
