@@ -2047,6 +2047,144 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
   });
 
+  it("daemon status prints the Service: line and the service field in --json, for a worker or a gateway, running or stopped, and none on an unsupported platform", async () => {
+    const home = "/Users/me";
+    const node = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const main = "/Users/me/simlock/dist/daemon/main.js";
+    const worker = "com.callstack.simlock.worker";
+    const gateway = "com.callstack.simlock.gateway";
+    const plist = (name: string) => `${home}/Library/LaunchAgents/${name}.plist`;
+    const cases: readonly {
+      readonly label: string;
+      readonly role: "worker" | "gateway";
+      readonly running: boolean;
+      readonly state: ServiceState | undefined;
+      readonly line: string | undefined;
+      readonly service: Record<string, unknown> | undefined;
+    }[] = [
+      {
+        label: "not installed, stopped",
+        role: "worker",
+        running: false,
+        state: { state: "not-installed" },
+        line: "Service: not installed",
+        service: { state: "not-installed", manager: "launchd", name: worker },
+      },
+      {
+        label: "installed, running",
+        role: "worker",
+        running: true,
+        state: { state: "installed", path: plist(worker) },
+        line: `Service: installed (launchd, ${worker})`,
+        service: { state: "installed", manager: "launchd", name: worker, path: plist(worker) },
+      },
+      {
+        label: "not loaded, running",
+        role: "worker",
+        running: true,
+        state: { state: "not-loaded", path: plist(worker) },
+        line: `Service: not loaded (launchd, ${worker}): commands start the daemon without it`,
+        service: { state: "not-loaded", manager: "launchd", name: worker, path: plist(worker) },
+      },
+      {
+        label: "Node path gone, stopped",
+        role: "worker",
+        running: false,
+        state: { state: "broken", path: plist(worker), missing: [node] },
+        line: `Service: broken (launchd, ${worker}): ${node} is gone; run simlock daemon install`,
+        service: {
+          state: "broken",
+          manager: "launchd",
+          name: worker,
+          path: plist(worker),
+          missing: [node],
+        },
+      },
+      {
+        label: "both paths gone, stopped",
+        role: "worker",
+        running: false,
+        state: { state: "broken", path: plist(worker), missing: [node, main] },
+        line: `Service: broken (launchd, ${worker}): ${node}, ${main} are gone; run simlock daemon install`,
+        service: {
+          state: "broken",
+          manager: "launchd",
+          name: worker,
+          path: plist(worker),
+          missing: [node, main],
+        },
+      },
+      {
+        label: "gateway, running",
+        role: "gateway",
+        running: true,
+        state: { state: "installed", path: plist(gateway) },
+        line: `Service: installed (launchd, ${gateway})`,
+        service: { state: "installed", manager: "launchd", name: gateway, path: plist(gateway) },
+      },
+      {
+        label: "unsupported platform",
+        role: "worker",
+        running: true,
+        state: undefined,
+        line: undefined,
+        service: undefined,
+      },
+    ];
+    for (const testCase of cases) {
+      for (const json of [false, true]) {
+        const label = `${testCase.label}${json ? " --json" : ""}`;
+        const output = outputCapture();
+        const manager =
+          testCase.state === undefined
+            ? undefined
+            : new FakeServiceManager({ state: testCase.state });
+        const environment = output.environmentWith({
+          daemonHome: { role: testCase.role, dataDirectory: "/simlock", gatewayPresent: false },
+          connectExistingAdmin: async () => {
+            if (!testCase.running) throw new Error("connect ECONNREFUSED");
+            return fakeClient();
+          },
+          service: {
+            manager,
+            platform: manager === undefined ? "linux" : "darwin",
+            definition: async () =>
+              serviceDefinition({
+                role: testCase.role,
+                root: `${home}/.simlock`,
+                dataDirectory: "/simlock",
+                home,
+                nodePath: node,
+                mainPath: main,
+                env: {},
+              }),
+          },
+        });
+
+        await expect(
+          runCli(["daemon", "status", ...(json ? ["--json"] : [])], environment),
+          label,
+        ).resolves.toBe(0);
+
+        if (json) {
+          const parsed = JSON.parse(output.stdout) as Record<string, unknown>;
+          expect(parsed.service, label).toEqual(testCase.service);
+          expect(parsed.status === "stopped" || "daemon" in parsed, label).toBe(true);
+        } else {
+          const lines = output.stdout.trimEnd().split("\n");
+          if (testCase.line !== undefined) expect(lines.at(-1), label).toBe(testCase.line);
+          expect(
+            lines.filter((line) => line.startsWith("Service:")),
+            label,
+          ).toEqual(testCase.line === undefined ? [] : [testCase.line]);
+          expect(lines[0], label).toBe(
+            testCase.running ? "Daemon: running (worker)" : "Daemon stopped",
+          );
+        }
+      }
+    }
+  });
+
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
