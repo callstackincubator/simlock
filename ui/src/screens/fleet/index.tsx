@@ -8,6 +8,7 @@ import {
   Loaded,
   Meter,
   Page,
+  type Paging,
   SearchField,
   Slots,
   Status,
@@ -57,17 +58,32 @@ export function FleetBody({ page }: { readonly page: FleetPage }) {
         }
         end={<SearchField label="Search workers" value={page.query} onChange={page.search} />}
       />
-      <DataTable
-        label="Workers"
+      <WorkersTable
         rows={page.rows}
-        columns={COLUMNS}
-        rowId={(row) => row.id}
-        rowTo={(row) => row.to}
         empty={page.empty ? "No workers have connected." : "No worker matches."}
         paging={page.paging}
-        wide
       />
     </>
+  );
+}
+
+// why: the Overview draws this same table, every worker and no pager, so it passes no `paging`.
+export function WorkersTable(props: {
+  readonly rows: readonly WorkerRow[];
+  readonly empty: string;
+  readonly paging?: Paging;
+}) {
+  return (
+    <DataTable
+      label="Workers"
+      rows={props.rows}
+      columns={COLUMNS}
+      rowId={(row) => row.id}
+      rowTo={(row) => row.to}
+      empty={props.empty}
+      {...(props.paging === undefined ? {} : { paging: props.paging })}
+      wide
+    />
   );
 }
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import type { ResourceState } from "../data/live/connection";
 import type { LoadView } from "../ds/loaded";
 import {
   filterInboxRows,
@@ -29,23 +30,37 @@ export interface InboxReads {
 }
 
 // why: a daemon that keeps no queue of its own answers 501; the Inbox then counts no waiting
-// requests instead of hiding the fleet behind "not available". A read that failed is not that:
-// the rest still shows, and the page says what could not be checked.
-export function useInboxReads(): InboxReads {
-  const asked = loadView(useLiveResource<WaitingList>("/v1/lease-requests"));
-  const leases = useLiveResource<LeaseList>("/v1/leases");
-  const tokens = useLiveResource<TokenList>("/v1/tokens");
-  const failed = asked.kind === "refused";
+// requests instead of hiding the fleet behind "not available". A read that failed is not that,
+// even when an earlier answer is still held: the rest still shows, and the page says what could
+// not be checked.
+export function inboxReadsOf(
+  asked: ResourceState<WaitingList>,
+  leases: ResourceState<LeaseList>,
+  tokens: ResourceState<TokenList>,
+): InboxReads {
+  const waiting = loadView(asked);
+  const failed =
+    waiting.kind === "refused" || (waiting.kind === "ready" && waiting.refusal !== undefined);
   return {
     couldNotCheck: [
       ...(failed ? ["waiting requests"] : []),
-      ...(leases.data === undefined && leases.error !== undefined ? ["leases"] : []),
+      ...(leases.error === undefined ? [] : ["leases"]),
     ],
     leases: leases.data?.leases,
     tokens: tokens.data?.tokens,
     waiting:
-      asked.kind === "unsupported" || failed ? { data: { requests: [] }, kind: "ready" } : asked,
+      waiting.kind === "unsupported" || waiting.kind === "refused"
+        ? { data: { requests: [] }, kind: "ready" }
+        : waiting,
   };
+}
+
+export function useInboxReads(): InboxReads {
+  return inboxReadsOf(
+    useLiveResource<WaitingList>("/v1/lease-requests"),
+    useLiveResource<LeaseList>("/v1/leases"),
+    useLiveResource<TokenList>("/v1/tokens"),
+  );
 }
 
 export interface Inbox {

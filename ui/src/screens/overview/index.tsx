@@ -3,29 +3,24 @@ import "./overview.css";
 import {
   ChartPanel,
   ChoiceChips,
-  Empty,
   Link,
   Loaded,
-  Meter,
   Page,
   Panel,
   Refusal,
   Row,
   ShareBar,
-  Slots,
   StatRow,
   StatTile,
   Status,
-  StatusDot,
   Toolbar,
 } from "../../ds";
+import { WorkersTable } from "../fleet";
 import type { FiguresState } from "../../state/figures";
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import {
-  type Gauge,
   type Overview,
   type OverviewInbox,
-  type OverviewWorker,
   type PlatformCapacity,
   useOverview,
 } from "../../state/overview";
@@ -113,7 +108,7 @@ export function OverviewBody(props: {
       )}
       <Row>
         <Panel title="Workers" flush actions={<Link to="/fleet">Open Fleet</Link>}>
-          <WorkerTable workers={overview.workers} />
+          <WorkersTable rows={overview.workers} empty="No workers have connected." />
         </Panel>
         <div className="overview-side">
           <NeedsYou inbox={overview.inbox} />
@@ -152,59 +147,6 @@ function PlatformBar({ platform }: { readonly platform: PlatformCapacity }) {
   );
 }
 
-function GaugeCell({ gauge }: { readonly gauge: Gauge | undefined }) {
-  if (gauge === undefined) return <span className="gauge muted">—</span>;
-  return (
-    <span className="gauge">
-      <Meter percent={gauge.percent} tone={gauge.tone} size="thin" />
-      <span className="mono">{gauge.text}</span>
-    </span>
-  );
-}
-
-function WorkerTable({ workers }: { readonly workers: readonly OverviewWorker[] }) {
-  if (workers.length === 0) return <Empty>No workers have connected.</Empty>;
-  return (
-    <table className="table worker-table">
-      <thead>
-        <tr>
-          <th scope="col">Worker</th>
-          <th scope="col">Devices</th>
-          <th scope="col">CPU</th>
-          <th scope="col">Memory</th>
-          <th scope="col" className="num">
-            Leases
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {workers.map((worker) => (
-          <tr key={worker.id}>
-            <td data-label="Worker">
-              <span className="worker-name">
-                <StatusDot tone={worker.health.tone} label={worker.health.word} />
-                <Link to={worker.to}>{worker.name}</Link>
-              </span>
-            </td>
-            <td data-label="Devices">
-              <Slots slots={worker.slots} label={worker.slotsLabel} />
-            </td>
-            <td data-label="CPU">
-              <GaugeCell gauge={worker.cpu} />
-            </td>
-            <td data-label="Memory">
-              <GaugeCell gauge={worker.memory} />
-            </td>
-            <td data-label="Leases" className="num">
-              {worker.leases ?? <span className="muted">—</span>}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
 function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
   const unchecked =
     inbox.couldNotCheck.length === 0 ? null : (
@@ -214,20 +156,23 @@ function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
     return unchecked ?? <p className="muted">Nothing needs you</p>;
   }
   return (
-    <Panel title="Needs you" flush>
-      <ul className="overview-list">
-        {inbox.needsYou.map((item) => (
-          <li key={item.key}>
-            <Link to={item.to} className="overview-row">
-              <Status tone={item.tone}>{item.word}</Status>
-              <span className="overview-row-aside">{item.subject}</span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-      <p className="overview-all">
-        <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
-      </p>
-    </Panel>
+    <>
+      <Panel title="Needs you" flush>
+        <ul className="overview-list">
+          {inbox.needsYou.map((item) => (
+            <li key={item.key}>
+              <Link to={item.to} className="overview-row">
+                <Status tone={item.tone}>{item.word}</Status>
+                <span className="overview-row-aside">{item.subject}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <p className="overview-all">
+          <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
+        </p>
+      </Panel>
+      {unchecked}
+    </>
   );
 }

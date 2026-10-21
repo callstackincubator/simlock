@@ -473,8 +473,8 @@ function detailOf(
   };
 }
 
-// why: the list and the inspector are worked out together from the same items, so the row that is
-// marked chosen is always the item the inspector shows.
+// why: the rows and the drawer's detail are worked out together from the same items, so they
+// never disagree.
 export function inboxPageOf(input: {
   readonly workers: readonly WorkerView[];
   readonly events: readonly ConsoleEvent[];

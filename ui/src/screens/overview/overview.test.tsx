@@ -76,6 +76,36 @@ describe("the overview screen", () => {
     expect(shown).not.toContain("Nothing needs you");
   });
 
+  it("shows the Needs you panel and the Could not check line together when a read failed and a problem is known", () => {
+    const shown = text(
+      renderToStaticMarkup(
+        <OverviewBody
+          overview={{
+            ...quiet,
+            inbox: {
+              couldNotCheck: ["leases"],
+              needsYou: [
+                {
+                  key: "w1/disconnected",
+                  subject: "mac-1",
+                  to: "/inbox/w1%2Fdisconnected",
+                  tone: "error",
+                  word: "disconnected",
+                },
+              ],
+              problems: 1,
+            },
+          }}
+        />,
+      ),
+    );
+
+    expect(shown).toContain("Needs you");
+    expect(shown).toContain("All in Inbox (1)");
+    expect(shown).toContain("Could not check: leases");
+    expect(shown).not.toContain("Nothing needs you");
+  });
+
   it("links the workers table to Fleet and says 2 workers not read yet in the plural", () => {
     const shown = renderToStaticMarkup(
       <OverviewBody overview={{ ...quiet, capacity: [{ name: "iOS", notRead: 2, parts: [] }] }} />,
@@ -86,7 +116,7 @@ describe("the overview screen", () => {
     expect(shown).toContain('aria-label="iOS: no devices"');
   });
 
-  it("names each worker's health in its square, its devices in words beside the slots, and a muted dash where a count is not known", () => {
+  it("draws the workers with Fleet's table, every row and no pager, and notes capacity not read yet", () => {
     const html = renderToStaticMarkup(
       <OverviewBody
         overview={{
@@ -102,37 +132,27 @@ describe("the overview screen", () => {
               ],
             },
           ],
-          workers: [
-            {
-              health: { tone: "warn", word: "memory 88%" },
-              id: "w1",
-              leases: 2,
-              name: "mac-mini-01",
-              slots: [
-                { kind: "leased", label: "iPhone 16 18.4, leased" },
-                { kind: "free", label: "free" },
-              ],
-              slotsLabel: "1 leased, 1 free",
-              to: "/fleet/w1",
-            },
-            {
-              health: { tone: "warn", word: "starting" },
-              id: "w2",
-              name: "mac-mini-02",
-              slots: [],
-              slotsLabel: "Not reported",
-              to: "/fleet/w2",
-            },
-          ],
+          workers: Array.from({ length: 12 }, (_, index) => ({
+            health: { tone: "ok" as const, word: "connected" },
+            id: `w${index}`,
+            meters: [],
+            mono: false,
+            name: `mac-${index}`,
+            slots: [],
+            slotsLabel: "No devices",
+            to: `/fleet/w${index}`,
+          })),
         }}
       />,
     );
 
-    expect(html).toContain('class="status-dot status-dot-warn" role="img" aria-label="memory 88%"');
-    expect(html).toContain('role="img" aria-label="1 leased, 1 free"');
-    expect(html).toContain('href="/fleet/w1"');
-    expect(text(html)).not.toContain("memory 88%");
-    expect(html).toContain('<td data-label="Leases" class="num"><span class="muted">—</span></td>');
+    const table = text(html);
+    for (const header of ["Worker", "State", "Slots", "Use", "CPU", "Memory", "Disk"]) {
+      expect(table).toContain(header);
+    }
+    expect(html).toContain('href="/fleet/w0"');
+    expect(html).toContain('href="/fleet/w11"');
+    expect(html).not.toContain("Workers pages");
     expect(text(html)).toContain("iOS 1 worker not read yet");
     expect(html).toContain('role="img" aria-label="Android: 2 leased, 2 offline"');
     expect(text(html)).toContain("2 leased 2 offline");

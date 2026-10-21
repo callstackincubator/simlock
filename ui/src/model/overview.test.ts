@@ -4,6 +4,7 @@ import { figuresOf } from "./figures";
 import { overviewOf } from "./overview";
 import { statsOf } from "./test-support";
 import type { WaitingRequest } from "./waiting";
+import { workerRow } from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
@@ -154,16 +155,17 @@ describe("the overview", () => {
     ]);
   });
 
-  it("gives each worker its health square, its slots and its load, and a lost worker no load", () => {
+  it("gives each worker the row Fleet draws: its health, its slots and its use, and a lost worker no use", () => {
     const { workers } = overviewOf({ now: NOW, requests: [], workers: fleet });
 
-    expect(workers.map((row) => [row.name, row.health.tone, row.health.word, row.leases])).toEqual([
-      ["mini-1", "ok", "connected", 2],
-      ["mini-2", "warn", "drained", 0],
-      ["down-1", "error", "disconnected", 0],
+    expect(workers.map((row) => [row.name, row.health.tone, row.health.word])).toEqual([
+      ["mini-1", "ok", "connected"],
+      ["mini-2", "warn", "drained"],
+      ["down-1", "error", "disconnected"],
     ]);
+    expect(workers).toEqual(fleet.map((worker) => workerRow(worker)));
     expect(workers[0]?.slotsLabel).toBe("2 leased, 1 ready, 3 free");
-    expect(workers[2]).not.toHaveProperty("cpu");
+    expect(workers[2]).not.toHaveProperty("use");
   });
 
   it("leaves the fleet's lease and device figures unknown, not zero, while a connected worker is starting", () => {
@@ -180,10 +182,7 @@ describe("the overview", () => {
       ["Android", 1, 0],
     ]);
 
-    const row = alone.workers[0];
-    expect(row).toBeDefined();
-    expect(row).not.toHaveProperty("leases");
-    expect(row?.slotsLabel).toBe("Not reported");
+    expect(alone.workers).toEqual([workerRow(unread("mini-3"))]);
 
     const reporting = worker("mini-1", [device("a", "leased", "ios"), device("b", "ready", "ios")]);
     const mixed = overviewOf({
@@ -198,9 +197,9 @@ describe("the overview", () => {
       ["Workers", "2"],
     ]);
 
-    expect(mixed.workers.map((r) => [r.name, r.leases, r.slotsLabel])).toEqual([
-      ["mini-1", 1, "1 leased, 1 ready, 4 free"],
-      ["mini-3", undefined, "Not reported"],
+    expect(mixed.workers.map((r) => [r.name, r.slotsLabel])).toEqual([
+      ["mini-1", "1 leased, 1 ready, 4 free"],
+      ["mini-3", workerRow(unread("mini-3")).slotsLabel],
     ]);
   });
 

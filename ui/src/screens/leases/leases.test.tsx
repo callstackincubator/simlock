@@ -145,7 +145,7 @@ describe("a lease's drawer", () => {
     expect(text(html)).not.toContain("expiring");
   });
 
-  it("shows an expiring status next to the title once the lease is under 15 minutes from its end", () => {
+  it("shows an expiring status next to the title once the lease is under 5 minutes from its end", () => {
     const html = inConsole(<LeaseTitle lease={inspection({ expiring: true })} />);
 
     expect(html).toMatch(/ci-runner-3.*status-warn.*expiring/);

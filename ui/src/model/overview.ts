@@ -7,47 +7,20 @@ import {
   inboxTone,
 } from "./inbox";
 import { isExpiring, type LeaseRecord, type TokenRecord } from "./leases";
-import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import type { FiguresState } from "./figures";
-import { formatBusyPercent, loadGauges } from "./load";
-import { levelOf } from "./load-thresholds";
 import { formatCount } from "./paging";
 import { inboxPath } from "./paths";
 import { formatDuration } from "./time";
-import type { Tone, Toned } from "./tones";
+import type { Tone } from "./tones";
 import type { WaitingRequest } from "./waiting";
-import {
-  isUnread,
-  leasesHeld,
-  type WorkerDevice,
-  type WorkerView,
-  workerName,
-  workerPath,
-} from "./workers";
+import { type WorkerRow, workerRow } from "./worker-page";
+import { isUnread, leasesHeld, type WorkerDevice, type WorkerView } from "./workers";
 
 export interface OverviewTile {
   readonly label: string;
   readonly value: string;
   readonly unit?: string;
   readonly to?: string;
-}
-
-export interface Gauge {
-  readonly percent: number;
-  readonly text: string;
-  readonly tone: Tone | "neutral";
-}
-
-export interface OverviewWorker {
-  readonly id: string;
-  readonly name: string;
-  readonly to: string;
-  readonly health: Toned;
-  readonly slots: readonly DeviceSlot[];
-  readonly slotsLabel: string;
-  readonly cpu?: Gauge;
-  readonly memory?: Gauge;
-  readonly leases?: number;
 }
 
 export interface OverviewItem {
@@ -84,7 +57,7 @@ export interface Overview {
   readonly wait?: OverviewTile;
   readonly ending: OverviewTile;
   readonly figures: FiguresState;
-  readonly workers: readonly OverviewWorker[];
+  readonly workers: readonly WorkerRow[];
   readonly inbox: OverviewInbox;
 }
 
@@ -146,31 +119,6 @@ function platformCapacity(
       const count = counts.get(kind) ?? 0;
       return count === 0 ? [] : [{ count, kind, percent: percentOf(count, total), word }];
     }),
-  };
-}
-
-function gauge(percent: number | undefined): Gauge | undefined {
-  if (percent === undefined) return undefined;
-  const tone = levelOf(percent);
-  return { percent, text: formatBusyPercent(percent), tone: tone === "idle" ? "neutral" : tone };
-}
-
-function overviewWorker(worker: WorkerView): OverviewWorker {
-  const slots = isUnread(worker) ? [] : workerSlots(worker);
-  const gauges =
-    worker.connection === "connected" && worker.load !== undefined ? loadGauges(worker.load) : {};
-  const cpu = gauge(gauges.cpu);
-  const memory = gauge(gauges.memory);
-  return {
-    health: workerHealth(worker),
-    id: worker.id,
-    name: workerName(worker),
-    slots,
-    slotsLabel: isUnread(worker) ? "Not reported" : slotsLabel(slots),
-    to: workerPath(worker.id),
-    ...(worker.leases === undefined ? {} : { leases: worker.leases.length }),
-    ...(cpu === undefined ? {} : { cpu }),
-    ...(memory === undefined ? {} : { memory }),
   };
 }
 
@@ -274,6 +222,6 @@ export function overviewOf(input: {
     figures,
     tiles: tiles(workers, requests, now),
     ...(figures.kind === "ready" ? { wait: figures.data.wait } : {}),
-    workers: workers.map(overviewWorker),
+    workers: workers.map((worker) => workerRow(worker)),
   };
 }

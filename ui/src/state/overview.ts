@@ -7,13 +7,7 @@ import { useLiveResource, useNow } from "./live";
 import { useInboxReads } from "./inbox";
 import { bothViews, loadView, mapView } from "./resource";
 
-export type {
-  Overview,
-  OverviewInbox,
-  OverviewWorker,
-  Gauge,
-  PlatformCapacity,
-} from "../model/overview";
+export type { Overview, OverviewInbox, PlatformCapacity } from "../model/overview";
 
 export function useOverview(range: ConsoleRange): LoadView<Overview> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));

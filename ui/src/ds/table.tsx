@@ -32,7 +32,8 @@ export function DataTable<T extends RowData>(props: {
   readonly columns: readonly Column<T>[];
   readonly rowId: (row: T) => string;
   readonly empty: string;
-  readonly paging: Paging;
+  // why: a table given no `paging` shows every row and no pager.
+  readonly paging?: Paging;
   readonly wide?: boolean;
   readonly className?: string;
   // why: a row that opens something is clicked anywhere; its first link stays the keyboard's way in.
@@ -55,7 +56,12 @@ export function DataTable<T extends RowData>(props: {
     data: rows as T[],
     features,
     getRowId: (row) => rowId(row),
-    state: { pagination: { pageIndex: paging.page - 1, pageSize: paging.size } },
+    state: {
+      pagination:
+        paging === undefined
+          ? { pageIndex: 0, pageSize: Math.max(rows.length, 1) }
+          : { pageIndex: paging.page - 1, pageSize: paging.size },
+    },
   });
   if (rows.length === 0) return <p className="muted">{empty}</p>;
   const classes = ["table", wide ? "table-wide" : undefined, className].filter(Boolean).join(" ");
@@ -102,7 +108,7 @@ export function DataTable<T extends RowData>(props: {
           ))}
         </tbody>
       </table>
-      <Pager label={label} paging={paging} />
+      {paging === undefined ? null : <Pager label={label} paging={paging} />}
     </>
   );
 }
