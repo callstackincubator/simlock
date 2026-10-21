@@ -165,6 +165,23 @@ put together from them and draws nothing of its own that one of them already dra
   (`IconButton`) and, for a lease, tabs. Escape, the close button and the dim layer close it. It slides in once, when it opens,
   and switching its tabs does not replay that. A lease's drawer uses no status colour of its own;
   a device's shows the device's state as a status, word and square.
+- **Menu.** A table row ends in a **⋯** `IconButton` that opens a small list; a right-click on the
+  row opens the same list, and a drawer or page header shows its item's first safe action as a
+  secondary button beside its own **⋯**. An entry is 36px tall with `--text`; the highlighted one
+  takes `--surface` and the focus ring inside its edge. Dangerous entries come last, after a 1px
+  `--border` line, in `--status-error`, never `--accent`. A disabled entry is `--text-muted`. A
+  list with no entry draws no **⋯**. Arrow keys move, Escape closes. It floats above drawers and
+  toasts.
+- **Dialog.** A confirmation is a modal alert dialog (`ConfirmDialog`): a title that asks the
+  question, one or two sentences, and two buttons, the keeping one first ("Keep") and the action
+  second, named by its verb ("Release lease"). While it runs the action button is disabled and reads
+  its progress ("Releasing…"). A dialog that asks for a typed name keeps the action disabled until
+  the text equals it.
+- **Toast.** At the bottom right, newest at the bottom, at most three (older ones wait hidden), each
+  a title, an optional line and an optional action button, and a **Close** button. A success toast
+  leaves after 6 seconds, paused while hovered or focused. An error toast has a `--status-error`
+  edge and title, stays until closed and is announced at once (`role="alert"`); the rest are
+  announced politely. A toast moves in once, when it appears.
 - **Stat tiles.** A row of tiles: a label, a big number (`--text-xl`), and a short unit in mono
   beside it ("of 48", "last hour"). A tile that leads somewhere is a link as a whole. A tile
   shows only numbers its page already has; it never makes a request of its own.
@@ -260,7 +277,7 @@ put together from them and draws nothing of its own that one of them already dra
 Short, and only where it says where something came from. Colour changes on hover take 120ms
 (`--duration`). Moves take 220ms (`--duration-move`) on one easing (`--ease`): the sidebar
 widens and narrows; a page rises 10px as it opens; a drawer slides in from the right, once, when it opens; a
-meter or share bar slides to its new place. Nothing loops, nothing moves on its own, and
+meter or share bar slides to its new place; a toast rises 16px as it appears. Nothing loops, nothing moves on its own, and
 charts never animate. With `prefers-reduced-motion: reduce`, there are no transitions and no
 animations at all.
 

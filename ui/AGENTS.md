@@ -52,6 +52,18 @@ ends. `model/proxy-refusal.ts` words a refusal.
 reads from that route) once the live connection starts and again after each reconnect; a read that
 fails leaves none. `useDaemonMode` (`state/live.tsx`) gives it to state (ADR 0037 §4).
 
+## Actions
+
+An action is described once per kind of item in `model/actions.ts` (`leaseActions`, `requestActions`,
+`workerActions`, `inboxActions`): its label, danger, confirm, toasts and request (ADR 0037 §3). A
+screen never builds one; `state/actions.ts` (`useActions`) turns them into menu entries and its `run`
+is the one runner: it asks `confirm`, calls `ApiClient.write` and tells `notify` the outcome, and keeps
+an in-flight flag per item key, shared by the row, the drawer and the Inbox so a second click sends
+nothing. `notify` and `confirm` are plain functions `App` passes in through `state/services.tsx`.
+`write` sends through the same path as a read (token, `credentials`, the 401 path), but a network
+error or a timeout on a write throws without asking whether the session ended. The worker actions
+are offered only when `useDaemonMode` says `gateway` (ADR 0037 §4).
+
 ## Pages
 
 | Path                         | Screen   | Layout                                                                                                                                         |
@@ -89,6 +101,11 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 - Signals: `Status` (square and word), `StatusDot` (square alone, the word as its name),
   `Meter`, `Slots`, `ShareBar`, `SlotLegend`.
 - Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
+- Actions: `RowMenu` (a ⋯ button and its menu), `MenuRow` (a table row that opens the same menu on a
+  right-click), `ActionBar` (a drawer's or page's first safe action and its ⋯; Base UI Menu and
+  ContextMenu), `ConfirmDialog` (Base UI AlertDialog, type-to-confirm, one host), `createToaster`
+  and `ToastHost` (Base UI Toast: its manager is the only queue, and owns the timer, the limit and
+  closing). `DataTable` takes a `menu` for its last column.
 
 ## Rules
 
