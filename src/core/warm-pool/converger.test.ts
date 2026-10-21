@@ -2665,11 +2665,22 @@ describe("warm pool learned kinds", () => {
       const metPayloads = payloads(met);
       await met.pool.pass();
       await met.pool.settle();
-      const empty = harness([], { limit: 0, state: await withLearned([1, 2]), targets: [phone] });
+      const empty = harness([], {
+        catalog: async () => [iosListing],
+        limit: 0,
+        state: await withLearned([1, 2]),
+        targets: [phone],
+      });
       const emptyPayloads = payloads(empty);
       await empty.pool.pass();
       await empty.pool.settle();
 
+      expect(
+        empty.pool
+          .figures()
+          .targets.filter((target) => target.origin === "learned")
+          .map((target) => [target.model, target.short]),
+      ).toEqual([["iPad Pro", "running-limit"]]);
       expect(metPayloads).toEqual([]);
       expect(emptyPayloads).toEqual([
         {
