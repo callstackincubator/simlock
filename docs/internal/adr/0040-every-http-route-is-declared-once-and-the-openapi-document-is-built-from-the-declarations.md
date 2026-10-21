@@ -45,9 +45,10 @@ flowchart LR
 
 The repo moves from Zod 3 to Zod 4. Every schema accepts and refuses the
 same inputs as before, except whole numbers above 2^53−1 and ±Infinity,
-which Zod 4 refuses with its own 400 message. Before, a value such as
-`ttlMs` or `timeoutMs` above 2^53−1 was accepted (no route, dispatcher or
-wait-queue cap refuses it); now it is a 400. Our own messages (refinements, custom errors, the
+which Zod 4 refuses with its own 400 message. A `ttlMs` above 2^53−1 was
+already a 400 (the dispatchers refuse a `ttlMs` above `lease.maxTtlMs`), so
+only its wording changes to Zod's. A `timeoutMs` above 2^53−1 was accepted
+(no cap refuses it anywhere); now it is a 400. Our own messages (refinements, custom errors, the
 hand-written query messages that move into schemas) stay word for word.
 Zod's own default messages in a 400 `BAD_REQUEST` may change wording;
 codes and statuses do not. The JSON Schema text MCP `tools/list` publishes
