@@ -1267,6 +1267,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   });
 
   it("a lease the gateway's `lease.list` leaves out of one answer, read by a `devices` call, an allocate, a renewal while a command runs, or a heartbeat, is not ended: the next heartbeat succeeds and renews the simlock lease", async () => {
+    const during: Record<string, unknown> = {};
     const triggers: Record<string, (rig: Rig, member: Member) => Promise<void>> = {
       allocate: async (rig) => {
         await granted(rig, 2);
@@ -1275,7 +1276,8 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
         await command(rig, "devices", undefined);
       },
       heartbeat: async (rig) => {
-        await heartbeat(rig, 1);
+        const beat = await envelopeOf(await heartbeat(rig, 1));
+        during.heartbeat = beat.result ?? beat.error?.data;
       },
       renewal: async (rig, member) => {
         const running = await runningCommand(rig, member, 1);
@@ -1314,6 +1316,8 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const live = { answer: expect.objectContaining({ ok: true }), cut: 1, leftMs: 60_000 };
     expect(outcomes).toEqual({ allocate: live, devices: live, heartbeat: live, renewal: live });
+    // why: the command already ran on the worker, so the heartbeat that met the omission still answers its reply.
+    expect(during).toEqual({ heartbeat: expect.objectContaining({ ok: true }) });
   });
 });
 

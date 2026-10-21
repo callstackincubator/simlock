@@ -68,7 +68,7 @@ Front (`createFront`, prefix `agent-device`):
    set or allowlist; `install` only from an upload; `devices` alone, not streamed.
 5. Allocate → `lease.request` (`front/allocate.ts`), see flow.
 6. Heartbeat → forwarded with `ttlMs` raised to the ceiling; on success `renewLease`
-   (`lease.renew` only if it moves the deadline). agent-device says gone → `lease.release`,
+   (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`,
    reply "ended by simlock".
 7. Release → forwarded; on success `lease.release`; map marks it ended by `agent`.
 8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends,
