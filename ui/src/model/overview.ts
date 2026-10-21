@@ -102,19 +102,23 @@ function partOf(worker: WorkerView, device: WorkerDevice): PartKind | undefined 
   return PART_OF_STATE[device.state];
 }
 
+function devicePartsOf(worker: WorkerView, platform: "ios" | "android"): readonly PartKind[] {
+  return (worker.devices ?? []).flatMap((device) => {
+    const part = device.spec.platform === platform ? partOf(worker, device) : undefined;
+    return part === undefined ? [] : [part];
+  });
+}
+
 function platformCapacity(
   workers: readonly WorkerView[],
   platform: "ios" | "android",
 ): PlatformCapacity {
   const counts = new Map<PartKind, number>();
+  const add = (kind: PartKind, count: number) => counts.set(kind, (counts.get(kind) ?? 0) + count);
   for (const worker of workers) {
-    for (const device of worker.devices ?? []) {
-      const part = device.spec.platform === platform ? partOf(worker, device) : undefined;
-      if (part !== undefined) counts.set(part, (counts.get(part) ?? 0) + 1);
-    }
+    for (const part of devicePartsOf(worker, platform)) add(part, 1);
     // why: the bar is the room every worker may run, so a full bar means no room left.
-    const free = platformSlots(worker, platform).filter((slot) => slot.kind === "free").length;
-    if (free > 0) counts.set("free", (counts.get("free") ?? 0) + free);
+    add("free", platformSlots(worker, platform).filter((slot) => slot.kind === "free").length);
   }
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
   return {

@@ -1,7 +1,7 @@
 import type { UsageOutput } from "../../../src/contract/index";
 import { type FiguresState, figuresOf } from "../model/figures";
 import { type ConsoleRange, statsPath } from "../model/range";
-export type { FigureChart, FiguresState } from "../model/figures";
+export type { FiguresState } from "../model/figures";
 import { useRef } from "react";
 
 import { useLiveResource, useNow } from "./live";
