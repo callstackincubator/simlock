@@ -151,6 +151,11 @@ function item(page: Page, condition: string, subject: string): Locator {
     .filter({ hasText: subject });
 }
 
+async function closeDrawer(page: Page): Promise<void> {
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+}
+
 function facts(page: Page): Locator {
   return page.getByRole("group", { name: "Facts" });
 }
@@ -222,6 +227,7 @@ test.describe("the Inbox view", () => {
             platform: "ios",
             queuePosition: 1,
             requesterId: id,
+            spec: { platform: "ios" },
             stage: "queued",
           });
           await route.fulfill({
@@ -321,7 +327,9 @@ test.describe("the Inbox view", () => {
       expect(address).toBe(`/inbox/${encodeURIComponent("lease/wrk_a.lse_1/ending")}/`);
       await page.reload();
 
-      await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+      await expect(
+        page.getByRole("dialog").getByRole("heading", { name: "tok_stub · dev_stub" }),
+      ).toBeVisible();
       expect(new URL(page.url()).pathname).toBe(address);
     } finally {
       await host.dispose();
@@ -385,7 +393,10 @@ test.describe("the Inbox view", () => {
       );
       await expect(rows(page)).toHaveCount(1);
       await expect(page).toHaveURL(/\/inbox$/);
-      await expect(page.getByRole("heading", { level: 2, name: "worker-b" })).toBeVisible();
+      await drained.click();
+      await expect(
+        page.getByRole("dialog").getByRole("heading", { name: "worker-b" }),
+      ).toBeVisible();
       await expect(page.getByRole("link", { name: "Open worker" })).toHaveAttribute(
         "href",
         `/fleet/${encodeURIComponent(b?.id ?? "")}`,
@@ -414,30 +425,6 @@ test.describe("the Inbox view", () => {
       await untilTheDaemonSays(fleet.gateway, (views) => views[0]?.drained === false);
 
       await expect(drained).toHaveCount(0, { timeout: 1_000 });
-      await expect(page.getByText("Nothing needs you.")).toBeVisible();
-    } finally {
-      await disposeFleet(fleet);
-    }
-  });
-
-  test("an item named in the URL that leaves the Inbox says Resolved. with a link back", async ({
-    page,
-  }) => {
-    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
-    try {
-      const [a] = await workers(fleet.gateway);
-      expect((await fleet.gateway.cli(["worker", "drain", a?.id ?? ""])).code).toBe(0);
-      await openInbox(page, fleet.gateway);
-      await item(page, "drained", "worker-a").click();
-      await expect(page).toHaveURL(/\/inbox\/.+/);
-      await expect(page.getByRole("heading", { level: 2, name: "worker-a" })).toBeVisible();
-
-      expect((await fleet.gateway.cli(["worker", "undrain", a?.id ?? ""])).code).toBe(0);
-      await untilTheDaemonSays(fleet.gateway, (views) => views[0]?.drained === false);
-
-      await expect(page.getByText("Resolved.")).toBeVisible({ timeout: 1_000 });
-      await page.getByRole("link", { name: "Back to Inbox" }).click();
-      await expect(page).toHaveURL(/\/inbox$/);
       await expect(page.getByText("Nothing needs you.")).toBeVisible();
     } finally {
       await disposeFleet(fleet);
@@ -518,8 +505,11 @@ test.describe("the Inbox view", () => {
       await expect(facts(page)).toContainText("Gateway protocol");
       await expect(facts(page)).toContainText("Worker protocol");
 
+      await closeDrawer(page);
+
       await item(page, "quarantined", "iPhone 16 on worker-a").click();
       await expect(facts(page)).toContainText(quarantined?.id ?? "");
+      await closeDrawer(page);
 
       await item(page, "stalled", "iPhone 16 on worker-a").click();
       await expect(facts(page)).toContainText(stalled?.id ?? "");
@@ -578,6 +568,7 @@ test.describe("the Inbox view", () => {
 
       await item(page, "quarantined", `iPhone 16 on ${name}`).click();
       await expect(facts(page)).toContainText(/Cause\s*Purge failed: Error: erase failed/);
+      await closeDrawer(page);
 
       await item(page, "over RAM budget", name).click();
       await expect(facts(page)).toContainText(/Used\s*\d+\.\d\d GiB/);

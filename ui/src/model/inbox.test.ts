@@ -282,6 +282,64 @@ describe("the Inbox items of a lease about to end", () => {
   });
 });
 
+describe("the drawer of a waiting request and of a lease about to end", () => {
+  it("says what happened, lists the details and links to the request's and the lease's own page", () => {
+    const requests: WaitingRequest[] = [
+      {
+        createdAt: NOW - 125_000,
+        id: "req_1",
+        queuePosition: 1,
+        requesterId: "agent-b",
+        spec: { model: "iPhone 16", platform: "ios" },
+        stage: "queued",
+      },
+    ];
+    const leases: LeaseRecord[] = [
+      {
+        deviceId: "dev_1",
+        grantedAt: NOW - 60_000,
+        id: "wrk_1.lse_1",
+        idChosenByRequester: false,
+        lastRenewedAt: NOW - 30_000,
+        ownerId: "tok_1",
+        requesterId: "tok_1",
+        ttlDeadline: NOW + 90_000,
+        ttlMs: 900_000,
+      },
+    ];
+    const workers = [worker({ devices: [device("dev_1")] })];
+    const shown = (key: string) =>
+      shownOf(inboxPageOf({ events: [], key, leases, now: NOW, requests, workers }));
+
+    const waiting = shown("request/req_1/waiting");
+    const ending = shown("lease/wrk_1.lse_1/ending");
+
+    expect(waiting.what).toBe("agent-b has waited 2 min 5 s for a device.");
+    expect(waiting.facts.map((fact) => [fact.label, fact.value])).toEqual([
+      ["Waited", "2 min 5 s"],
+      ["Device", "iOS iPhone 16"],
+      ["Request", "req_1"],
+    ]);
+    expect(waiting.about).toEqual({
+      name: "agent-b",
+      open: "Open request",
+      to: "/queue/req_1",
+    });
+    expect(ending.what).toBe("tok_1's lease on iPhone 16 ends in 1:30.");
+    expect(ending.facts.map((fact) => [fact.label, fact.value])).toEqual([
+      ["Time left", "1:30"],
+      ["Device", "iPhone 16"],
+      ["Holder", "tok_1"],
+      ["Lease", "wrk_1.lse_1"],
+    ]);
+    expect(ending.about).toEqual({
+      name: "tok_1 · iPhone 16",
+      open: "Open lease",
+      to: "/leases/wrk_1.lse_1/",
+    });
+  });
+});
+
 describe("the order of the Inbox items", () => {
   it("keeps the order given for problems, puts the longest wait first and the least time left first", () => {
     const request = (id: string, waitedMs: number): WaitingRequest => ({
