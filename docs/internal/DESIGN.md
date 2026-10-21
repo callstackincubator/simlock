@@ -30,8 +30,8 @@ Simlock's accent is orange where Apex's is green.
   | `--text-xs` | 12px | labels, units, a row's second line, a link's count |
   | `--text-sm` | 14px | links in the sidebar, buttons, table cells, facts |
   | `--text-md` | 16px | body text, page subtitles, card and panel titles |
-  | `--text-lg` | 20px | a list's title, an inspector title that is an id |
-  | `--text-xl` | 28px | a page's and an inspector's title, a tile's number |
+  | `--text-lg` | 20px | a drawer's title                                 |
+  | `--text-xl` | 28px | a page's title, a tile's number                    |
   | `--text-2xl` | 32px | a lease's countdown |
 
 - Weights: 400 for text, 500 for labels and big numbers, 600 for titles, 700

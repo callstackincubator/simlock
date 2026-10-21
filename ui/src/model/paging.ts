@@ -63,7 +63,7 @@ export function rangeOf(at: PageAt, total: number): string {
 }
 
 // why: choosing a row must not throw the list back to its first page or its search, but the
-// inspector's own pagers (devices, warm pool) belong to one worker and are left behind.
+// worker page's own pagers (devices, warm pool) belong to one worker and are left behind.
 export function listSearch(search: string): string {
   const query = new URLSearchParams(search);
   const kept = new URLSearchParams();

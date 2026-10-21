@@ -24,6 +24,7 @@ export { INBOX_FILTERS, type InboxFilter } from "../model/inbox";
 
 export interface InboxReads {
   readonly waiting: LoadView<WaitingList>;
+  readonly workers: LoadView<WorkerList>;
   readonly leases: LeaseList["leases"] | undefined;
   readonly tokens: TokenList["tokens"] | undefined;
   readonly couldNotCheck: readonly string[];
@@ -32,26 +33,31 @@ export interface InboxReads {
 // why: a daemon that keeps no queue of its own answers 501; the Inbox then counts no waiting
 // requests instead of hiding the fleet behind "not available". A read that failed is not that,
 // even when an earlier answer is still held: the rest still shows, and the page says what could
-// not be checked.
+// not be checked. A read that failed after an answer counts nothing from it either: the held
+// answer is stale, and a figure from it would read as known.
 export function inboxReadsOf(
   asked: ResourceState<WaitingList>,
   leases: ResourceState<LeaseList>,
   tokens: ResourceState<TokenList>,
+  workerState: ResourceState<WorkerList>,
 ): InboxReads {
   const waiting = loadView(asked);
+  const workers = loadView(workerState);
   const failed =
     waiting.kind === "refused" || (waiting.kind === "ready" && waiting.refusal !== undefined);
   return {
     couldNotCheck: [
       ...(failed ? ["waiting requests"] : []),
       ...(leases.error === undefined ? [] : ["leases"]),
+      ...(workers.kind === "ready" && workers.refusal !== undefined ? ["workers"] : []),
     ],
-    leases: leases.data?.leases,
+    leases: leases.error === undefined ? leases.data?.leases : undefined,
     tokens: tokens.data?.tokens,
     waiting:
       waiting.kind === "unsupported" || waiting.kind === "refused"
         ? { data: { requests: [] }, kind: "ready" }
         : waiting,
+    workers,
   };
 }
 
@@ -60,6 +66,7 @@ export function useInboxReads(): InboxReads {
     useLiveResource<WaitingList>("/v1/lease-requests"),
     useLiveResource<LeaseList>("/v1/leases"),
     useLiveResource<TokenList>("/v1/tokens"),
+    useLiveResource<WorkerList>("/v1/workers"),
   );
 }
 
@@ -74,7 +81,6 @@ export interface Inbox {
 }
 
 export function useInbox(): Inbox {
-  const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   const reads = useInboxReads();
   // why: the events only fill the drawer's list, so a feed still loading shows the page with
   // none rather than holding back the list.
@@ -83,7 +89,7 @@ export function useInbox(): Inbox {
   const urlId = itemIdFrom("/inbox", usePath());
   const [filter, choose] = useState<InboxFilter>("all");
   const view = mapView(
-    bothViews(bothViews(workers, reads.waiting), { data: feed.data ?? [], kind: "ready" }),
+    bothViews(bothViews(reads.workers, reads.waiting), { data: feed.data ?? [], kind: "ready" }),
     ([[list, waiting], events]) =>
       inboxPageOf({
         events,
