@@ -1,7 +1,7 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 
-import packageJson from "../../package.json" with { type: "json" };
 import type { OptionalModuleDefinition } from "../modules/index.js";
+import { readPackageVersion } from "../ports/index.js";
 import { DECLARED_ROUTES } from "./route-declarations.js";
 import { BEARER_SCHEME } from "./routes.js";
 
@@ -19,6 +19,6 @@ export function buildOpenApiDocument(
   for (const route of DECLARED_ROUTES) app.openAPIRegistry.registerPath(route);
   return app.getOpenAPI31Document({
     openapi: "3.1.0",
-    info: { title: "simlock HTTP API", version: packageJson.version },
+    info: { title: "simlock HTTP API", version: readPackageVersion() },
   });
 }
