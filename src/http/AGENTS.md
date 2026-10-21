@@ -61,7 +61,7 @@ codes: `UNAUTHENTICATED` and `FORBIDDEN` (not on `/v1/healthz`), `DAEMON_STOPPIN
 enforces them. `app.openapi` registers the declaration, and a handler's JSON reply is type-checked
 against it (never at run time; a stream, which declares `stream: sseMessage({...})`, or a bodiless 204 returns any `Response`). `route-declarations.ts` holds them, `buildOpenApiDocument` writes
 the document from the same list plus the routes of every definition that carries `http` (`module-routes.ts`; the stream's, none for agent-device), and `pnpm openapi <file>` saves it. The route-coverage test in
-`core-routes.test.ts` holds a list of routes not declared yet, which is empty: every route is declared.
+`core-routes.test.ts` checks that every route the app serves is declared.
 
 `HttpMount` adds a prefix (`/v1/<prefix>`, `/v1/<prefix>/*`) behind the same auth. Today: the
 agent-device front and the stream (`/v1/stream`).

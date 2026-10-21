@@ -56,7 +56,10 @@ export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
             description: "A gateway's worker answered success with no picture.",
             errorCodes: ["STREAM_UNAVAILABLE"],
           },
-          503: { description: "The stream is not available.", errorCodes: ["STREAM_UNAVAILABLE"] },
+          503: {
+            description: "The stream is not available, or a gateway cannot reach the worker.",
+            errorCodes: ["STREAM_UNAVAILABLE", "WORKER_UNREACHABLE"],
+          },
         },
       },
     ],

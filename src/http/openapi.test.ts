@@ -2,7 +2,7 @@ import { validate } from "@readme/openapi-parser";
 import { describe, expect, it } from "vitest";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { streamModule } from "../stream/definition.js";
+import { optionalModules } from "../module-registry/index.js";
 import { buildOpenApiDocument } from "./openapi.js";
 
 describe("buildOpenApiDocument", () => {
@@ -342,8 +342,16 @@ describe("buildOpenApiDocument", () => {
 });
 
 describe("buildOpenApiDocument with a module that carries http", () => {
+  it("an integrator builds the document from the real modules and gets valid OpenAPI 3.1", async () => {
+    const document = buildOpenApiDocument(optionalModules);
+
+    const result = await validate(structuredClone(document) as never);
+
+    expect(result.valid).toBe(true);
+  });
+
   it("an integrator reads GET /v1/stream/leases/{id} under stream, with its headers, binary 200, 405 and refusals, and no agent-device or uplink path", () => {
-    const document = buildOpenApiDocument([streamModule as never]);
+    const document = buildOpenApiDocument(optionalModules);
     const operation = document.paths?.["/v1/stream/leases/{id}"]?.get;
     const ok = (operation?.responses ?? {})["200"] as {
       content?: Record<string, unknown>;
@@ -380,13 +388,14 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "415": ["STREAM_NOT_SUPPORTED"],
       "500": ["INTERNAL"],
       "502": ["STREAM_UNAVAILABLE"],
-      "503": ["STREAM_UNAVAILABLE"],
+      "503": ["STREAM_UNAVAILABLE", "WORKER_UNREACHABLE"],
     });
     expect(
       Object.keys(document.paths ?? {}).filter(
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",
       ),
     ).toEqual([]);
+    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["stream"]);
   });
 });
 
