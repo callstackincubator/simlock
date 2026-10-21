@@ -1,11 +1,56 @@
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon } from "./helpers/index.js";
+import { freeLoopbackPort, REPO_ROOT, waitFor, withDaemon } from "./helpers/index.js";
 
 describe("daemon lifecycle & recovery", () => {
+  it.each([
+    { role: "worker", args: [], folder: "" },
+    { role: "gateway", args: ["--gateway"], folder: "gateway" },
+  ])(
+    "a service manager sends SIGTERM to a running $role daemon: it stops cleanly, emits daemon.stopping reason signal, removes admin.token, exits 0",
+    async ({ args, folder }) => {
+      const env = await withDaemon({ mode: "auto" });
+      if (args.length > 0) {
+        const port = await freeLoopbackPort();
+        const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
+        expect(set.code, set.stderr).toBe(0);
+      }
+      const directory = join(env.home, folder);
+      const child = spawn(process.execPath, [join(REPO_ROOT, "dist/daemon/main.js"), ...args], {
+        env: env.env,
+        stdio: "ignore",
+      });
+      const exited = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) => resolve(code));
+      });
+      try {
+        await waitFor(() => existsSync(join(directory, "admin.token")), {
+          label: "the daemon's admin.token written",
+        });
+
+        child.kill("SIGTERM");
+        const code = await exited;
+
+        expect(code).toBe(0);
+        expect(existsSync(join(directory, "admin.token"))).toBe(false);
+        expect(await readFile(join(directory, "daemon.log"), "utf8")).toContain(
+          '"message":"Daemon stopping"',
+        );
+        expect(await readFile(join(directory, "daemon.log"), "utf8")).toContain(
+          '"reason":"signal"',
+        );
+      } finally {
+        child.kill("SIGKILL");
+      }
+    },
+    60_000,
+  );
+
   it("auto-starts on the first CLI call, reports status, and does not double-spawn", async () => {
     const env = await withDaemon({ mode: "auto" });
 
