@@ -64,6 +64,39 @@ describe("daemon lifecycle & recovery", () => {
     60_000,
   );
 
+  it("SIGTERM before startup finishes exits 0 at once instead of waiting for the start", async () => {
+    const env = await withDaemon({ mode: "auto" });
+    await env.driverScript.set({
+      ios: {
+        availableOsVersions: ["26.0"],
+        knownModels: ["iPhone 16"],
+        latencyMs: { listManaged: 20_000 },
+      },
+    });
+    const child = spawn(process.execPath, [join(REPO_ROOT, "dist/daemon/main.js")], {
+      env: env.env,
+      stdio: "ignore",
+    });
+    const exited = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => resolve(code));
+    });
+    try {
+      await waitFor(() => existsSync(join(env.home, "admin.token")), {
+        label: "the daemon's admin.token written, startup still held",
+      });
+
+      const sentAt = Date.now();
+      child.kill("SIGTERM");
+      const code = await exited;
+
+      expect(code).toBe(0);
+      expect(Date.now() - sentAt).toBeLessThan(10_000);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   it("a daemon that stops for a failure exits 1; one that finds another daemon answering exits 0", async () => {
     const env = await withDaemon({ mode: "auto" });
 
