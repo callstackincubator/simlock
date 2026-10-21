@@ -1,11 +1,5 @@
 /* A list of rows, and the breadcrumb a worker's page carries. */
 
-.list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 .list-row {
   display: grid;
   grid-template-columns: minmax(10px, auto) minmax(0, 1fr) auto;

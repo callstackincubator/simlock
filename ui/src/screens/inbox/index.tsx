@@ -108,7 +108,7 @@ export function InboxBody(props: {
 
 // why: an address can name an item the daemon has since cleared; the drawer says so instead of
 // keeping the details it last held.
-export function InboxDrawerBody({ shown }: { readonly shown: InboxPage["shown"] }) {
+function InboxDrawerBody({ shown }: { readonly shown: InboxPage["shown"] }) {
   if (typeof shown !== "object") {
     return <p className="muted drawer-note">This is no longer in the Inbox.</p>;
   }

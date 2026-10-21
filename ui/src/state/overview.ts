@@ -10,7 +10,6 @@ import { bothViews, loadView, mapView } from "./resource";
 export type {
   Overview,
   OverviewInbox,
-  OverviewItem,
   OverviewWorker,
   Gauge,
   PlatformCapacity,

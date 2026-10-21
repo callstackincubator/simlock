@@ -57,7 +57,7 @@ export type InboxItem =
 
 type WorkerItem = Extract<InboxItem, { readonly worker: unknown }>;
 
-export const WAITING_TOO_LONG_MS = 60_000;
+const WAITING_TOO_LONG_MS = 60_000;
 
 export interface InboxContext {
   readonly now: number;
@@ -292,29 +292,38 @@ function timeLeft(leftMs: number): string {
 
 // why: each sentence says what the daemon found and what it means, so the drawer opens on the
 // reason before the details.
+// why: `Extract` finds nothing for a condition that shares its item shape with others (a worker's
+// three), so each item is matched by whether its condition type holds this one.
+type ItemOf<C extends InboxItem["condition"]> = InboxItem extends infer I
+  ? I extends { readonly condition: infer K }
+    ? [C] extends [K]
+      ? I
+      : never
+    : never
+  : never;
+
+type Say = { readonly [C in InboxItem["condition"]]: (item: ItemOf<C>) => string };
+
+const SAY: Say = {
+  absent: (item) => `${inboxSubject(item)}: the phone cannot be reached.`,
+  disconnected: (item) => `${workerName(item.worker)} has lost its connection to the gateway.`,
+  drained: (item) => `${workerName(item.worker)} is drained: it takes no new leases.`,
+  ending: (item) =>
+    `${item.holder}'s lease on ${item.model} ${
+      item.leftMs <= 0 ? "ends now" : `ends in ${minutesAndSeconds(item.leftMs)}`
+    }.`,
+  incompatible: (item) => `${workerName(item.worker)} runs a protocol this gateway cannot talk to.`,
+  "over RAM budget": (item) =>
+    `${workerName(item.worker)} uses more memory than its budget allows.`,
+  quarantined: (item) =>
+    `${item.device.spec.model} is quarantined and cannot be leased until it is dealt with.`,
+  stalled: (item) => `${item.device.spec.model} has stayed in one state longer than expected.`,
+  waiting: (item) =>
+    `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)} for a device.`,
+};
+
 function whatHappened(item: InboxItem): string {
-  switch (item.condition) {
-    case "disconnected":
-      return `${workerName(item.worker)} has lost its connection to the gateway.`;
-    case "incompatible":
-      return `${workerName(item.worker)} runs a protocol this gateway cannot talk to.`;
-    case "drained":
-      return `${workerName(item.worker)} is drained: it takes no new leases.`;
-    case "over RAM budget":
-      return `${workerName(item.worker)} uses more memory than its budget allows.`;
-    case "quarantined":
-      return `${item.device.spec.model} is quarantined and cannot be leased until it is dealt with.`;
-    case "stalled":
-      return `${item.device.spec.model} has stayed in one state longer than expected.`;
-    case "absent":
-      return `${inboxSubject(item)}: the phone cannot be reached.`;
-    case "waiting":
-      return `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)} for a device.`;
-    case "ending":
-      return `${item.holder}'s lease on ${item.model} ${
-        item.leftMs <= 0 ? "ends now" : `ends in ${minutesAndSeconds(item.leftMs)}`
-      }.`;
-  }
+  return (SAY[item.condition] as (item: InboxItem) => string)(item);
 }
 
 function deviceFacts(

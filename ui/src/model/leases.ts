@@ -134,7 +134,7 @@ export const LEASE_FILTERS: readonly { readonly value: LeaseFilter; readonly lab
 
 // why: a lease with under 5 minutes left is about to end, so the list, the inspector and the Inbox
 // warn by the same rule.
-export const EXPIRING_UNDER_MS = 5 * 60_000;
+const EXPIRING_UNDER_MS = 5 * 60_000;
 
 export function isExpiring(deadline: number, now: number): boolean {
   return deadline - now < EXPIRING_UNDER_MS;

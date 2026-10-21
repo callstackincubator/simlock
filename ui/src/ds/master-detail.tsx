@@ -4,20 +4,6 @@ import type { ReactNode } from "react";
 
 import { Link } from "./link";
 
-export function List({
-  label,
-  children,
-}: {
-  readonly label: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <ul className="list" aria-label={label}>
-      {children}
-    </ul>
-  );
-}
-
 export interface ListRowProps {
   readonly to: string;
   readonly selected: boolean;

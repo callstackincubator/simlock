@@ -18,7 +18,7 @@ import { useLiveResource, useNow } from "./live";
 import { bothViews, loadView, mapView } from "./resource";
 import { usePath } from "./router";
 
-export type { InboxDetail, InboxEvent, InboxPage, InboxRow } from "../model/inbox";
+export type { InboxEvent, InboxPage, InboxRow } from "../model/inbox";
 export { INBOX_FILTERS, type InboxFilter } from "../model/inbox";
 
 export interface InboxReads {
