@@ -226,7 +226,10 @@ export const leaseRequestCreateRoute = declareRoute({
           .optional(),
       },
       headers: {
-        "Retry-After": z.string().openapi({ description: "Seconds to wait before asking again." }),
+        "Retry-After": z
+          .string()
+          .optional()
+          .openapi({ description: "Seconds to wait before asking again; sent with NO_CAPACITY." }),
       },
     },
   },

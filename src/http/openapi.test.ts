@@ -150,12 +150,15 @@ describe("buildOpenApiDocument", () => {
       existingLeaseId: errorFields(post, "409"),
       capacityReason: errorFields(post, "503"),
       leaseId: errorFields(cancel, "409"),
-      retryAfter: Object.keys(responseOf(post, "503").headers ?? {}),
+      retryAfter: Object.entries(responseOf(post, "503").headers ?? {}).map(([name, header]) => [
+        name,
+        (header as { required?: boolean }).required ?? false,
+      ]),
     }).toEqual({
       existingLeaseId: ["code", "message", "existingLeaseId"],
       capacityReason: ["code", "message", "capacityReason"],
       leaseId: ["code", "message", "leaseId"],
-      retryAfter: ["Retry-After"],
+      retryAfter: [["Retry-After", false]],
     });
 
     expect({
