@@ -85,6 +85,13 @@ export class NukeService implements NukeExecutor {
       await this.options.leases.beginMaintenance();
       releaseMaintenanceStarted = true;
       const releasedLeaseIds = await this.options.leases.releaseAllDuringMaintenance("killed");
+      try {
+        this.options.warmPool.forget();
+      } catch (error: unknown) {
+        this.#logger.error("nuke could not clear the warm pool's record", {
+          error: stableError(error),
+        });
+      }
 
       for (const device of this.options.registry.snapshot.virtualDevices) {
         try {
