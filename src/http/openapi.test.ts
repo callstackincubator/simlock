@@ -56,6 +56,92 @@ describe("buildOpenApiDocument", () => {
       "501": ["UNSUPPORTED_IN_GATEWAY_MODE"],
     });
   });
+
+  it("an integrator reads the lease routes in the document, each with its own codes and every SSE event's data schema", () => {
+    const paths = buildOpenApiDocument([]).paths ?? {};
+    const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
+    const post = operation("/v1/lease-requests", "post");
+    const cancel = operation("/v1/lease-requests/{id}", "delete");
+    const release = operation("/v1/leases/{id}", "delete");
+
+    expect(
+      Object.fromEntries(
+        [
+          ["POST", "/v1/lease-requests"],
+          ["GET", "/v1/lease-requests"],
+          ["GET", "/v1/lease-requests/{id}"],
+          ["GET", "/v1/lease-requests/{id}/events"],
+          ["DELETE", "/v1/lease-requests/{id}"],
+          ["GET", "/v1/leases"],
+          ["GET", "/v1/leases/{id}"],
+          ["POST", "/v1/leases/{id}/renew"],
+          ["POST", "/v1/leases/{id}/exec"],
+          ["GET", "/v1/leases/{id}/events"],
+          ["DELETE", "/v1/leases/{id}"],
+        ].map(([method, path]) => [
+          `${method} ${path}`,
+          operation(path!, method!.toLowerCase() as "get")?.tags,
+        ]),
+      ),
+    ).toEqual({
+      "DELETE /v1/lease-requests/{id}": ["Lease requests"],
+      "DELETE /v1/leases/{id}": ["Leases"],
+      "GET /v1/lease-requests": ["Lease requests"],
+      "GET /v1/lease-requests/{id}": ["Lease requests"],
+      "GET /v1/lease-requests/{id}/events": ["Lease requests"],
+      "GET /v1/leases": ["Leases"],
+      "GET /v1/leases/{id}": ["Leases"],
+      "GET /v1/leases/{id}/events": ["Leases"],
+      "POST /v1/lease-requests": ["Lease requests"],
+      "POST /v1/leases/{id}/exec": ["Leases"],
+      "POST /v1/leases/{id}/renew": ["Leases"],
+    });
+    expect(replySchema(post, "201").required).toEqual(["request"]);
+    expect(post?.parameters).toEqual([
+      expect.objectContaining({ in: "header", name: "Idempotency-Key", required: false }),
+    ]);
+    expect(Object.keys(responseOf(post, "201").headers ?? {})).toEqual(["Location"]);
+    expect(
+      Object.fromEntries(["409", "422", "503"].map((status) => [status, errorCodes(post, status)])),
+    ).toEqual({
+      "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
+      "422": ["UNKNOWN_MODEL"],
+      "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
+    });
+    expect(Object.keys(replySchema(release, "202").properties ?? {})).toEqual([
+      "device",
+      "released",
+    ]);
+    expect(responseOf(cancel, "204")).toEqual({ description: "Success" });
+    expect(errorCodes(cancel, "409")).toEqual(["REQUEST_NOT_CANCELLABLE"]);
+    expect(errorCodes(operation("/v1/leases/{id}/exec", "post"), "504")).toEqual(["EXEC_TIMEOUT"]);
+
+    expect({
+      exec: streamEvents(operation("/v1/leases/{id}/exec", "post")),
+      lease: streamEvents(operation("/v1/leases/{id}/events", "get")),
+      stages: streamEvents(operation("/v1/lease-requests/{id}/events", "get")),
+    }).toEqual({
+      exec: ["output", "exit", "error"],
+      lease: ["device_unhealthy", "device_recovered", "lease_lost"],
+      stages: [
+        "queued",
+        "downloading",
+        "reclaiming",
+        "provisioning",
+        "booting",
+        "granted",
+        "failed",
+        "cancelled",
+      ],
+    });
+    for (const stream of [
+      operation("/v1/leases/{id}/exec", "post"),
+      operation("/v1/leases/{id}/events", "get"),
+      operation("/v1/lease-requests/{id}/events", "get"),
+    ]) {
+      expect(Object.keys(streamMessage(stream).properties ?? {})).toEqual(["data", "event"]);
+    }
+  });
 });
 
 function summarize(
@@ -85,6 +171,33 @@ function replySchema(operation: { responses?: object } | undefined, status: stri
     { content?: { "application/json"?: { schema?: JsonSchema } } }
   >;
   return responses[status]?.content?.["application/json"]?.schema ?? {};
+}
+
+function responseOf(operation: { responses?: object } | undefined, status: string) {
+  const responses = (operation?.responses ?? {}) as Record<
+    string,
+    { description?: string; headers?: object }
+  >;
+  return responses[status] ?? {};
+}
+
+function streamMessage(operation: { responses?: object } | undefined): StreamSchema {
+  const responses = (operation?.responses ?? {}) as Record<
+    string,
+    { content?: { "text/event-stream"?: { schema?: StreamSchema } } }
+  >;
+  return responses["200"]?.content?.["text/event-stream"]?.schema ?? {};
+}
+
+function streamEvents(operation: { responses?: object } | undefined) {
+  return streamMessage(operation).properties?.event?.enum;
+}
+
+interface StreamSchema {
+  readonly properties?: {
+    readonly data?: object;
+    readonly event?: { readonly enum?: readonly string[] };
+  };
 }
 
 function errorCodes(operation: { responses?: object } | undefined, status: string) {
