@@ -342,7 +342,7 @@ async function keepOrRelease(
       ttlMs: grant.lease.ttlMs,
       ...replyFacts(reading.result),
     });
-    return relay(reply);
+    return relay(withGrantedDevice(reply, grant.device.spec));
   }
   const lease = replyData(reading.result)?.["lease"];
   const named =
@@ -373,6 +373,23 @@ async function settleNoReply(
     ended.reading.kind === "error" &&
     (ended.reading.code === undefined || !LEASE_GONE.has(ended.reading.code));
   if (!holds) await releaseSimlock(context, identity, plan.leaseId);
+}
+
+// why: agent-device's reply names the lease but not which model, OS and image Simlock picked, so the front adds that beside the lease for the CLI.
+function withGrantedDevice<T extends { text: string | undefined }>(
+  reply: T,
+  spec: Grant["device"]["spec"],
+): T {
+  if (reply.text === undefined) return reply;
+  const body = JSON.parse(reply.text) as Record<string, unknown>;
+  const lease = asRecord(asRecord(asRecord(body["result"])?.["data"])?.["lease"]);
+  if (lease === undefined) return reply;
+  lease["device"] = {
+    model: spec.model,
+    osVersion: spec.osVersion,
+    ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+  };
+  return { ...reply, text: JSON.stringify(body) };
 }
 
 function replyFacts(result: Record<string, unknown>) {
