@@ -332,7 +332,7 @@ test.describe("every view", () => {
     }
   });
 
-  test("no <style> element or Content-Security-Policy violation with a menu, a dialog and a toast open", async ({
+  test("no <style> element or Content-Security-Policy violation with a menu, a dialog, a toast and the search open", async ({
     page,
   }) => {
     const host = await startHostWithLease();
@@ -355,6 +355,17 @@ test.describe("every view", () => {
         }));
         expect(found, surface).toEqual({ styles: 0, violations: [] });
       });
+      await page.reload();
+      await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeVisible();
+      await page.keyboard.press("Control+k");
+      await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill("a");
+      await expect(page.getByRole("option", { name: "Activity" })).toBeVisible();
+      await settled(page);
+      const found = await page.evaluate(() => ({
+        styles: document.querySelectorAll("style").length,
+        violations: (window as unknown as { cspViolations: string[] }).cspViolations,
+      }));
+      expect(found, "search").toEqual({ styles: 0, violations: [] });
       expect(errors).toEqual([]);
     } finally {
       await host.dispose();
@@ -362,7 +373,7 @@ test.describe("every view", () => {
   });
 
   for (const colorScheme of ["light", "dark"] as const) {
-    test(`Fleet, a worker page, a device drawer, and Queue and Activity with a drawer open pass an automated WCAG AA check (${colorScheme})`, async ({
+    test(`Fleet, a worker page, a device drawer, Queue and Activity with a drawer open, and the search pass an automated WCAG AA check (${colorScheme})`, async ({
       page,
     }) => {
       const { host, pages } = await hostWithLease();
@@ -392,6 +403,24 @@ test.describe("every view", () => {
             path,
           ).toEqual([]);
         }
+        await visit(page, host, "/fleet");
+        await page.keyboard.press("Control+k");
+        await page
+          .getByRole("combobox", { name: "Search pages, items and actions" })
+          .fill("console");
+        await expect(page.getByRole("option", { name: /console-views/ }).first()).toBeVisible();
+        await settled(page);
+        const searching = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        expect(searching.passes.map((rule) => rule.id)).toContain("color-contrast");
+        expect(
+          searching.violations.map((violation) => ({
+            id: violation.id,
+            targets: violation.nodes.map((node) => node.target.join(" ")),
+          })),
+          "search",
+        ).toEqual([]);
       } finally {
         await host.dispose();
       }
