@@ -1,8 +1,9 @@
 // why: ADR 0037 §3. One action list per kind of item, read by every surface that offers it; the
 // wording of each dialog and toast is fixed here, so no surface words it differently.
 import type { InboxItem } from "./inbox";
-import type { TokenRecord } from "./leases";
-import type { WorkerView } from "./workers";
+import { type TokenRecord, leaseRows } from "./leases";
+import { requestedDevice } from "./waiting";
+import { type WorkerView, workerName } from "./workers";
 
 export type DaemonModeName = "gateway" | "worker";
 
@@ -74,8 +75,24 @@ export interface RequestActionInput {
   readonly device: string;
 }
 
-export function requestActions(_request: RequestActionInput): readonly ItemAction[] {
-  return [];
+export function requestActions(request: RequestActionInput): readonly ItemAction[] {
+  return [
+    {
+      confirm: {
+        body: `${request.requester} stops waiting for ${request.device} and gets an error.`,
+        busy: "Cancelling…",
+        confirm: "Cancel request",
+        title: `Cancel ${request.requester}'s request?`,
+      },
+      danger: true,
+      id: "cancel-request",
+      itemKey: request.key,
+      label: "Cancel request",
+      method: "DELETE",
+      path: `/v1/lease-requests/${encodeURIComponent(request.id)}`,
+      success: { title: `Cancelled ${request.requester}'s request` },
+    },
+  ];
 }
 
 export interface WorkerActionInput {
@@ -85,11 +102,58 @@ export interface WorkerActionInput {
   readonly drained: boolean;
 }
 
+// why: ADR 0037 §4. On a single host the three worker routes answer 501, and when the mode is not
+// known the console never guesses `gateway`, so neither offers a worker action.
 export function workerActions(
-  _worker: WorkerActionInput,
-  _mode: DaemonModeName | undefined,
+  worker: WorkerActionInput,
+  mode: DaemonModeName | undefined,
 ): readonly ItemAction[] {
-  return [];
+  if (mode !== "gateway") return [];
+  const itemKey = `worker/${worker.id}`;
+  const path = `/v1/workers/${encodeURIComponent(worker.id)}` as const;
+  const actions: ItemAction[] = [
+    worker.drained
+      ? {
+          danger: false,
+          id: "undrain",
+          itemKey,
+          label: "Undrain",
+          method: "DELETE",
+          path: `${path}/drain`,
+          success: { title: `${worker.name} takes leases again` },
+        }
+      : {
+          danger: false,
+          id: "drain",
+          itemKey,
+          label: "Drain",
+          method: "POST",
+          path: `${path}/drain`,
+          success: {
+            description: "Its leases keep running. New leases go to other workers.",
+            title: `${worker.name} drained`,
+          },
+        },
+  ];
+  if (worker.connection === "disconnected") {
+    actions.push({
+      confirm: {
+        body: "It leaves the fleet and its devices are forgotten. It can join again with a worker token.",
+        busy: "Removing…",
+        confirm: "Remove worker",
+        title: `Remove ${worker.name}?`,
+        typeToConfirm: worker.name,
+      },
+      danger: true,
+      id: "remove-worker",
+      itemKey,
+      label: "Remove worker",
+      method: "DELETE",
+      path,
+      success: { title: `${worker.name} removed` },
+    });
+  }
+  return actions;
 }
 
 export interface InboxActionContext {
@@ -99,9 +163,51 @@ export interface InboxActionContext {
   readonly workers: readonly WorkerView[];
 }
 
+// why: only a drained worker's item has a fix button, and its fix is Undrain; every other action of
+// an item is in its menu. Device conditions (a quarantined or stalled device) are about a device, so
+// they offer no worker action.
 export function inboxActions(
-  _item: InboxItem,
-  _context: InboxActionContext,
+  item: InboxItem,
+  context: InboxActionContext,
 ): { readonly fix?: ItemAction; readonly menu: readonly ItemAction[] } {
-  return { menu: [] };
+  switch (item.condition) {
+    case "waiting":
+      return {
+        menu: requestActions({
+          device: requestedDevice(item.request.spec),
+          id: item.request.id,
+          key: `${item.request.workerId ?? ""}/${item.request.id}`,
+          requester: item.request.requesterId,
+        }),
+      };
+    case "ending": {
+      const [row] = leaseRows({
+        leases: [item.lease],
+        now: context.now,
+        tokens: context.tokens,
+        workers: context.workers,
+      });
+      return { menu: row === undefined ? [] : leaseActions(row) };
+    }
+    case "quarantined":
+    case "stalled":
+    case "absent":
+      return { menu: [] };
+    case "disconnected":
+    case "incompatible":
+    case "drained":
+    case "over RAM budget": {
+      const menu = workerActions(
+        {
+          connection: item.worker.connection,
+          drained: item.worker.drained,
+          id: item.worker.id,
+          name: workerName(item.worker),
+        },
+        context.mode,
+      );
+      const fix = item.condition === "drained" ? menu.find((a) => a.id === "undrain") : undefined;
+      return fix === undefined ? { menu } : { fix, menu };
+    }
+  }
 }
