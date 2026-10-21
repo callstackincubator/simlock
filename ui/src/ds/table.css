@@ -8,6 +8,14 @@
   border-collapse: collapse;
   font-size: var(--text-sm);
   table-layout: fixed;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* A table in a panel already sits on the panel's card. */
+.panel .table {
+  border: 0;
+  background: none;
 }
 
 .table th,
