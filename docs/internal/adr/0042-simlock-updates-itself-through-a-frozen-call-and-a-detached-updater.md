@@ -47,8 +47,10 @@ flowchart LR
    a starting worker answers once its leases are loaded. It needs
    `admin`. The client sends it on a mismatched connection, as it does
    `daemon.stop`. Its input (`version?`, `force?`, `cancel?`, `query?`)
-   and its answer never change shape. `query` returns the update state
-   and starts nothing. So a gateway can update, and follow, a worker that
+   and its answer (`started`, `version`, `health`, `update`,
+   `lastUpdateFailure`, `latestVersion`) never change shape. `query`
+   returns that answer and starts nothing, so it is also how a follower
+   or the updater reads a daemon across a protocol change. So a gateway can update, and follow, a worker that
    shows `incompatible`, and the gateway and its workers can be updated
    in any order.
 2. **Every surface reaches the same call.** `simlock update` on the
@@ -62,7 +64,9 @@ flowchart LR
    the call until the daemon exits, a worker is `updating`. It refuses
    new lease requests and cancels queued ones with `DAEMON_UPDATING`, on
    every surface. The gateway's routing skips an `updating` worker as it
-   skips a drained one. The drain set is never touched, so an operator's
+   skips a drained one, and a worker that answers a forwarded lease
+   request with `DAEMON_UPDATING` sends the request on to another
+   worker. The drain set is never touched, so an operator's
    own drain survives the update, and the state ends by itself: at the
    restart, on cancel, or when the install fails.
 4. **The state is never stored.** A daemon that stops or crashes while
@@ -76,25 +80,29 @@ flowchart LR
 6. **A worker waits for its leases; a gateway does not.** A worker
    installs once its last lease has ended, or at once with `force`. A
    gateway's leases live on its workers and survive its restart, so it
-   installs at once. `cancel` ends the wait and is refused once the
-   install has started.
+   installs at once. `force` on a waiting update stops the wait.
+   `cancel` ends the wait and is refused once the install has started.
 7. **A detached updater does the install and the restart.** The daemon
    spawns one detached process with the Node that runs it, given the
    target version, the role and `SIMLOCK_HOME`. It runs
-   `npm i -g simlock@<version>` (the machine's npm, so `.npmrc` registries
-   and proxies apply) while the old daemon still serves, and reports
+   `npm i -g simlock@<version>` (the machine's npm, run with the
+   daemon's Node and in its data directory, so `.npmrc` registries and
+   proxies apply and no project folder interferes), with a 10-minute
+   limit, while the old daemon still serves, and reports
    progress and npm's error as lines on a pipe the old daemon reads. On
    an install failure it exits non-zero and the old daemon, still
    running, reports the failure and leaves `updating`. On success it
-   sends `daemon.stop` with the role's `admin.token`, waits for the old
-   daemon to exit, and starts the new one with the new `simlock daemon
-   start` for the same role, which goes through the service manager when
-   one is installed (ADR 0041).
+   sends `daemon.stop` with the role's `admin.token` and waits for the
+   old daemon to exit (after 10 minutes it kills it: leases are stored,
+   and startup redoes an unfinished purge). It starts the new one with
+   the new `simlock daemon start` for the same role, which goes through
+   the service manager when one is installed (ADR 0041), and asks it
+   with `query` until it is running the new version.
 8. **A new version that does not start is rolled back.** Once the old
    daemon has stopped, the updater is the only one left to report. If the
-   new daemon does not start, it reinstalls the old version and starts
-   that, and writes a result file the next daemon start reads: that
-   daemon reports the failure (stage `restarting`) and emits
+   new daemon is not running within 2 minutes, it writes a result file,
+   reinstalls the old version and starts that. That daemon reads the
+   file and reports the failure (stage `restarting`) and emits
    `daemon.update-failed`. If the rollback fails too, the machine stays
    down and the updater logs it to `daemon.log`.
 9. **npm only.** A Simlock not installed by global npm (a source
@@ -102,6 +110,9 @@ flowchart LR
    naming how it was installed and the command to run by hand.
 10. **Latest by default, any version by name.** Without `version` the
    updater installs `latest`; with it, that version, older ones included.
+   Without `version`, a daemon newer than `latest` (a prerelease) is
+   never downgraded. "Newer" is semver order against the `latest` tag,
+   one rule for every surface.
    Rolling back across a protocol bump leaves the worker `incompatible`,
    which the frozen call can fix again.
 11. **The call answers at once; progress is state and events.** The
