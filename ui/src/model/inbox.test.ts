@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { inboxItems, inboxPageOf } from "./inbox";
+import { filterInboxRows, inboxItems, inboxPageOf } from "./inbox";
 import type { ConsoleEvent } from "./events";
 import { filterLeaseRows, type LeaseRecord, leaseRows, type TokenRecord } from "./leases";
 import type { WaitingRequest } from "./waiting";
@@ -200,6 +200,7 @@ describe("the Inbox items of an absent phone", () => {
           phone("dev_locked", "absent", "locked"),
           phone("dev_untrusted", "absent", "untrusted"),
           phone("dev_gone", "absent", "not-present"),
+          phone("dev_bare", "absent"),
           phone("dev_ready", "ready"),
           phone("dev_shut", "shutdown"),
         ],
@@ -210,6 +211,7 @@ describe("the Inbox items of an absent phone", () => {
       ["wrk_1/dev_locked/absent", "absent", "warn", "iPhone 15 Pro is absent (locked)"],
       ["wrk_1/dev_untrusted/absent", "absent", "warn", "iPhone 15 Pro is absent (untrusted)"],
       ["wrk_1/dev_gone/absent", "absent", "warn", "iPhone 15 Pro is absent (not-present)"],
+      ["wrk_1/dev_bare/absent", "absent", "warn", "iPhone 15 Pro is absent (not-present)"],
     ]);
   });
 });
@@ -265,20 +267,26 @@ describe("the Inbox items of a lease about to end", () => {
       lease("lse_far", 301_000),
       lease("lse_edge", 300_000),
       lease("lse_near", 299_000),
+      lease("lse_four_oh_five", 245_000),
+      lease("lse_now", 0),
       lease("lse_past", -1_000),
+      { ...lease("lse_lost", 10_000), deviceId: "dev_gone" },
     ];
 
     const page = inboxPageOf({ events: [], key: undefined, leases, now: NOW, tokens, workers });
 
     expect(page.rows.map((row) => [row.key, row.word, row.subject])).toEqual([
       ["lease/lse_past/ending", "ending", "ci-runner-3 · iPhone 16 ends now"],
+      ["lease/lse_now/ending", "ending", "ci-runner-3 · iPhone 16 ends now"],
+      ["lease/lse_lost/ending", "ending", "ci-runner-3 · dev_gone ends in 0:10"],
+      ["lease/lse_four_oh_five/ending", "ending", "ci-runner-3 · iPhone 16 ends in 4:05"],
       ["lease/lse_near/ending", "ending", "ci-runner-3 · iPhone 16 ends in 4:59"],
     ]);
     expect(
       filterLeaseRows(leaseRows({ leases, now: NOW, tokens, workers }), "expiring").map(
         (row) => row.id,
       ),
-    ).toEqual(["lse_near", "lse_past"]);
+    ).toEqual(["lse_four_oh_five", "lse_lost", "lse_near", "lse_now", "lse_past"]);
   });
 });
 
@@ -413,7 +421,7 @@ describe("the Inbox groups", () => {
     const page = inboxPageOf({
       events: [],
       key: undefined,
-      leases: [lease],
+      leases: [lease, { ...lease, id: "lse_2", ttlDeadline: NOW + 200_000 }],
       now: NOW,
       requests: [request],
       workers,
@@ -424,8 +432,14 @@ describe("the Inbox groups", () => {
       ["Needs a look", "wrk_a/drained"],
       ["Needs a look", "request/req_1/waiting"],
       ["Heads-up", "lease/lse_1/ending"],
+      ["Heads-up", "lease/lse_2/ending"],
     ]);
     expect(page.problems).toBe(3);
+    expect(filterInboxRows(page.rows, "Needs a look").map((row) => row.key)).toEqual([
+      "wrk_a/drained",
+      "request/req_1/waiting",
+    ]);
+    expect(filterInboxRows(page.rows, "all")).toHaveLength(5);
   });
 });
 

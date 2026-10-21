@@ -53,6 +53,7 @@ const fleet = [
     device("a", "leased", "ios"),
     device("b", "ready", "ios"),
     device("c", "leased", "android"),
+    device("z", "deleted", "ios"),
   ]),
   worker("mini-2", [device("d", "quarantined", "android")], { drained: true }),
   worker("down-1", [], { connection: "disconnected" }),
@@ -75,7 +76,10 @@ function unread(id: string): WorkerView {
 
 describe("the overview", () => {
   it("counts the fleet's headline figures from what the workers, the queue and the daemon's figures say", () => {
-    const requests = [{ createdAt: NOW - 74_000, id: "r1" }] as unknown as WaitingRequest[];
+    const requests = [
+      { createdAt: NOW - 74_000, id: "r1" },
+      { createdAt: NOW - 10_000, id: "r2" },
+    ] as unknown as WaitingRequest[];
     const stats = statsOf({
       bucketMs: 60_000,
       from: NOW - 60 * 60_000,
@@ -95,11 +99,17 @@ describe("the overview", () => {
     const shown = [...tiles, wait, ending];
     expect(shown.map((tile) => [tile?.label, tile?.value, tile?.unit])).toEqual([
       ["Leased", "2", "of 4 · 1 ready"],
-      ["Waiting", "1", "longest 1 min 14 s"],
+      ["Waiting", "2", "longest 1 min 14 s"],
       ["Workers", "2", "of 3"],
       ["Wait p95", "38 s", "last hour"],
       ["Ending soon", "0", "under 5 min"],
     ]);
+  });
+
+  it("shows Ending soon as unknown, not zero, while the leases cannot be read", () => {
+    const { ending } = overviewOf({ now: NOW, requests: [], workers: fleet });
+
+    expect([ending.value, ending.unit]).toEqual(["—", undefined]);
   });
 
   it("has no Wait p95 tile while the daemon's figures are loading or refused", () => {
@@ -112,14 +122,35 @@ describe("the overview", () => {
     expect(waits).toEqual([undefined, undefined]);
   });
 
-  it("lists what needs you in the Inbox's order, each linked to its own page and toned by how bad it is", () => {
-    const { inbox } = overviewOf({ now: NOW, requests: [], workers: fleet });
+  it("lists the first four problems in the Inbox's order, each linked to its own page and toned by how bad it is, and leaves heads-ups out", () => {
+    const lease = {
+      deviceId: "a",
+      grantedAt: NOW - 60_000,
+      id: "lse_1",
+      idChosenByRequester: false,
+      lastRenewedAt: NOW - 30_000,
+      ownerId: "tok_1",
+      requesterId: "tok_1",
+      ttlDeadline: NOW + 100_000,
+      ttlMs: 900_000,
+    };
+    const { inbox } = overviewOf({
+      leases: [lease],
+      now: NOW,
+      requests: [],
+      workers: [
+        ...fleet,
+        worker("down-2", [], { connection: "disconnected" }),
+        worker("down-3", [], { connection: "disconnected" }),
+      ],
+    });
 
-    expect(inbox.problems).toBe(3);
+    expect(inbox.problems).toBe(5);
     expect(inbox.needsYou.map((item) => [item.word, item.tone, item.subject, item.to])).toEqual([
       ["quarantined", "error", "Pixel 8 on mini-2", "/inbox/mini-2%2Fd%2Fquarantined"],
       ["disconnected", "error", "down-1", "/inbox/down-1%2Fdisconnected"],
-      ["drained", "warn", "mini-2", "/inbox/mini-2%2Fdrained"],
+      ["disconnected", "error", "down-2", "/inbox/down-2%2Fdisconnected"],
+      ["disconnected", "error", "down-3", "/inbox/down-3%2Fdisconnected"],
     ]);
   });
 
@@ -185,10 +216,20 @@ describe("the overview", () => {
         device("g", "absent", "ios"),
         device("h", "quarantined", "android"),
       ]),
-      worker("w2", [device("i", "ready", "ios"), device("j", "leased", "ios")], { drained: true }),
-      worker("w3", [device("k", "ready", "ios"), device("l", "leased", "android")], {
-        connection: "disconnected",
-      }),
+      worker(
+        "w2",
+        [device("i", "ready", "ios"), device("j", "leased", "ios"), device("m", "ready", "ios")],
+        { drained: true },
+      ),
+      worker(
+        "w3",
+        [
+          device("k", "ready", "ios"),
+          device("l", "leased", "android"),
+          device("n", "deleted", "android"),
+        ],
+        { connection: "disconnected" },
+      ),
       unread("w4"),
     ];
 
@@ -198,28 +239,28 @@ describe("the overview", () => {
       capacity.map((platform) => [
         platform.name,
         platform.notRead,
-        platform.parts.map((part) => [part.count, part.word]),
+        platform.parts.map((part) => [part.count, part.word, part.percent]),
       ]),
     ).toEqual([
       [
         "iOS",
         1,
         [
-          [2, "leased"],
-          [1, "ready"],
-          [2, "booting"],
-          [1, "drained"],
-          [1, "absent"],
-          [1, "shut down"],
-          [1, "offline"],
+          [2, "leased", 20],
+          [1, "ready", 10],
+          [2, "booting", 20],
+          [2, "drained", 20],
+          [1, "absent", 10],
+          [1, "shut down", 10],
+          [1, "offline", 10],
         ],
       ],
       [
         "Android",
         1,
         [
-          [1, "quarantined"],
-          [1, "offline"],
+          [1, "quarantined", 50],
+          [1, "offline", 50],
         ],
       ],
     ]);

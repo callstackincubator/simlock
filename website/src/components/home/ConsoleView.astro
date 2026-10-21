@@ -2,7 +2,7 @@
 import Dither from '../site/Dither.astro';
 import { endEvents, endSlots, endWait, leases, mmss, slotWords, TTL, workers } from './console-story';
 
-const nav = ['Overview', 'Workers', 'Leases', 'Waiting', 'Attention', 'Events', 'Usage'];
+const nav = ['Overview', 'Workers', 'Leases', 'Waiting', 'Inbox', 'Events', 'Usage'];
 const leaseCount = (id: string) => endSlots[id]!.filter((k) => k === 'leased').length;
 const label =
   'The Simlock console on a gateway with three workers: mac-studio-1, mac-studio-2 and linux-ci-1. Agents ask for devices and each request becomes a lease on its own device; agent-4 waits while an iPhone boots, and agent-1’s iPhone screen plays live.';
