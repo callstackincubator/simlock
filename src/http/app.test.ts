@@ -36,6 +36,9 @@ import {
   proxyAuthConfig,
   openMemoryStateDatabase,
 } from "../auth/testing.js";
+import { streamModule } from "../stream/index.js";
+// why: the stream index exports only the definition, so a registry reads no module code; the real mount is reached through `testing.ts` to prove the listed route against the real handler.
+import { createStreamMount } from "../stream/testing.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
   FakeDispatcher,
@@ -3039,5 +3042,39 @@ describe("a person the sign-in proxy signed in", () => {
       expect(response.status).toBe(202);
       expect(dispatcher.calls.map((call) => call.operation)).toContain("lease.release");
     });
+  });
+});
+
+describe("the stream mount's listed route", () => {
+  it("is the route its handler answers: the listed path gets a status the definition lists, and /v1/stream/x gets its listed 404", async () => {
+    const route = streamModule.http?.routes[0];
+    if (route === undefined) throw new Error("the stream definition lists no route");
+    const link = {
+      serve: () =>
+        Promise.resolve({
+          body: new ReadableStream<Uint8Array>(),
+          close: () => Promise.resolve(),
+          meta: { codec: "h264" as const, fps: 30, height: 720, width: 330 },
+        }),
+    };
+    const { app } = buildHarness({
+      mounts: [{ prefix: "stream", ...createStreamMount({ link }) }],
+    });
+    const listed = Object.keys(route.statuses).map(Number);
+    const answer = (path: string, method = "GET") =>
+      app.request(path, { headers: agentAuth, method });
+
+    const found = await answer(route.path.replace("{id}", "lse_1"));
+    const other = await answer("/v1/stream/x");
+    const wrongMethod = await answer(route.path.replace("{id}", "lse_1"), "POST");
+
+    expect(found.status).toBe(200);
+    expect(found.headers.get("content-type")).toBe("application/vnd.simlock.stream+h264");
+    expect([other.status, wrongMethod.status]).toEqual([404, 405]);
+    expect(listed).toEqual(
+      expect.arrayContaining([found.status, other.status, wrongMethod.status]),
+    );
+    expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_LEASE" } });
+    await found.body?.cancel();
   });
 });
