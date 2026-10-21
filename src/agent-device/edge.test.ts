@@ -790,6 +790,21 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(installs()).toBe(1);
   });
 
+  it("allocate with `physical: true` answers `refused: physical devices are not available through agent-device` and leaves no lease; `physical: false` and `physical: null` are granted", async () => {
+    const rig = await setUp({ maxRunning: 8 });
+
+    const answer = await envelopeOf(await allocate(rig, 1, { physical: true }));
+
+    expect(answer.error).toMatchObject(
+      refusal("refused: physical devices are not available through agent-device"),
+    );
+    expect(await leases(rig)).toEqual([]);
+    expect(allocatesReceived(rig)).toEqual([]);
+    await granted(rig, 2, { physical: false });
+    await granted(rig, 3, { physical: null });
+    expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2), hex(3)]);
+  });
+
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
     const rig = await setUp();
 
