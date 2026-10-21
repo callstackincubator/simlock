@@ -1,7 +1,16 @@
 import type { Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
+import {
+  disposeFleet,
+  expect,
+  type RunningDaemon,
+  settled,
+  signIn,
+  startDaemon,
+  startFleet,
+  test,
+} from "./fixtures.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
@@ -269,6 +278,45 @@ test.describe("the Overview's figures", () => {
       );
     } finally {
       await host.dispose();
+    }
+  });
+});
+
+async function workerConnection(host: RunningDaemon, label: string): Promise<string | undefined> {
+  const { workers } = (await operatorGet(host, "/v1/workers")) as {
+    workers: { label?: string; connection: string }[];
+  };
+  return workers.find((worker) => worker.label === label)?.connection;
+}
+
+test.describe("the Overview's Inbox lines", () => {
+  test("an empty Inbox shows Nothing needs you and no Needs you panel; a disconnected worker shows the panel with that item first, and All in Inbox (1)", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+    ]);
+    try {
+      await openOverview(page, fleet.gateway);
+      await expect(page.getByText("Nothing needs you")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Needs you" })).toHaveCount(0);
+
+      await (fleet.workers[1] as RunningDaemon).stop();
+      await waitFor(
+        async () => (await workerConnection(fleet.gateway, "worker-b")) === "disconnected",
+        {
+          label: "worker-b disconnected",
+        },
+      );
+
+      const panel = page.getByRole("region", { name: "Needs you" });
+      await expect(panel).toBeVisible();
+      await expect(page.getByText("Nothing needs you")).toHaveCount(0);
+      await expect(panel.getByRole("link").first()).toContainText("worker-b");
+      await expect(panel.getByRole("link", { name: "All in Inbox (1)" })).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
     }
   });
 });
