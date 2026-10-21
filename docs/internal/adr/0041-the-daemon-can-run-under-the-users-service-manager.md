@@ -43,7 +43,10 @@ flowchart LR
 
 1. **`simlock daemon install` and `simlock daemon uninstall`** install
    and remove a per-user service for one role. The global `--gateway` and
-   `--local` flags pick the role, as for every other `daemon` command. On
+   `--local` flags pick the role, as for every other `daemon` command, except that install and uninstall
+   join `daemon start` and `config set` as commands that work on a host
+   with no gateway present (ADR 0034), so a gateway service can be
+   installed before the gateway ever ran. On
    macOS it is a launchd LaunchAgent in `~/Library/LaunchAgents`, loaded
    into the `gui/<uid>` domain. On Linux it is a systemd user unit in
    `$XDG_CONFIG_HOME/systemd/user` (or `~/.config/systemd/user`). On any
@@ -61,11 +64,15 @@ flowchart LR
    `dist/daemon/main.js` path of the CLI that ran install, plus
    `--gateway` for a gateway. Install saves in the service file every
    variable the daemon or a tool it runs reads from the operator's
-   environment, each only when set: `SIMLOCK_HOME` (always, the resolved
+   environment, except `SIMLOCK_AGENT_ID`, each only when set: `SIMLOCK_HOME` (always, the resolved
    root), `SIMLOCK_DRIVERS_MODULE`, `PATH`, `ANDROID_HOME`,
    `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME`, `ANDROID_USER_HOME`,
    `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME`, `JAVA_HOME` and
-   `DEVELOPER_DIR`. Nothing else from the shell: no tokens. A variable a
+   `DEVELOPER_DIR`. `SIMLOCK_AGENT_ID` is not saved: the daemon only uses it as the default
+   requester of a request that names none (`src/daemon/main.ts:548`,
+   `:912`), and a daemon the service starts uses its process id instead,
+   as an auto-started daemon does with no variable set. Nothing else from
+   the shell: no tokens. A variable a
    later change starts reading joins this list in the same change. stdout
    and stderr are appended to the role's `daemon.log`, as with auto-start;
    install creates the file at mode 0600 first, because launchd and
@@ -93,7 +100,11 @@ flowchart LR
    broken (§9), `daemon start` and every auto-start (CLI and MCP) ask the
    manager to start it (`launchctl kickstart`, `systemctl --user start`)
    instead of spawning a child. The startup deadline and the probe stay
-   as they are. When the service is installed but not loaded (nobody
+   as they are. The CLI has no child to watch, so a start the daemon
+   refuses is seen at the startup deadline (`DAEMON_STARTUP_FAILED` after
+   20 s) with the `daemon.log` lines written since the start, not as soon
+   as the daemon exits: the one exception to ADR 0036's rule that a start
+   error prints on exit. When the service is installed but not loaded (nobody
    logged in at the screen, no systemd user session) or broken, the start
    spawns the daemon as today and prints one notice on stderr naming the
    service and why, so a command never fails only because the service
