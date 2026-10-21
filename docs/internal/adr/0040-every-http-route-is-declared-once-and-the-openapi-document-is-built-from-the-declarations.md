@@ -43,9 +43,12 @@ flowchart LR
 
 ### 1. Zod 4
 
-The repo moves from Zod 3 to Zod 4. Our own messages (refinements, custom
-errors) stay word for word. Zod's own default messages in a 400
-`BAD_REQUEST` may change wording; codes and statuses do not.
+The repo moves from Zod 3 to Zod 4. Every schema accepts and refuses the
+same inputs as before. Our own messages (refinements, custom errors, the
+hand-written query messages that move into schemas) stay word for word.
+Zod's own default messages in a 400 `BAD_REQUEST` may change wording;
+codes and statuses do not. The JSON Schema text MCP `tools/list` publishes
+changes form with the library; what each tool accepts does not.
 
 ### 2. One declaration per route
 
@@ -59,11 +62,16 @@ carries:
 - the reply schema for each success status. A reply that is an operation's
   answer reuses that operation's `output` schema; a reshaped reply gets its
   own schema in `src/http`, not in the contract;
-- the error codes the route can return, each with its status from
-  `ERROR_TABLE` or the HTTP layer's own codes;
-- a tag (Leases, Lease requests, Devices, Workers, Components, Events,
-  Tokens, System, Modules) and a description that names the role the
-  operation needs and any mode that answers 501.
+- the error codes the route itself can return, each with its status from
+  `ERROR_TABLE` or the HTTP layer's own codes. The declaration helper adds
+  a base set to every route: `UNAUTHENTICATED` and `FORBIDDEN` (not on
+  `/v1/healthz`), `DAEMON_STOPPING`, `DAEMON_STARTUP_FAILED` and
+  `INTERNAL`; `BAD_REQUEST` on a route with input; `UNSUPPORTED_MEDIA_TYPE`
+  on a route with a JSON body;
+- a tag (System, Devices, Lease requests, Leases, Workers, Components,
+  Tokens, Events; `agent-device`, `stream` and `Uplink` for §4) and a
+  description that names the role the operation needs and any mode that
+  answers 501.
 
 A route registered any other way is a bug, except the module mounts (§4).
 
@@ -81,8 +89,9 @@ The document's `info.version` is the package version.
 - **Events:** `/v1/events` and `/v1/events/stream` type the event envelope;
   the payload is an open object, documented in the Events reference.
 - **Body media type:** a JSON body sent without a JSON content type is
-  refused with 415 and the HTTP-local code `UNSUPPORTED_MEDIA_TYPE`, as
-  `@hono/zod-openapi` gates it. Today such a body is read as `{}` and
+  refused with 415 and the HTTP-local code `UNSUPPORTED_MEDIA_TYPE`.
+  `@hono/zod-openapi` gates it with an `HTTPException(415)`, which the
+  error mapper turns into that code. Today such a body is read as `{}` and
   refused with 400.
 
 ### 4. Module and uplink routes are listed, not re-declared
@@ -91,16 +100,25 @@ The `agent-device` and `stream` mounts stay one handler each, served at
 `/v1/<name>` and `/v1/<name>/*`. Each module lists its routes (method, path,
 statuses) for the document, tagged with the module and the config key that
 turns it on (`capabilities.<name>.enabled`). Bodies simlock owns are typed
-(the stream's refusals); agent-device's own protocol bodies are not copied,
-the route links to agent-device. `GET /v1/uplink` is listed as gateway only,
-with 101, 401 and 403. A test keeps each module's list equal to the paths
-its handler answers.
+(the stream's refusals, the agent-device front's own refusals);
+agent-device's own protocol bodies are not copied, the route links to
+agent-device. Each module's routes carry its own tag, `agent-device` or
+`stream`. `GET /v1/uplink` is listed as gateway only, tagged `Uplink`, with
+101, 401 and 403. A test keeps each module's list equal to the paths its
+handler answers. The coverage check (§6) counts a mount as covered when
+its module lists at least one path under it, and matches the uplink
+against `UPLINK_PATH`, since the upgrade is not a route of the app.
 
 ### 5. Replies are checked in tests
 
-`createApp` takes a switch that parses every JSON reply against its
-declared schema, and refuses an error code the route did not declare. A
-mismatch answers 500 `INTERNAL` naming the route and the problem. The
+`createHttpApp` takes a switch that checks every JSON reply against its
+declared schema, with unknown keys refused at every depth, and refuses an
+error code that is neither declared nor a base code. The schemas
+themselves stay as they are: the contract strips unknown keys in
+production. For a module route it refuses a status the module did not
+list and a JSON refusal body that does not match its listed schema;
+binary and proxied bodies are not checked. A mismatch answers 500
+`INTERNAL` naming the route and the problem. The
 switch is on in unit tests and in the e2e daemon
 (`SIMLOCK_CHECK_HTTP_REPLIES=1`, set only by the e2e harness), and off in
 production.
