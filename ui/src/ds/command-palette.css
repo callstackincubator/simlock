@@ -34,3 +34,31 @@
 .palette-list {
   overflow-y: auto;
 }
+
+.palette-group {
+  display: block;
+  padding-bottom: var(--space-2);
+}
+
+.palette-group-label {
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.palette-item[data-highlighted] {
+  background: var(--field);
+  box-shadow: inset 2px 0 0 var(--accent);
+}

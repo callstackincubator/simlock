@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { AppFrame, Button, CommandPalette, Icon, Sidebar, Status, StatusDot } from "../ds";
 import { NotFoundScreen } from "../screens/not-found";
 import { usePath } from "../state/router";
-import { useSearchPalette } from "../state/search";
+import { useSearchPalette, useSearchSession } from "../state/search";
 import {
   useInboxCount,
   useConnectionStatus,
@@ -61,7 +61,7 @@ export function Shell() {
       }
     >
       {route === undefined ? <NotFoundScreen /> : <route.Screen />}
-      {palette.open ? <CommandPalette onClose={palette.hide} /> : null}
+      {palette.open ? <SearchDialog hide={palette.hide} /> : null}
     </AppFrame>
   );
 }
@@ -122,5 +122,21 @@ function SignOutButton(props: {
       <Icon name="signOut" />
       <span className="nav-label">Sign out</span>
     </Button>
+  );
+}
+
+function SearchDialog({ hide }: { readonly hide: () => void }) {
+  const session = useSearchSession(
+    ROUTES.map((route) => ({ label: route.label, path: route.path })),
+    hide,
+  );
+  return (
+    <CommandPalette
+      groups={session.groups}
+      typed={session.typed}
+      onType={session.type}
+      onChoose={session.choose}
+      onClose={hide}
+    />
   );
 }

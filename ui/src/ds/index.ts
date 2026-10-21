@@ -1,7 +1,7 @@
 import "./foundation.css";
 
 export { Button, ButtonLink } from "./button";
-export { CommandPalette } from "./command-palette";
+export { CommandPalette, type PaletteGroup, type PaletteItem } from "./command-palette";
 export { ConfirmHost, createConfirmer, type ConfirmSpec } from "./confirm-dialog";
 export { Drawer, DrawerTabs } from "./drawer";
 export { ChartPanel, MinuteChart, MinuteTable } from "./chart";
