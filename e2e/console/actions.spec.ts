@@ -492,4 +492,61 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("a success toast leaves after 6 s and stays while hovered, an error toast stays until closed, and at most three show while a fourth hides the oldest until one closes", async ({
+    page,
+  }) => {
+    const names = ["toast-a", "toast-b", "toast-c", "toast-d"];
+    const fleet = await startFleet(names.map((label) => ({ driverScript: { ios: IOS }, label })));
+    try {
+      await page.clock.install();
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const toasts = page.getByRole("region", { name: "Notifications" });
+      const toastOf = (text: string) => toasts.locator(".toast").filter({ hasText: text });
+      const act = async (worker: string, item: string) => {
+        await rowOf(page, worker)
+          .getByRole("button", { name: `Actions for ${worker}` })
+          .click();
+        await page.getByRole("menuitem", { name: item, exact: true }).click();
+      };
+
+      await act("toast-a", "Drain");
+      const drained = toastOf("toast-a drained");
+      await expect(drained).toBeVisible();
+      await page.clock.fastForward(5_000);
+      await expect(drained).toBeVisible();
+      await drained.hover();
+      await page.clock.fastForward(10_000);
+      await expect(drained).toBeVisible();
+      await page.mouse.move(0, 0);
+      await page.clock.fastForward(6_500);
+      await expect(drained).toBeHidden();
+
+      await page.route("**/v1/workers/*/drain", (route) => route.abort());
+      await act("toast-b", "Drain");
+      const refused = toastOf("Couldn't drain toast-b");
+      await expect(refused).toBeVisible();
+      await page.clock.fastForward(30_000);
+      await expect(refused).toBeVisible();
+      await expect(refused.getByRole("button", { name: "Close" })).toBeVisible();
+      await refused.getByRole("button", { name: "Close" }).click();
+      await expect(refused).toBeHidden();
+      await page.unroute("**/v1/workers/*/drain");
+
+      await act("toast-a", "Undrain");
+      await act("toast-b", "Drain");
+      await act("toast-c", "Drain");
+      await act("toast-d", "Drain");
+      await expect(toastOf("toast-d drained")).toBeVisible();
+      await expect(toasts.locator(".toast:visible")).toHaveCount(3);
+      await expect(toastOf("toast-a takes leases again")).toBeHidden();
+
+      await expect(toastOf("toast-d drained").getByRole("button", { name: "Close" })).toBeVisible();
+      await toastOf("toast-d drained").getByRole("button", { name: "Close" }).click();
+      await expect(toastOf("toast-a takes leases again")).toBeVisible();
+      await expect(toasts.locator(".toast:visible")).toHaveCount(3);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
