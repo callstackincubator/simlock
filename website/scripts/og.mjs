@@ -11,7 +11,7 @@ import { chromium } from "playwright-core";
 import sharp from "sharp";
 
 import { accent, accentRgb, brandCss } from "../src/site/brand.ts";
-import { acts, gatewayUrl } from "../src/components/home/story.ts";
+import { gatewayUrl, steps } from "../src/components/home/story.ts";
 import { site } from "../src/site/content.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -31,9 +31,9 @@ const card = {
   platforms: site.platforms,
   mark: site.mark ?? [],
   gateway: gatewayUrl,
-  // why: the card's table is the hero's second act: each agent, its device and the worker
+  // why: the card's table is the hero's second step: each agent, its device and the worker
   // the gateway sent it to.
-  lanes: acts[1].agents.map((a) => ({ agent: a.agent, device: a.device, worker: a.route.worker })),
+  lanes: steps[1].agents.map((a) => ({ agent: a.agent, device: a.device, worker: a.worker })),
   rgb: accentRgb.split(" ").map(Number),
 };
 

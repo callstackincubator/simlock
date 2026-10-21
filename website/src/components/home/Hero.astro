@@ -1,167 +1,178 @@
 ---
-// why: the hero tells the product's story in order: one Mac first, then more machines behind a
-// gateway. The copy is in content.ts and the two acts in story.ts; hero.ts plays them.
+// why: the hero tells the product's story in two steps: one machine that agents lease from three
+// ways, then a fleet of them behind a gateway. The copy is in content.ts and the steps in story.ts;
+// hero.ts plays them.
 import Dither from '../site/Dither.astro';
-import Window from '../site/Window.astro';
 import { docs, site } from '../../site/content';
-import { acts, gatewayUrl, stageLabel } from './story';
+import { gatewayUrl, prompt, stageLabel, steps, tokens } from './story';
 
 const num = (i: number) => String(i + 1).padStart(2, '0');
-// why: the server HTML is each act's finished frame (BRAND.md, Motion); hero.ts resets it
-// before it plays.
-const holder = (ai: number, slot: number) => acts[ai]!.agents.find((a) => a.slot === slot);
-const slotsBefore = (ai: number, mi: number) =>
-  acts[ai]!.machines.slice(0, mi).reduce((n, m) => n + m.slots.length, 0);
+// why: the server HTML is the first step's finished frame (BRAND.md, Motion); hero.ts resets it
+// before it plays. One stage holds both steps: the fleet's machines are a superset of the first
+// step's, so the second step only shows what the first hides.
+const [first, fleet] = steps;
+const machines = fleet!.machines;
+const holder = (mi: number, si: number) => first!.agents.find((a) => mi === 0 && a.slot === si);
+const streams = (mi: number, si: number) =>
+  steps.some((s) => s.agents.some((a) => a.via === 'AGENT-DEVICE' && a.worker === machines[mi]!.name && a.slot === si));
 ---
 
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-top st-top">
-    <div class="st-copy">
-      <h1 class="h1" id="hero-title">{site.headline[0]} <em>{site.headline[1]}</em></h1>
-      <p class="lede">{site.lede}</p>
-      <div class="actions">
-        <a class="btn" href={docs.start}>Get started <span aria-hidden="true">→</span></a>
-      </div>
-    </div>
-    <div class="st-art" aria-hidden="true">
-      <Dither scene="rollout" focus={0.5} />
+    <h1 class="h1" id="hero-title">{site.headline[0]} <em>{site.headline[1]}</em></h1>
+    <p class="lede">{site.lede}</p>
+    <div class="actions">
+      <a class="btn" href={docs.start}>Get started <span aria-hidden="true">→</span></a>
     </div>
   </div>
 
-  <div class="viz st-viz" data-stage role="img" aria-label={stageLabel}>
-    <Dither scene="flow" />
-    <div class="st-stage">
-      <div class="st-tabs" aria-hidden="true">
-        {
-          acts.map((a, i) => (
-            <button type="button" class:list={['st-tab', { 'is-on': i === 0 }]} data-goto={i} tabindex="-1">
-              <b>[{num(i)}]</b> {a.label}
-              <i class="st-progress" />
-            </button>
-          ))
-        }
-      </div>
+  <div class="st" data-stage>
+    <div class="st-steps" role="group" aria-label="Story">
+      {
+        steps.map((s, i) => (
+          <button type="button" class:list={['st-step', { 'is-on': i === 0 }]} data-goto={i} aria-pressed={i === 0 ? 'true' : 'false'}>
+            <span class="st-step-lab">
+              <b>{num(i)}</b>
+              {s.label}
+            </span>
+            <span class="st-step-fill" aria-hidden="true">
+              <span class="st-step-lab">
+                <b>{num(i)}</b>
+                {s.label}
+              </span>
+            </span>
+          </button>
+        ))
+      }
+    </div>
 
-      <div class="st-acts">
-        {
-          acts.map((a, ai) => (
-            <div class:list={['st-act', `st-act--${ai === 0 ? 'local' : 'fleet'}`, { 'is-on': ai === 0 }]} data-act={ai}>
-              <div class="st-act-head">
-                <code class="st-cmd">
-                  <span class="p">$</span> <span data-cmd>{a.cmd}</span>
-                </code>
-              </div>
+    <div class="st-caps">
+      {
+        steps.map((s, i) => (
+          <p class:list={['st-cap', { 'is-on': i === 0 }]} data-cap={i} aria-hidden={i === 0 ? undefined : 'true'}>
+            <b>{s.caption[0]}</b> {s.caption[1]}
+            <br />
+            {s.caption[2]}
+          </p>
+        ))
+      }
+    </div>
 
-              <div class="st-row st-agents">
-                {a.agents.map((g) => (
-                  <Window title={`${g.where} · ${g.agent}`} class="st-chip">
-                    <div class="term st-term">
-                      <div class="ln">
-                        <span class="p">$ </span>
-                        <span data-t>{g.cmd}</span>
-                      </div>
-                      <div class="ln out" data-result>
-                        <span class="st-live">granted</span> {g.route?.worker ?? g.device}
-                      </div>
-                    </div>
-                  </Window>
-                ))}
-              </div>
-
-              <div class="st-row st-ducts">
-                {a.agents.map((_, gi) => (
-                  <span class="st-duct" data-up={gi} aria-hidden="true">
-                    <span class="pkt" />
-                    <span class="pkt pkt--back" />
+    <div class="viz st-viz">
+      <Dither scene="flow" />
+      <div class="st-stage" data-step="0" role="img" aria-label={stageLabel}>
+        <div class="st-col st-agents">
+          {
+            first!.agents.map((a, i) => (
+              <div class="st-chip" data-agent={i}>
+                <div class="st-bar">
+                  <span class="st-via" data-via>
+                    {a.via}
                   </span>
-                ))}
-              </div>
-
-              {a.agents.some((g) => g.route) && (
-                <>
-                  <Window title={`gateway · ${gatewayUrl}`} class="st-gw">
-                    <div class="st-gw-cells">
-                      {a.agents.map((g, gi) => (
-                        <div class="st-gw-cell is-on" data-route={gi}>
-                          <span class="st-gw-to">
-                            {g.agent} → <span class="st-live">{g.route?.worker}</span>
-                          </span>
-                          <span class="st-gw-why">{g.route?.why}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div class="st-gw-foot" data-gw-foot>
-                      {a.machines.length} workers connected · one URL for every agent
-                    </div>
-                  </Window>
-                  <div class="st-row st-ducts">
-                    {a.agents.map((_, gi) => (
-                      <span class="st-duct" data-down={gi} aria-hidden="true">
-                        <span class="pkt" />
-                        <span class="pkt pkt--back" />
-                      </span>
+                  <span class="st-title" data-title>
+                    {a.agent} · {a.where}
+                  </span>
+                </div>
+                <div class="st-term">
+                  <div class="ln" data-cmd>
+                    <span class="p">{prompt(a.via)} </span>
+                    {tokens(a.cmd).map((t) => (
+                      <span class={t.cls}>{t.text}</span>
                     ))}
                   </div>
-                </>
-              )}
-
-              <div class="st-row st-machines">
-                {a.machines.map((m, mi) => (
-                  <div class="st-machine" data-machine={mi} data-foot={m.foot}>
-                    <div class="st-mhead">
-                      <span class="st-mname">{m.name}</span>
-                      <span class="st-mhost">{m.host}</span>
-                    </div>
-                    <div class="st-phones">
-                      {m.slots.map((s, si) => {
-                        const n = slotsBefore(ai, mi) + si;
-                        const h = holder(ai, n);
-                        return (
-                          <div class="st-dev" data-slot={n} data-start={s.start}>
-                            <div class="st-phone" data-state={h ? 'leased' : s.start}>
-                              <div class="st-phone-in">
-                                <div class="st-screen">
-                                  <span class="st-boot" />
-                                  <span class="st-app">
-                                    <b />
-                                    <span class="st-tiles">
-                                      <span />
-                                      <span />
-                                      <span />
-                                      <span />
-                                    </span>
-                                    <i />
-                                    <i />
-                                    <i />
-                                    <i />
-                                  </span>
-                                </div>
-                                <span class="st-home" />
-                              </div>
-                            </div>
-                            <span class="st-dname">{s.device ?? ''}</span>
-                            <span class="st-dstate" data-dstate>
-                              {h ? (
-                                <>
-                                  <span class="st-live">leased</span> {h.agent}
-                                </>
-                              ) : (
-                                s.start
-                              )}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div class="st-mfoot" data-mfoot>
-                      {m.foot}
-                    </div>
+                  <div class="ln out" data-result>
+                    <span class="st-live">{a.via === 'AGENT-DEVICE' ? 'streaming' : 'granted'}</span> {a.result}
                   </div>
-                ))}
+                </div>
               </div>
+            ))
+          }
+        </div>
+
+        <div class="st-col st-mid">
+          <div class="st-gw" data-gw>
+            <div class="st-bar st-gw-bar">gateway · {gatewayUrl}</div>
+            <div class="st-gw-body">
+              one URL for every agent
+              <br />
+              <span class="st-dim">picks a machine with room</span>
             </div>
-          ))
-        }
+          </div>
+        </div>
+
+        <div class="st-col st-machines">
+          {
+            machines.map((m, mi) => (
+              <div class="st-machine" data-machine={mi}>
+                <div class="st-mhead">
+                  <span class="st-mname">{m.name}</span>
+                  <span class="st-mhost">{m.host}</span>
+                </div>
+                <div class="st-devs">
+                  {m.devices.map((d, si) => {
+                    const h = holder(mi, si);
+                    const live = !!h && h.via === 'AGENT-DEVICE';
+                    return (
+                      <div class:list={['st-dev', { 'is-live': live }]} data-dev={si} data-start={d.start}>
+                        <div class="st-phone" data-state={h ? 'leased' : d.start}>
+                          <div class="st-phone-in">
+                            <div class="st-screen">
+                              <span class="st-boot" />
+                              <span class="st-app">
+                                <b />
+                                <span class="st-tiles">
+                                  <span />
+                                  <span />
+                                  <span />
+                                  <span />
+                                </span>
+                                <i />
+                                <i />
+                                <i />
+                              </span>
+                              {streams(mi, si) && (
+                                <span class="st-stream" data-view="home">
+                                  <span class="st-v st-v-splash">
+                                    <b />
+                                  </span>
+                                  <span class="st-v st-v-signin">
+                                    <b />
+                                    <i />
+                                    <i />
+                                    <u data-tap />
+                                  </span>
+                                  <span class="st-v st-v-home">
+                                    <b />
+                                    <i class="st-q" data-q>
+                                      <s />
+                                    </i>
+                                    <span class="st-row" />
+                                    <span class="st-row" data-f />
+                                    <span class="st-row" />
+                                    <span class="st-row" data-f />
+                                  </span>
+                                  <span class="st-tap" />
+                                </span>
+                              )}
+                            </div>
+                            <span class="st-home" />
+                          </div>
+                        </div>
+                        <span class="st-ltag">LIVE</span>
+                        <span class="st-dname">{d.name}</span>
+                        <span class="st-dstate" data-dstate>
+                          {h ? <span class="st-live">{h.agent}</span> : d.start}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          }
+        </div>
+
+        <svg class="st-wires" data-wires aria-hidden="true"></svg>
       </div>
     </div>
   </div>
@@ -176,240 +187,233 @@ const slotsBefore = (ai: number, mi: number) =>
 
 <style>
   .st-top {
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-    align-items: stretch;
-    column-gap: clamp(2rem, 5vw, 4rem);
-  }
-  .st-copy {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    justify-items: center;
     gap: 1.25rem;
+    padding-bottom: clamp(2rem, 4vw, 3rem);
+    text-align: center;
   }
-  .st-copy .h1 {
-    max-width: 16ch;
+  .st-top .h1 {
+    max-width: 20ch;
     margin: -0.18em 0 0;
   }
-  .st-copy .lede {
-    max-width: 34rem;
-    margin: 0;
+  .st-top .lede {
+    max-width: 38rem;
   }
-  .st-copy .actions {
-    margin-top: 0.5rem;
-  }
-  .st-art {
-    position: relative;
-    min-height: 22rem;
-    border: 1px solid var(--line);
+  .st-top .actions {
+    justify-content: center;
+    margin-top: 0.25rem;
   }
 
-  .st-stage {
-    position: relative;
-    padding: clamp(1.5rem, 4vw, 2.75rem) var(--pad) clamp(2rem, 5vw, 3.5rem);
-  }
-
-  /* why: the tabs say which act is on, and the bar under one fills while it plays. */
-  .st-tabs {
-    display: flex;
-    gap: 0;
-    margin-bottom: 1.25rem;
-    width: max-content;
-    background: var(--bg);
+  /* why: the steps are buttons; the playing one fills with the accent from left to right, and its
+     label turns dark where the fill has passed. */
+  .st-steps {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    width: min(100% - 2 * var(--pad), 32rem);
+    margin: 0 auto 1.25rem;
     border: 1px solid var(--line-strong);
   }
-  .st-tab {
+  .st-step {
     position: relative;
-    padding: 0.625rem 1rem;
-    background: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1rem;
     border: 0;
-    border-right: 1px solid var(--line);
+    background: none;
     color: var(--faint);
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: var(--label-tracking);
-    text-transform: uppercase;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
     cursor: pointer;
+    transition:
+      background 0.12s,
+      color 0.12s;
   }
-  .st-tab:last-child {
-    border-right: 0;
+  .st-step + .st-step {
+    border-left: 1px solid var(--line-strong);
   }
-  .st-tab b {
-    font-weight: 400;
-    color: var(--faint);
-  }
-  .st-tab.is-on {
+  .st-step:hover {
+    background: var(--surface);
     color: var(--text);
   }
-  .st-tab.is-on b {
-    color: var(--accent);
+  .st-step:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
   }
-  .st-progress {
+  .st-step-lab {
+    display: flex;
+    align-items: baseline;
+    gap: 0.625rem;
+  }
+  .st-step b {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 400;
+  }
+  .st-step.is-on {
+    background: var(--accent-low);
+    color: var(--text);
+  }
+  .st-step-fill {
     position: absolute;
-    inset: auto 0 -1px 0;
-    height: 2px;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: var(--accent);
-    transform-origin: left;
-    transform: scaleX(0);
+    color: var(--on-accent);
+    clip-path: inset(0 100% 0 0);
+    pointer-events: none;
   }
-  .st-tab.is-playing .st-progress {
-    animation: st-progress var(--dur, 8s) steps(32) forwards;
+  .st-step-fill b {
+    color: rgb(10 10 10 / 0.7);
   }
-  @keyframes st-progress {
+  .st-step.is-on.is-done .st-step-fill {
+    clip-path: inset(0);
+  }
+  .st-step.is-on.is-playing .st-step-fill {
+    animation: st-fill var(--dur, 8s) steps(40) forwards;
+  }
+  @keyframes st-fill {
     to {
-      transform: scaleX(1);
+      clip-path: inset(0);
     }
   }
 
-  /* why: both acts share one grid cell, so the stage keeps the taller act's height and the
-     page never jumps on a cut. */
-  .st-acts {
+  /* why: both captions share one grid cell and two lines, so the stage never moves on a step. */
+  .st-caps {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    margin: 0 auto clamp(1.5rem, 3vw, 2rem);
+    padding: 0 var(--pad);
+    max-width: 46rem;
   }
-  .st-act {
+  .st-cap {
     grid-area: 1 / 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    opacity: 0;
-    pointer-events: none;
+    margin: 0;
+    color: var(--muted);
+    font-size: clamp(0.9375rem, 0.9rem + 0.2vw, 1.0625rem);
+    line-height: 1.55;
+    text-align: center;
+    visibility: hidden;
   }
-  .st-act.is-on {
-    opacity: 1;
-    pointer-events: auto;
+  .st-cap.is-on {
+    visibility: visible;
   }
-  .st-act-head {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-  .st-cmd {
-    padding: 0.375rem 0.75rem;
-    background: var(--bg);
-    border: 1px solid var(--line);
+  .st-cap b {
     color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    white-space: nowrap;
-  }
-  .st-cmd .p {
-    color: var(--accent);
+    font-weight: 500;
   }
 
-  .st-row {
+  /* why: the Flow scene is dimmed behind the stage, so the dashed wires read over it. */
+  .st-viz :global(.dither) {
+    opacity: 0.5;
+  }
+  .st-stage {
+    position: relative;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    column-gap: clamp(0.75rem, 2vw, 1.5rem);
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.65fr) minmax(0, 1.1fr);
+    column-gap: clamp(2.5rem, 5vw, 4.5rem);
+    height: 30rem;
+    padding: clamp(1.5rem, 3vw, 2.5rem) var(--pad);
+    box-sizing: content-box;
+  }
+  .st-col {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.25rem;
+    min-width: 0;
+  }
+
+  .st-chip,
+  .st-gw,
+  .st-machine {
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+  }
+  .st-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+  .st-via {
+    flex: none;
+    padding: 0 0.3rem;
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+    font-size: 0.5625rem;
+    letter-spacing: var(--label-tracking);
+  }
+  .st-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .st-term {
-    padding: 0.625rem 0.875rem;
-    font-size: 0.6875rem;
-    line-height: 1.7;
+    padding: 0.625rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: clamp(0.625rem, 0.4rem + 0.35vw, 0.75rem);
+    line-height: 1.8;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .st-term .ln {
+    min-height: 1.8em;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* why: hero.ts builds these spans at run time, outside Astro's scoping, so they are global. */
+  .st-term :global(.p),
+  .st-term :global(.str),
   :global(.st-live) {
     color: var(--accent);
   }
+  .st-term .out {
+    color: var(--muted);
+  }
+  .st-term :global(.opt),
   :global(.st-dim) {
     color: var(--faint);
   }
 
-  .st-duct {
-    position: relative;
-    justify-self: center;
-    width: 2px;
-    height: clamp(1.75rem, 3.5vw, 2.5rem);
-    background: repeating-linear-gradient(180deg, var(--track, rgb(255 255 255 / 0.5)) 0 4px, transparent 4px 8px);
+  /* why: the gateway is only in the second step; it keeps its place in the first, hidden, so the
+     agents' column never changes width. */
+  .st-gw-bar {
+    justify-content: center;
   }
-  .st-duct:global(.is-live) {
-    --track: var(--accent);
-  }
-  .st-duct :global(.pkt) {
-    top: 0;
-    left: 50%;
-  }
-
-    .st-act--local .st-machines {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  /* why: act 1 is shorter than act 2; its command stays under the tabs and the rest centres in
-     the space left. */
-  .st-act--local .st-agents {
-    margin-top: auto;
-  }
-  .st-act--local .st-machines {
-    margin-bottom: auto;
-  }
-  .st-act--local .st-phone {
-    --pw: clamp(4rem, 6vw, 5.25rem);
-  }
-  .st-act--local .st-phones {
-    justify-content: space-around;
-  }
-
-  .st-gw-cells {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .st-gw-body {
+    padding: 0.75rem;
+    color: var(--muted);
     font-family: var(--font-mono);
     font-size: 0.6875rem;
+    line-height: 1.6;
+    text-align: center;
   }
-  .st-gw-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    padding: 0.5rem 0.875rem;
-    border-right: 1px solid var(--line);
+  .st-stage[data-step='0'] .st-gw {
     visibility: hidden;
   }
-  .st-gw-cell:last-child {
-    border-right: 0;
+  .st-stage[data-step='0'] .st-machine:not([data-machine='0']) {
+    display: none;
   }
-  .st-gw-cell:global(.is-on) {
-    visibility: visible;
+  /* why: steps cut on opacity only, never on a transform, so every box is where hero.ts measured
+     it when it drew the wires. */
+  .st-stage[data-step='1'] .st-gw,
+  .st-machine:global(.is-joined) {
+    animation: st-in 0.4s steps(3) both;
   }
-  /* why: one line each, cut with an ellipsis, so text that changes mid-animation never wraps
-     and pushes the stage taller. */
-  .st-gw-to,
-  .st-gw-why,
-  .st-gw-foot,
-  .st-mfoot {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .st-gw-to {
-    color: var(--muted);
-  }
-  .st-gw-why {
-    color: var(--faint);
-  }
-  .st-gw-foot {
-    padding: 0.375rem 0.875rem;
-    border-top: 1px solid var(--line);
-    color: var(--faint);
-    font-family: var(--font-mono);
-    font-size: 0.625rem;
-    letter-spacing: var(--label-tracking);
-    text-transform: uppercase;
-  }
-
-  .st-machine {
-    display: flex;
-    flex-direction: column;
-    gap: 0.875rem;
-    min-width: 0;
-    padding: 0.875rem;
-    background: var(--bg);
-    border: 1px solid var(--line-strong);
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
+  @keyframes st-in {
+    from {
+      opacity: 0;
+    }
   }
   .st-machine:global(.is-joining) {
     border-style: dashed;
@@ -418,51 +422,83 @@ const slotsBefore = (ai: number, mi: number) =>
   .st-machine:global(.is-flash) {
     border-color: var(--accent);
   }
+
+  .st-machine {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    min-width: 0;
+    padding: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+  }
   .st-mhead {
     display: flex;
-    flex-wrap: wrap;
     justify-content: space-between;
-    gap: 0.125rem 0.75rem;
+    gap: 0.75rem;
   }
   .st-mname {
     color: var(--text);
   }
-  .st-mhost,
-  .st-mfoot {
+  .st-mhost {
     color: var(--faint);
   }
-  .st-mfoot {
-    font-size: 0.625rem;
-    letter-spacing: var(--label-tracking);
-    text-transform: uppercase;
+  .st-devs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
   }
-  .st-phones {
-    display: flex;
-    justify-content: center;
-    gap: clamp(1rem, 3vw, 2.5rem);
-  }
-  /* why: a fixed width, so a label growing from "free" to "leased agent-1" never moves the phones
-     beside it. */
   .st-dev {
     display: flex;
-    flex: none;
     flex-direction: column;
     align-items: center;
     gap: 0.25rem;
-    width: 6.5rem;
+    min-width: 0;
     text-align: center;
   }
-  .st-dname {
-    width: 100%;
-    min-height: 1.4em;
-    margin-top: 0.375rem;
-    color: var(--muted);
-    white-space: nowrap;
-  }
+  .st-dname,
   .st-dstate {
     width: 100%;
-    color: var(--faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .st-dname {
+    color: var(--muted);
+  }
+  .st-dstate {
+    color: var(--faint);
+  }
+  /* why: the LIVE tag keeps its room under every phone, so nothing moves when one starts to stream. */
+  .st-ltag {
+    margin-top: 0.3rem;
+    padding: 0 0.3rem;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 0.5rem;
+    letter-spacing: var(--label-tracking);
+    line-height: 1.5;
+    visibility: hidden;
+  }
+  .st-dev:global(.is-live) .st-ltag {
+    visibility: visible;
+  }
+
+  /* why: in the fleet, every machine is a small row of phones, without labels. */
+  .st-stage[data-step='1'] .st-machine {
+    gap: 0.875rem;
+    padding: 0.625rem 0.875rem;
+  }
+  .st-stage[data-step='1'] .st-devs {
+    display: flex;
+    gap: 1rem;
+  }
+  .st-stage[data-step='1'] .st-dname,
+  .st-stage[data-step='1'] .st-dstate {
+    display: none;
+  }
+  .st-stage[data-step='1'] .st-phone {
+    --pw: 2.375rem;
   }
 
   /* why: square steps, not border-radius, so the frame matches the dithered scenes' phones. */
@@ -477,8 +513,8 @@ const slotsBefore = (ai: number, mi: number) =>
     );
   }
   .st-phone {
+    --pw: min(4.5rem, 100%);
     flex: none;
-    --pw: clamp(3.5rem, 5vw, 4.5rem);
     width: var(--pw);
     aspect-ratio: 1 / 2;
     padding: 1px;
@@ -488,7 +524,7 @@ const slotsBefore = (ai: number, mi: number) =>
     display: flex;
     flex-direction: column;
     height: 100%;
-    padding: 10px 5px 0;
+    padding: 18% 7% 0;
     background: #050505;
   }
   .st-screen {
@@ -500,7 +536,7 @@ const slotsBefore = (ai: number, mi: number) =>
   }
   .st-home {
     display: flex;
-    flex: 0 0 14px;
+    flex: 0 0 12%;
     align-items: center;
     justify-content: center;
   }
@@ -510,9 +546,14 @@ const slotsBefore = (ai: number, mi: number) =>
     height: 3px;
     background: #313131;
   }
+  .st-phone:global(.is-flash),
+  .st-phone:global(.is-flash) .st-screen {
+    background: var(--accent);
+  }
   /* why: BRAND.md draws a free slot dashed, a ready one grey, a booting one hatched. */
   .st-phone[data-state='free'] {
-    background: repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) top / 100% 1px no-repeat,
+    background:
+      repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) top / 100% 1px no-repeat,
       repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) bottom / 100% 1px no-repeat,
       repeating-linear-gradient(180deg, #5a5a5a 0 4px, transparent 4px 8px) left / 1px 100% no-repeat,
       repeating-linear-gradient(180deg, #5a5a5a 0 4px, transparent 4px 8px) right / 1px 100% no-repeat;
@@ -528,41 +569,53 @@ const slotsBefore = (ai: number, mi: number) =>
     background: #1a1a1a;
   }
   .st-boot,
-  .st-app {
+  .st-app,
+  .st-stream {
     position: absolute;
     inset: 0;
     display: none;
   }
-  .st-boot {
-    background: repeating-linear-gradient(135deg, rgb(var(--accent-rgb) / 0.55) 0 3px, transparent 3px 8px);
+  .st-phone[data-state='booting'] .st-boot,
+  .st-phone[data-state='cleaning'] .st-boot {
+    display: block;
+    overflow: hidden;
+  }
+  /* why: the stripes move as one oversized layer, not by background-position, so the pattern
+     never tiles and shows no seam. 33.94px is three stripe periods (8px × √2 × 3). */
+  .st-boot::before {
+    content: '';
+    position: absolute;
+    inset: -40px 0 0;
+    background: repeating-linear-gradient(135deg, var(--hatch) 0 3px, transparent 3px 8px);
     animation: st-hatch 0.9s steps(6) infinite;
+  }
+  .st-phone[data-state='booting'] {
+    --hatch: rgb(var(--accent-rgb) / 0.55);
+  }
+  .st-phone[data-state='cleaning'] {
+    --hatch: rgb(255 255 255 / 0.3);
   }
   @keyframes st-hatch {
     to {
-      background-position: 0 -34px;
+      transform: translateY(33.94px);
     }
-  }
-  .st-phone[data-state='booting'] .st-boot {
-    display: block;
   }
   .st-app {
     flex-direction: column;
-    gap: 5px;
-    padding: 8px 7px;
+    gap: 8%;
+    padding: 14% 12%;
   }
   .st-phone[data-state='leased'] .st-app {
     display: flex;
   }
   .st-app b {
-    display: block;
-    flex: 0 0 12px;
+    flex: 0 0 9%;
     background: var(--accent);
   }
   .st-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 3px;
-    margin-bottom: 3px;
+    gap: 6%;
   }
   .st-tiles span {
     aspect-ratio: 1;
@@ -572,8 +625,7 @@ const slotsBefore = (ai: number, mi: number) =>
     background: rgb(var(--accent-rgb) / 0.7);
   }
   .st-app i {
-    display: block;
-    height: 4px;
+    height: 3px;
     background: rgb(var(--accent-rgb) / 0.45);
   }
   .st-app i:nth-of-type(2n) {
@@ -581,60 +633,171 @@ const slotsBefore = (ai: number, mi: number) =>
     background: rgb(255 255 255 / 0.3);
   }
 
-  @media (max-width: 64rem) {
-    .st-top {
-      grid-template-columns: minmax(0, 1fr);
+  /* why: an agent-device lease streams its screen: the app the agent drives, in place of the
+     generic leased screen. */
+  .st-dev:global(.is-live) .st-phone[data-state='leased'] .st-app {
+    display: none;
+  }
+  .st-dev:global(.is-live) .st-phone[data-state='leased'] .st-stream {
+    display: block;
+  }
+  .st-v {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    gap: 7%;
+    padding: 14% 10%;
+  }
+  .st-stream[data-view='splash'] .st-v-splash,
+  .st-stream[data-view='signin'] .st-v-signin,
+  .st-stream[data-view='home'] .st-v-home {
+    display: flex;
+  }
+  .st-v-splash {
+    align-items: center;
+    justify-content: center;
+  }
+  .st-v-splash b {
+    width: 34%;
+    aspect-ratio: 1;
+    background: var(--accent);
+  }
+  .st-v b {
+    flex: none;
+    height: 6%;
+    width: 55%;
+    background: #fff;
+  }
+  .st-v-signin i,
+  .st-q {
+    flex: none;
+    height: 9%;
+    border: 1px solid #3a3a3a;
+  }
+  .st-v-signin u {
+    flex: none;
+    height: 10%;
+    background: var(--accent);
+  }
+  .st-q {
+    display: flex;
+    align-items: center;
+    padding: 0 6%;
+  }
+  .st-q:global(.is-focus) {
+    border-color: var(--accent);
+  }
+  .st-q s {
+    height: 30%;
+    width: var(--typed, 0%);
+    background: #fff;
+  }
+  .st-row {
+    display: flex;
+    flex: none;
+    gap: 8%;
+    height: 11%;
+  }
+  .st-row::before {
+    content: '';
+    aspect-ratio: 1;
+    background: rgb(var(--accent-rgb) / 0.55);
+  }
+  .st-row::after {
+    content: '';
+    flex: 1;
+    margin: 6% 0;
+    background: linear-gradient(rgb(255 255 255 / 0.5) 0 25%, transparent 25% 60%, rgb(255 255 255 / 0.22) 60% 85%, transparent 85%);
+  }
+  .st-row:global(.is-gone) {
+    display: none;
+  }
+  .st-tap {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    margin: -5px 0 0 -5px;
+    border: 1px solid #fff;
+    visibility: hidden;
+  }
+  .st-tap:global(.is-on) {
+    visibility: visible;
+    animation: st-tap 0.5s steps(4) forwards;
+  }
+  @keyframes st-tap {
+    from {
+      transform: scale(0.4);
     }
-    .st-art {
-      min-height: 16rem;
+    to {
+      transform: scale(1.4);
+      opacity: 0;
     }
   }
-  @media (max-width: 48rem) {
-    .st-dev {
-      width: 3.75rem;
+
+  .st-wires {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .st-wires :global(path) {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.4);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+  }
+  .st-wires :global(path.is-live) {
+    stroke: var(--accent);
+  }
+  :global(.st-pkt) {
+    position: absolute;
+    z-index: 2;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    background: var(--accent);
+    pointer-events: none;
+  }
+  :global(.st-pkt.is-back) {
+    background: var(--text);
+  }
+
+  /* why: below a three-column width the stage stacks; dashed connectors stand in for the wires. */
+  @media (max-width: 60rem) {
+    .st-stage {
+      grid-template-columns: minmax(0, 1fr);
+      height: auto;
+      row-gap: 2.75rem;
     }
-    .st-dname,
-    .st-dstate {
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    /* why: three machines with two slots each do not fit a phone; the leased slot tells the story. */
-    .st-act--fleet .st-dev:nth-child(2) {
+    .st-wires {
       display: none;
     }
-    .st-term .ln:first-child {
+    .st-stage[data-step='0'] .st-mid {
       display: none;
     }
-    .st-term {
-      font-size: 0.5625rem;
-      padding: 0.5rem;
+    .st-col + .st-col::before {
+      content: '';
+      position: absolute;
+      bottom: calc(100% + 0.5rem);
+      left: 50%;
+      height: 1.75rem;
+      border-left: 1.5px dashed rgb(255 255 255 / 0.4);
     }
-    :global(.st-chip .window-tag),
-    :global(.st-chip .window-controls) {
-      display: none;
+    .st-gw {
+      width: min(100%, 18rem);
+      align-self: center;
     }
-    .st-act--fleet .st-machines {
-      column-gap: 0.5rem;
+  }
+  @media (max-width: 30rem) {
+    .st-step {
+      padding: 0.625rem 0.5rem;
+      font-size: 0.875rem;
     }
-    .st-act--fleet .st-machine {
-      padding: 0.5rem;
-      font-size: 0.5625rem;
-    }
-    .st-act--fleet .st-mhost,
-    .st-act--fleet .st-dname,
-    .st-gw-why {
-      display: none;
-    }
-    .st-phone {
-      --pw: 2.75rem;
-    }
-    .st-phones {
+    .st-devs {
       gap: 0.5rem;
-    }
-    .st-cmd {
-      white-space: normal;
-      overflow-wrap: anywhere;
-      font-size: 0.625rem;
     }
   }
 </style>
