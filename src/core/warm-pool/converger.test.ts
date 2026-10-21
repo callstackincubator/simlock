@@ -2380,4 +2380,94 @@ describe("warm pool learned kinds", () => {
     await rig.pool.settle();
     expect(new LearnedKinds(state).kinds(rig.clock.now())).toHaveLength(0);
   });
+
+  describe("with a learned kind beside the configured targets", () => {
+    const phone: WarmTarget = { count: 1, model: "iPhone 15", osVersion: "26.0", platform: "ios" };
+    const ipad = {
+      model: "iPad Pro",
+      osVersion: "26.0",
+      physical: false,
+      platform: "ios",
+    } as const;
+    const withLearned = async (counts: number[]) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      const learned = new LearnedKinds(state);
+      learned.learn(ipad, "pad", now - minute);
+      counts.forEach((_, index) => {
+        learned.learn(device("d1", "ready", 0).spec, `phone-${index}`, now - 2 * minute);
+      });
+      return state;
+    };
+
+    it("lists configured targets only in figures() and the short log, with a learned kind short in the same pass", async () => {
+      const short = harness([], { limit: 0, state: await withLearned([1]), targets: [phone] });
+      await short.pool.pass();
+      await short.pool.settle();
+      const met = harness([device("d1", "ready", 0)], {
+        limit: 1,
+        state: await withLearned([1]),
+        targets: [phone],
+      });
+      await met.pool.pass();
+      await met.pool.settle();
+
+      expect(short.pool.figures().targets).toEqual([
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 15",
+          osVersion: "26.0",
+          platform: "ios",
+          ready: 0,
+          short: "running-limit",
+        },
+      ]);
+      const shortLogs = short.sink.records.filter(
+        (record) => record.message === "a warm pool target is short",
+      );
+      expect(shortLogs.map((record) => record.fields?.target)).toEqual(["ios iPhone 15 26.0"]);
+      expect(met.pool.figures().targets.map((target) => [target.model, target.ready])).toEqual([
+        ["iPhone 15", 1],
+      ]);
+      expect(
+        met.sink.records.filter((record) => record.message === "a warm pool target is short"),
+      ).toEqual([]);
+    });
+
+    it("emits warm-pool.target-missed for a merged entry by its configured count", async () => {
+      const payloads = (rig: ReturnType<typeof harness>): unknown[] => {
+        const seen: unknown[] = [];
+        rig.eventBus.subscribe("warm-pool.target-missed", (envelope) =>
+          seen.push(envelope.payload),
+        );
+        return seen;
+      };
+      const met = harness([device("d1", "ready", 0)], {
+        limit: 1,
+        state: await withLearned([1, 2]),
+        targets: [phone],
+      });
+      const metPayloads = payloads(met);
+      await met.pool.pass();
+      await met.pool.settle();
+      const empty = harness([], { limit: 0, state: await withLearned([1, 2]), targets: [phone] });
+      const emptyPayloads = payloads(empty);
+      await empty.pool.pass();
+      await empty.pool.settle();
+
+      expect(metPayloads).toEqual([]);
+      expect(emptyPayloads).toEqual([
+        {
+          count: 1,
+          mode: "full",
+          model: "iPhone 15",
+          osVersion: "26.0",
+          platform: "ios",
+          ready: 0,
+          reason: "running-limit",
+        },
+      ]);
+    });
+  });
 });
