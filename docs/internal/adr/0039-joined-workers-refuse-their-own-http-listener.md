@@ -1,6 +1,6 @@
 # 0039. Joined workers refuse their own HTTP listener
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-21
 - **Issue:** [#806](https://github.com/callstackincubator/simlock/issues/806), from request #705
 - **Supersedes:** ADR 0005 requirement 3's “Nothing else on the worker changes” only as it permits HTTP on a joined worker. Its other membership rules remain.
