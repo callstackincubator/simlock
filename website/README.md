@@ -3,7 +3,8 @@
 The site at https://callstackincubator.github.io/simlock/: the home page, a 404 page and the
 docs, in the Callstack product look. Astro and Starlight, its own package (run everything from
 this folder), deployed to GitHub Pages by `.github/workflows/website.yml` on every push to
-`main` that changes `website/`; a pull request that changes `website/` builds it without deploying.
+`main` that changes `website/`, `docs/*.md`, `src/`, `package.json` or `pnpm-lock.yaml` (the HTTP API
+reference is built from the code); a pull request that changes them builds it without deploying.
 
 The look, the scenes and the words are in [BRAND.md](../docs/internal/BRAND.md). The end-user
 docs live only here, in `src/content/docs/docs/`, one `.mdx` page each; the sidebar is in
