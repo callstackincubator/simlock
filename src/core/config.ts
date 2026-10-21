@@ -892,7 +892,7 @@ function defaultConfig(
       deleteAfterMs: 60 * 60_000,
     },
     warmPool: {
-      ...defaultWarmPoolConfig,
+      ...defaultWarmPoolConfig(systemStats),
       quarantine: {
         maxRetries: 3,
         retryBackoffMs: 30_000,

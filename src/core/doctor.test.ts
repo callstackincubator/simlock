@@ -19,7 +19,7 @@ import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import type { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupRead } from "./startup-read.js";
-import { loadTestRegistry, openTestState, testComponentWiring } from "./testing.js";
+import { loadTestRegistry, openTestState, testComponentWiring, testStateOf } from "./testing.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 describe("Doctor", () => {
@@ -549,6 +549,7 @@ describe("Doctor", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 }),
     });
 

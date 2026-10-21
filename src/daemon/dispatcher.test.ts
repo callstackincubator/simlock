@@ -6,6 +6,7 @@ import {
   openTestState,
   testComponentWiring,
   type FakeDriverOptions,
+  testStateOf,
 } from "../core/testing.js";
 import type { StateDatabase } from "../state/index.js";
 
@@ -351,6 +352,7 @@ async function buildDispatcher(
     eventBus,
     idGenerator: sequence(),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({
       cpuCount: 8,
       totalRamBytes: 32 * gibibyte,

@@ -643,6 +643,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
               mode: specMode(waiter.spec),
               platform: waiter.spec.platform,
               requirement: waiter.requirement ?? exactRequirement(waiter.spec),
+              spec: waiter.spec,
             },
           ],
     );
@@ -898,6 +899,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       if (!this.options.queue.markProcessing(waiter)) return undefined;
       try {
         await this.#grant(waiter, plan.device, plan.kind);
+        // why: the next request in line may already have a ready device waiting for it, and no
+        // other event will wake it.
+        this.#wakeQueue();
       } catch (error: unknown) {
         this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
         this.#defer(waiter, "waiting-for-device");

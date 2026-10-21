@@ -33,14 +33,28 @@ function check(body: string, ...args: string[]) {
   }
 }
 
-function fromGitHub(pull: object, options: { origin?: boolean } = {}) {
+function fromGitHub(
+  pull: object,
+  options: { origin?: boolean; comments?: readonly string[] } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "pr-body-gh-"));
   writeFileSync(join(dir, "pull.json"), JSON.stringify(pull));
+  // why: the comments endpoint answers only when the test says so, so a case with no
+  // `comments` proves the script never asked for them (a chore branch has no ledger).
+  if (options.comments !== undefined) {
+    writeFileSync(
+      join(dir, "comments.json"),
+      JSON.stringify(options.comments.map((body) => ({ body }))),
+    );
+  }
   writeFileSync(
     join(dir, "gh"),
     `#!/bin/sh
-[ "$*" = "api -X GET repos/o/r/pulls/7" ] || { echo "fake gh: unexpected: $*" >&2; exit 9; }
-cat ${JSON.stringify(join(dir, "pull.json"))}
+case "$*" in
+  "api -X GET repos/o/r/pulls/7") cat ${JSON.stringify(join(dir, "pull.json"))} ;;
+  "api -X GET repos/o/r/issues/7/comments -f per_page=100") cat ${JSON.stringify(join(dir, "comments.json"))} 2>/dev/null || { echo "fake gh: comments not expected" >&2; exit 9; } ;;
+  *) echo "fake gh: unexpected: $*" >&2; exit 9 ;;
+esac
 `,
   );
   chmodSync(join(dir, "gh"), 0o755);
@@ -158,14 +172,33 @@ describe("pr-body-check.mjs", () => {
     const bare = `## Review\n\n${COUNTS}\nRounds: 1. Tokens: 1.0M.\n\n${FOOTER}\n`;
     expect(fromGitHub({ body: bare, head: { ref: "chore/x" } })).toEqual({ status: 0, lines: [] });
 
-    expect(fromGitHub({ body: bare, head: { ref: "bug/7" } }).lines).toEqual([
+    expect(fromGitHub({ body: bare, head: { ref: "bug/7" } }, { comments: [] }).lines).toEqual([
       "pr-body: no `### Status` section",
       expect.stringContaining("no `## Assumptions` section"),
+      expect.stringContaining("no comment headed `## Review ledger`"),
     ]);
     expect(fromGitHub({ body: null, head: { ref: "chore/x" } }).lines).toEqual([
       expect.stringContaining('the last line is not "*Written by an agent.*"'),
       expect.stringContaining("no `## Review` section"),
     ]);
+  });
+
+  it("requires the Review ledger comment on a delivery branch whose reviews ran, and only there", () => {
+    const body = valid;
+    const ledger = '## Review ledger\n\nRound 1: abc\n```json\n{"findings": []}\n```';
+    expect(fromGitHub({ body, head: { ref: "task/7" } }, { comments: ["hi", ledger] })).toEqual({
+      status: 0,
+      lines: [],
+    });
+    expect(fromGitHub({ body, head: { ref: "task/7" } }, { comments: ["hi"] }).lines).toEqual([
+      "pr-body: no comment headed `## Review ledger` (REVIEW.md, Measurement)",
+    ]);
+    const skipped = body.replace(
+      COUNTS,
+      "Spec review: skipped. Code review: skipped. Claims review: skipped.",
+    );
+    expect(fromGitHub({ body: skipped, head: { ref: "task/7" } }).status).toBe(0);
+    expect(fromGitHub({ body, head: { ref: "chore/x" } }).status).toBe(0);
   });
 
   it("takes the repo from the origin remote when GH_REPO is unset", () => {

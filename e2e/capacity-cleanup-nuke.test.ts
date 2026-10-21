@@ -71,29 +71,6 @@ async function releaseAndForget(
   return grant.device.driverDeviceId;
 }
 
-/**
- * Forces an immediate, synchronous reaper evaluation (rather than waiting on the slow
- * 60s periodic tick or hoping an unrelated `lease.released` retriggers it) by polling
- * `simlock cleanup` itself until the target reaches `state` -- this is what lets an
- * idle-threshold test converge in milliseconds without a fixed sleep: each poll tick
- * both re-checks real elapsed time *and* forces the daemon to act on it.
- */
-async function waitForCleanupToReach(
-  env: Awaited<ReturnType<typeof withDaemon>>,
-  driverDeviceId: string,
-  state: string,
-  timeout = 10_000,
-): Promise<void> {
-  await waitFor(
-    async () => {
-      await env.cli(["cleanup"]);
-      const rows = await deviceRows(env);
-      return rows.some((row) => row.driverDeviceId === driverDeviceId && row.state === state);
-    },
-    { timeout, interval: 50, label: `cleanup demotes ${driverDeviceId} to ${state}` },
-  );
-}
-
 describe("capacity, warm pool, cleanup, and nuke", () => {
   it("distinguishes the managed-device limit from the running limit, and counts reclaiming as running, never warm", async () => {
     const env = await withDaemon({
@@ -157,7 +134,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await waitForLeaseCount(env, 0);
   });
 
-  it("demotes an idle device, previews cleanup without executing on --dry-run, and nuke touches only registry devices", async () => {
+  it("keeps an idle device of a leased kind out of cleanup and its --dry-run preview, and nuke touches only registry devices", async () => {
     const env = await withDaemon({
       configOverrides: {
         // Tight on purpose: by the nuke phase this forces a real queued waiter
@@ -181,9 +158,16 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await holderX.waitForExit(15_000).catch(() => undefined);
     await waitForDeviceState(env, grantX.device.driverDeviceId, "ready");
 
-    await waitForCleanupToReach(env, grantX.device.driverDeviceId, "shutdown");
+    // why: the pool learned the kind from the lease and keeps its device ready past idle.shutdownAfterMs.
+    expect((await env.cli(["cleanup"])).code).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect((await env.cli(["cleanup"])).code).toBe(0);
+    expect(
+      (await deviceRows(env)).find((row) => row.driverDeviceId === grantX.device.driverDeviceId)
+        ?.state,
+    ).toBe("ready");
 
-    // cleanup --dry-run must report proposals without acting on them.
+    // why: a dry run lists what a real run would do, and the device the pool keeps is not in it. That it executes nothing is the reaper unit test's: no device here is one a rule acts on.
     await env.driverScript.merge({ ios: { latencyMs: { reclaim: 5_000 } } });
     const dryRunDeviceId = await releaseAndForget(env, "dryrun-z");
     await waitForDeviceState(env, dryRunDeviceId, "ready");
@@ -193,26 +177,12 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     );
     expect(readyDevice, "expected a ready (warm) device for the dry-run preview").toBeDefined();
 
-    await waitFor(
-      async () => {
-        const preview = await env.cli(["cleanup", "--dry-run"]);
-        const proposals = preview.json as { rule: string; target: string }[];
-        return proposals.some((proposal) => proposal.target === readyDevice?.id);
-      },
-      {
-        timeout: 10_000,
-        interval: 50,
-        label: "dry-run eventually proposes shutting the idle device down",
-      },
-    );
-
-    await env.driverLog.clear();
-    const dryRun = await env.cli(["cleanup", "--dry-run"]);
-    expect(dryRun.code).toBe(0);
-    const dryRunCalls = await env.driverLog.calls();
+    const preview = await env.cli(["cleanup", "--dry-run"]);
     expect(
-      dryRunCalls.filter((call) => call.operation === "shutdown" || call.operation === "destroy"),
-      "--dry-run must never call a destructive/state-changing driver verb",
+      (preview.json as { target: string }[]).filter(
+        (proposal) => proposal.target === readyDevice?.id,
+      ),
+      "the kept device of a leased kind is not proposed",
     ).toEqual([]);
 
     // nuke: force-releases every lease, clears the queue, destroys registry devices,

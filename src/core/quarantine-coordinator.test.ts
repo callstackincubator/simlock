@@ -13,7 +13,13 @@ import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import type { VirtualDevice, VirtualSpec } from "./domain.js";
 import { type FakePhysicalDevice } from "./fake-driver.js";
-import { FakeDriver, loadTestRegistry, openTestState, testComponentWiring } from "./testing.js";
+import {
+  FakeDriver,
+  loadTestRegistry,
+  openTestState,
+  testComponentWiring,
+  testStateOf,
+} from "./testing.js";
 import { createCore, loadConfig } from "./index.js";
 import {
   QuarantineCoordinator,
@@ -1025,6 +1031,7 @@ describe("QuarantineCoordinator and enrollment of a quarantined physical device 
       drivers: [driver],
       eventBus,
       registry,
+      state: testStateOf(registry),
       systemStats,
       ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
     });
@@ -1198,6 +1205,7 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
       eventBus,
       ...(logger === undefined ? {} : { logger }),
       registry,
+      state: testStateOf(registry),
       systemStats,
       ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
     });

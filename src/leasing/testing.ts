@@ -1,5 +1,6 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
+import type { StateDatabase } from "../state/index.js";
 import {
   type CapacityReader,
   type WarmPoolReader,
@@ -45,6 +46,7 @@ export interface TestEngineOptions {
   readonly idGenerator: IdGenerator;
   readonly logger?: Logger | undefined;
   readonly registry: Registry;
+  readonly state: StateDatabase;
   readonly systemStats: SystemStats;
   readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
@@ -92,6 +94,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     logger: options.logger,
     modelPreferences: options.modelPreferences,
     registry: options.registry,
+    state: options.state,
     systemStats: options.systemStats,
   });
   const leasing = createLeasing({

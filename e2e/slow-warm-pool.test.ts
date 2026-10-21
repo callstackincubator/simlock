@@ -199,11 +199,14 @@ interface Lane {
 }
 
 /**
- * A real-driver daemon whose pool targets one device of the newest runtime of each platform; with
+ * why: a real-driver daemon whose pool targets one device of the newest runtime of each platform; with
  * `enabled: false` the config is rewritten and the daemon restarted with the pool off, so no
- * device exists until a lease asks.
+ * device exists until a lease asks. With `noTargets` the pool has none to fill: only the kinds it
+ * learns from leases.
  */
-async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise<Lane> {
+async function warmDaemon(
+  options: { readonly enabled?: boolean; readonly noTargets?: boolean } = {},
+): Promise<Lane> {
   await sweepStaleDeviceSets();
   const env = await withDaemon({ driver: "real" });
   const adbServerPort = env.adbServerPort;
@@ -222,7 +225,7 @@ async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise
   };
   await writeWarmPool(env, {
     maxConcurrentBoots: 2,
-    targets: [targets.ios, targets.android],
+    targets: options.noTargets === true ? [] : [targets.ios, targets.android],
     ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
   });
   return { adbServerPort, deviceSet: iosDeviceSet(env.home), env, targets };
@@ -305,6 +308,40 @@ async function holdsState(
     const row = (await devices(env)).find((entry) => entry.driverDeviceId === driverDeviceId);
     expect(row?.state, `${driverDeviceId} stays ${state}`).toBe(state);
   });
+}
+
+async function untilSettled(env: TestEnv, driverDeviceId: string): Promise<void> {
+  let last: Row[] = [];
+  await waitFor(
+    async () => {
+      last = await devices(env);
+      const row = last.find((entry) => entry.driverDeviceId === driverDeviceId);
+      return row !== undefined && (row.state === "ready" || row.state === "shutdown");
+    },
+    {
+      interval: 1000,
+      label: () =>
+        `${driverDeviceId} is reclaimed; last saw ${JSON.stringify(last.map((r) => [r.driverDeviceId, r.state]))}`,
+      timeout: READY_TIMEOUT,
+    },
+  );
+}
+
+async function untilEachPlatformHasReady(env: TestEnv): Promise<void> {
+  let last: Row[] = [];
+  await waitFor(
+    async () => {
+      last = await devices(env);
+      return (["ios", "android"] as const).every((platform) =>
+        last.some((row) => row.spec.platform === platform && row.state === "ready"),
+      );
+    },
+    {
+      interval: 1000,
+      label: () => `a ready device on each platform; last saw ${JSON.stringify(last)}`,
+      timeout: READY_TIMEOUT,
+    },
+  );
 }
 
 /** Per platform, exactly one device, and it is ready. */
@@ -543,7 +580,7 @@ describe(
     );
 
     it(
-      "grants the first lease of each targeted model warm with no booting progress, and after release each device is ready again",
+      "grants the first lease of each targeted model warm with no booting progress, and after release each platform still has a ready device",
       { timeout: WARM_ROUND_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
@@ -571,10 +608,13 @@ describe(
           await expectGrantedWarm(env, granted, readyEvents);
 
           for (const grant of granted) await release(env, grant);
-          // iOS is shut down, erased and booted again by the pool; Android restores its snapshot.
+          // why: the pool booted a second device of each kind while the first was leased (a target counts
+          // ready devices only), so once the released one is reclaimed the kind already has its
+          // ready device: the pool owes the released one nothing, and it may stay down.
           for (const grant of granted) {
-            await untilState(env, grant.device.driverDeviceId, "ready");
+            await untilSettled(env, grant.device.driverDeviceId);
           }
+          await untilEachPlatformHasReady(env);
           // A failed snapshot load falls back to a wipe and the pool boots the device back to ready,
           // so the state alone cannot tell the two apart: the reclaim's own strategy does.
           const android = granted.find((grant) => grant.device.spec.platform === "android");
@@ -692,6 +732,66 @@ describe(
           );
           await step("release the second emulator lease", RELEASE_TIMEOUT + MINUTE, () =>
             release(env, second.android.grant),
+          );
+        } catch (error: unknown) {
+          if (lane !== undefined) await diagnose(lane.env);
+          throw error;
+        } finally {
+          if (lane !== undefined) await nuke(lane.env);
+        }
+      },
+    );
+
+    it(
+      "with no target, a released simulator and a released emulator are ready again before the next lease, are shut down with the pool off, and are booted again from the record with it on",
+      { timeout: COLD_TEST_TIMEOUT },
+      async (context) => {
+        const missing = await missingPlatform();
+        if (missing !== undefined) context.skip(missing);
+        let lane: Lane | undefined;
+        try {
+          lane = await step("start the daemon with no target", DAEMON_START_BUDGET, () =>
+            warmDaemon({ noTargets: true }),
+          );
+          const { env, targets } = lane;
+          const first = {
+            android: await step("lease the emulator", LEASE_TIMEOUT + MINUTE, () =>
+              lease(env, targets.android, "learn-android"),
+            ),
+            ios: await step("lease the simulator", LEASE_TIMEOUT + MINUTE, () =>
+              lease(env, targets.ios, "learn-ios"),
+            ),
+          };
+          await step("release the simulator", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, first.ios.grant),
+          );
+          await step("release the emulator", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, first.android.grant),
+          );
+          const iosUdid = first.ios.grant.device.driverDeviceId;
+          const androidId = first.android.grant.device.driverDeviceId;
+          await step("both devices are ready again", 2 * READY_TIMEOUT, async () => {
+            await untilState(env, iosUdid, "ready");
+            await untilState(env, androidId, "ready");
+          });
+          await step("both stay ready", HOLD + 2 * MINUTE, async () => {
+            await holdsState(env, iosUdid, "ready", HOLD);
+            await holdsState(env, androidId, "ready", HOLD);
+          });
+
+          await step("the pool off shuts both down", 12 * MINUTE, async () => {
+            await writeWarmPool(env, { enabled: false });
+            await untilState(env, iosUdid, "shutdown", 5 * MINUTE);
+            await untilState(env, androidId, "shutdown", 5 * MINUTE);
+          });
+          await step(
+            "the pool on boots both from the record, before any lease",
+            2 * READY_TIMEOUT,
+            async () => {
+              await writeWarmPool(env, { enabled: true });
+              await untilState(env, iosUdid, "ready");
+              await untilState(env, androidId, "ready");
+            },
           );
         } catch (error: unknown) {
           if (lane !== undefined) await diagnose(lane.env);
