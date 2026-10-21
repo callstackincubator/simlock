@@ -18,6 +18,7 @@ import {
   StatTile,
   Status,
   StatusDot,
+  Toolbar,
 } from "../../ds";
 import type { FigureChart, FiguresState } from "../../state/figures";
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
@@ -70,10 +71,12 @@ export function OverviewBody(props: {
   const [leases, ...others] = ready?.data.charts ?? [];
   return (
     <>
-      <div className="overview-range">
-        <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
-        {ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
-      </div>
+      <Toolbar
+        start={
+          <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
+        }
+        end={ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
+      />
       {ready?.refusal === undefined ? null : <Refusal message={ready.refusal} />}
       <StatRow label="Fleet at a glance">
         {overview.tiles.map((tile) => (

@@ -10,3 +10,8 @@
 .toolbar-end {
   margin-left: auto;
 }
+
+.toolbar-end p {
+  margin: 0;
+  font-size: var(--text-sm);
+}

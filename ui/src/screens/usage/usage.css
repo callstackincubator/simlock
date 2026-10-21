@@ -1,15 +1,3 @@
-.usage-range {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.usage-range p {
-  margin: 0;
-  font-size: var(--text-sm);
-}
-
 .usage-panels {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
