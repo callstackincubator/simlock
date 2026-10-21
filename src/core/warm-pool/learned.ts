@@ -28,9 +28,9 @@ export const warmPoolOwner: SqliteSchemaOwner = {
   version: 1,
 };
 
-export const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
+const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export const LEARNED_KINDS_PER_PLATFORM = 32;
+const LEARNED_KINDS_PER_PLATFORM = 32;
 
 export interface LearnedKind {
   readonly spec: VirtualSpec;

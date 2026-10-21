@@ -5,7 +5,7 @@ import { stableError } from "../stable-error.js";
 import type { LearnedKind } from "./learned.js";
 
 /** why: the longest the pool waits for a catalog read; `avdmanager` has no timeout of its own. */
-export const CATALOG_READ_LIMIT_MS = 30_000;
+const CATALOG_READ_LIMIT_MS = 30_000;
 
 interface CatalogCheckOptions {
   readonly catalog: Pick<DriverCatalog, "listCatalog">;

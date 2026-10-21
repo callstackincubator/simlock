@@ -371,22 +371,31 @@ export class WarmPool {
     } while (this.#again);
   }
 
+  /** why: whatever is shut down under a reset, an iOS device its forced release left that way included, is meant to stay down. */
+  #markReset(): void {
+    for (const device of this.options.registry.snapshot.virtualDevices) {
+      if (device.state === "shutdown") this.#reset.add(device.id);
+    }
+  }
+
+  /** why: a pool that is off keeps no target: nothing is resolved, reported, checked or spared. */
+  async #resolveEnabled(): Promise<readonly TargetReport[]> {
+    if (!this.options.config.enabled) return [];
+    const refused = await this.#resolveTargets();
+    this.#checkCatalog();
+    return refused;
+  }
+
   async #once(): Promise<void> {
     if (this.#draining) return;
     if (this.options.acquisition.maintenanceActive) {
-      // Whatever is shut down under a reset, an iOS device its forced release left that way
-      // included, is meant to stay down.
-      for (const device of this.options.registry.snapshot.virtualDevices) {
-        if (device.state === "shutdown") this.#reset.add(device.id);
-      }
+      this.#markReset();
       return;
     }
     this.#readLogged = false;
     this.#closeOpenRows();
     try {
-      // A pool that is off keeps no target: nothing is resolved, reported or spared.
-      const refused = this.options.config.enabled ? await this.#resolveTargets() : [];
-      if (this.options.config.enabled) this.#checkCatalog();
+      const refused = await this.#resolveEnabled();
       const plan = await this.options.decisions.run(() => evaluate(this.#view()));
       const reports = configuredOnly([...refused, ...plan.targets]);
       this.#note(reports);

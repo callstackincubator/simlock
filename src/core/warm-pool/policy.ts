@@ -682,8 +682,7 @@ function fillTarget(
   if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return filling ? undefined : "boot-failed";
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
-    let refused = addOne(plan, spec);
-    while (refused === "running-limit" && displaceFor(plan, spec)) refused = addOne(plan, spec);
+    const refused = addDisplacing(plan, spec);
     if (refused !== undefined) return added > 0 || filling ? undefined : refused;
     added += 1;
   }
@@ -709,6 +708,13 @@ function displaceFor(plan: TargetPlan, spec: VirtualSpec): boolean {
   release(plan.room, victim);
   plan.proposals.push({ action: "shutdown", deviceId: victim.id, reason: "displaced" });
   return true;
+}
+
+/** why: a learned kind refused for a running slot tries again after each displacement it can make. */
+function addDisplacing(plan: TargetPlan, spec: VirtualSpec): TargetShort | undefined {
+  let refused = addOne(plan, spec);
+  while (refused === "running-limit" && displaceFor(plan, spec)) refused = addOne(plan, spec);
+  return refused;
 }
 
 /** Proposes one boot of a shut-down device of the kind, else one creation; or why it cannot. */

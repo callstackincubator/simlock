@@ -277,7 +277,7 @@ export function createCore(options: CoreOptions): Core {
     leases: leaseMaintenance.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
-    warmPool,
+    warmPool: { forget: () => warmPool.forget() },
   });
   const doctor = new Doctor({
     // Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
