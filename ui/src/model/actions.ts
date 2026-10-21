@@ -1,10 +1,17 @@
 // why: ADR 0037 §3. One action list per kind of item, read by every surface that offers it; the
 // wording of each dialog and toast is fixed here, so no surface words it differently.
+import type { InboxItem } from "./inbox";
+import type { TokenRecord } from "./leases";
+import type { WorkerView } from "./workers";
+
+export type DaemonModeName = "gateway" | "worker";
+
 export interface ActionConfirm {
   readonly title: string;
   readonly body: string;
   readonly confirm: string;
   readonly busy: string;
+  readonly typeToConfirm?: string;
 }
 
 export interface ActionToast {
@@ -14,7 +21,7 @@ export interface ActionToast {
 }
 
 export interface ItemAction {
-  readonly id: "release-lease";
+  readonly id: "release-lease" | "cancel-request" | "drain" | "undrain" | "remove-worker";
   readonly itemKey: string;
   readonly label: string;
   readonly danger: boolean;
@@ -58,4 +65,43 @@ export function leaseActions(lease: LeaseActionInput): readonly ItemAction[] {
       },
     },
   ];
+}
+
+export interface RequestActionInput {
+  readonly key: string;
+  readonly id: string;
+  readonly requester: string;
+  readonly device: string;
+}
+
+export function requestActions(_request: RequestActionInput): readonly ItemAction[] {
+  return [];
+}
+
+export interface WorkerActionInput {
+  readonly id: string;
+  readonly name: string;
+  readonly connection: WorkerView["connection"];
+  readonly drained: boolean;
+}
+
+export function workerActions(
+  _worker: WorkerActionInput,
+  _mode: DaemonModeName | undefined,
+): readonly ItemAction[] {
+  return [];
+}
+
+export interface InboxActionContext {
+  readonly mode: DaemonModeName | undefined;
+  readonly now: number;
+  readonly tokens: readonly TokenRecord[];
+  readonly workers: readonly WorkerView[];
+}
+
+export function inboxActions(
+  _item: InboxItem,
+  _context: InboxActionContext,
+): { readonly fix?: ItemAction; readonly menu: readonly ItemAction[] } {
+  return { menu: [] };
 }
