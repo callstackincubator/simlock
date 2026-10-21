@@ -14,6 +14,9 @@ import {
 import { useSidebar } from "../state/sidebar";
 import { ROUTES, routeFor } from "./routes";
 
+const MODAL_DIALOG =
+  '[role="dialog"]:not([aria-modal="false"]), [role="alertdialog"]:not([aria-modal="false"])';
+
 export function Shell() {
   const path = usePath();
   const route = routeFor(path);
@@ -27,6 +30,9 @@ export function Shell() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        // why: a drawer or a dialog is already open over the console, and the search opens over
+        // none; a toast is a non-modal dialog and does not count.
+        if (document.querySelector(MODAL_DIALOG) !== null) return;
         event.preventDefault();
         palette.show();
       }

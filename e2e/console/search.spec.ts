@@ -139,6 +139,9 @@ test.describe("the search results", () => {
       await openConsole(page, host.tokens.operator, new URL("/", host.url).toString());
       const box = page.getByRole("combobox", { name: "Search pages, items and actions" });
       const goTo = async (typed: string, path: RegExp) => {
+        // why: ⌘K does nothing while a drawer is open, so the one the last step opened is closed first.
+        if ((await page.getByRole("dialog").count()) > 0) await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
         await page.keyboard.press("Control+k");
         await box.fill(typed);
         await page.keyboard.press("Enter");
@@ -178,6 +181,7 @@ test.describe("the search actions", () => {
         { label: "the gateway sees the stopped worker disconnected" },
       );
       const run = async (typed: string) => {
+        await expect(page.getByRole("alertdialog")).toHaveCount(0);
         await page.keyboard.press("Control+k");
         await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill(typed);
         await page.keyboard.press("Enter");
