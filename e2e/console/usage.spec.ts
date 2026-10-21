@@ -221,20 +221,17 @@ test.describe("the Usage page", () => {
     }
   });
 
-  test("clicking the Overview's Granted tile on /?range=7d opens /usage?range=7d", async ({
-    page,
-  }) => {
+  test("shows the Device slots in use chart in the shared frame", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await page.goto(new URL("/?range=7d", host.url).toString());
+      await page.goto(new URL("/usage?range=6h", host.url).toString());
       await signIn(page, host.tokens.operator);
-      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-
-      await page.getByRole("link", { name: /Granted/ }).click();
-
       await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
-      expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe("/usage?range=7d");
-      await expect(page.getByRole("radio", { name: "7 days" })).toBeChecked();
+
+      await expect(
+        page.getByRole("heading", { name: "Device slots in use, last 6 hours", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator("#main details.chart-data")).toHaveCount(1);
     } finally {
       await host.dispose();
     }

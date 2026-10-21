@@ -25,6 +25,7 @@ const RANGES = [
 ] as const;
 
 const CHARTS = ["leasesHeld", "queueDepth", "slotsUsed"] as const;
+const OVERVIEW_CHARTS = ["leasesHeld", "queueDepth"] as const;
 
 interface Stats {
   readonly totals: { readonly granted: number; readonly wait: { readonly p95: number | null } };
@@ -110,7 +111,7 @@ async function tablesOf(page: Page): Promise<readonly (readonly string[])[]> {
 }
 
 function expectedTables(stats: Stats): readonly (readonly string[])[] {
-  return CHARTS.map((key) =>
+  return OVERVIEW_CHARTS.map((key) =>
     [...stats.series].reverse().map((point) => (point[key] === null ? "—" : String(point[key]))),
   );
 }
@@ -119,7 +120,7 @@ test.describe("the Overview's figures", () => {
   // why: a run is charted once its minute is over, which can take most of a minute.
   test.describe.configure({ timeout: 150_000 });
 
-  test("picking each of 1 hour, 6 hours, 24 hours and 7 days writes its ?range=, and the two tiles and all three chart tables equal GET /v1/stats", async ({
+  test("picking each of 1 hour, 6 hours, 24 hours and 7 days writes its ?range=, and the Wait p95 tile and the two chart tables equal GET /v1/stats", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -137,9 +138,6 @@ test.describe("the Overview's figures", () => {
         ).toBeVisible();
 
         const stats = await statsOf(host, range.since);
-        await expect
-          .poll(() => tileText(page, "Granted"))
-          .toBe(`Granted | ${stats.totals.granted} | ${range.unit}`);
         await expect
           .poll(() => tileText(page, "Wait p95"))
           .toBe(`Wait p95 | ${waitText(stats.totals.wait.p95)} | ${range.unit}`);
@@ -160,21 +158,20 @@ test.describe("the Overview's figures", () => {
       await scriptedRun(host);
       await openOverview(page, host, "/?range=6h");
       await expect(page.getByRole("radio", { name: "6 hours" })).toBeChecked();
-      await expect(tile(page, "Granted")).toBeVisible();
-      const before = [await tileText(page, "Granted"), await tileText(page, "Wait p95")];
+      await expect(tile(page, "Wait p95")).toBeVisible();
+      const before = [await tileText(page, "Wait p95")];
 
       await page.reload();
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
       await expect(page.getByRole("radio", { name: "6 hours" })).toBeChecked();
-      await expect.poll(() => tileText(page, "Granted")).toBe(before[0]);
-      await expect.poll(() => tileText(page, "Wait p95")).toBe(before[1]);
+      await expect.poll(() => tileText(page, "Wait p95")).toBe(before[0]);
     } finally {
       await host.dispose();
     }
   });
 
-  test("a daemon stop and start, with the events behind the figures pruned, shows the same Wait p95, Granted and chart rows", async ({
+  test("a daemon stop and start, with the events behind the figures pruned, shows the same Wait p95 and chart rows", async ({
     page,
   }) => {
     const host = await startDaemon("worker", {
@@ -184,14 +181,13 @@ test.describe("the Overview's figures", () => {
     try {
       await scriptedRun(host);
       await openOverview(page, host, "/?range=24h");
-      await expect(tile(page, "Granted")).toBeVisible();
+      await expect(tile(page, "Wait p95")).toBeVisible();
       const before = {
-        granted: await tileText(page, "Granted"),
         rows: (await tablesOf(page)).map((rows) => rows.filter((row) => row !== "—")),
         wait: await tileText(page, "Wait p95"),
       };
 
-      expect(before.rows).toHaveLength(3);
+      expect(before.rows).toHaveLength(2);
       expect(before.rows.every((rows) => rows.length > 0)).toBe(true);
 
       await host.stop();
@@ -204,7 +200,6 @@ test.describe("the Overview's figures", () => {
         events: { event: string }[];
       };
       expect(events.filter((entry) => entry.event === "lease.granted")).toEqual([]);
-      await expect.poll(() => tileText(page, "Granted")).toBe(before.granted);
       await expect.poll(() => tileText(page, "Wait p95")).toBe(before.wait);
       const after = (await tablesOf(page)).map((rows) => rows.filter((row) => row !== "—"));
       expect(after.map((rows, index) => rows.slice(-(before.rows[index]?.length ?? 0)))).toEqual(
@@ -215,19 +210,19 @@ test.describe("the Overview's figures", () => {
     }
   });
 
-  test("a lease granted while the Overview is open raises Granted within 2 seconds with no reload", async ({
+  test("a lease granted while the Overview is open raises Leased within 2 seconds with no reload", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await openOverview(page, host);
-      await expect(tile(page, "Granted")).toBeVisible();
-      await expect(tile(page, "Granted")).toContainText("0");
+      await expect(tile(page, "Leased")).toBeVisible();
+      await expect(tile(page, "Leased")).toContainText("0");
 
       const granted = await host.cli([...LEASE, "--agent-id", "late", "--detach"]);
       expect(granted.code, granted.stderr).toBe(0);
 
-      await expect(tile(page, "Granted").locator(".stat-value")).toHaveText("1", {
+      await expect(tile(page, "Leased").locator(".stat-value")).toHaveText("1", {
         timeout: 2_000,
       });
     } finally {
