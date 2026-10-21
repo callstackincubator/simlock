@@ -1,6 +1,6 @@
 # 0042. Simlock updates itself through a frozen call and a detached updater
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-21
 - **Issue:** [#825](https://github.com/callstackincubator/simlock/issues/825)
 - **Supersedes:** nothing. Extends [ADR
