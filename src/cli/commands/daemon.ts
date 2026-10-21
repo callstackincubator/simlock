@@ -80,6 +80,34 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     }
     return 0;
   }
+  if (command === "uninstall") {
+    const { manager, definition } = serviceAccess(environment);
+    const service = await definition();
+    const state = await manager.state(service);
+    const writeJson = (status: string, extra: Record<string, unknown>): void =>
+      writeResult((value) => environment.stdout.write(value), {
+        status,
+        ...extra,
+        service: {
+          state: "not-installed",
+          manager: manager.manager,
+          name: service.name,
+        },
+      });
+    if (state.state === "not-installed") {
+      if (values.json) writeJson("not-installed", {});
+      else environment.stdout.write(`Service not installed: ${service.name}\n`);
+      return 0;
+    }
+    const stopped = await stopRunningDaemon(environment, token);
+    await manager.uninstall(service);
+    if (values.json) writeJson("removed", stopped ? { stopped: true } : {});
+    else {
+      if (stopped) environment.stdout.write("Daemon stopping\n");
+      environment.stdout.write(`Service removed: ${service.name} (${manager.manager})\n`);
+    }
+    return 0;
+  }
   if (command === "stop") {
     const client = await connectDaemonClient(environment, token, { launch: false });
     try {

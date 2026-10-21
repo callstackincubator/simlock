@@ -76,6 +76,7 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "status", load: daemonModule },
       { name: "logs", load: daemonModule },
       { name: "install", load: daemonModule },
+      { name: "uninstall", load: daemonModule },
     ],
   },
   {

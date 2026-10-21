@@ -183,4 +183,23 @@ describe("LaunchdServiceManager (#830)", () => {
       expect(plist.ProgramArguments[0], testCase.label).toBe(testCase.nodePath);
     }
   });
+
+  it("uninstall unloads the service and deletes its plist, and a service that was not loaded is no error", async () => {
+    for (const bootoutCode of [0, 113]) {
+      const filesystem = new MemoryFilesystem();
+      const definition = definitionFor("worker");
+      await installed(definition, filesystem);
+      const runner = new ScriptedProcessRunner([
+        {
+          match: { command: "launchctl", args: ["bootout", `gui/501/${definition.name}`] },
+          result: { code: bootoutCode, stdout: "", stderr: "" },
+        },
+      ]);
+
+      await new LaunchdServiceManager({ runner, filesystem, uid: 501 }).uninstall(definition);
+
+      expect(runner.calls[0]?.options.timeoutMs, `code ${String(bootoutCode)}`).toBe(10_000);
+      expect(await filesystem.exists(definition.path), `code ${String(bootoutCode)}`).toBe(false);
+    }
+  });
 });

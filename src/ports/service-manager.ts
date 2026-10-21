@@ -209,7 +209,10 @@ export class LaunchdServiceManager implements ServiceManager {
     await this.launchctl(["bootstrap", this.domain(), definition.path]);
   }
 
-  async uninstall(_definition: ServiceDefinition): Promise<void> {}
+  async uninstall(definition: ServiceDefinition): Promise<void> {
+    await this.launchctl(["bootout", `${this.domain()}/${definition.name}`]);
+    await this.options.filesystem.rm(definition.path);
+  }
 
   async start(_definition: ServiceDefinition): Promise<void> {}
 }
