@@ -622,4 +622,41 @@ test.describe("the console acts", () => {
       await daemon.dispose();
     }
   });
+
+  test("an item's menu entries are disabled while its action is in flight, and a click on one sends nothing", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "busy-a" }]);
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const posts: string[] = [];
+      let answer: (() => Promise<void>) | undefined;
+      await page.route("**/v1/workers/*/drain", async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        posts.push(route.request().url());
+        answer = () => route.continue();
+        return undefined;
+      });
+      const menuButton = rowOf(page, "busy-a").getByRole("button", { name: "Actions for busy-a" });
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Drain", exact: true }).click();
+      await expect.poll(() => posts.length).toBe(1);
+
+      await menuButton.click();
+      const entry = page.getByRole("menuitem", { name: "Drain", exact: true });
+      await expect(entry).toHaveAttribute("aria-disabled", "true");
+      await entry.click({ force: true });
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      expect(posts).toHaveLength(1);
+
+      await answer?.();
+      await expect(page.getByText("busy-a drained", { exact: true })).toBeVisible();
+      await menuButton.click();
+      await expect(page.getByRole("menuitem", { name: "Undrain", exact: true })).toBeEnabled();
+      expect(posts).toHaveLength(1);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
