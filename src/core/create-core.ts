@@ -294,6 +294,7 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.optionalModules === undefined ? {} : { optionalModules: options.optionalModules }),
     prerequisiteChecks: options.prerequisiteChecks ?? [],
+    ...(options.serviceCheck === undefined ? {} : { serviceCheck: options.serviceCheck }),
     quarantine,
     registry,
     warmPool: {

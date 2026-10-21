@@ -872,6 +872,13 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     message: z.string(),
   }),
   z.object({
+    kind: z.literal("service-broken"),
+    manager: z.enum(["launchd", "systemd"]),
+    name: z.string(),
+    missing: z.array(z.string()).min(1),
+    remedy: z.string(),
+  }),
+  z.object({
     kind: z.literal("prerequisite-missing"),
     platform: platformSchema,
     prerequisite: z.string(),

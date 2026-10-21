@@ -89,6 +89,8 @@ import {
   NodeHostInfo,
   NodeIpcTransport,
   NodeProcessRunner,
+  productionServiceManager,
+  serviceDefinition,
   NodeProcessSupervisor,
   NodeSystemStats,
   NodeBytePipeLauncher,
@@ -392,6 +394,7 @@ async function composeDaemon(
     modelPreferences,
     optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
+    ...(options.serviceCheck === undefined ? {} : { serviceCheck: options.serviceCheck }),
     registry,
     state,
     systemStats,
@@ -1584,6 +1587,37 @@ function logFatalStart(role: DaemonMode | undefined, message: string, extra: obj
   process.exitCode = 1;
 }
 
+/** why: only a worker has a service check; a gateway and an unsupported platform have none. */
+function productionServiceCheck(role: DaemonMode): { readonly serviceCheck?: ServiceCheck } {
+  const filesystem = new NodeFilesystem();
+  const manager = productionServiceManager(process.platform, {
+    runner: new NodeProcessRunner(),
+    filesystem,
+    uid: process.getuid?.() ?? 0,
+  });
+  if (manager === undefined || role !== "worker") return {};
+  const root = resolveSimlockHome();
+  const definition = serviceDefinition({
+    role,
+    root,
+    dataDirectory: daemonDataDirectory(root, role),
+    home: homedir(),
+    nodePath: process.execPath,
+    mainPath: fileURLToPath(import.meta.url),
+    env: process.env,
+  });
+  return {
+    serviceCheck: {
+      manager: manager.manager,
+      name: definition.name,
+      check: async () => {
+        const state = await manager.state(definition);
+        return state.state === "broken" ? state.missing : [];
+      },
+    },
+  };
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   filterSqliteExperimentalWarning();
   const argv = process.argv.slice(2);
@@ -1593,7 +1627,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   } else {
     // why: one SIGTERM handler for both phases: before the daemon is up there is nothing to stop, so it exits 0 at once; after, it stops with reason `signal` and exits 0.
     let running: Awaited<ReturnType<typeof startDaemon>> | undefined;
-    void startDaemon({ role })
+    void startDaemon({ role, ...productionServiceCheck(role) })
       .then((daemon) => {
         running = daemon;
       })
