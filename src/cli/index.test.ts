@@ -20,6 +20,8 @@ import {
   FakeServiceManager,
   IpcError,
   launcherFor,
+  LaunchdServiceManager,
+  ScriptedProcessRunner,
   MemoryFilesystem,
   MemoryIpcTransport,
   FakeKeySetFetcher,
@@ -8752,5 +8754,149 @@ describe("CLI: a start goes through the service (#830)", () => {
       expect(spawner.launches, testCase.label).toBe(0);
       expect(notices, testCase.label).toEqual([]);
     }
+  });
+});
+
+describe("CLI: a service manager call fails, or the platform has none (#830)", () => {
+  const home = "/Users/me";
+  const root = join(home, ".simlock");
+  const name = "com.callstack.simlock.worker";
+  const plist = `${home}/Library/LaunchAgents/${name}.plist`;
+  const nodePath = "/opt/node/bin/node";
+  const mainPath = "/opt/simlock/dist/daemon/main.js";
+  const done = (code: number | null, stderr = "") => ({ code, stdout: "", stderr });
+
+  async function run(options: {
+    readonly argv: readonly string[];
+    readonly platform?: NodeJS.Platform;
+    readonly script?: ConstructorParameters<typeof ScriptedProcessRunner>[0];
+    readonly present?: readonly string[];
+  }): Promise<{
+    readonly exitCode: number;
+    readonly stderr: string;
+    readonly filesystem: MemoryFilesystem;
+  }> {
+    const filesystem = new MemoryFilesystem();
+    for (const path of options.present ?? []) {
+      await filesystem.mkdirp(dirname(path));
+      await filesystem.writeFileAtomic(path, "");
+    }
+    const manager =
+      options.script === undefined
+        ? undefined
+        : new LaunchdServiceManager({
+            runner: new ScriptedProcessRunner(options.script),
+            filesystem,
+            uid: 501,
+          });
+    const ipc = new MemoryIpcTransport();
+    const ports: CliEnvironmentPorts = {
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc,
+      launcher: launcherFor({
+        role: "worker",
+        root,
+        dataDirectory: root,
+        mainPath,
+        nodePath,
+        home,
+        env: {},
+        serviceManager: manager,
+        notify: () => undefined,
+        spawner: new FakeDaemonLauncher(() => undefined, { exit: { code: 1, signal: null } }),
+      }),
+      daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      service: {
+        manager,
+        platform: options.platform ?? "darwin",
+        home,
+        root,
+        nodePath,
+        mainPath,
+      },
+    };
+    const output = outputCapture(ports);
+    const exitCode = await runCli(options.argv, output.environmentWith());
+    return { exitCode, stderr: output.stderr, filesystem };
+  }
+
+  const errorOf = (stderr: string): { code: string; message: string } =>
+    (
+      JSON.parse(stderr.trim().split("\n").at(-1) ?? "") as {
+        error: { code: string; message: string };
+      }
+    ).error;
+
+  it("a failed or stuck launchctl call is SERVICE_FAILED, a failed load removes the plist, and a platform without a service manager is a usage error", async () => {
+    for (const platform of ["linux", "win32"] as const) {
+      for (const command of ["install", "uninstall"]) {
+        const result = await run({ argv: ["daemon", command], platform });
+        expect(result.exitCode, `${platform} ${command}`).toBe(2);
+        expect(errorOf(result.stderr), `${platform} ${command}`).toEqual({
+          code: "USAGE",
+          message: `daemon ${command} is supported on macOS and Linux only`,
+        });
+      }
+    }
+
+    const bootout = {
+      match: { command: "launchctl", args: ["bootout", `gui/501/${name}`] },
+      result: done(113),
+    };
+    const bootstrap = { command: "launchctl", args: ["bootstrap", "gui/501", plist] };
+    const failedLoad = await run({
+      argv: ["daemon", "install"],
+      script: [
+        bootout,
+        {
+          match: bootstrap,
+          result: done(5, "Bootstrap failed: 5: Input/output error\nsecond line"),
+        },
+      ],
+    });
+    expect(failedLoad.exitCode).toBe(1);
+    expect(errorOf(failedLoad.stderr)).toEqual({
+      code: "SERVICE_FAILED",
+      message: `launchctl bootstrap gui/501 ${plist} failed: Bootstrap failed: 5: Input/output error`,
+    });
+    expect(await failedLoad.filesystem.exists(plist)).toBe(false);
+
+    const stuckLoad = await run({
+      argv: ["daemon", "install"],
+      script: [bootout, { match: bootstrap, result: done(null) }],
+    });
+    expect(stuckLoad.exitCode).toBe(1);
+    expect(errorOf(stuckLoad.stderr)).toEqual({
+      code: "SERVICE_FAILED",
+      message: `launchctl bootstrap gui/501 ${plist} did not finish within 10 s`,
+    });
+    expect(await stuckLoad.filesystem.exists(plist)).toBe(false);
+
+    const failedKickstart = await run({
+      argv: ["daemon", "start"],
+      present: [plist, nodePath, mainPath],
+      script: [
+        {
+          match: { command: "plutil", args: ["-convert", "json", "-o", "-", plist] },
+          result: {
+            code: 0,
+            stdout: JSON.stringify({ ProgramArguments: [nodePath, mainPath] }),
+            stderr: "",
+          },
+        },
+        { match: { command: "launchctl", args: ["print", `gui/501/${name}`] }, result: done(0) },
+        {
+          match: { command: "launchctl", args: ["kickstart", `gui/501/${name}`] },
+          result: done(1, "Could not find service"),
+        },
+      ],
+    });
+    expect(failedKickstart.exitCode).toBe(1);
+    expect(errorOf(failedKickstart.stderr)).toEqual({
+      code: "SERVICE_FAILED",
+      message: `launchctl kickstart gui/501/${name} failed: Could not find service`,
+    });
   });
 });
