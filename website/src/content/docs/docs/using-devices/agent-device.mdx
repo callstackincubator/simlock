@@ -27,7 +27,7 @@ agent-device through Simlock drives simulators and emulators. It does not lease 
 
 <Steps>
 
-1. On the worker, turn on agent-device and HTTP:
+1. On a standalone worker, turn on agent-device and HTTP. A worker that joins a gateway turns on only agent-device, and keeps HTTP off:
 
    ```sh
    simlock config set capabilities.agent-device.enabled true
