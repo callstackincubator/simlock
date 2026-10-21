@@ -11,7 +11,9 @@ import { buildCliEnvironment } from "../cli/index.js";
 import {
   FakeClock,
   FakeDaemonLauncher,
+  FakeServiceManager,
   FakeSystemStats,
+  NodeDaemonLauncher,
   MemoryFilesystem,
   MemoryIpcTransport,
 } from "../ports/index.js";
@@ -207,6 +209,53 @@ describe("MCP stdio lifecycle", () => {
       await mcpClient.close();
       await runner.shutdown();
     } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("auto-start from a tool call asks a loaded service to start the daemon and spawns nothing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mcp-svc-"));
+    vi.stubEnv("SIMLOCK_HOME", root);
+    const spawned = vi
+      .spyOn(NodeDaemonLauncher.prototype, "launch")
+      .mockRejectedValue(new Error("the MCP server spawned a daemon"));
+    try {
+      const serviceManager = new FakeServiceManager({
+        state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+      });
+      const toolCallClient = new FakeSimlockClient();
+      toolCallClient.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+      connectWithAutoLaunch.mockReset().mockImplementation(async (options) => {
+        await options.launcher.launch();
+        return toolCallClient;
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const runner = await startMcpStdio({
+        clock: new FakeClock(0),
+        createTransport: () => serverTransport,
+        requesterId: "mcp-test",
+        serviceManager,
+        signals: new FakeSignals(),
+      });
+      const mcpClient = new Client({ name: "test", version: "1.0.0" });
+      await mcpClient.connect(clientTransport);
+
+      await mcpClient.request(
+        {
+          method: "tools/call",
+          params: { arguments: { model: "iPhone", platform: "ios" }, name: "lease_simulator" },
+        },
+        CallToolResultSchema,
+      );
+
+      expect(serviceManager.starts).toHaveLength(1);
+      expect(serviceManager.starts[0]?.role).toBe("worker");
+      expect(spawned).not.toHaveBeenCalled();
+      await mcpClient.close();
+      await runner.shutdown();
+    } finally {
+      spawned.mockRestore();
       vi.unstubAllEnvs();
       await rm(root, { force: true, recursive: true });
     }
