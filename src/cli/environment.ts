@@ -61,11 +61,13 @@ class AutoLaunchAdminConnector {
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
+    const output = await launched.readOutput().catch(() => "");
     const { SimlockError } = await import("../contract/index.js");
+    const { startTimeoutMessage } = await import("../ports/index.js");
     throw new SimlockError(
       "DAEMON_STARTUP_FAILED",
       "transport",
-      `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+      startTimeoutMessage(errorMessage(lastError), output),
       {},
     );
   }

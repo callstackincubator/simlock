@@ -1,7 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { type DaemonExit, type DaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
+import {
+  type DaemonExit,
+  type DaemonLauncher,
+  logReaderSince,
+  NodeDaemonLauncher,
+} from "./daemon-launcher.js";
 import type { DaemonRole } from "./paths.js";
 import { serviceDefinition, type ServiceManager } from "./service-manager.js";
 
@@ -52,8 +57,9 @@ export function launcherFor(options: LauncherForOptions): DaemonLauncher {
         );
       }
       if (state.state !== "installed") return spawner.launch();
+      const readOutput = await logReaderSince(join(options.dataDirectory, "daemon.log"));
       await serviceManager.start(definition);
-      return { exited: new Promise<DaemonExit>(() => undefined), readOutput: async () => "" };
+      return { exited: new Promise<DaemonExit>(() => undefined), readOutput };
     },
   };
 }

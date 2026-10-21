@@ -26,6 +26,25 @@ export function startErrorFrom(exit: DaemonExit, output: string): string {
   return `The daemon exited with code ${String(exit.code ?? exit.signal)} while starting; see \`simlock daemon logs\``;
 }
 
+const DEADLINE_LOG_LINES = 20;
+
+export function startTimeoutMessage(lastError: string, output: string): string {
+  const lines = output
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .slice(-DEADLINE_LOG_LINES);
+  const base = `Timed out starting simlock daemon: ${lastError}`;
+  return lines.length === 0 ? base : `${base}\ndaemon.log since the start:\n${lines.join("\n")}`;
+}
+
+export async function logReaderSince(logPath: string): Promise<() => Promise<string>> {
+  const before = await stat(logPath).catch(() => undefined);
+  if (before === undefined) {
+    return async () => (await readFile(logPath)).subarray(-MAX_OUTPUT_BYTES).toString("utf8");
+  }
+  return () => readLogSince(logPath, before.ino, before.size);
+}
+
 function fatalMessage(line: string): string | undefined {
   let record: unknown;
   try {

@@ -23,6 +23,7 @@ export {
   type LaunchedDaemon,
   NodeDaemonLauncher,
   startErrorFrom,
+  startTimeoutMessage,
 } from "./daemon-launcher.js";
 export {
   type IpcConnection,
