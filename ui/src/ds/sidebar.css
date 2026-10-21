@@ -167,29 +167,16 @@
   font-size: var(--text-sm);
 }
 
-.sidebar-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* Sign out and Collapse: one secondary button, icon and word centred together. */
+.sidebar-toggle,
+.sign-out {
   gap: var(--space-2);
-  height: 32px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: var(--label-tracking);
-  text-transform: uppercase;
-  cursor: pointer;
+  min-height: 36px;
   white-space: nowrap;
 }
 
-.sidebar-toggle:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-
-.sidebar-toggle .nav-label {
+.sidebar-toggle .nav-label,
+.sign-out .nav-label {
   flex: 0 1 auto;
 }
 
@@ -233,8 +220,10 @@
   display: none;
 }
 
-.sidebar-collapsed .sidebar-toggle {
+.sidebar-collapsed .sidebar-toggle,
+.sidebar-collapsed .sign-out {
   gap: 0;
+  padding: 0;
 }
 
 @media (max-width: 767.98px) {
@@ -362,16 +351,6 @@
   align-items: center;
   min-height: 20px;
   font-size: var(--text-sm);
-}
-
-.sign-out {
-  gap: var(--space-2);
-  min-height: 36px;
-}
-
-.sidebar-collapsed .sign-out {
-  gap: 0;
-  padding: 0;
 }
 
 .sidebar-collapsed .connection {

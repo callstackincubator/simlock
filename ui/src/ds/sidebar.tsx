@@ -2,6 +2,7 @@ import "./sidebar.css";
 
 import { type ReactNode, useId, useState } from "react";
 
+import { Button } from "./button";
 import { Icon, type IconName } from "./icon";
 import { Link } from "./link";
 
@@ -104,8 +105,8 @@ export function Sidebar(props: {
       </div>
       <div className="sidebar-foot">
         {footer(collapsed)}
-        <button
-          type="button"
+        <Button
+          variant="secondary"
           className="sidebar-toggle"
           aria-expanded={!collapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -114,7 +115,7 @@ export function Sidebar(props: {
         >
           <Icon name={collapsed ? "expand" : "collapse"} />
           <span className="nav-label">Collapse</span>
-        </button>
+        </Button>
       </div>
     </nav>
   );
