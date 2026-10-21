@@ -5,7 +5,7 @@ import { describeSchemaIssues } from "../contract/index.js";
 import { badRequest, errorResponse } from "./errors.js";
 
 export type RouteRole = "public" | "agent" | "admin";
-export type RouteTag = "System" | "Devices";
+type RouteTag = "System" | "Devices";
 type SuccessStatus = 200 | 201 | 202 | 204;
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 415 | 422 | 500 | 501 | 503;
 type JsonContent<Schema extends z.ZodType> = { "application/json": { schema: Schema } };

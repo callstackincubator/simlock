@@ -60,10 +60,6 @@ export class HttpApiError extends Error {
   }
 }
 
-export function unauthenticated(message: string): HttpApiError {
-  return new HttpApiError(401, "UNAUTHENTICATED", message);
-}
-
 export function forbidden(message: string): HttpApiError {
   return new HttpApiError(403, "FORBIDDEN", message);
 }

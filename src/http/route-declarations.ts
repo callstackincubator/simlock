@@ -21,7 +21,7 @@ export const statusRoute = declareRoute({
   reply: OPERATIONS["status.get"].output,
 });
 
-export const deviceAddBodySchema = z.object({ id: z.string(), platform: z.string() }).strict();
+const deviceAddBodySchema = z.object({ id: z.string(), platform: z.string() }).strict();
 
 export const deviceAddRoute = declareRoute({
   method: "post",

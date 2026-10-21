@@ -26,30 +26,45 @@ describe("buildOpenApiDocument", () => {
     const status = paths["/v1/status"]?.get;
     const add = paths["/v1/devices"]?.post;
 
-    expect(status?.tags).toEqual(["System"]);
-    expect(status?.description).toContain("Role: agent.");
-    expect(Object.keys(status?.responses ?? {}).sort()).toEqual([
-      "200",
-      "401",
-      "403",
-      "500",
-      "503",
-    ]);
-    expect(errorCodes(status, "503")).toEqual(["DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"]);
-    expect(add?.tags).toEqual(["Devices"]);
-    expect(add?.description).toContain("Role: admin.");
+    expect(summarize(status)).toEqual({
+      codes503: ["DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
+      description: expect.stringContaining("Role: agent."),
+      statuses: ["200", "401", "403", "500", "503"],
+      tags: ["System"],
+    });
+    expect(summarize(add)).toMatchObject({
+      description: expect.stringContaining("Role: admin."),
+      tags: ["Devices"],
+    });
     expect(add?.requestBody).toMatchObject({ required: true });
     expect(replySchema(add, "200").required).toEqual(
       expect.arrayContaining(["id", "driverDeviceId", "reenrolled"]),
     );
-    expect(errorCodes(add, "422")).toEqual(["DEVICE_NOT_ENROLLABLE", "NO_DRIVER"]);
-    expect(errorCodes(add, "403")).toEqual(["FORBIDDEN"]);
-    expect(errorCodes(add, "415")).toEqual(["UNSUPPORTED_MEDIA_TYPE"]);
-    expect(errorCodes(add, "400")).toEqual(["BAD_REQUEST"]);
-    expect(errorCodes(add, "409")).toEqual(["DEVICE_BUSY"]);
-    expect(errorCodes(add, "501")).toEqual(["UNSUPPORTED_IN_GATEWAY_MODE"]);
+    expect(
+      Object.fromEntries(
+        ["400", "403", "409", "415", "422", "501"].map((code) => [code, errorCodes(add, code)]),
+      ),
+    ).toEqual({
+      "400": ["BAD_REQUEST"],
+      "403": ["FORBIDDEN"],
+      "409": ["DEVICE_BUSY"],
+      "415": ["UNSUPPORTED_MEDIA_TYPE"],
+      "422": ["DEVICE_NOT_ENROLLABLE", "NO_DRIVER"],
+      "501": ["UNSUPPORTED_IN_GATEWAY_MODE"],
+    });
   });
 });
+
+function summarize(
+  operation: { tags?: string[]; description?: string; responses?: object } | undefined,
+) {
+  return {
+    codes503: errorCodes(operation, "503"),
+    description: operation?.description,
+    statuses: Object.keys(operation?.responses ?? {}).sort(),
+    tags: operation?.tags,
+  };
+}
 
 interface JsonSchema {
   readonly required?: readonly string[];
