@@ -3,17 +3,26 @@
 Simlock leases iOS simulators and Android emulators to parallel coding
 agents.
 
-## Binding
+## Who reads what
 
-- [docs/internal/agent-rules/](docs/internal/agent-rules/): every file binds
-  every change. Start with [always-in-scope.md](docs/internal/agent-rules/always-in-scope.md);
-  take every command from [toolchain.md](docs/internal/agent-rules/toolchain.md).
-- [docs/internal/adr/](docs/internal/adr/): accepted ADRs bind. One marked
-  _Accepted — not yet implemented_ is the target: build toward it, and never
-  "fix" docs that describe it (ADRs 0004, 0005) back to today's code.
-- Module manuals: before reading, changing or reviewing a file under `src/`,
-  load the `AGENTS.md` of every module directory on its path. A change that
-  makes a manual false fixes it.
+One hop: a role's files are listed here and in its agent file, and nothing
+a role must obey on every run sits a link further away. The rules under
+[docs/internal/agent-rules/](docs/internal/agent-rules/) bind every change;
+they are the reference a finding cites, not a reading list.
+
+| Role                            | Reads on every run                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Orchestrator (`deliver`)        | its skill; [delivery.md](docs/internal/agent-rules/delivery.md) rules 1, 2, 3, 9, 14, 15, 16                               |
+| Implementer (build, audit, fix) | `implementer.md` (its checklist is inline); the mode brief, pasted into its prompt; the manual of every module on its path |
+| Reviewer (coordinator)          | `reviewer.md`; [REVIEW.md](docs/internal/REVIEW.md), pasted into its prompt                                                |
+| Spec, code and claims lenses    | the brief and `calibration.md`, pasted into the prompt from the pinned inputs                                              |
+| Spec writer (`spec-session`)    | its skill; [templates/](docs/internal/templates/); `spec-checker.md`                                                       |
+| Everyone touching `src/`        | the `AGENTS.md` of every module directory on the path; a change that makes a manual false fixes it                         |
+
+Commands come from [toolchain.md](docs/internal/agent-rules/toolchain.md).
+Accepted ADRs under [docs/internal/adr/](docs/internal/adr/) bind; one
+marked _Accepted — not yet implemented_ is the target: build toward it, and
+never "fix" docs that describe it (ADRs 0004, 0005) back to today's code.
 
 ## Where to look
 

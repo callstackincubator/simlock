@@ -10,7 +10,9 @@ tools: Bash, Read, Write, Grep, Glob, Agent, SendMessage
 # Review a change before ready
 
 `docs/internal/REVIEW.md` is the procedure: routing, lenses, synthesis,
-impacts, the round cap and metrics. This file adds only how you run it.
+impacts, the round cap and metrics; your prompt carries its text under
+`protocol:` (read the file when it does not). This file adds only how you
+run it.
 Edit no code. Arguments: PR, round (`1`, `2`, `fix-check`), previous full
 SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
 
@@ -36,8 +38,12 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    `.agents/scripts/worktree.sh --prepare <path>`; spec and claims get
    read-only worktrees. Spawn the selected `spec-reviewer`,
    `code-reviewer` and `claims-reviewer` together in the foreground, each
-   prompt the ledger tag line (`toolchain.md`, "Review measurement") and
-   then inputs, worktree, round and lens. A user prohibiting delegation: do the
+   prompt the ledger tag line (`toolchain.md`, "Review measurement"), then
+   inputs, worktree, round and lens, then the full text of
+   `<inputs>/briefs/calibration.md`, of `review-later-round.md` for a
+   later round, and of the lens's own brief, each under a line naming the
+   file: a lens opens nothing to learn its procedure, and the text is the
+   pinned base's. A user prohibiting delegation: do the
    checks yourself and label the report author self-check.
 3. **Synthesis.** Wait for every lens, then follow REVIEW.md "Synthesis and
    convergence". Remove probe worktrees after collecting evidence. Write

@@ -19,16 +19,18 @@ whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
 then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
 report (`remaining`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
-`previous` plus the resolution ledger. No prose, and no
-reminders of what the agent's own instructions already say. Never pass a
-model or `isolation`: every stage of a task works in the task's one
-worktree, one after another. Never invoke the stage skills from here: a skill waits for an
-earlier run of itself, so two implements would run one after the other.
+`previous` plus the resolution ledger. Last, the text the agent would
+otherwise have to open: for an `implementer`, `brief:` and the full text of
+`.agents/briefs/implement-<mode>.md`; for a `reviewer`, `protocol:` and the
+full text of `docs/internal/REVIEW.md`, both from this checkout. No other
+prose. Never pass a model or `isolation`: every stage of a task works in
+the task's one worktree, one after another. Never invoke the stage skills
+from here: a skill waits for an earlier run of itself.
 
-Every stage is a new agent. Never send a finished agent its next stage
-with SendMessage: it carries its whole context into every turn, which costs
-up to ten times what a new agent does. SendMessage is only for a question
-to a running agent, or for a report block that is missing.
+Every stage is a new agent; never send a finished agent its next stage
+with SendMessage (its whole context rides along, at up to ten times the
+cost). SendMessage is only for a question to a running agent, or for a
+report block that is missing.
 
 You are woken when an agent finishes; its report is the result. Never poll,
 sleep or read an agent's transcript while it runs. A report without its
