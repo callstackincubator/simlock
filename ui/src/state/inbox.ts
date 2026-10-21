@@ -1,9 +1,12 @@
 import { useState } from "react";
 
 import type { ResourceState } from "../data/live/connection";
+import type { MenuEntry } from "../ds";
 import type { LoadView } from "../ds/loaded";
+import { inboxActions } from "../model/actions";
 import {
   filterInboxRows,
+  inboxItems,
   type InboxFilter,
   type InboxPage,
   inboxPageOf,
@@ -15,7 +18,8 @@ import type { WaitingList } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
 import { type ListDrawerState, useListDrawer } from "./drawer";
 import { useRecentEvents } from "./events";
-import { useLiveResource, useNow } from "./live";
+import { useActions } from "./actions";
+import { useDaemonMode, useLiveResource, useNow } from "./live";
 import { bothViews, loadView, mapView } from "./resource";
 import { usePath } from "./router";
 
@@ -113,4 +117,34 @@ export function useInbox(): Inbox {
 
 export function useInboxDrawer(urlId: string | undefined): ListDrawerState {
   return useListDrawer("/inbox", urlId);
+}
+
+export interface InboxRowActions {
+  readonly fix?: MenuEntry;
+  readonly menu: readonly MenuEntry[];
+}
+
+// why: an Inbox row reads the one list of actions its item offers (ADR 0037 §3); only a drained
+// worker's row has a fix button.
+export function useInboxActions(): (row: InboxRow) => InboxRowActions {
+  const reads = useInboxReads();
+  const { entries } = useActions();
+  const mode = useDaemonMode();
+  const now = useNow();
+  const workers = reads.workers.kind === "ready" ? reads.workers.data.workers : [];
+  const waiting = reads.waiting.kind === "ready" ? reads.waiting.data.requests : [];
+  const tokens = reads.tokens ?? [];
+  const items = inboxItems(workers, {
+    leases: reads.leases,
+    now: now.server,
+    requests: waiting,
+    tokens,
+  });
+  return (row) => {
+    const item = items.find((candidate) => candidate.key === row.key);
+    if (item === undefined) return { menu: [] };
+    const actions = inboxActions(item, { mode, now: now.server, tokens, workers });
+    const [fix] = actions.fix === undefined ? [] : entries([actions.fix]);
+    return { menu: entries(actions.menu), ...(fix === undefined ? {} : { fix }) };
+  };
 }

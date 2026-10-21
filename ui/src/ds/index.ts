@@ -11,7 +11,7 @@ export { Icon, type IconName } from "./icon";
 export { Link, NavigationProvider } from "./link";
 export { Loaded, type LoadView, Refusal } from "./loaded";
 export { ListRow } from "./master-detail";
-export type { MenuEntry } from "./menu";
+export { type MenuEntry, RowMenu } from "./menu";
 export { Meter } from "./meter";
 export type { Paging } from "./pager";
 export { DesignProvider } from "./provider";

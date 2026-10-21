@@ -1,6 +1,7 @@
 import "./inbox.css";
 
 import {
+  Button,
   ButtonLink,
   ChoiceChips,
   Drawer,
@@ -11,6 +12,7 @@ import {
   Loaded,
   Page,
   Panel,
+  RowMenu,
   Status,
   StatusDot,
   Toolbar,
@@ -21,7 +23,9 @@ import {
   type InboxFilter,
   type InboxPage,
   type InboxRow,
+  type InboxRowActions,
   useInbox,
+  useInboxActions,
   useInboxDrawer,
 } from "../../state/inbox";
 
@@ -30,6 +34,7 @@ const GROUP_ORDER = ["Broken", "Needs a look", "Heads-up"] as const;
 export function InboxScreen() {
   const { choose, couldNotCheck, filter, rows, urlId, view } = useInbox();
   const { close, fromList } = useInboxDrawer(urlId);
+  const actionsOf = useInboxActions();
   return (
     <Page
       title="Inbox"
@@ -50,7 +55,12 @@ export function InboxScreen() {
       <Loaded view={view}>
         {(page) => (
           <>
-            <InboxBody rows={rows(page)} filter={filter} couldNotCheck={couldNotCheck} />
+            <InboxBody
+              rows={rows(page)}
+              filter={filter}
+              couldNotCheck={couldNotCheck}
+              actionsOf={actionsOf}
+            />
             {urlId === undefined ? null : (
               <Drawer
                 key={urlId}
@@ -78,8 +88,9 @@ export function InboxBody(props: {
   readonly rows: readonly InboxRow[];
   readonly filter: InboxFilter;
   readonly couldNotCheck?: readonly string[];
+  readonly actionsOf?: (row: InboxRow) => InboxRowActions;
 }) {
-  const { couldNotCheck = [], filter, rows } = props;
+  const { actionsOf, couldNotCheck = [], filter, rows } = props;
   const unchecked =
     couldNotCheck.length === 0 ? null : (
       <p className="muted">{`Could not check: ${couldNotCheck.join(", ")}`}</p>
@@ -98,12 +109,15 @@ export function InboxBody(props: {
           <Panel key={group} title={group} flush>
             <ul className="inbox-list">
               {inGroup.map((row) => (
-                <li key={row.key}>
+                <li key={row.key} className="inbox-item">
                   <Link to={row.to} className="inbox-row">
                     <StatusDot tone={row.tone} label={row.word} />
                     <span className="inbox-word">{row.word}</span>
                     <span className="inbox-subject">{row.subject}</span>
                   </Link>
+                  {actionsOf === undefined ? null : (
+                    <InboxActions row={row} actions={actionsOf(row)} />
+                  )}
                 </li>
               ))}
             </ul>
@@ -111,6 +125,22 @@ export function InboxBody(props: {
         );
       })}
     </>
+  );
+}
+
+function InboxActions(props: { readonly row: InboxRow; readonly actions: InboxRowActions }) {
+  const { actions, row } = props;
+  return (
+    <span className="inbox-actions">
+      {actions.fix === undefined ? null : (
+        <Button variant="secondary" disabled={actions.fix.disabled} onClick={actions.fix.onSelect}>
+          {actions.fix.label}
+        </Button>
+      )}
+      {actions.menu.length === 0 ? null : (
+        <RowMenu label={`Actions for ${row.subject}`} entries={actions.menu} />
+      )}
+    </span>
   );
 }
 
