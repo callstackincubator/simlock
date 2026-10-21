@@ -1,9 +1,16 @@
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import type { ApiClient, Fetch } from "../data/api";
 import type { Preferences } from "../data/preferences";
 import type { Session } from "../data/session";
-import { DesignProvider, NavigationProvider } from "../ds";
+import {
+  ConfirmHost,
+  createConfirmer,
+  createToaster,
+  DesignProvider,
+  NavigationProvider,
+  ToastHost,
+} from "../ds";
 import { SignInEndedScreen, SignInScreen, SigningInScreen } from "../screens/sign-in";
 import { LiveProvider } from "../state/live";
 import { navigate } from "../state/router";
@@ -19,9 +26,11 @@ export function App(props: {
   readonly session: Session;
 }) {
   const { session } = props;
+  const [toaster] = useState(createToaster);
+  const [confirmer] = useState(createConfirmer);
   const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   return (
-    <ConsoleProvider {...props}>
+    <ConsoleProvider {...props} notify={toaster.notify} confirm={confirmer.confirm}>
       <NavigationProvider navigate={navigate}>
         <DesignProvider>
           {state.kind === "checking" ? (
@@ -35,6 +44,8 @@ export function App(props: {
               <Shell />
             </LiveProvider>
           )}
+          <ToastHost toaster={toaster} />
+          <ConfirmHost confirmer={confirmer} />
         </DesignProvider>
       </NavigationProvider>
     </ConsoleProvider>

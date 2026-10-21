@@ -21,6 +21,8 @@ function inConsole(node: ReactNode): string {
     fetch: (() => Promise.reject(new Error("unused"))) as unknown as Fetch,
     preferences: {} as unknown as Preferences,
     session: {} as unknown as Session,
+    confirm: () => Promise.resolve(),
+    notify: () => undefined,
   };
   return renderToStaticMarkup(<ConsoleProvider {...services}>{node}</ConsoleProvider>);
 }
@@ -107,7 +109,7 @@ const PAGING: Paging = {
 };
 
 function table(rows: readonly LeaseRowView[], narrowed = false): string {
-  return renderToStaticMarkup(<LeaseTable rows={rows} narrowed={narrowed} paging={PAGING} />);
+  return inConsole(<LeaseTable rows={rows} narrowed={narrowed} paging={PAGING} />);
 }
 
 describe("the lease list", () => {
@@ -115,7 +117,7 @@ describe("the lease list", () => {
     const html = table([row()]);
 
     expect(text(html)).toBe(
-      "Holder Device Expires in ci-runner-3 iPhone 16 · mac-mini-1 2 min 5 s",
+      "Holder Device Expires in Actions ci-runner-3 iPhone 16 · mac-mini-1 2 min 5 s",
     );
     expect(html).toContain('href="/leases/lse_1/"');
   });

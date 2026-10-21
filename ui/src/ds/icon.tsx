@@ -11,6 +11,7 @@ const PATHS = {
   menu: "M2 4h12M2 8h12M2 12h12",
   close: "M3 3l10 10M13 3L3 13",
   signOut: "M6 2.5H2.5v11H6M10 5l3 3-3 3M13 8H6",
+  more: "M3 8h.01M8 8h.01M13 8h.01",
   device: "M5 1.5h6v13H5zM7.5 12.5h1",
 } as const;
 

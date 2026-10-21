@@ -1,0 +1,82 @@
+import { useCallback, useSyncExternalStore } from "react";
+
+import type { MenuEntry } from "../ds";
+import type { ItemAction } from "../model/actions";
+import { navigate } from "./router";
+import { useApi, useConfirm, useNotify } from "./services";
+
+// why: the in-flight flag is kept per item key, outside any component, so every surface that offers
+// an item's actions (its row, its drawer, the Inbox) sees the same flag and disables the same entries.
+const inFlight = new Set<string>();
+const listeners = new Set<() => void>();
+
+function setInFlight(key: string, on: boolean): void {
+  if (on) inFlight.add(key);
+  else inFlight.delete(key);
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+let snapshot: ReadonlySet<string> = new Set();
+function current(): ReadonlySet<string> {
+  if (snapshot.size !== inFlight.size || [...inFlight].some((key) => !snapshot.has(key))) {
+    snapshot = new Set(inFlight);
+  }
+  return snapshot;
+}
+
+export interface Actions {
+  readonly run: (action: ItemAction) => Promise<void>;
+  readonly entries: (actions: readonly ItemAction[]) => readonly MenuEntry[];
+}
+
+export function useActions(): Actions {
+  const api = useApi();
+  const confirm = useConfirm();
+  const notify = useNotify();
+  const busy = useSyncExternalStore(subscribe, current, current);
+  const run = useCallback(
+    async (action: ItemAction) => {
+      if (inFlight.has(action.itemKey)) return;
+      const perform = async () => {
+        setInFlight(action.itemKey, true);
+        try {
+          await api.write(action.method, action.path);
+          const { description, title, view } = action.success;
+          notify({
+            title,
+            ...(description === undefined ? {} : { description }),
+            ...(view === undefined
+              ? {}
+              : { action: { label: view.label, onClick: () => navigate(view.to) } }),
+          });
+        } finally {
+          setInFlight(action.itemKey, false);
+        }
+      };
+      if (action.confirm === undefined) await perform();
+      else await confirm(action.confirm, perform);
+    },
+    [api, confirm, notify],
+  );
+  const entries = useCallback(
+    (actions: readonly ItemAction[]) =>
+      actions.map((action) => ({
+        danger: action.danger,
+        disabled: busy.has(action.itemKey),
+        key: action.id,
+        label: action.label,
+        onSelect: () => {
+          void run(action);
+        },
+      })),
+    [busy, run],
+  );
+  return { entries, run };
+}

@@ -188,3 +188,8 @@
 .table-row-link:hover {
   background: var(--surface);
 }
+
+.table .table-menu {
+  width: 3.5rem;
+  text-align: right;
+}

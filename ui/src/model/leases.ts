@@ -4,6 +4,7 @@ import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract
 import { defined } from "./defined";
 import { type ConsoleEvent, textField, workerIdOf } from "./events";
 import { formatDuration } from "./time";
+import { devicePath } from "./paths";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
 export type LeaseRecord = z.infer<typeof statusLeaseSchema>;
@@ -164,6 +165,7 @@ export interface LeaseRowView {
   readonly worker?: string;
   readonly sub: string;
   readonly platform?: string;
+  readonly deviceTo?: `/${string}`;
 }
 
 export function leaseRows(input: {
@@ -178,6 +180,7 @@ export function leaseRows(input: {
     const model = device?.spec.model ?? lease.deviceId;
     const worker = workerNameOfLease(lease, workers);
     const sub = [model, worker].filter((part) => part !== undefined).join(" · ");
+    const owner = workerOfLease(lease, workers);
     return {
       expiring: isExpiring(lease.ttlDeadline, now),
       holder: holderName(lease.requesterId, tokens),
@@ -190,6 +193,7 @@ export function leaseRows(input: {
       to: leasePath(lease.id),
       ...(worker === undefined ? {} : { worker }),
       ...(device === undefined ? {} : { platform: device.spec.platform }),
+      ...(owner === undefined ? {} : { deviceTo: devicePath(owner.id, lease.deviceId) }),
     };
   });
 }

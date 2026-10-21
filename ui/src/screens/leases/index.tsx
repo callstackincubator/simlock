@@ -13,7 +13,13 @@ import {
   SearchField,
   Toolbar,
 } from "../../ds";
-import { LEASE_FILTERS, type LeaseRowView, useLeaseDrawer, useLeases } from "../../state/leases";
+import {
+  LEASE_FILTERS,
+  type LeaseRowView,
+  useLeaseDrawer,
+  useLeaseMenu,
+  useLeases,
+} from "../../state/leases";
 import { LeaseDrawer } from "./drawer";
 
 export function LeasesScreen() {
@@ -91,6 +97,7 @@ export function LeaseTable(props: {
   readonly paging: Paging;
 }) {
   const { narrowed, paging, rows } = props;
+  const entries = useLeaseMenu();
   return (
     <DataTable
       label="Leases"
@@ -98,6 +105,7 @@ export function LeaseTable(props: {
       columns={COLUMNS}
       rowId={(row) => row.key}
       rowTo={(row) => row.to}
+      menu={{ entries, label: (row) => `Actions for ${row.holder}` }}
       empty={narrowed ? "No leases match this filter or search." : "No leases."}
       paging={paging}
     />

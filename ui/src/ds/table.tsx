@@ -11,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 
 import { useNavigateTo } from "./link";
+import { type MenuEntry, RowMenu } from "./menu";
 import { Pager, type Paging } from "./pager";
 
 export interface Column<T> {
@@ -38,8 +39,24 @@ export function DataTable<T extends RowData>(props: {
   readonly className?: string;
   // why: a row that opens something is clicked anywhere; its first link stays the keyboard's way in.
   readonly rowTo?: (row: T) => string;
+  // why: the row's ⋯ menu, in a last column of its own that has no header text to show.
+  readonly menu?: {
+    readonly label: (row: T) => string;
+    readonly entries: (row: T) => readonly MenuEntry[];
+  };
 }) {
-  const { className, columns, empty, label, paging, rowId, rowTo, rows, wide = false } = props;
+  const {
+    className,
+    columns,
+    empty,
+    label,
+    menu,
+    paging,
+    rowId,
+    rowTo,
+    rows,
+    wide = false,
+  } = props;
   const navigate = useNavigateTo();
   // why: `FlexRender` mounts a cell function as a component, and a view builds its columns anew on
   // every render, so each refresh would mount a new component, draw the cell's elements afresh and
@@ -75,6 +92,11 @@ export function DataTable<T extends RowData>(props: {
                 {column.header}
               </th>
             ))}
+            {menu === undefined ? null : (
+              <th scope="col" className="table-menu">
+                <span className="visually-hidden">Actions</span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -104,6 +126,11 @@ export function DataTable<T extends RowData>(props: {
                   </td>
                 );
               })}
+              {menu === undefined ? null : (
+                <td className="table-menu">
+                  <RowMenu label={menu.label(row.original)} entries={menu.entries(row.original)} />
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

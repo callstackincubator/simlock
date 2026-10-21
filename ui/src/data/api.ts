@@ -26,6 +26,7 @@ export class ApiError extends Error {
 
 interface SendOptions {
   readonly fetch: Fetch;
+  readonly method?: "DELETE" | "POST";
   readonly token?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -54,6 +55,7 @@ export async function send<T>(
       cache: "no-store",
       credentials: "same-origin",
       headers: options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` },
+      ...(options.method === undefined ? {} : { method: options.method }),
       signal: controller.signal,
     });
     return await read(response);
@@ -83,6 +85,7 @@ export interface ApiClient {
     headTimeoutMs?: number,
   ): Promise<ApiResponse<ReadableStream<Uint8Array>>>;
   healthz(): Promise<ApiResponse<boolean>>;
+  write(method: "DELETE" | "POST", path: ApiPath): Promise<void>;
 }
 
 export type ApiFailure = "unauthorized" | "not-simlock";
@@ -140,6 +143,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         if (response.body === null) throw new ApiError(response.status, undefined, "No body");
         return { body: response.body, date: response.headers.get("Date") };
       }),
+    write: (method, path) => watched(path, { ...authorized(), method }, async () => undefined),
     healthz: () =>
       send("/v1/healthz", { fetch: options.fetch }, async (response) => ({
         body: response.ok,

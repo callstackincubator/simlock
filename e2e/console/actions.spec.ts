@@ -45,7 +45,7 @@ test.describe("the console acts", () => {
       await leaseOverSocket(daemon, "release-agent");
       await openPage(page, daemon, "/leases", "Leases");
       const row = rowOf(page, "release-agent");
-      const worker = ((await row.innerText()).split(" · ")[1] ?? "").split("\n")[0] ?? "";
+      const worker = /iPhone 16 · (\S+)/.exec(await row.innerText())?.[1] ?? "";
       expect(worker).not.toBe("");
 
       const menuButton = row.getByRole("button", { name: "Actions for release-agent" });
