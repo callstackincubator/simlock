@@ -853,6 +853,7 @@ function figureOf(report: TargetReport): WarmTargetFigures {
     ...report.kind,
     booting: report.booting,
     count: report.count,
+    origin: "configured",
     ready: report.ready,
     ...(report.short === undefined ? {} : { short: report.short }),
   };
