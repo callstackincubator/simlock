@@ -154,6 +154,11 @@ export function inboxGroup(item: InboxItem): InboxGroup {
   return inboxTone(item.condition) === "error" ? "Broken" : "Needs a look";
 }
 
+// why: a heads-up is not a problem yet, so the count the sidebar and Overview show leaves it out.
+export function problemCount(items: readonly InboxItem[]): number {
+  return items.filter((item) => inboxGroup(item) !== "Heads-up").length;
+}
+
 // why: the Inbox lists its groups in a fixed order, each keeping the order its items came in.
 export function inGroupOrder(items: readonly InboxItem[]): readonly InboxItem[] {
   return GROUPS.flatMap((group) => items.filter((item) => inboxGroup(item) === group));
@@ -481,7 +486,7 @@ export function inboxPageOf(input: {
   }));
   const named = input.key !== undefined;
   const chosen = named ? items.find((item) => item.key === input.key) : items[0];
-  const problems = items.filter((item) => inboxGroup(item) !== "Heads-up").length;
+  const problems = problemCount(items);
   if (chosen !== undefined) {
     return { named, problems, rows, shown: detailOf(chosen, input) };
   }
