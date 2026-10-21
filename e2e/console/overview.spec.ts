@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import {
@@ -373,6 +373,99 @@ test.describe("the Overview's Inbox lines", () => {
       await expect(page.getByText("Nothing needs you")).toHaveCount(0);
     } finally {
       await host.dispose();
+    }
+  });
+});
+
+test.describe("the Overview's five numbers", () => {
+  test("show the daemon's values: one lease held of four devices with three ready, one request waiting with its longest wait, two of two workers, Wait p95, and Ending soon counting a lease with 4 minutes left and not one with 10", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+    ]);
+    try {
+      const held: string[] = [];
+      for (const agent of ["one", "two", "three", "four"]) {
+        const granted = await fleet.gateway.cli([...LEASE, "--agent-id", agent, "--detach"]);
+        expect(granted.code, granted.stderr).toBe(0);
+        held.push((granted.json as { lease: { id: string } }).lease.id);
+      }
+      for (const id of held.slice(1)) {
+        const released = await fleet.gateway.cli(["release", id]);
+        expect(released.code, released.stderr).toBe(0);
+      }
+      await waitFor(
+        async () => {
+          const { workers } = (await operatorGet(fleet.gateway, "/v1/workers")) as {
+            workers: { devices: { state: string }[] }[];
+          };
+          const states = workers.flatMap((worker) => worker.devices.map((device) => device.state));
+          return states.length === 4 && states.filter((state) => state === "ready").length === 3;
+        },
+        { label: "four devices, three ready" },
+      );
+      // why: a request is stubbed as waiting 2 minutes and a lease as ending, at times a real daemon cannot reach quickly,
+      // each counted from the daemon's own clock (its Date header).
+      await page.route(
+        (url) => url.pathname === "/v1/lease-requests",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          await route.fulfill({
+            json: {
+              requests: [
+                {
+                  createdAt: now - 125_000,
+                  id: "req_stub",
+                  platform: "ios",
+                  queuePosition: 1,
+                  requesterId: "stub",
+                  stage: "queued",
+                },
+              ],
+            },
+            response,
+          });
+        },
+      );
+      await page.route(
+        (url) => url.pathname === "/v1/leases",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          const { leases } = (await response.json()) as {
+            leases: { id: string; ttlDeadline: number }[];
+          };
+          const [first] = leases;
+          if (first === undefined) throw new Error("the daemon lists no lease");
+          await route.fulfill({
+            json: {
+              leases: [
+                { ...first, ttlDeadline: now + 4 * 60_000 },
+                { ...first, id: "lease-later", ttlDeadline: now + 10 * 60_000 },
+              ],
+            },
+            response,
+          });
+        },
+      );
+
+      await openOverview(page, fleet.gateway);
+
+      const stats = await statsOf(fleet.gateway, "1h");
+      await expect.poll(() => tileText(page, "Leased")).toBe("Leased | 1 | of 4 · 3 ready");
+      await expect
+        .poll(() => tileText(page, "Waiting"))
+        .toMatch(/^Waiting \| 1 \| longest 2 min \d+ s$/);
+      await expect.poll(() => tileText(page, "Workers")).toBe("Workers | 2 | of 2");
+      await expect
+        .poll(() => tileText(page, "Wait p95"))
+        .toBe(`Wait p95 | ${waitText(stats.totals.wait.p95)} | last hour`);
+      await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 1 | under 5 min");
+    } finally {
+      await disposeFleet(fleet);
     }
   });
 });
