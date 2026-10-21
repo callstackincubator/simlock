@@ -492,3 +492,23 @@ test.describe("the Overview's workers table", () => {
     }
   });
 });
+
+test.describe("the range chips", () => {
+  test("sit in the shared toolbar on Overview and on Usage", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      for (const path of ["/", "/usage"]) {
+        await page.goto(new URL(path, host.url).toString());
+        if (path === "/") await signIn(page, host.tokens.operator);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        const chips = page.locator("#main .toolbar .toolbar-start").getByRole("group", {
+          name: "Range",
+        });
+        await expect(chips, path).toBeVisible();
+        await expect(chips.getByRole("radio")).toHaveCount(4);
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+});
