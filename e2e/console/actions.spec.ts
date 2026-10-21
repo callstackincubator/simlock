@@ -1,7 +1,15 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, signIn, startDaemon, test } from "./fixtures.js";
+import {
+  disposeFleet,
+  expect,
+  type RunningDaemon,
+  signIn,
+  startDaemon,
+  startFleet,
+  test,
+} from "./fixtures.js";
 
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -132,6 +140,33 @@ test.describe("the console acts", () => {
       expect(await waitingCount(daemon)).toBe(0);
     } finally {
       await daemon.dispose();
+    }
+  });
+
+  test("a worker is drained from Fleet with no dialog, and Undo undrains it", async ({ page }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "drain-a" }]);
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const row = rowOf(page, "drain-a");
+      await expect(row).toBeVisible();
+      await expect(row).not.toContainText("drained");
+
+      const menuButton = row.getByRole("button", { name: "Actions for drain-a" });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Drain", exact: true }).click();
+      await expect(page.getByText("drain-a drained", { exact: true })).toBeVisible();
+      await expect(
+        page.getByText("Its leases keep running. New leases go to other workers."),
+      ).toBeVisible();
+      await expect(page.getByRole("alertdialog")).toHaveCount(0);
+      await expect(row).toContainText("drained");
+
+      await page.getByRole("button", { name: "Undo" }).click();
+      await expect(page.getByText("drain-a takes leases again")).toBeVisible();
+      await expect(row).not.toContainText("drained");
+    } finally {
+      await disposeFleet(fleet);
     }
   });
 });
