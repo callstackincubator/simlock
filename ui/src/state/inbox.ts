@@ -53,6 +53,7 @@ export interface Inbox {
   readonly filter: InboxFilter;
   readonly choose: (filter: InboxFilter) => void;
   readonly rows: (page: InboxPage) => readonly InboxRow[];
+  readonly couldNotCheck: readonly string[];
   // why: the key in the URL stands even before the list has loaded, so the drawer can ask for it.
   readonly urlId: string | undefined;
 }
@@ -81,6 +82,7 @@ export function useInbox(): Inbox {
   );
   return {
     choose,
+    couldNotCheck: reads.couldNotCheck,
     filter,
     rows: (page) => filterInboxRows(page.rows, filter),
     urlId,

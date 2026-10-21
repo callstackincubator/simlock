@@ -28,7 +28,7 @@ import {
 const GROUP_ORDER = ["Broken", "Needs a look", "Heads-up"] as const;
 
 export function InboxScreen() {
-  const { choose, filter, rows, urlId, view } = useInbox();
+  const { choose, couldNotCheck, filter, rows, urlId, view } = useInbox();
   const { close, fromList } = useInboxDrawer(urlId);
   return (
     <Page
@@ -50,7 +50,7 @@ export function InboxScreen() {
       <Loaded view={view}>
         {(page) => (
           <>
-            <InboxBody rows={rows(page)} filter={filter} />
+            <InboxBody rows={rows(page)} filter={filter} couldNotCheck={couldNotCheck} />
             {urlId === undefined ? null : (
               <Drawer
                 key={urlId}
@@ -77,13 +77,21 @@ export function InboxScreen() {
 export function InboxBody(props: {
   readonly rows: readonly InboxRow[];
   readonly filter: InboxFilter;
+  readonly couldNotCheck?: readonly string[];
 }) {
-  const { filter, rows } = props;
+  const { couldNotCheck = [], filter, rows } = props;
+  const unchecked =
+    couldNotCheck.length === 0 ? null : (
+      <p className="muted">{`Could not check: ${couldNotCheck.join(", ")}`}</p>
+    );
   if (rows.length === 0) {
+    // why: an Inbox that could not read everything never claims nothing needs you.
+    if (unchecked !== null) return unchecked;
     return <Empty>{filter === "all" ? "Nothing needs you." : "Nothing in this group."}</Empty>;
   }
   return (
     <>
+      {unchecked}
       {GROUP_ORDER.map((group) => {
         const inGroup = rows.filter((row) => row.group === group);
         return inGroup.length === 0 ? null : (
