@@ -24,6 +24,7 @@ import {
   ScriptedProcessRunner,
   MemoryFilesystem,
   MemoryIpcTransport,
+  resolveDaemonSocketPath,
   FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
@@ -6730,6 +6731,21 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
     };
     expect(reported.error.code).toBe("USAGE");
     expect(reported.error.message).toContain("SIMLOCK_HOME");
+  });
+});
+
+describe("CLI: the daemon endpoint check", () => {
+  it("buildCliEnvironment reports the daemon endpoint present only while its socket file exists", async () => {
+    const filesystem = new MemoryFilesystem();
+    const environment = buildCliEnvironment(realCliEnvironmentPorts(filesystem), {});
+    const socketPath = resolveDaemonSocketPath("/simlock");
+
+    expect(await environment.daemonEndpointPresent()).toBe(false);
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(socketPath, "");
+    expect(await environment.daemonEndpointPresent()).toBe(true);
+    await filesystem.rm(socketPath);
+    expect(await environment.daemonEndpointPresent()).toBe(false);
   });
 });
 
