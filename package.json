@@ -75,7 +75,7 @@
     "hono": "^4.13.5",
     "jose": "6.2.9",
     "ws": "8.18.3",
-    "zod": "^3.25.76"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

@@ -65,14 +65,14 @@ function checkDeviceType(
   if (device.physical) {
     if (device.mode !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A physical device has no mode",
         path: ["mode"],
       });
     }
     if (requireClass && device.class === undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A physical device has a class",
         path: ["class"],
       });
@@ -81,14 +81,14 @@ function checkDeviceType(
   }
   if (device.mode === undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "A virtual device has a mode",
       path: ["mode"],
     });
   }
   if (device.class !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "A virtual device has no class",
       path: ["class"],
     });
@@ -738,7 +738,7 @@ export const platformCatalogSchema = z.object({
    * listed model counts has no entry. On a gateway a class's entry is kept only when every
    * connected worker reports the same model for it, and that worker lists it itself.
    */
-  classDefaults: z.record(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
+  classDefaults: z.partialRecord(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
   /**
    * ADR 0008 §1: every installed image, present only for a platform whose driver has images
    * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
@@ -978,7 +978,7 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 
 /** Mirrors `Config` (src/core/config.ts) field for field. */
 /** ADR 0015 §4: `ios.defaultModels` and `android.defaultModels`, a list of model names per class. */
-const defaultModelsSchema = z.record(deviceClassSchema, z.array(z.string().min(1)).min(1));
+const defaultModelsSchema = z.partialRecord(deviceClassSchema, z.array(z.string().min(1)).min(1));
 
 const proxyAuthSchema = z.object({
   header: z.string(),
@@ -1203,7 +1203,7 @@ const installInProgressSchema = z.object({
 });
 
 /** A list of at most `MAX_LISTED_INSTALLS` entries; a longer one is cut to its first ones. */
-function boundedInstalls<Entry extends z.ZodTypeAny>(entry: Entry) {
+function boundedInstalls<Entry extends z.ZodType>(entry: Entry) {
   return z.array(entry).transform((installs) => installs.slice(0, MAX_LISTED_INSTALLS));
 }
 

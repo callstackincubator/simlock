@@ -138,7 +138,7 @@ const componentInstallBodySchema = z
 
 const deviceAddBodySchema = z.object({ id: z.string(), platform: z.string() }).strict();
 
-function jsonBody<Schema extends z.ZodTypeAny>(schema: Schema) {
+function jsonBody<Schema extends z.ZodType>(schema: Schema) {
   return zValidator("json", schema, (result, c) => {
     if (!result.success) {
       return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
