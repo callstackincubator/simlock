@@ -123,6 +123,16 @@ export type DoctorFinding =
       readonly remedy: string;
     };
 
+/**
+ * why: the service manager's answer for this role's service, injected so the core checks no path
+ * itself; `check` returns the paths the service names that are gone, none when whole or absent.
+ */
+export interface ServiceCheck {
+  readonly manager: "launchd" | "systemd";
+  readonly name: string;
+  readonly check: () => Promise<readonly string[]>;
+}
+
 export type OptionalModuleFinding = Extract<DoctorFinding, { readonly kind: "module-unavailable" }>;
 
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
@@ -158,6 +168,7 @@ export interface DoctorOptions {
     readonly runningCapacity: () => CapacityReader["runningCapacity"];
   };
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  readonly serviceCheck?: ServiceCheck;
   readonly runningPlatforms?: () => readonly Platform[];
   readonly registry: Registry;
 }

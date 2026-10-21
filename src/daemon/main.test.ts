@@ -556,6 +556,58 @@ describe("startDaemon", () => {
     expect(runs).toEqual({ android: 2, ios: 2 });
   });
 
+  it("a worker's doctor reports service-broken for each service whose paths are gone, and doctor.reconciled does not carry it", async () => {
+    const gone = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const mainGone = "/Users/me/simlock/dist/daemon/main.js";
+    const name = "com.callstack.simlock.worker";
+    const remedy = "Run `simlock daemon install` again.";
+    const admin = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "operator",
+      role: "admin",
+    } as const;
+    for (const testCase of [
+      { label: "not installed", missing: [], expected: [] },
+      { label: "installed and whole", missing: [], expected: [] },
+      {
+        label: "one path gone",
+        missing: [gone],
+        expected: [{ kind: "service-broken", manager: "launchd", name, missing: [gone], remedy }],
+      },
+      {
+        label: "both gone",
+        missing: [gone, mainGone],
+        expected: [
+          { kind: "service-broken", manager: "launchd", name, missing: [gone, mainGone], remedy },
+        ],
+      },
+    ]) {
+      const { daemon } = await start({
+        serviceCheck: { manager: "launchd", name, check: async () => testCase.missing },
+      });
+      const report = (await daemon.dispatch("doctor.run", {}, admin)) as {
+        readonly findings: readonly { readonly kind: string }[];
+      };
+      expect(
+        report.findings.filter((finding) => finding.kind === "service-broken"),
+        testCase.label,
+      ).toEqual(testCase.expected);
+      const replayed = (await daemon.dispatch("events.replay", {}, admin)) as readonly {
+        readonly event: string;
+        readonly payload: { readonly driftFindings?: readonly { readonly kind: string }[] };
+      }[];
+      const reconciled = replayed.filter((envelope) => envelope.event === "doctor.reconciled");
+      expect(reconciled.length, testCase.label).toBeGreaterThan(0);
+      for (const envelope of reconciled) {
+        expect(
+          envelope.payload.driftFindings?.map((finding) => finding.kind),
+          testCase.label,
+        ).not.toContain("service-broken");
+      }
+    }
+  });
+
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
     const { daemon, directory } = await start({
       configOverrides: { lease: { maxRequestRecords: 1 } },

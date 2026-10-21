@@ -24,6 +24,7 @@ import {
   type Platform,
   type ModelPreferences,
   type PrerequisiteCheck,
+  type ServiceCheck,
   CleanupReaper,
   ComponentInstaller,
   DEVICE_CLASSES,
@@ -152,6 +153,7 @@ export interface StartDaemonOptions {
   readonly relayTargets?: RelayTargets;
   readonly role?: DaemonMode;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  readonly serviceCheck?: ServiceCheck;
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
   readonly hostLoadProbe?: HostLoadProbe | null;
