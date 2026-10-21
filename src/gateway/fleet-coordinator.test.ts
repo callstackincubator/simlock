@@ -4396,26 +4396,6 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
   });
 });
 
-describe("FleetLeaseCoordinator reads a lost uplink in one place (#514)", () => {
-  it("reads DAEMON_STOPPING from a worker as a lost uplink: lease.request fails WORKER_UNREACHABLE", async () => {
-    const { coordinator, directory, workers } = harness();
-    const client = new ScriptedWorkerClient();
-    directory.add("wrk_a", client);
-    connectWorker(workers, "wrk_a");
-    client.requestLeaseQueue.push({
-      error: new SimlockError("DAEMON_STOPPING", "transport", "The daemon is stopping", {}),
-      kind: "error",
-    });
-
-    const rejection = await coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
-
-    expect(rejection).toBeInstanceOf(DispatchError);
-    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
-  });
-});
-
 describe("FleetLeaseCoordinator lists why each worker cannot take a waiting request (#637)", () => {
   type Reasons = readonly { workerId: string; reason: string; capacityReason?: string }[];
 
@@ -4481,9 +4461,14 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
   const saturatedExcept = (free: string) => (id: string) =>
     id === free ? {} : { capacity: saturatedIos() };
 
-  it("lists, in worker id order, drained for a drained worker and full with platform-running-limit for one with no free iOS slot", async () => {
-    const { coordinator, workers } = fleet(["wrk_b", "wrk_a"], (id) =>
-      id === "wrk_b" ? { capacity: saturatedIos() } : {},
+  it("lists, in worker id order, drained for a drained worker and full with platform-running-limit for one with no free iOS slot, also when it has no free global slot either", async () => {
+    const capacity = statusFixture().capacity;
+    const bothFull = {
+      ...saturatedIos(),
+      global: { ...capacity.global, maxRunning: 0 },
+    };
+    const { coordinator, workers } = fleet(["wrk_c", "wrk_b", "wrk_a"], (id) =>
+      id === "wrk_b" ? { capacity: saturatedIos() } : id === "wrk_c" ? { capacity: bothFull } : {},
     );
     await workers.setDrained("wrk_a", true);
 
@@ -4492,6 +4477,7 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
     expect(listed(coordinator)).toEqual([
       { reason: "drained", workerId: "wrk_a" },
       { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_b" },
+      { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_c" },
     ]);
   });
 

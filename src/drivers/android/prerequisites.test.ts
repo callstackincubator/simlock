@@ -58,18 +58,24 @@ describe("androidPrerequisites", () => {
     expect(runner.calls[0]?.options.timeoutMs).toBe(30_000);
   });
 
-  it("reports android-emulator with the `sdkmanager --install emulator` remedy when only the emulator binary is missing", async () => {
-    const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS]);
+  it.each([
+    ["emulator", "android-emulator", "sdkmanager --install emulator"],
+    ["platform-tools", "android-platform-tools", "sdkmanager --install platform-tools"],
+  ] as const)(
+    "reports the package with its `sdkmanager --install` remedy when only %s is missing",
+    async (without, prerequisite, remedy) => {
+      const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS]);
 
-    const missing = await check(await sdkFilesystem(["emulator"]), runner).check();
+      const missing = await check(await sdkFilesystem([without]), runner).check();
 
-    expect(missing).toEqual([
-      expect.objectContaining({
-        prerequisite: "android-emulator",
-        remedy: expect.stringContaining("sdkmanager --install emulator") as unknown,
-      }),
-    ]);
-  });
+      expect(missing).toEqual([
+        expect.objectContaining({
+          prerequisite,
+          remedy: expect.stringContaining(remedy) as unknown,
+        }),
+      ]);
+    },
+  );
 
   it("stops reporting a package on the next check once it is installed", async () => {
     const filesystem = await sdkFilesystem(["emulator"]);
@@ -84,19 +90,6 @@ describe("androidPrerequisites", () => {
     await writeFile(filesystem, `${sdk}/emulator/emulator`);
 
     await expect(prerequisites.check()).resolves.toEqual([]);
-  });
-
-  it("reports android-platform-tools when only adb is missing", async () => {
-    const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS]);
-
-    const missing = await check(await sdkFilesystem(["platform-tools"]), runner).check();
-
-    expect(missing).toEqual([
-      expect.objectContaining({
-        prerequisite: "android-platform-tools",
-        remedy: expect.stringContaining("sdkmanager --install platform-tools") as unknown,
-      }),
-    ]);
   });
 
   it("reports android-cmdline-tools when no tool bin is complete, and does not run sdkmanager", async () => {

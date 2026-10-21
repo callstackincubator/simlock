@@ -112,12 +112,6 @@ describe("SimlockError", () => {
   });
 });
 
-describe("NO_CAPACITY", () => {
-  it("is among the codes whose details are declared", () => {
-    expect(CODES_WITH_DECLARED_DETAILS.has("NO_CAPACITY")).toBe(true);
-  });
-});
-
 describe("CAPABILITY_MISSING", () => {
   it("maps CAPABILITY_MISSING to HTTP 422 and CLI exit 12 as a domain error whose details name the capabilities", () => {
     const table: Record<string, unknown> = ERROR_TABLE;

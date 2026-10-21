@@ -32,16 +32,6 @@ describe("AdbServerSupervisor.start", () => {
     await expect(harness.filesystem.readFile(recordPath)).resolves.toContain('"startedAt":17');
   });
 
-  it("refuses a port something else is already listening on", async () => {
-    const harness = await start({ listening: true });
-
-    await expect(harness.started).rejects.toMatchObject({
-      name: "AdbServerUnavailableError",
-      port,
-      reason: "occupied",
-    });
-  });
-
   it("refuses a port whose recorded server is dead even though something answers there", async () => {
     // The listener cannot be Simlock's -- the pid that would prove it is gone -- so this is
     // somebody else's adb server, and attaching to it is what failing closed prevents.

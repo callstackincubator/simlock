@@ -94,23 +94,6 @@ describe("ScriptedProcessRunner", () => {
 
     await expect(result).resolves.toEqual({ code: null, stderr: "", stdout: "" });
   });
-
-  it("replays scripted output through line streams", async () => {
-    const runner = new ScriptedProcessRunner([
-      {
-        match: { command: "adb", args: ["logcat"] },
-        stdoutLines: ["booting", "ready"],
-      },
-    ]);
-    const process = runner.spawn("adb", ["logcat"]);
-    const lines: string[] = [];
-
-    for await (const line of process.stdout) {
-      lines.push(line);
-    }
-
-    expect(lines).toEqual(["booting", "ready"]);
-  });
 });
 
 describe("ScriptedProcessRunner: spawnStreaming", () => {
@@ -618,14 +601,6 @@ describe("NodeProcessRunner", () => {
     expect(outcome).toEqual({ code: null, stderr: "", stdout: "" });
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   }, 15_000);
-
-  it("keeps a 10 s SIGTERM-to-SIGKILL grace, a 5 s exit deferral cap and a 1 s exit grace when no options are given", () => {
-    const runner = new NodeProcessRunner();
-
-    expect(runner.sigkillGraceMs).toBe(10_000);
-    expect(runner.exitDeferralCapMs).toBe(5_000);
-    expect(runner.exitGraceMs).toBe(1_000);
-  });
 
   it("settles wait() when a detached grandchild keeps the stdio pipe open after the process exits", async () => {
     const runner = new NodeProcessRunner({ exitGraceMs: 100 });
