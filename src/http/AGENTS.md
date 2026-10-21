@@ -56,7 +56,7 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
 schemas, reply and its own error codes, and the helper adds the bearer requirement and the base
 codes: `UNAUTHENTICATED` and `FORBIDDEN` (not on `/v1/healthz`), `DAEMON_STOPPING`,
 `DAEMON_STARTUP_FAILED` and `INTERNAL` on every route, `BAD_REQUEST` on a route with any input,
-`UNSUPPORTED_MEDIA_TYPE` on a route with a JSON body. The code lists are documentation: nothing
+`UNSUPPORTED_MEDIA_TYPE` on a route with a JSON body. `errorExtras` adds a status's body fields and headers (`capacityReason`, `Retry-After`). The code lists are documentation: nothing
 enforces them. `app.openapi` registers the declaration, and a handler's JSON reply is type-checked
 against it (never at run time; a stream, which declares `stream: sseMessage({...})`, or a bodiless 204 returns any `Response`). `route-declarations.ts` holds them, `buildOpenApiDocument` writes
 the document from the same list, and `pnpm openapi <file>` saves it. The route-coverage test in

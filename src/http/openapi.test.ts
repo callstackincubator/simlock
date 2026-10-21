@@ -114,7 +114,49 @@ describe("buildOpenApiDocument", () => {
     ]);
     expect(responseOf(cancel, "204")).toEqual({ description: "Success" });
     expect(errorCodes(cancel, "409")).toEqual(["REQUEST_NOT_CANCELLABLE"]);
-    expect(errorCodes(operation("/v1/leases/{id}/exec", "post"), "504")).toEqual(["EXEC_TIMEOUT"]);
+    expect(
+      Object.fromEntries(
+        (
+          [
+            ["get", "/v1/lease-requests/{id}", "404"],
+            ["get", "/v1/lease-requests/{id}/events", "404"],
+            ["delete", "/v1/lease-requests/{id}", "404"],
+            ["get", "/v1/leases/{id}", "404"],
+            ["post", "/v1/leases/{id}/renew", "404"],
+            ["get", "/v1/leases/{id}/events", "404"],
+            ["delete", "/v1/leases/{id}", "404"],
+            ["post", "/v1/leases/{id}/exec", "404"],
+            ["post", "/v1/leases/{id}/exec", "501"],
+            ["post", "/v1/leases/{id}/exec", "504"],
+          ] as const
+        ).map(([method, path, status]) => [
+          `${method} ${path} ${status}`,
+          errorCodes(operation(path, method), status),
+        ]),
+      ),
+    ).toEqual({
+      "delete /v1/lease-requests/{id} 404": ["UNKNOWN_LEASE_REQUEST"],
+      "delete /v1/leases/{id} 404": ["UNKNOWN_LEASE"],
+      "get /v1/lease-requests/{id} 404": ["UNKNOWN_LEASE_REQUEST"],
+      "get /v1/lease-requests/{id}/events 404": ["UNKNOWN_LEASE_REQUEST"],
+      "get /v1/leases/{id} 404": ["UNKNOWN_LEASE"],
+      "get /v1/leases/{id}/events 404": ["UNKNOWN_LEASE"],
+      "post /v1/leases/{id}/exec 404": ["UNKNOWN_LEASE"],
+      "post /v1/leases/{id}/exec 501": ["UNSUPPORTED_IN_GATEWAY_MODE"],
+      "post /v1/leases/{id}/exec 504": ["EXEC_TIMEOUT"],
+      "post /v1/leases/{id}/renew 404": ["UNKNOWN_LEASE"],
+    });
+    expect({
+      existingLeaseId: errorFields(post, "409"),
+      capacityReason: errorFields(post, "503"),
+      leaseId: errorFields(cancel, "409"),
+      retryAfter: Object.keys(responseOf(post, "503").headers ?? {}),
+    }).toEqual({
+      existingLeaseId: ["code", "message", "existingLeaseId"],
+      capacityReason: ["code", "message", "capacityReason"],
+      leaseId: ["code", "message", "leaseId"],
+      retryAfter: ["Retry-After"],
+    });
 
     expect({
       exec: streamEvents(operation("/v1/leases/{id}/exec", "post")),
@@ -230,6 +272,10 @@ interface StreamSchema {
     readonly data?: object;
     readonly event?: { readonly enum?: readonly string[] };
   };
+}
+
+function errorFields(operation: { responses?: object } | undefined, status: string) {
+  return Object.keys(replySchema(operation, status).properties?.error?.properties ?? {});
 }
 
 function errorCodes(operation: { responses?: object } | undefined, status: string) {

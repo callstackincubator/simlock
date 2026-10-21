@@ -1571,7 +1571,7 @@ describe("lease routes", () => {
     },
   );
 
-  it("a caller sends a bad wait or renew body and gets 400 with today's message; a renew with no body, an empty body or an extra key renews", async () => {
+  it("a caller sends a bad wait or renew body and gets 400 with today's message; a renew with no body, an empty body under any content type or an extra key renews", async () => {
     const { app, dispatcher } = buildHarness();
     const { id } = await createLeaseRequest(app, dispatcher);
     const renewals: unknown[] = [];
@@ -1633,11 +1633,15 @@ describe("lease routes", () => {
     for (const response of [
       await renew(undefined, undefined),
       await renew("", "application/json"),
+      await renew("", "text/plain"),
+      await renew("", "application/x-www-form-urlencoded"),
       await renew('{"ttlMs":60000,"note":"x"}'),
     ]) {
       expect(response.status).toBe(200);
     }
     expect(renewals).toEqual([
+      { leaseId: "lse_1" },
+      { leaseId: "lse_1" },
       { leaseId: "lse_1" },
       { leaseId: "lse_1" },
       { leaseId: "lse_1", ttlMs: 60_000 },

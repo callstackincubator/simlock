@@ -10,7 +10,15 @@ type SuccessStatus = 200 | 201 | 202 | 204;
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 415 | 422 | 500 | 501 | 503 | 504;
 type JsonContent<Schema extends z.ZodType> = { "application/json": { schema: Schema } };
 type ErrorBody = { error: { code: string; message: string } };
-type ErrorResponse = { description: string; content: JsonContent<z.ZodType<ErrorBody>> };
+type ErrorResponse = {
+  description: string;
+  content: JsonContent<z.ZodType<ErrorBody>>;
+  headers?: z.ZodObject<z.ZodRawShape>;
+};
+// why: an error status can carry body fields and response headers beyond `code` and `message`, and the document names them.
+type ErrorExtras = Partial<
+  Record<ErrorStatus, { readonly fields?: z.ZodRawShape; readonly headers?: z.ZodRawShape }>
+>;
 
 export const BEARER_SCHEME = "bearer";
 
@@ -90,12 +98,13 @@ interface Declaration<
   readonly replyHeaders?: z.ZodType;
   readonly status?: Success;
   readonly errors?: Own;
+  readonly errorExtras?: ErrorExtras;
 }
 
-function errorSchema(codes: readonly string[]): z.ZodType<ErrorBody> {
+function errorSchema(codes: readonly string[], fields: z.ZodRawShape = {}): z.ZodType<ErrorBody> {
   return z.object({
     error: z
-      .object({ code: z.enum(codes as [string, ...string[]]), message: z.string() })
+      .object({ code: z.enum(codes as [string, ...string[]]), message: z.string(), ...fields })
       .catchall(z.unknown()),
   }) as z.ZodType<ErrorBody>;
 }
@@ -104,6 +113,7 @@ function declaredErrors(
   role: RouteRole,
   request: RequestSchemas,
   own: Partial<Record<ErrorStatus, readonly string[]>>,
+  extras: ErrorExtras,
 ): Record<number, ErrorResponse> {
   const codes = new Map<ErrorStatus, string[]>();
   const add = (status: ErrorStatus, list: readonly string[]) =>
@@ -124,7 +134,12 @@ function declaredErrors(
       status,
       {
         description: `Error codes: ${list.join(", ")}.`,
-        content: { "application/json": { schema: errorSchema(list) } },
+        content: {
+          "application/json": { schema: errorSchema(list, extras[status as ErrorStatus]?.fields) },
+        },
+        ...(extras[status as ErrorStatus]?.headers === undefined
+          ? {}
+          : { headers: z.object(extras[status as ErrorStatus]!.headers!) }),
       },
     ]),
   );
@@ -170,7 +185,12 @@ export function declareRoute<
       ...successContent(declaration),
       ...(declaration.replyHeaders === undefined ? {} : { headers: declaration.replyHeaders }),
     },
-    ...declaredErrors(declaration.role, request, declaration.errors ?? {}),
+    ...declaredErrors(
+      declaration.role,
+      request,
+      declaration.errors ?? {},
+      declaration.errorExtras ?? {},
+    ),
   } as DeclaredResponses<
     Reply,
     Stream,

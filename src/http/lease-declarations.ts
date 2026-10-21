@@ -2,7 +2,7 @@ import { z } from "@hono/zod-openapi";
 
 import {
   deviceClassSchema,
-  deviceStateSchema,
+  deviceRecordSchema,
   imageTagSchema,
   leaseIdSchema,
   OPERATIONS,
@@ -217,6 +217,19 @@ export const leaseRequestCreateRoute = declareRoute({
     422: ["UNKNOWN_MODEL"],
     503: ["NO_CAPACITY"],
   },
+  errorExtras: {
+    409: { fields: { existingLeaseId: z.string().optional() } },
+    503: {
+      fields: {
+        capacityReason: z
+          .enum(["device-limit", "ram-budget", "global-running-limit", "platform-running-limit"])
+          .optional(),
+      },
+      headers: {
+        "Retry-After": z.string().openapi({ description: "Seconds to wait before asking again." }),
+      },
+    },
+  },
 });
 
 export const requestsReplySchema = z.object({ requests: z.array(waitingRequestSchema) });
@@ -262,6 +275,7 @@ export const leaseRequestCancelRoute = declareRoute({
   request: { params: leaseParamsSchema },
   status: 204,
   errors: { 404: ["UNKNOWN_LEASE_REQUEST"], 409: ["REQUEST_NOT_CANCELLABLE"] },
+  errorExtras: { 409: { fields: { leaseId: z.string().optional() } } },
 });
 
 export const leaseListRoute = declareRoute({
@@ -310,7 +324,7 @@ export const leaseReleaseRoute = declareRoute({
   role: "agent",
   request: { params: leaseParamsSchema },
   reply: z.object({
-    device: z.object({ id: z.string(), state: deviceStateSchema }),
+    device: z.object({ id: z.string(), state: deviceRecordSchema.shape.state }),
     released: z.literal(true),
   }),
   status: 202,

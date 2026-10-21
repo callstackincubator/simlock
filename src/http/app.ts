@@ -842,12 +842,13 @@ function findDevice(
   );
 }
 
-// why: an empty body under a JSON content type is no body: a renew without one keeps the lease's own width.
+// why: an empty body is no body whatever its content type: a renew without one keeps the lease's own width.
 async function emptyBodyAsNone(c: Context, next: () => Promise<void>): Promise<void> {
-  if (/^application\/([a-z-.]+\+)?json/i.test(c.req.header("content-type") ?? "")) {
-    // why: `bodyCache.text` is typed as the string but holds the pending read; the JSON validator parses what it holds, so `{}` stands in for the empty text.
-    if ((await c.req.text()).trim() === "")
-      Object.assign(c.req.bodyCache, { text: Promise.resolve("{}") });
+  const isJson = /^application\/([a-z-.]+\+)?json/i.test(c.req.header("content-type") ?? "");
+  if ((await c.req.text()).trim() === "") {
+    // why: the validator reads the body only under a JSON content type, so an empty one is relabelled; `bodyCache.text` is typed as the string but holds the pending read, and the JSON validator parses what it holds, so `{}` stands in for the empty text.
+    if (!isJson) c.req.raw.headers.set("content-type", "application/json");
+    Object.assign(c.req.bodyCache, { text: Promise.resolve("{}") });
   }
   await next();
 }
