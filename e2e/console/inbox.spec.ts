@@ -163,6 +163,47 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
 }
 
 test.describe("the Inbox view", () => {
+  test("/inbox lists a drained worker under Needs a look and a disconnected one under Broken; the chips show one group at a time", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+    ]);
+    try {
+      const a = (await workers(fleet.gateway)).find((view) => view.label === "worker-a");
+      expect((await fleet.gateway.cli(["worker", "drain", a?.id ?? ""])).code).toBe(0);
+      await (fleet.workers[1] as RunningDaemon).stop();
+      await untilTheDaemonSays(
+        fleet.gateway,
+        (views) =>
+          views.find((view) => view.label === "worker-a")?.drained === true &&
+          views.find((view) => view.label === "worker-b")?.connection === "disconnected",
+      );
+      await openInbox(page, fleet.gateway);
+
+      const broken = page.getByRole("region", { name: "Broken" });
+      const needsALook = page.getByRole("region", { name: "Needs a look" });
+      await expect(broken.getByRole("link", { name: /worker-b/ })).toBeVisible();
+      await expect(needsALook.getByRole("link", { name: /worker-a/ })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Heads-up" })).toHaveCount(0);
+
+      await page.getByRole("radio", { name: "Broken" }).check();
+      await expect(broken).toBeVisible();
+      await expect(needsALook).toHaveCount(0);
+
+      await page.getByRole("radio", { name: "Needs a look" }).check();
+      await expect(needsALook).toBeVisible();
+      await expect(broken).toHaveCount(0);
+
+      await page.getByRole("radio", { name: "All" }).check();
+      await expect(broken).toBeVisible();
+      await expect(needsALook).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
   test("draining a worker adds it to the Inbox view within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
