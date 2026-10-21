@@ -12,13 +12,15 @@ interface CatalogCheckOptions {
   readonly clock: Clock;
   readonly hasDriver: (platform: Platform) => boolean;
   readonly logger: Logger;
+  /** why: a read lists a platform that had no answer, so the kinds waiting on it can be planned now, not at the next tick. A failed or timed out read does not call it: its retry would loop. */
+  readonly onAnswer: () => void;
 }
 
 /**
  * why: reads each platform's catalog beside a pass, never blocking it, and says which learned kinds
  * the last answers no longer list. A read that throws or runs past the limit leaves its platform
  * with no answer, so none of its kinds is judged on it: they are kept, and planned for nothing
- * (`unanswered`) until a read lists the platform, which the next pass applies (ADR 0038 §4).
+ * (`unanswered`) until a read lists the platform, which asks for a pass at once (ADR 0038 §4, §5).
  */
 export class CatalogCheck {
   readonly #answers = new Map<Platform, PlatformCatalog>();
@@ -73,7 +75,11 @@ export class CatalogCheck {
         if (!finish()) return;
         const entry = entries.find((candidate) => candidate.platform === platform);
         if (entry === undefined) this.#answers.delete(platform);
-        else this.#answers.set(platform, entry);
+        else {
+          const first = !this.#answers.has(platform);
+          this.#answers.set(platform, entry);
+          if (first) this.options.onAnswer();
+        }
       },
       (error: unknown) => {
         if (!finish()) return;

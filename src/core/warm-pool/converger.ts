@@ -159,6 +159,7 @@ export class WarmPool {
       clock: options.clock,
       hasDriver: options.hasDriver,
       logger: this.#logger,
+      onAnswer: () => this.#trigger(),
     });
   }
 

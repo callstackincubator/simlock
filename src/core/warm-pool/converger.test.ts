@@ -2285,7 +2285,7 @@ describe("warm pool learned kinds", () => {
       "test",
     );
 
-  it("learns on lease.granted the leased device's kind, closes it on lease.released and lease.expired, skips a physical device and learns nothing with warmPool.enabled false", async () => {
+  it("learns on lease.granted the leased device's kind, closes it on lease.released and lease.expired, learns nothing for a device the registry does not hold, and nothing with warmPool.enabled false", async () => {
     const devices = [device("d1", "leased", 0), device("d2", "leased", 0)];
     const learnedWith = async (
       end: "lease.released" | "lease.expired" | undefined,
@@ -2369,7 +2369,7 @@ describe("warm pool learned kinds", () => {
     expect(restarted.bootCalls).toEqual(["shut"]);
   });
 
-  it("keeps a learned kind and plans nothing for it while its platform's catalog read is pending, failed or timed out, and boots it once a read lists the platform", async () => {
+  it("keeps a learned kind and plans nothing for it while its platform's catalog read is pending, failed or timed out, and boots it as soon as a read lists the platform, without waiting for the next tick", async () => {
     const phone = device("d1", "ready", 0).spec;
     const rigFor = async (catalog: () => Promise<readonly PlatformCatalog[]>) => {
       const state = await openMemoryState([warmPoolOwner]);
@@ -2396,7 +2396,6 @@ describe("warm pool learned kinds", () => {
     expect(new LearnedKinds(pending.state).kinds(pending.rig.clock.now())).toHaveLength(1);
     release([iosListing]);
     await later();
-    await pending.rig.pool.pass();
     await pending.rig.pool.settle();
     expect(pending.rig.bootCalls).toEqual(["shut"]);
 
@@ -2405,6 +2404,7 @@ describe("warm pool learned kinds", () => {
     });
     await failed.rig.pool.pass();
     await later();
+    await failed.rig.pool.pass();
     await failed.rig.pool.settle();
     expect(failed.rig.bootCalls).toEqual([]);
     expect(failed.rig.provisionCalls).toEqual([]);
@@ -2412,6 +2412,7 @@ describe("warm pool learned kinds", () => {
 
     const answered = await rigFor(async () => [iosListing]);
     await answered.rig.pool.pass();
+    await later();
     await answered.rig.pool.settle();
     expect(answered.rig.bootCalls).toEqual(["shut"]);
   });
@@ -2473,7 +2474,7 @@ describe("warm pool learned kinds", () => {
       catalogOf({}),
     ]);
     expect(listed.kinds).toBe(1);
-    expect(listed.calls).toEqual([1, 2]);
+    expect(listed.calls).toEqual([2, 3]);
     listed.rig.clock.advance(30_000);
     expect(
       listed.rig.sink.records.filter(
