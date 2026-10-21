@@ -105,29 +105,32 @@ export function MinuteTable(props: {
 }) {
   const { bucketMs = 60_000, heading, minutes } = props;
   return (
-    <table className="chart-data visually-hidden">
-      <caption>{heading}</caption>
-      <thead>
-        <tr>
-          <th scope="col">{columnOf(bucketMs)}</th>
-          <th scope="col" className="num">
-            {heading}
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {[...minutes].reverse().map((minute) => (
-          <tr key={minute.at}>
-            <td data-label={columnOf(bucketMs)} className="mono">
-              {minute.label}
-            </td>
-            <td data-label={heading} className="num">
-              {minute.count ?? "—"}
-            </td>
+    // why: a table grows to its rows whatever its height, so the hiding is on a wrapper.
+    <div className="visually-hidden">
+      <table className="chart-data">
+        <caption>{heading}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{columnOf(bucketMs)}</th>
+            <th scope="col" className="num">
+              {heading}
+            </th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {[...minutes].reverse().map((minute) => (
+            <tr key={minute.at}>
+              <td data-label={columnOf(bucketMs)} className="mono">
+                {minute.label}
+              </td>
+              <td data-label={heading} className="num">
+                {minute.count ?? "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

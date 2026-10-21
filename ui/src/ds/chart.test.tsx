@@ -13,7 +13,7 @@ describe("the hidden minute table", () => {
 
     const html = renderToStaticMarkup(<MinuteTable minutes={minutes} heading="Leases held" />);
 
-    expect(html).toContain('<table class="chart-data visually-hidden">');
+    expect(html).toContain('<div class="visually-hidden"><table class="chart-data">');
     expect(html).not.toContain("<summary>");
     expect(html).toContain('<th scope="col" class="num">Leases held</th>');
     const rows = [...html.matchAll(/<tr><td[^>]*>([^<]*)<\/td><td[^>]*>([^<]*)<\/td><\/tr>/g)].map(

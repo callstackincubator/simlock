@@ -83,7 +83,7 @@ export function DataTable<T extends RowData>(props: {
   if (rows.length === 0) return <p className="muted">{empty}</p>;
   const classes = ["table", wide ? "table-wide" : undefined, className].filter(Boolean).join(" ");
   return (
-    <>
+    <div className="table-card">
       <table className={classes}>
         <thead>
           <tr>
@@ -152,7 +152,7 @@ export function DataTable<T extends RowData>(props: {
         </tbody>
       </table>
       {paging === undefined ? null : <Pager label={label} paging={paging} />}
-    </>
+    </div>
   );
 }
 

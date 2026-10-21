@@ -8,12 +8,26 @@
   border-collapse: collapse;
   font-size: var(--text-sm);
   table-layout: fixed;
+}
+
+/* A table and its pager sit on a card. Outside a panel the card is drawn; as a page's last part it
+ * fills the page's height, so one row still reads as a list. In a panel the panel is the card. */
+.table-card {
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   background: var(--surface);
 }
 
-/* A table in a panel already sits on the panel's card. */
-.panel .table {
+.page > .table-card:last-child {
+  flex: 1;
+}
+
+.table-card > .pager {
+  margin-top: auto;
+}
+
+.panel .table-card {
   border: 0;
   background: none;
 }

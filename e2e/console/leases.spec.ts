@@ -446,7 +446,7 @@ test.describe("the leases page", () => {
       const title = await boxOf(page.getByRole("heading", { level: 1, name: "Leases" }));
       const chips = await boxOf(page.getByRole("group", { name: "Filter leases" }));
       const search = await boxOf(page.getByRole("searchbox", { name: "Search leases" }));
-      const table = await boxOf(page.locator("main table"));
+      const table = await boxOf(page.locator("main .table-card"));
 
       expect(chips.x).toBeCloseTo(title.x, 0);
       expect(search.x).toBeGreaterThan(chips.x + chips.width);

@@ -99,8 +99,13 @@ export function Feed(props: {
 function useNearEnd(last: number | undefined, count: number, onNearEnd: (() => void) | undefined) {
   const callback = useRef(onNearEnd);
   callback.current = onNearEnd;
+  // why: the box's height settles after the first draw (it fills the page), which moves the last
+  // drawn row; the list asks once per number of rows, not once per change of what is drawn.
+  const askedAt = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (last !== undefined && last >= count - NEAR_END_ROWS) callback.current?.();
+    if (last === undefined || last < count - NEAR_END_ROWS || askedAt.current === count) return;
+    askedAt.current = count;
+    callback.current?.();
   }, [last, count]);
 }
 
