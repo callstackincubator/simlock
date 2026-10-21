@@ -47,7 +47,7 @@ describe("helloRequestSchema", () => {
 });
 
 describe("PROTOCOL_VERSION_RANGE", () => {
-  it("is one above the base branch's, for the alerts.test operation", () => {
-    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 52, min: 52 });
+  it("is one above the base branch's, for the warm pool entries' origin", () => {
+    expect(PROTOCOL_VERSION_RANGE).toEqual({ max: 53, min: 53 });
   });
 });

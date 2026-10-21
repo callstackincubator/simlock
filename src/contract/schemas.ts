@@ -520,6 +520,8 @@ export const statusCapacitySchema = z.object({
 /** The most targets the block carries, and the longest model or OS version it names. The config load enforces the same. */
 export const WARM_POOL_TARGETS_MAX = 256;
 export const WARM_POOL_NAME_MAX = 256;
+/** why: the configured targets plus the learned kinds, 32 per platform, the pool keeps. */
+export const WARM_POOL_ENTRIES_MAX = WARM_POOL_TARGETS_MAX + 64;
 
 /** Why a warm target is short, in the order the first that applies is the one reported. */
 const warmPoolShortSchema = z.enum([
@@ -540,6 +542,8 @@ const warmPoolTargetSchema = z.object({
   model: z.string().max(WARM_POOL_NAME_MAX),
   osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
   mode: z.enum(["slim", "full"]),
+  imageTag: imageTagSchema.optional(),
+  origin: z.enum(["configured", "learned"]),
   count: z.number().int().nonnegative(),
   ready: z.number().int().nonnegative(),
   booting: z.number().int().nonnegative(),
@@ -553,7 +557,7 @@ export const statusWarmPoolSchema = z.object({
     ios: z.number().int().nonnegative(),
     android: z.number().int().nonnegative(),
   }),
-  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_TARGETS_MAX),
+  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_ENTRIES_MAX),
 });
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);

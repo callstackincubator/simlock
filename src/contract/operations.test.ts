@@ -538,6 +538,7 @@ describe("operation input/output round trips", () => {
           count: 2,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "26.0",
           platform: "ios",
           ready: 1,
@@ -547,6 +548,7 @@ describe("operation input/output round trips", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "learned",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -595,7 +597,7 @@ describe("operation input/output round trips", () => {
       ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
     });
 
-    it("rejects a short outside the ten reasons, and a target list longer than 256", () => {
+    it("rejects a short outside the ten reasons, and a target list longer than 320", () => {
       const target = warmPool.targets[0];
       expect(() =>
         OPERATIONS["status.get"].output.parse({
@@ -606,7 +608,7 @@ describe("operation input/output round trips", () => {
       expect(() =>
         OPERATIONS["status.get"].output.parse({
           ...running,
-          warmPool: { ...warmPool, targets: Array.from({ length: 257 }, () => target) },
+          warmPool: { ...warmPool, targets: Array.from({ length: 321 }, () => target) },
         }),
       ).toThrow();
     });
@@ -629,6 +631,7 @@ describe("operation input/output round trips", () => {
       count: 1,
       mode: "full",
       model: "iPhone 17",
+      origin: "configured",
       platform: "ios",
       ready: 0,
       short,

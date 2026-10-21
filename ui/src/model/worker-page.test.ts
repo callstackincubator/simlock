@@ -576,6 +576,7 @@ describe("a worker's warm pool tab", () => {
     count: 1,
     mode: "full" as const,
     model: "iPhone 17",
+    origin: "configured" as const,
     osVersion: "27.0",
     platform: "ios" as const,
     ready: 0,
