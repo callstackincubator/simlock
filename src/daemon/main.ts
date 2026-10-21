@@ -126,7 +126,11 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
-import { DaemonEndpointHost, refuseWhenDaemonAnswers } from "./connection-host.js";
+import {
+  DaemonAlreadyRunningError,
+  DaemonEndpointHost,
+  refuseWhenDaemonAnswers,
+} from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
@@ -1545,15 +1549,27 @@ export function parseDaemonArgv(argv: readonly string[]): DaemonMode | undefined
  * daemon's own `Config` — that is exactly what may have failed to load — so it always
  * writes to the daemon's own folder at a fixed level.
  */
-function createFatalLogger(role: DaemonMode | undefined): Logger {
+function createFatalLogger(
+  role: DaemonMode | undefined,
+  level: "error" | "info" = "error",
+): Logger {
   return new JsonLinesLogger({
     clock: new SystemClock(),
-    level: "error",
+    level,
     module: "daemon",
     sink: new NodeFileLogSink({
       path: join(daemonDataDirectory(resolveSimlockHome(), role ?? "worker"), "daemon.log"),
     }),
   });
+}
+
+function logAlreadyRunning(role: DaemonMode, error: DaemonAlreadyRunningError): void {
+  try {
+    createFatalLogger(role, "info").info("Daemon already running", { socket: error.endpoint });
+  } catch {
+    // why: logging itself failed, so the line goes to the console rather than being swallowed.
+    console.error(error.message);
+  }
 }
 
 function logFatalStart(role: DaemonMode | undefined, message: string, extra: object): void {
@@ -1584,6 +1600,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         running = daemon;
       })
       .catch((error: unknown) => {
+        if (error instanceof DaemonAlreadyRunningError) {
+          logAlreadyRunning(role, error);
+          return;
+        }
         logFatalStart(role, error instanceof Error ? error.message : String(error), {
           stack: error instanceof Error ? error.stack : undefined,
         });
