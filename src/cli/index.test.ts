@@ -8524,6 +8524,7 @@ describe("CLI: daemon install (#830)", () => {
     readonly running: boolean;
     readonly stillAnswering: number;
     readonly state?: ServiceState;
+    readonly refuse?: boolean;
   }): Promise<{
     readonly exitCode: number;
     readonly output: ReturnType<typeof outputCapture>;
@@ -8544,6 +8545,9 @@ describe("CLI: daemon install (#830)", () => {
       await resolveCredential();
       if (!options.running)
         throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
+      if (options.refuse === true) {
+        throw new SimlockError("FORBIDDEN", "protocol", "The admin token was rejected", {});
+      }
       if (stops > 0) {
         polls += 1;
         if (polls > options.stillAnswering) {
@@ -8607,6 +8611,25 @@ describe("CLI: daemon install (#830)", () => {
         removed: 1,
       },
       {
+        label: "installed, a daemon running, --json",
+        argv: ["daemon", "uninstall", "--json"],
+        state: installedState,
+        running: true,
+        json: {
+          status: "removed",
+          stopped: true,
+          service: { state: "not-installed", manager: "launchd", name },
+        },
+        removed: 1,
+      },
+      {
+        label: "installed, gateway flag, no gateway folder",
+        argv: ["--gateway", "daemon", "uninstall"],
+        state: installedState,
+        stdout: `Service removed: ${name} (launchd)\n`,
+        removed: 1,
+      },
+      {
         label: "not installed",
         argv: ["daemon", "uninstall"],
         state: { state: "not-installed" } as ServiceState,
@@ -8627,7 +8650,7 @@ describe("CLI: daemon install (#830)", () => {
     for (const testCase of cases) {
       const result = await runWithService({
         argv: testCase.argv,
-        running: false,
+        running: testCase.running ?? false,
         stillAnswering: 0,
         state: testCase.state,
       });
@@ -8684,6 +8707,18 @@ describe("CLI: daemon install (#830)", () => {
     expect(stubborn.serviceManager.installs).toEqual([]);
     expect(stubborn.clock.now()).toBeGreaterThanOrEqual(300_000);
     expect(stubborn.clock.now()).toBeLessThan(301_000);
+
+    const refused = await runWithService({
+      argv: ["daemon", "install"],
+      running: true,
+      stillAnswering: 0,
+      refuse: true,
+    });
+    expect(refused.exitCode).toBe(1);
+    expect(JSON.parse(refused.output.stderr)).toEqual({
+      error: { code: "FORBIDDEN", message: "The admin token was rejected" },
+    });
+    expect(refused.serviceManager.installs).toEqual([]);
 
     const uninstall = await runWithService({
       argv: ["daemon", "uninstall"],
@@ -8764,6 +8799,12 @@ describe("CLI: a start through a service that fails (#830)", () => {
     const cases = [
       { label: "the log holds the start error", written: startError, expected: "EADDRINUSE" },
       { label: "empty log", written: "", expected: undefined },
+      {
+        label: "25 lines: the last 20 are kept",
+        written: Array.from({ length: 25 }, (_, index) => `line ${String(index + 1)}\n`).join(""),
+        expected: "line 6\n",
+        notExpected: "line 5\n",
+      },
     ];
     for (const testCase of cases) {
       const directory = await mkdtemp(join(tmpdir(), "simlock-service-start-"));
@@ -8822,6 +8863,9 @@ describe("CLI: a start through a service that fails (#830)", () => {
           expect(error.message, testCase.label).not.toContain("\n");
         } else {
           expect(error.message, testCase.label).toContain(testCase.expected);
+        }
+        if (testCase.notExpected !== undefined) {
+          expect(error.message, testCase.label).not.toContain(testCase.notExpected);
         }
       } finally {
         await rm(directory, { force: true, recursive: true });

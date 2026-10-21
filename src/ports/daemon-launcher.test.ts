@@ -250,9 +250,10 @@ describe("launcherFor's fallback to spawning", () => {
   it("spawns the daemon as today, with a notice when the service is not loaded or broken", async () => {
     const cases: readonly {
       readonly label: string;
-      readonly state: ServiceState;
+      readonly state: ServiceState | undefined;
       readonly notices: readonly string[];
     }[] = [
+      { label: "no service manager on this platform", state: undefined, notices: [] },
       { label: "no service", state: { state: "not-installed" }, notices: [] },
       {
         label: "not loaded",
@@ -275,7 +276,10 @@ describe("launcherFor's fallback to spawning", () => {
       },
     ];
     for (const testCase of cases) {
-      const serviceManager = new FakeServiceManager({ state: testCase.state });
+      const serviceManager =
+        testCase.state === undefined
+          ? undefined
+          : new FakeServiceManager({ state: testCase.state });
       const spawner = new FakeDaemonLauncher();
       const notices: string[] = [];
       const launcher = launcherFor({
@@ -294,7 +298,7 @@ describe("launcherFor's fallback to spawning", () => {
       await launcher.launch();
 
       expect(spawner.launches, testCase.label).toBe(1);
-      expect(serviceManager.starts, testCase.label).toEqual([]);
+      expect(serviceManager?.starts ?? [], testCase.label).toEqual([]);
       expect(notices, testCase.label).toEqual(testCase.notices);
     }
   });

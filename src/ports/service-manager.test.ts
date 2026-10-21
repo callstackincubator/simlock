@@ -6,7 +6,9 @@ import { MemoryFilesystem } from "./filesystem.js";
 import { ScriptedProcessRunner } from "./process-runner.js";
 import {
   LaunchdServiceManager,
+  productionServiceManager,
   serviceDefinition,
+  ServiceFailedError,
   type ServiceDefinition,
 } from "./service-manager.js";
 
@@ -102,7 +104,7 @@ describe("LaunchdServiceManager (#830)", () => {
   it("launchd reads the plist install wrote: arguments, saved variables, service keys and log paths", async () => {
     const saved = {
       SIMLOCK_DRIVERS_MODULE: "/x/drivers.js",
-      PATH: "/usr/bin:/opt/bin",
+      PATH: "/usr/bin:/opt/bin&sbin:/odd<dir>",
       ANDROID_HOME: "/sdk",
       ANDROID_SDK_ROOT: "/sdk",
       ANDROID_AVD_HOME: "/avd",
@@ -133,7 +135,13 @@ describe("LaunchdServiceManager (#830)", () => {
 
     for (const testCase of cases) {
       const definition = definitionFor(testCase.role, testCase.env);
-      const { plist } = await installed(definition);
+      const { plist, filesystem } = await installed(definition);
+      const raw = await filesystem.readFile(definition.path);
+      if (testCase.role === "worker") {
+        expect(raw, `${testCase.label}: XML-escaped`).toContain(
+          "/usr/bin:/opt/bin&amp;sbin:/odd&lt;dir&gt;",
+        );
+      }
       expect(plist, testCase.label).toEqual({
         Label: definition.name,
         ProgramArguments: testCase.arguments,
@@ -285,6 +293,57 @@ describe("LaunchdServiceManager (#830)", () => {
       expect(runner.calls.length, testCase.label).toBe(testCase.script.length);
       for (const call of runner.calls) expect(call.options.timeoutMs, testCase.label).toBe(10_000);
     }
+  });
+
+  it("state fails with SERVICE_FAILED when plutil cannot read the plist", async () => {
+    const definition = definitionFor("worker");
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dirname(definition.path));
+    await filesystem.writeFileAtomic(definition.path, "not a plist");
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { command: "plutil", args: ["-convert", "json", "-o", "-", definition.path] },
+        result: { code: 1, stdout: "", stderr: "Unexpected character n\nsecond line" },
+      },
+    ]);
+
+    const state = new LaunchdServiceManager({ runner, filesystem, uid: 501 }).state(definition);
+
+    await expect(state).rejects.toBeInstanceOf(ServiceFailedError);
+    await expect(state).rejects.toThrow(
+      `plutil -convert json -o - ${definition.path} failed: Unexpected character n`,
+    );
+  });
+
+  it("install stops on a daemon.log error that is not 'already exists'", async () => {
+    class DeniedLogFilesystem extends MemoryFilesystem {
+      override async writeFileExclusive(): Promise<void> {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+    }
+    const definition = definitionFor("worker");
+    const runner = new ScriptedProcessRunner([
+      { match: { command: "launchctl", args: ["bootout", /.*/] } },
+    ]);
+
+    const install = new LaunchdServiceManager({
+      runner,
+      filesystem: new DeniedLogFilesystem(),
+      uid: 501,
+    }).install(definition);
+
+    await expect(install).rejects.toThrow("denied");
+  });
+
+  it("productionServiceManager is the launchd adapter on macOS and nothing elsewhere", () => {
+    const dependencies = {
+      runner: new ScriptedProcessRunner([]),
+      filesystem: new MemoryFilesystem(),
+      uid: 501,
+    };
+    expect(productionServiceManager("darwin", dependencies)).toBeInstanceOf(LaunchdServiceManager);
+    expect(productionServiceManager("linux", dependencies)).toBeUndefined();
+    expect(productionServiceManager("win32", dependencies)).toBeUndefined();
   });
 
   it("start kickstarts the loaded service", async () => {
