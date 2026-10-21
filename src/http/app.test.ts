@@ -1530,6 +1530,12 @@ describe("lease routes", () => {
   it.each([
     ["renew", "/v1/leases/lse_1/renew", '{"ttlMs":60000}', "lease.renew"],
     ["exec", "/v1/leases/lse_1/exec", '{"args":["list"],"tool":"simctl"}', "device.exec"],
+    [
+      "install",
+      "/v1/components/install",
+      '{"platform":"android","version":"35"}',
+      "component.install",
+    ],
   ])(
     "a caller sends the %s body without a JSON content type and gets 415 UNSUPPORTED_MEDIA_TYPE; with application/json it reaches the dispatcher",
     async (_route, path, body, operation) => {
@@ -1543,6 +1549,12 @@ describe("lease routes", () => {
         ttlDeadline: 2_000,
       });
       dispatcher.handlers["device.exec"] = () => ({ exitCode: 0 });
+      dispatcher.handlers["component.install"] = () => ({
+        component: "35",
+        outcome: "installed",
+        platform: "android",
+        version: "35",
+      });
       const send = (contentType: string | undefined) =>
         app.request(path, {
           body,
