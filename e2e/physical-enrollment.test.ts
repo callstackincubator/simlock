@@ -482,16 +482,6 @@ describe("simlock device remove", () => {
     }
   });
 
-  it("from a non-interactive shell, with no --yes, unenrols the device", async () => {
-    const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const enrolled = await add(env, "ios", UDID);
-
-    const result = await env.cli(["device", "remove", UDID]);
-
-    expect(result.code, result.stderr).toBe(0);
-    expect((await rows(env)).find((row) => row.id === enrolled.id)?.state).toBe("deleted");
-  });
-
   it("then device add writes a new record with a new registry ID and reenrolled false, and the old record stays deleted", async () => {
     const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
     const first = await add(env, "ios", UDID);

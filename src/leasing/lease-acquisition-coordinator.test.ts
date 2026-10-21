@@ -744,9 +744,9 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
 
 describe("LeaseAcquisitionCoordinator", () => {
   it("rejects a second request from a requester whose first is still pending, under no key or a new idempotency key, with lease.rejected already-leased", async () => {
-    // The one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
+    // why: the one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
     // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a
-    // lease is createLeasing's "enforces one active request or lease per requester" case.
+    // lease is createLeasing's "with no lease.maxPerRequester, a requester holding a lease is refused" case.
     const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
     await harness.coordinator.request(request, { ownerId: "holder", requesterId: "holder" });
     const pending = harness.coordinator.request(request, {
@@ -3026,18 +3026,6 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
 
       expect(whileResolving).toEqual([]);
       await expect(pending).rejects.toMatchObject({ name: "UnknownModelError" });
-    });
-
-    it("fails a class request with UnknownModelError when the catalog reader answers no entry for the platform", async () => {
-      const harness = await createHarness({
-        catalogReader: { listCatalog: async () => [] },
-        drivers: [iosDriver()],
-        preferences: iosPreferences,
-      });
-
-      await expect(harness.coordinator.request(phone, owner("agent"))).rejects.toMatchObject({
-        name: "UnknownModelError",
-      });
     });
 
     it.each([

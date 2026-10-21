@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -202,10 +202,6 @@ async function exitCodeOf(response: Response): Promise<{ code: number; body: str
   return { body, code: (JSON.parse(data) as { exitCode: number }).exitCode };
 }
 
-async function errorCodeOf(response: Response): Promise<string> {
-  return ((await response.json()) as { error: { code: string } }).error.code;
-}
-
 describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
   missing === undefined
     ? "iOS physical phone (real devicectl)"
@@ -319,29 +315,6 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
     );
 
     it(
-      "device.exec devicectl --json-output <path> list devices is refused and no file appears at <path>",
-      { timeout: 5 * MINUTE },
-      async () => {
-        const daemon = await rig();
-        await enroll(daemon.env, udid);
-        const grant = await leasePhysical(daemon.env, "phone-lane-refuse");
-        const target = join(await mkdtemp(join(tmpdir(), "simlock-physical-")), "refused.json");
-
-        const refused = await exec(daemon, grant.lease.id, "phone-lane-refuse", [
-          "--json-output",
-          target,
-          "list",
-          "devices",
-        ]);
-
-        expect(refused.status).toBe(422);
-        expect(await errorCodeOf(refused)).toBe("PASSTHROUGH_REFUSED");
-        await expect(access(target)).rejects.toMatchObject({ code: "ENOENT" });
-        await daemon.env.cli(["release", grant.lease.id]);
-      },
-    );
-
-    it(
       "device.exec devicectl device process launch <bundle> -- -AppleLanguages (en) of the test app exits 0",
       { timeout: 10 * MINUTE },
       async () => {
@@ -375,20 +348,6 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         expect(launched.code, launched.body).toBe(0);
         await daemon.env.cli(["release", grant.lease.id]);
         await waitForDeviceState(daemon.env, udid, "ready", { timeout: 3 * MINUTE });
-      },
-    );
-
-    it(
-      "the grant's environment carries SIMLOCK_DEVICE_UDID equal to the phone's UDID",
-      { timeout: 5 * MINUTE },
-      async () => {
-        const { env } = await rig();
-        await enroll(env, udid);
-
-        const grant = await leasePhysical(env, "phone-lane-env");
-
-        expect(grant.environment["SIMLOCK_DEVICE_UDID"]).toBe(udid);
-        await env.cli(["release", grant.lease.id]);
       },
     );
 

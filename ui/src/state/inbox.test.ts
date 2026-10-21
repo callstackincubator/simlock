@@ -28,18 +28,24 @@ describe("what the Inbox could not check", () => {
     expect(reads.waiting).toEqual({ data: { requests: [] }, kind: "ready" });
   });
 
-  it("names the waiting requests when that read failed after an earlier answer, and keeps the answer", () => {
-    const held = { requests: [] };
-    const reads = inboxReadsOf(
-      { data: held, error: DOWN },
-      { data: NO_LEASES },
-      {},
-      { data: NO_WORKERS },
-    );
+  it.each([
+    ["waiting requests", "waiting"],
+    ["workers", "workers"],
+  ] as const)(
+    "names the %s when that read failed after an earlier answer, and keeps the answer",
+    (name, field) => {
+      const held = field === "waiting" ? { requests: [] } : NO_WORKERS;
+      const reads = inboxReadsOf(
+        field === "waiting" ? { data: { requests: [] }, error: DOWN } : { data: { requests: [] } },
+        { data: NO_LEASES },
+        {},
+        field === "workers" ? { data: NO_WORKERS, error: DOWN } : { data: NO_WORKERS },
+      );
 
-    expect(reads.couldNotCheck).toEqual(["waiting requests"]);
-    expect(reads.waiting).toEqual({ data: held, kind: "ready", refusal: "down" });
-  });
+      expect(reads.couldNotCheck).toEqual([name]);
+      expect(reads[field]).toEqual({ data: held, kind: "ready", refusal: "down" });
+    },
+  );
 
   it("names the leases when that read failed, before any answer and after one", () => {
     expect(
@@ -85,17 +91,5 @@ describe("what the Inbox could not check", () => {
     );
 
     expect(reads.leases).toBeUndefined();
-  });
-
-  it("names the workers when that read failed after an earlier answer, and keeps the answer", () => {
-    const reads = inboxReadsOf(
-      { data: { requests: [] } },
-      { data: NO_LEASES },
-      {},
-      { data: NO_WORKERS, error: DOWN },
-    );
-
-    expect(reads.couldNotCheck).toEqual(["workers"]);
-    expect(reads.workers).toEqual({ data: NO_WORKERS, kind: "ready", refusal: "down" });
   });
 });

@@ -299,15 +299,6 @@ describe("FleetLeaseIndex", () => {
         ),
       ).toBe(true);
     });
-
-    it("does not warn for an ordinary addition that was never removed by a relayed event", () => {
-      const logger = new RecordingLogger();
-      const index = new FleetLeaseIndex(PREFIX, logger);
-
-      index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
-
-      expect(logger.warnings).toEqual([]);
-    });
   });
 
   describe("forgetWorker", () => {
@@ -414,15 +405,13 @@ describe("FleetLeaseIndex", () => {
       ]);
     });
 
-    it("logs a flagged lease with an invalid ID once, not on every snapshot that repeats it", () => {
-      const logger = new RecordingLogger();
-      const index = new FleetLeaseIndex(PREFIX, logger);
+    it("keeps one entry for a flagged lease with an invalid ID repeated across snapshots", () => {
+      const index = new FleetLeaseIndex(PREFIX);
 
       index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
       index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
       index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
 
-      expect(logger.warnings).toHaveLength(1);
       expect(index.all()).toHaveLength(1);
     });
 

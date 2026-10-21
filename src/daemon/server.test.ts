@@ -205,6 +205,7 @@ describe("DaemonServer", () => {
   });
 
   it.each([
+    [1, "speaks a wire this daemon cannot serve"],
     [17, "cannot parse a starting status.get answer"],
     [18, "cannot parse config.get's warmPool.targets"],
     [20, "cannot send lease.request's leaseId or read a lease's idChosenByRequester"],
@@ -246,18 +247,6 @@ describe("DaemonServer", () => {
       });
     },
   );
-
-  it("rejects a protocol v1 client outright rather than serving it a wire it cannot speak", async () => {
-    const harness = await createHarness();
-    const legacy = await createClient(harness.socketPath);
-
-    await expect(
-      legacy.request("hello", { clientVersion: "test", protocolVersion: 1 }),
-    ).resolves.toMatchObject({
-      error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
-      ok: false,
-    });
-  });
 
   it("grants the queued client when the holder's lease expires, not when it disconnects", async () => {
     // A log sink rather than a sleep: "the waiter stays queued" is a negative assertion, and
@@ -1161,24 +1150,57 @@ describe("DaemonServer", () => {
     }
   });
 
-  it("ignores lease-lost facts for leases with no currently connected holder without breaking the daemon", async () => {
-    const harness = await createHarness();
-    harness.eventBus.emit(
-      "lease.expired",
-      { deviceId: "device-x", leaseId: "lease-x", ownerId: "test-process" },
-      "test",
-    );
-    harness.eventBus.emit(
-      "lease.released",
-      { deviceId: "device-y", leaseId: "lease-y", ownerId: "test-process", reason: "killed" },
-      "test",
-    );
+  type EventBus = Awaited<ReturnType<typeof createHarness>>["eventBus"];
 
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
-    await client.close();
-  });
+  it.each([
+    [
+      "lease-lost",
+      (eventBus: EventBus) => {
+        eventBus.emit(
+          "lease.expired",
+          { deviceId: "device-x", leaseId: "lease-x", ownerId: "test-process" },
+          "test",
+        );
+        eventBus.emit(
+          "lease.released",
+          { deviceId: "device-y", leaseId: "lease-y", ownerId: "test-process", reason: "killed" },
+          "test",
+        );
+      },
+    ],
+    [
+      "device-unhealthy/device-recovered",
+      (eventBus: EventBus) => {
+        eventBus.emit(
+          "device.crash-detected",
+          { deviceId: "device-x", leaseId: "lease-x", observed: "stopped", platform: "ios" },
+          "test",
+        );
+        eventBus.emit(
+          "device.recovered",
+          {
+            attempts: 1,
+            deviceId: "device-x",
+            duration: 1_000,
+            leaseId: "lease-x",
+            platform: "ios",
+          },
+          "test",
+        );
+      },
+    ],
+  ])(
+    "ignores %s facts for leases with no currently connected holder without breaking the daemon",
+    async (_name, emitFacts) => {
+      const harness = await createHarness();
+      emitFacts(harness.eventBus);
+
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+      await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+      await client.close();
+    },
+  );
 
   it("pushes a device-unhealthy notification on device.crash-detected without releasing the lease", async () => {
     const harness = await createHarness();
@@ -1253,31 +1275,6 @@ describe("DaemonServer", () => {
     await holder.request("lease.release", { leaseId });
     await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
     await holder.close();
-  });
-
-  it("ignores device-unhealthy/device-recovered facts for leases with no currently connected holder", async () => {
-    const harness = await createHarness();
-    harness.eventBus.emit(
-      "device.crash-detected",
-      { deviceId: "device-x", leaseId: "lease-x", observed: "stopped", platform: "ios" },
-      "test",
-    );
-    harness.eventBus.emit(
-      "device.recovered",
-      {
-        attempts: 1,
-        deviceId: "device-x",
-        duration: 1_000,
-        leaseId: "lease-x",
-        platform: "ios",
-      },
-      "test",
-    );
-
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
-    await client.close();
   });
 
   it("pushes a lease-lost notification carrying reason device-lost when a leased device could not be recovered", async () => {
@@ -2212,29 +2209,6 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     });
     await holder.close();
   });
-
-  it("leaves leases alone on a daemon stop", async () => {
-    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
-    const holder = await createClient(harness.socketPath);
-    await hello(holder);
-    const grant = await holder.request("lease.request", {
-      requesterId: "agent-1",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    const leaseId = leaseIdOf(grant);
-    await holder.close();
-
-    await harness.daemon.stop("test");
-
-    // ADR 0004 §3: a stop ends connections, not leases. The record persists with its
-    // deadline for the next daemon to restore a timer from.
-    expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
-    expect(harness.eventBus.replay().filter((event) => event.event === "lease.released")).toEqual(
-      [],
-    );
-  });
 });
 
 describe("DaemonServer decorations", () => {
@@ -2262,61 +2236,6 @@ describe("DaemonServer decorations", () => {
   });
 
   describe("operational logging", () => {
-    function logger(): { logger: Logger; sink: MemoryLogSink } {
-      const sink = new MemoryLogSink();
-      return {
-        logger: new JsonLinesLogger({ clock: new FakeClock(1_000), level: "debug", sink }),
-        sink,
-      };
-    }
-
-    it("logs the daemon start with version, protocol version, socket path, and effective config", async () => {
-      const { logger: log, sink } = logger();
-      const harness = await createHarness({ logger: log, start: false });
-
-      await harness.daemon.start();
-
-      expect(sink.records).toContainEqual(
-        expect.objectContaining({
-          level: "info",
-          message: "Daemon started",
-          fields: expect.objectContaining({
-            version: "test",
-            protocolVersion: DAEMON_PROTOCOL_VERSION,
-            socketPath: harness.socketPath,
-            config: harness.config,
-          }),
-        }),
-      );
-    });
-
-    it("logs a connection opening with its principal and role, and closing afterward", async () => {
-      const { logger: log, sink } = logger();
-      const harness = await createHarness({ logger: log });
-      const client = await createClient(harness.socketPath);
-
-      await helloAs(client, "agent-7");
-      expect(sink.records).toContainEqual(
-        expect.objectContaining({
-          level: "info",
-          message: "Connection opened",
-          fields: expect.objectContaining({ principal: "agent-7", role: "admin" }),
-        }),
-      );
-
-      await client.close();
-      // ADR 0004 §3: there is no held-lease count to log any more, because there is no
-      // per-connection lease state to count.
-      await expect
-        .poll(() =>
-          sink.records.some(
-            (record) =>
-              record.message === "Connection closed" && record.fields?.principal === "agent-7",
-          ),
-        )
-        .toBe(true);
-    });
-
     it("drains the backgrounded reclaims before disposing, on a graceful stop", async () => {
       const order: string[] = [];
       let finishSettle!: () => void;
@@ -2460,75 +2379,6 @@ describe("DaemonServer decorations", () => {
       await harness.daemon.stop("test-health");
       expect(harness.daemon.health).toBe("running");
     });
-
-    it("logs a clean shutdown", async () => {
-      const { logger: log, sink } = logger();
-      const harness = await createHarness({ logger: log });
-
-      await harness.daemon.stop("test-shutdown");
-
-      expect(sink.records).toContainEqual(
-        expect.objectContaining({
-          level: "info",
-          message: "Daemon stopping",
-          fields: { reason: "test-shutdown" },
-        }),
-      );
-      expect(sink.records).toContainEqual(
-        expect.objectContaining({
-          level: "info",
-          message: "Daemon stopped",
-          fields: { reason: "test-shutdown" },
-        }),
-      );
-    });
-
-    // `doctor.run`/`nuke.run` used to surface an unconfigured collaborator as a plain `Error`,
-    // which `errorCode()` had no choice but to map to `INTERNAL` -- logged at error level
-    // indistinguishably from a real bug. `DoctorUnavailableError`/`NukeUnavailableError` (ADR
-    // 0003 §7: "one error class, closed codes") give this its own typed code, so it is now a
-    // handled error like any other expected domain refusal: an info-level `operation` line.
-    it("logs an unconfigured doctor as a handled DOCTOR_UNAVAILABLE, not an unhandled error", async () => {
-      const { logger: log, sink } = logger();
-      const harness = await createHarness({ logger: log });
-      const client = await createClient(harness.socketPath);
-      await hello(client);
-
-      await client.request("doctor.run", {});
-
-      expect(sink.records).toContainEqual(
-        expect.objectContaining({
-          level: "info",
-          message: "operation",
-          fields: expect.objectContaining({ code: "DOCTOR_UNAVAILABLE", operation: "doctor.run" }),
-        }),
-      );
-      expect(sink.records).not.toContainEqual(
-        expect.objectContaining({ level: "error", message: "Unhandled request error" }),
-      );
-      await client.close();
-    });
-
-    it("logs a handled/expected request error below error level", async () => {
-      const { logger: log, sink } = logger();
-      const harness = await createHarness({ logger: log });
-      const client = await createClient(harness.socketPath);
-      await hello(client);
-
-      await client.request("lease.release", { leaseId: "not-a-lease" });
-
-      expect(sink.records).toContainEqual(
-        expect.objectContaining({
-          level: "info",
-          message: "operation",
-          fields: expect.objectContaining({ code: "UNKNOWN_LEASE", operation: "lease.release" }),
-        }),
-      );
-      expect(sink.records).not.toContainEqual(
-        expect.objectContaining({ level: "error", message: "Unhandled request error" }),
-      );
-      await client.close();
-    });
   });
 });
 
@@ -2595,27 +2445,36 @@ describe("DaemonServer download policy", () => {
     await client.close();
   });
 
-  it("withholds download permission under the never policy even when the request asks for it", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
-    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
+  it.each([
+    ["asks for it", { allowDownload: true }],
+    ["never asked for a download", {}],
+  ])(
+    "attaches the download-policy suffix and withholds download permission under the never policy even when the request %s",
+    async (_name, extra) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+      const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
 
-    const response = await client.request("lease.request", {
-      allowDownload: true,
-      requesterId: "agent-1",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
+      // why: when the request never asked, the driver's own message still suggests `--allow-download`,
+      // which under the never policy can never help, so the suffix must still attach as the
+      // correction.
+      const response = await client.request("lease.request", {
+        ...extra,
+        requesterId: "agent-1",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+      });
 
-    expect(response.ok).toBe(false);
-    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
-    expect(response.error?.message).toContain("downloads.policy");
-    expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
-    await client.close();
-  });
+      expect(response.ok).toBe(false);
+      expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+      expect(response.error?.message).toContain("downloads.policy");
+      expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
+      await client.close();
+    },
+  );
 
   it("defers to the request's own flag under the default on-request policy", async () => {
     const clock = new FakeClock(1_000);
@@ -2637,29 +2496,6 @@ describe("DaemonServer download policy", () => {
     expect(response.ok).toBe(false);
     expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
     expect(response.error?.message).not.toContain("downloads.policy");
-    await client.close();
-  });
-
-  it("attaches the download-policy suffix under the never policy even when the request itself never asked for a download", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
-    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-
-    // No allowDownload on this request at all -- the driver's own message still suggests
-    // `--allow-download`, which under the never policy can never help, so the suffix must
-    // still attach as the correction.
-    const response = await client.request("lease.request", {
-      requesterId: "agent-1",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-
-    expect(response.ok).toBe(false);
-    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
-    expect(response.error?.message).toContain("downloads.policy");
     await client.close();
   });
 

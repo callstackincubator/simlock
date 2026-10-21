@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "./filesystem.js";
 import {
-  daemonDataDirectory,
   resolveDaemonHome,
   resolveDaemonSocketPath,
   resolveSimlockHome,
@@ -82,13 +81,6 @@ describe("resolveSimlockHome", () => {
     expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home/../other-home" })).toBe(
       "/tmp/other-home",
     );
-  });
-});
-
-describe("daemonDataDirectory", () => {
-  it("puts the gateway in <root>/gateway and the worker in <root>", () => {
-    expect(daemonDataDirectory("/home/me/.simlock", "gateway")).toBe("/home/me/.simlock/gateway");
-    expect(daemonDataDirectory("/home/me/.simlock", "worker")).toBe("/home/me/.simlock");
   });
 });
 

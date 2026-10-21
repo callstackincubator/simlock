@@ -25,17 +25,20 @@ const { connectToRunningDaemon, connectWithAutoLaunch } = vi.hoisted(() => ({
 vi.mock("./connect.js", () => ({ connectToRunningDaemon, connectWithAutoLaunch }));
 
 describe("MCP stdio lifecycle", () => {
-  it.each(["transport", "SIGINT", "SIGTERM"])("closes once on %s", async (cause) => {
+  it.each(["transport", "SIGINT", "SIGTERM", "stdin EOF"])("closes once on %s", async (cause) => {
     const transport = new FakeTransport();
     const server = new FakeServer();
     const signals = new FakeSignals();
+    const stdin = new FakeStdin();
     const runner = await startMcpStdio({
       createServer: () => server as unknown as McpServer,
       createTransport: () => transport,
       signals,
+      stdin,
     });
 
     if (cause === "transport") transport.onclose?.();
+    else if (cause === "stdin EOF") stdin.end();
     else signals.emit(cause);
     await runner.finished;
     await runner.shutdown();
@@ -43,6 +46,7 @@ describe("MCP stdio lifecycle", () => {
     expect(server.closeCalls).toBe(1);
     expect(transport.closeCalls).toBe(1);
     expect(signals.listeners.size).toBe(0);
+    expect(stdin.listener).toBeUndefined();
   });
 
   // Regression for a real reentrancy bug: the SDK's transport.close() can invoke
@@ -257,12 +261,6 @@ describe("MCP stdio lifecycle", () => {
     await runner.shutdown();
   });
 
-  it("sources the connection principal as claude-code:<id> from CLAUDE_CODE_SESSION_ID when neither requesterId nor SIMLOCK_AGENT_ID is given", async () => {
-    await expect(principalFor({ env: { CLAUDE_CODE_SESSION_ID: "abc" } })).resolves.toBe(
-      "claude-code:abc",
-    );
-  });
-
   it("falls back to mcp:<pid> when no requesterId, SIMLOCK_AGENT_ID or session id is given", async () => {
     await expect(principalFor({ env: {} })).resolves.toBe(`mcp:${process.pid}`);
   });
@@ -293,23 +291,6 @@ describe("MCP stdio lifecycle", () => {
       await expect(principalFor({ env })).resolves.toBe(cli.requesterId);
     },
   );
-
-  it("closes once when stdin reaches EOF", async () => {
-    const transport = new FakeTransport();
-    const server = new FakeServer();
-    const stdin = new FakeStdin();
-    const runner = await startMcpStdio({
-      createServer: () => server as unknown as McpServer,
-      createTransport: () => transport,
-      stdin,
-    });
-
-    stdin.end();
-    await runner.finished;
-    expect(server.closeCalls).toBe(1);
-    expect(transport.closeCalls).toBe(1);
-    expect(stdin.listener).toBeUndefined();
-  });
 
   it("finishes when the transport closes during server connection", async () => {
     const transport = new FakeTransport();

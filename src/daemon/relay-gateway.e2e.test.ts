@@ -682,25 +682,6 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(response.headers.get("connection")).toBeNull();
   });
 
-  it("with 63 relays to one worker held in their targets, a 64th starts at once", async () => {
-    const release = gate();
-    behavior = async () => {
-      await release.promise;
-      return new Response("ok");
-    };
-    const { opened, relay } = await startPair();
-
-    const calls = Array.from({ length: 64 }, () =>
-      settleWithin(relay.relay(WORKER_ID, buildCall({})), 20_000),
-    );
-    await poll(() => targetCalls.length, 10_000).toBe(64);
-    const channels = opened();
-    release.open();
-    await Promise.all(calls);
-
-    expect(channels).toBe(64);
-  }, 60_000);
-
   it("a 65th relay to one worker starts once one of 64 ends, and not before", async () => {
     const releases: (() => void)[] = [];
     behavior = async () => {

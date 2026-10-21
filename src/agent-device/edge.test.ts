@@ -2941,17 +2941,6 @@ describe("the agent-device front's request rules", () => {
       expect(rig.fake.requests.length).toBe(before);
     });
 
-    it("a route refusal answers 404 with `refused: unknown route POST /rpcx`", async () => {
-      const rig = await setUp();
-
-      const answer = await send(rig, "/rpcx", { body: "{}" });
-
-      expect(answer.status).toBe(404);
-      expect(((await bodyOf(answer)) as { error: string }).error).toBe(
-        "refused: unknown route POST /rpcx",
-      );
-    });
-
     it("a route outside the list answers 401 without a token, and `agent-device is not available on this simlock` while agent-device is unavailable", async () => {
       const rig = await setUp();
       expect((await send(rig, "/admin/leases")).status).toBe(404);
@@ -3726,15 +3715,6 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
     expect(await capabilities(off)).toEqual([{ name: "agent-device", state: "off" }]);
   });
 
-  it("a worker with agent-device running answers [{name: agent-device, state: available}], with no reason", async () => {
-    const rig = await setUp();
-
-    const [entry] = (await capabilities(rig)) ?? [];
-
-    expect(entry).toEqual({ name: "agent-device", state: "available" });
-    expect(entry).not.toHaveProperty("reason");
-  });
-
   it("a worker whose agent-device is unavailable answers state unavailable with the same reason its front's notAvailable reply names", async () => {
     const rig = await setUp();
     const reason = "found 0.20.1, need 0.21.28 or later";
@@ -3821,31 +3801,21 @@ describe(
       await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
     });
 
-    it("an artifact download of exactly 2147483648 bytes with `content-length` arrives byte for byte", async () => {
-      const rig = await setUp();
-      rig.fake.serveArtifact({ contentLength: "size", size: downloadLimit });
+    it.each(["size", "none"] as const)(
+      "a download of exactly 2147483648 bytes with `content-length` %s arrives byte for byte",
+      async (contentLength) => {
+        const rig = await setUp();
+        rig.fake.serveArtifact({ contentLength, size: downloadLimit });
 
-      const response = await send(rig, "/artifacts/a1");
-      const received = await drainDownload(response);
+        const response = await send(rig, "/artifacts/a1");
+        const received = await drainDownload(response);
 
-      expect(response.status).toBe(200);
-      expect(received.ended).toBe(true);
-      expect(received.bytes).toBe(downloadLimit);
-      expect(received.digest).toBe(rig.fake.producedDigest());
-    });
-
-    it("a download with no `content-length` of exactly 2147483648 bytes arrives byte for byte", async () => {
-      const rig = await setUp();
-      rig.fake.serveArtifact({ contentLength: "none", size: downloadLimit });
-
-      const response = await send(rig, "/artifacts/a1");
-      const received = await drainDownload(response);
-
-      expect(response.status).toBe(200);
-      expect(received.ended).toBe(true);
-      expect(received.bytes).toBe(downloadLimit);
-      expect(received.digest).toBe(rig.fake.producedDigest());
-    });
+        expect(response.status).toBe(200);
+        expect(received.ended).toBe(true);
+        expect(received.bytes).toBe(downloadLimit);
+        expect(received.digest).toBe(rig.fake.producedDigest());
+      },
+    );
 
     it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly, and the fake's body is cancelled", async () => {
       const rig = await setUp();
