@@ -340,7 +340,7 @@ export class WarmPool {
       const refused = this.options.config.enabled ? await this.#resolveTargets() : [];
       if (this.options.config.enabled) this.#checkCatalog();
       const plan = await this.options.decisions.run(() => evaluate(this.#view()));
-      const reports = [...refused, ...plan.targets];
+      const reports = configuredOnly([...refused, ...plan.targets]);
       this.#note(reports);
       for (const proposal of plan.proposals) {
         if (this.#draining) break;
@@ -751,6 +751,24 @@ export class WarmPool {
       error: stableError(error),
     });
   }
+}
+
+/**
+ * why: status, the short log and `warm-pool.target-missed` describe the operator's targets only in
+ * this version, so a learned kind's report is left out and a merged entry is judged by the
+ * configured count: a configured target that is met is not short however short the learned count is.
+ */
+function configuredOnly(reports: readonly TargetReport[]): TargetReport[] {
+  return reports
+    .filter((report) => report.origin === "configured")
+    .map((report) => {
+      if (report.count === report.configuredCount) return report;
+      const { short: _short, ...rest } = report;
+      const merged = { ...rest, count: report.configuredCount };
+      return report.ready >= report.configuredCount || report.short === undefined
+        ? merged
+        : { ...merged, short: report.short };
+    });
 }
 
 /** A report as `figures()` lists it: the kind, the numbers and the reason, never the message. */
