@@ -246,6 +246,7 @@ export function createCore(options: CoreOptions): Core {
       defaultMode: (platform) => port("warmPoolDemand").defaultMode(platform),
     },
     capacity,
+    catalog: drivers,
     claims,
     clock: options.clock,
     config: options.config.warmPool,

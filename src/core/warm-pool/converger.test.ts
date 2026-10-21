@@ -9,9 +9,11 @@ import {
   type VirtualDevice,
   type VirtualSpec,
   type LeaseRecord,
+  type Platform,
   type TargetResolution,
   type WaitingDemand,
 } from "../domain.js";
+import type { PlatformCatalog } from "../driver-catalog.js";
 import { BootTimeoutError, type DeviceRequest } from "../driver.js";
 import { SerializedDecision } from "../serialized-decision.js";
 import type { StateDatabase } from "../../state/index.js";
@@ -117,6 +119,8 @@ function harness(
     state?: StateDatabase;
     /** why: called with the id of each device the budget is asked to admit a boot of, while a pass proposes. */
     onAdmit?: (deviceId: string) => void;
+    /** why: what a platform's catalog read answers; by default a catalog that lists nothing. */
+    catalog?: (platform?: Platform) => Promise<readonly PlatformCatalog[]>;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -235,6 +239,7 @@ function harness(
         };
       },
     },
+    catalog: { listCatalog: options.catalog ?? (async () => []) },
     claims: {
       claim: (id) => claims.claim(id),
       isClaimed: (id) => claims.isClaimed(id),
@@ -2281,5 +2286,98 @@ describe("warm pool learned kinds", () => {
     await restarted.pool.pass();
     await restarted.pool.settle();
     expect(restarted.bootCalls).toEqual(["shut"]);
+  });
+
+  it("starts one catalog read per platform with a learned kind beside a pass, never two at once, forgets a kind whose model, OS, tag image or driver is gone, and keeps a platform's kinds when its read throws or passes 30 s", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const catalogOf = (entry: Partial<PlatformCatalog>): PlatformCatalog => ({
+      classDefaults: {},
+      defaultRuntime: undefined,
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: { "iPhone 15": ["26.0"] },
+      models: ["iPhone 15"],
+      platform: "ios",
+      runtimes: ["26.0"],
+      ...entry,
+    });
+    const run = async (
+      answer: (() => Promise<readonly PlatformCatalog[]>) | undefined,
+      options: { spec?: VirtualSpec; refused?: boolean } = {},
+    ) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(options.spec ?? phone, "l1", now - minute);
+      new LearnedKinds(state).ended("l1", now - 30_000);
+      const listCatalog = vi.fn(async () => answer?.() ?? []);
+      const rig = harness([device("d1", "ready", 0)], {
+        catalog: listCatalog,
+        state,
+        ...(options.refused === true ? { refusedPlatforms: ["ios" as const] } : {}),
+      });
+      await rig.pool.pass();
+      const startedByFirst = listCatalog.mock.calls.length;
+      await rig.pool.pass();
+      await rig.pool.settle();
+      return {
+        calls: [startedByFirst, listCatalog.mock.calls.length],
+        kinds: new LearnedKinds(state).kinds(rig.clock.now()).length,
+        listCatalog,
+        rig,
+      };
+    };
+
+    const listed = await run(async () => [catalogOf({})]);
+    expect(listed.kinds).toBe(1);
+    expect(listed.calls).toEqual([1, 2]);
+
+    const unlistedModel = await run(async () => [catalogOf({ models: [], modelRuntimes: {} })]);
+    expect(unlistedModel.kinds).toBe(0);
+    expect(
+      (await run(async () => [catalogOf({ modelRuntimes: { "iPhone 15": ["18.0"] } })])).kinds,
+    ).toBe(0);
+    const tagged = { ...phone, imageTag: "google_apis" };
+    const images = (tag: string) => [{ abi: "arm64", runtime: "26.0", tag }];
+    expect(
+      (await run(async () => [catalogOf({ images: images("default") })], { spec: tagged })).kinds,
+    ).toBe(0);
+    expect(
+      (await run(async () => [catalogOf({ images: images("google_apis") })], { spec: tagged }))
+        .kinds,
+    ).toBe(1);
+    expect((await run(async () => [catalogOf({})], { refused: true })).kinds).toBe(0);
+
+    const throwing = await run(async () => {
+      throw new Error("avdmanager failed");
+    });
+    expect(throwing.kinds).toBe(1);
+
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(phone, "l1", now - minute);
+    new LearnedKinds(state).ended("l1", now - 30_000);
+    const releases: ((value: readonly PlatformCatalog[]) => void)[] = [];
+    const hanging = vi.fn(
+      () =>
+        new Promise<readonly PlatformCatalog[]>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const rig = harness([device("d1", "ready", 0)], { catalog: hanging, state });
+    await rig.pool.pass();
+    await rig.pool.pass();
+    expect(hanging).toHaveBeenCalledTimes(1);
+    rig.clock.advance(30_000 - 1);
+    await rig.pool.pass();
+    expect(hanging).toHaveBeenCalledTimes(1);
+    rig.clock.advance(1);
+    await rig.pool.pass();
+    expect(hanging).toHaveBeenCalledTimes(2);
+    releases[0]?.([catalogOf({ models: [], modelRuntimes: {} })]);
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(new LearnedKinds(state).kinds(rig.clock.now())).toHaveLength(1);
+    releases[1]?.([catalogOf({ models: [], modelRuntimes: {} })]);
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(new LearnedKinds(state).kinds(rig.clock.now())).toHaveLength(0);
   });
 });

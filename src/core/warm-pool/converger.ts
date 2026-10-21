@@ -20,6 +20,7 @@ import {
   type WaitingDemand,
 } from "../domain.js";
 import type { DeviceRequest } from "../driver.js";
+import type { DriverCatalog } from "../driver-catalog.js";
 import type { ManagedDeviceLifecycle } from "../managed-device-lifecycle.js";
 import type { SerializedDecision } from "../serialized-decision.js";
 import { stableError } from "../stable-error.js";
@@ -63,6 +64,8 @@ export interface WarmPoolOptions {
   readonly eventBus: Pick<EventBus, "emit" | "subscribe">;
   readonly hasDriver: (platform: Platform) => boolean;
   readonly idle: { readonly shutdownAfterMs: number };
+  /** why: the pool reads the catalog of a platform with a learned kind, to forget a kind whose model or runtime is gone. */
+  readonly catalog: Pick<DriverCatalog, "listCatalog">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
