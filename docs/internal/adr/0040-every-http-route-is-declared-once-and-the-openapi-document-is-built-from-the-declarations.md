@@ -66,7 +66,8 @@ carries:
   answer reuses that operation's `output` schema; a reshaped reply gets its
   own schema in `src/http`, not in the contract;
 - the error codes the route itself can return, each with its status from
-  `ERROR_TABLE` or the HTTP layer's own codes. The declaration helper adds
+  `ERROR_TABLE` or the HTTP layer's own codes, as documentation: nothing
+  checks the list, and one shared error schema covers every code. The declaration helper adds
   a base set to every route: `UNAUTHENTICATED` and `FORBIDDEN` (not on
   `/v1/healthz`), `DAEMON_STOPPING`, `DAEMON_STARTUP_FAILED` and
   `INTERNAL`; `BAD_REQUEST` on a route with input; `UNSUPPORTED_MEDIA_TYPE`
@@ -109,38 +110,28 @@ The document describes the routes an integrator calls: the core routes of
 routes only simlock's own tools call:
 
 - `/v1/agent-device/*`, agent-device's proxy URL. The agent-device CLI is
-  its only caller, and what it relies on is the base URL, which the
-  document's overview names.
+  its only caller, and what it relies on is the base URL.
 - `/v1/uplink`, the connection a worker dials to join a gateway.
 
-A module's definition says which kind it is, as plain data
-(`http: { public: false }`, or `http: { public: true, routes }` with each
-route's method, path, statuses and refusal schemas), so the document needs
-no module loaded. This extends ADR 0030's definition by one optional field;
-`definition.ts` stays light. The host copies the data onto each mount, so
-the HTTP app reads it without naming a module, and refuses a module that
-mounts routes without saying which kind they are. A public module's routes
-go into the document under the module's tag, which names the config key
-that turns it on (`capabilities.<name>.enabled`). The coverage check (§6)
-counts a mount as covered when its module is public with at least one
-route, or not public.
+A module whose routes outside callers rely on describes them as plain data
+on its definition (`http: { routes }`: each route's method, path,
+description and statuses with their bodies), so the document needs no
+module loaded. This extends ADR 0030's definition by one optional field;
+`definition.ts` stays light. A definition with `http` goes into the
+document under the module's tag, which names the config key that turns it
+on (`capabilities.<name>.enabled`); one without it (agent-device) is left
+out. The coverage check (§6) counts a mount as covered when its definition
+carries `http`, and as left out when it does not. Nothing checks module
+replies at run time.
 
-### 5. Replies are checked in tests
+### 5. Replies are held to their declarations by the compiler
 
-`createHttpApp` takes a switch that checks every JSON reply against its
-declared schema, with unknown keys refused at every depth, and refuses an
-error code that is neither declared nor a base code. The schemas
-themselves stay as they are: the contract strips unknown keys in
-production. For a public module's routes it refuses a status the module
-did not list and a refusal body that does not match its listed schema.
-A non-public module's routes are not checked. A mismatch answers 500
-`INTERNAL` naming the route and the problem; on an SSE route the stream
-sends an `error` message, `{error:{code:"INTERNAL",message}}`, and ends.
-The fast e2e lane runs with the switch on; the slow lane, with real
-devices and agent-device, runs without it. The
-switch is on in unit tests and in the e2e daemon
-(`SIMLOCK_CHECK_HTTP_REPLIES=1`, set only by the e2e harness), and off in
-production.
+`@hono/zod-openapi` types each handler's return against the route's
+declared replies, and the dispatcher's answers are typed from the same Zod
+schemas, so a handler whose reply does not fit its declaration fails the
+typecheck. Nothing checks replies at run time. An extra field a type
+allows can still reach a reply undocumented; that risk is accepted for
+the code a runtime check would cost.
 
 ### 6. Where drift is caught
 
@@ -164,8 +155,8 @@ sequenceDiagram
 
 ## Consequences
 
-- A new route is one declaration: it is in the spec, the website and the
-  reply check at once.
+- A new route is one declaration: it is in the spec and the website at
+  once, and the compiler holds its handler to it.
 - `app.ts` is rewritten route by route. The order of middleware (auth, then
   input checks) stays.
 - A caller that sends a body without a JSON content type gets 415 instead
