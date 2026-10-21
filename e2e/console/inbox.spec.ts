@@ -369,6 +369,28 @@ test.describe("the Inbox view", () => {
     }
   });
 
+  test("with /v1/lease-requests stubbed to fail, the Inbox says Could not check: waiting requests and not Nothing needs you", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await page.route(
+        (url) => url.pathname === "/v1/lease-requests",
+        (route) =>
+          route.fulfill({
+            json: { error: { code: "INTERNAL", message: "The queue is down." } },
+            status: 500,
+          }),
+      );
+      await openInbox(page, host);
+
+      await expect(page.getByText("Could not check: waiting requests")).toBeVisible();
+      await expect(page.getByText("Nothing needs you.")).toHaveCount(0);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("draining a worker adds it to the Inbox view within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
