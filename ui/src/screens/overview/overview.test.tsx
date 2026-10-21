@@ -17,6 +17,7 @@ function text(html: string): string {
 const quiet: Overview = {
   activity: [],
   figures: { kind: "loading" },
+  ending: { label: "Ending soon", value: "0" },
   inbox: { couldNotCheck: [], needsYou: [], problems: 0 },
   platforms: [],
   tiles: [],
@@ -127,7 +128,7 @@ describe("the overview screen", () => {
     );
 
     expect(partial).toContain("Figures cover from today 10:30.");
-    expect(partial.indexOf("Figures cover from")).toBeLessThan(partial.indexOf("Utilisation"));
+    expect(partial.indexOf("Figures cover from")).toBeLessThan(partial.indexOf("Leased"));
     expect(whole).not.toContain("Figures cover from");
   });
 
@@ -151,9 +152,9 @@ describe("the overview screen", () => {
     expect(shown.split("The stats are not allowed.")).toHaveLength(3);
     expect(shown.indexOf("The stats are not allowed.")).toBeGreaterThan(shown.indexOf("Workers 0"));
     for (const kept of [
-      "Utilisation",
-      "Leases",
+      "Leased",
       "Waiting",
+      "Ending soon",
       "Capacity",
       "Nothing needs you",
       "Activity",
@@ -161,7 +162,7 @@ describe("the overview screen", () => {
       expect(shown, kept).toContain(kept);
     }
     expect(shown).toContain("No workers have connected.");
-    for (const gone of ["Granted", "Wait p95", "Leases held, last hour"]) {
+    for (const gone of ["Wait p95", "Leases held, last hour"]) {
       expect(shown, gone).not.toContain(gone);
     }
   });
@@ -177,7 +178,7 @@ describe("the overview screen", () => {
     );
 
     expect(shown.split("The stats are not allowed.")).toHaveLength(2);
-    expect(shown.indexOf("The stats are not allowed.")).toBeLessThan(shown.indexOf("Granted"));
+    expect(shown.indexOf("The stats are not allowed.")).toBeLessThan(shown.indexOf("Wait p95"));
     expect(shown).toContain("Wait p95");
     expect(shown).toContain("Leases held, last 6 hours");
   });
@@ -194,7 +195,7 @@ describe("the overview screen", () => {
     );
 
     expect(shown.split("Loading…")).toHaveLength(3);
-    expect(shown).toContain("Utilisation");
+    expect(shown).toContain("Leased");
     expect(shown).not.toContain("Wait p95");
   });
 });

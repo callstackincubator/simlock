@@ -80,13 +80,16 @@ export function OverviewBody(props: {
         {overview.tiles.map((tile) => (
           <StatTile key={tile.label} {...tile} />
         ))}
-        {ready === undefined ? (
+        {overview.wait === undefined ? (
           <li className="stat">
             <div className="stat-body">
               <FigureNote figures={figures} />
             </div>
           </li>
-        ) : null}
+        ) : (
+          <StatTile {...overview.wait} />
+        )}
+        <StatTile {...overview.ending} />
       </StatRow>
       <Row>
         {leases === undefined ? (

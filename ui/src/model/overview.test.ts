@@ -94,54 +94,33 @@ describe("the overview", () => {
       waitP95: 38_000,
     });
 
-    const { tiles } = overviewOf({
+    const { ending, tiles, wait } = overviewOf({
       events,
       figures: { data: figuresOf(stats, "1h", NOW), kind: "ready" },
+      leases: [],
       now: NOW,
       requests,
       workers: fleet,
     });
 
-    expect(tiles.map((tile) => [tile.label, tile.value, tile.unit])).toEqual([
-      ["Utilisation", "17", "%"],
-      ["Leases", "2", "of 12"],
+    const shown = [...tiles, wait, ending];
+    expect(shown.map((tile) => [tile?.label, tile?.value, tile?.unit])).toEqual([
+      ["Leased", "2", "of 4 · 1 ready"],
       ["Waiting", "1", "longest 1 min 14 s"],
-      ["Workers", "2", "of 3 up"],
-      ["Granted", "3", "last hour"],
+      ["Workers", "2", "of 3"],
       ["Wait p95", "38 s", "last hour"],
+      ["Ending soon", "0", "under 5 min"],
     ]);
-    expect(tiles.find((tile) => tile.label === "Granted")?.to).toBe("/usage");
   });
 
-  it("links the Granted tile to /usage from 1h and to /usage?range=6h, 24h and 7d from the others", () => {
-    const links = (["1h", "6h", "24h", "7d"] as const).map((range) => {
-      const stats = statsOf({ bucketMs: 60_000, from: NOW - 60 * 60_000, granted: 3, to: NOW });
-      const { tiles } = overviewOf({
-        events: [],
-        figures: { data: figuresOf(stats, range, NOW), kind: "ready" },
-        now: NOW,
-        requests: [],
-        workers: fleet,
-      });
-      return tiles.find((tile) => tile.label === "Granted")?.to;
-    });
-
-    expect(links).toEqual(["/usage", "/usage?range=6h", "/usage?range=24h", "/usage?range=7d"]);
-  });
-
-  it("shows only the fleet's four tiles while the daemon's figures are loading or refused", () => {
+  it("has no Wait p95 tile while the daemon's figures are loading or refused", () => {
     const shown = [{ kind: "loading" }, { kind: "refused", message: "no" }] as const;
 
-    const labels = shown.map((figures) =>
-      overviewOf({ events: [], figures, now: NOW, requests: [], workers: fleet }).tiles.map(
-        (tile) => tile.label,
-      ),
+    const waits = shown.map(
+      (figures) => overviewOf({ events: [], figures, now: NOW, requests: [], workers: fleet }).wait,
     );
 
-    expect(labels).toEqual([
-      ["Utilisation", "Leases", "Waiting", "Workers"],
-      ["Utilisation", "Leases", "Waiting", "Workers"],
-    ]);
+    expect(waits).toEqual([undefined, undefined]);
   });
 
   it("splits each platform's limit into leased, ready and booting, counting connected workers only", () => {
@@ -260,8 +239,7 @@ describe("the overview", () => {
     const alone = overviewOf({ events, now: NOW, requests: [], workers: [unread("mini-3")] });
 
     expect(alone.tiles.map((tile) => [tile.label, tile.value])).toEqual([
-      ["Utilisation", "—"],
-      ["Leases", "—"],
+      ["Leased", "—"],
       ["Waiting", "0"],
       ["Workers", "1"],
     ]);
@@ -285,8 +263,7 @@ describe("the overview", () => {
     });
 
     expect(mixed.tiles.map((tile) => [tile.label, tile.value])).toEqual([
-      ["Utilisation", "—"],
-      ["Leases", "—"],
+      ["Leased", "—"],
       ["Waiting", "0"],
       ["Workers", "2"],
     ]);

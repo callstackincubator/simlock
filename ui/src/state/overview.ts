@@ -1,5 +1,6 @@
 import type { LoadView } from "../ds/loaded";
 import { overviewOf, type Overview } from "../model/overview";
+import type { LeaseList, TokenList } from "../model/leases";
 import type { ConsoleRange } from "../model/range";
 import type { WaitingList } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
@@ -25,6 +26,12 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
   // requests instead of hiding the whole fleet behind "not available". A read that failed is not
   // that: the fleet still shows, and the Inbox line says what could not be checked.
   const failed = asked.kind === "refused";
+  const leases = useLiveResource<LeaseList>("/v1/leases");
+  const tokens = useLiveResource<TokenList>("/v1/tokens");
+  const couldNot = [
+    ...(asked.kind === "refused" ? ["waiting requests"] : []),
+    ...(leases.data === undefined && leases.error !== undefined ? ["leases"] : []),
+  ];
   const waiting: LoadView<WaitingList> =
     asked.kind === "unsupported" || failed ? { data: { requests: [] }, kind: "ready" } : asked;
   const events = loadView(useRecentEvents());
@@ -34,10 +41,12 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
   return mapView(reads, ([[workerList, waitingList], recent]) =>
     overviewOf({
       events: recent,
-      couldNotCheck: failed ? ["waiting requests"] : [],
+      couldNotCheck: couldNot,
       figures,
+      leases: leases.data?.leases,
       now: now.server,
       requests: waitingList.requests,
+      tokens: tokens.data?.tokens,
       workers: workerList.workers,
     }),
   );

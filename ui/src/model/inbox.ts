@@ -59,9 +59,9 @@ export const WAITING_TOO_LONG_MS = 60_000;
 
 export interface InboxContext {
   readonly now: number;
-  readonly requests?: readonly WaitingRequest[];
-  readonly leases?: readonly LeaseRecord[];
-  readonly tokens?: readonly TokenRecord[];
+  readonly requests?: readonly WaitingRequest[] | undefined;
+  readonly leases?: readonly LeaseRecord[] | undefined;
+  readonly tokens?: readonly TokenRecord[] | undefined;
 }
 
 // why: a worker that is both disconnected and drained is two items, since each clears on its own.

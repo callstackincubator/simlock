@@ -1,5 +1,13 @@
 import { eventSummary, eventTone } from "./activity";
-import { inboxGroup, inboxItems, inGroupOrder, inboxSubject, inboxTone } from "./inbox";
+import {
+  inboxGroup,
+  type InboxContext,
+  inboxItems,
+  inGroupOrder,
+  inboxSubject,
+  inboxTone,
+} from "./inbox";
+import { isExpiring, type LeaseRecord, type TokenRecord } from "./leases";
 import type { ConsoleEvent } from "./events";
 import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import type { FiguresState } from "./figures";
@@ -73,6 +81,8 @@ export interface OverviewInbox {
 
 export interface Overview {
   readonly tiles: readonly OverviewTile[];
+  readonly wait?: OverviewTile;
+  readonly ending: OverviewTile;
   readonly figures: FiguresState;
   readonly platforms: readonly PlatformUse[];
   readonly workers: readonly OverviewWorker[];
@@ -140,25 +150,21 @@ function overviewWorker(worker: WorkerView): OverviewWorker {
 function tiles(
   workers: readonly WorkerView[],
   requests: readonly WaitingRequest[],
-  platforms: readonly PlatformUse[],
   now: number,
 ): readonly OverviewTile[] {
   const held = leasesHeld(workers);
-  const limit = platforms.reduce((sum, platform) => sum + (platform.limit ?? 0), 0);
   const connected = workers.filter((worker) => worker.connection === "connected").length;
   const oldest = Math.min(...requests.map((request) => request.createdAt));
-  const unknown = held === undefined;
+  const devices = workers.flatMap((worker) =>
+    (worker.devices ?? []).filter((entry) => entry.state !== "deleted"),
+  );
+  const ready = devices.filter((entry) => entry.state === "ready").length;
   return [
     {
-      label: "Utilisation",
-      ...(unknown ? {} : { unit: "%" }),
-      value: unknown ? "—" : String(Math.round(percentOf(held, limit))),
-    },
-    {
-      label: "Leases",
+      label: "Leased",
       to: "/leases",
-      ...(unknown ? {} : { unit: `of ${formatCount(limit)}` }),
-      value: unknown ? "—" : formatCount(held),
+      ...(held === undefined ? {} : { unit: `of ${formatCount(devices.length)} · ${ready} ready` }),
+      value: held === undefined ? "—" : formatCount(held),
     },
     {
       label: "Waiting",
@@ -169,21 +175,32 @@ function tiles(
     {
       label: "Workers",
       to: "/fleet",
-      unit: `of ${formatCount(workers.length)} up`,
+      unit: `of ${formatCount(workers.length)}`,
       value: formatCount(connected),
     },
   ];
 }
 
+// why: the same rule the Leases filter and the Inbox use, against the daemon's clock; a failed read
+// of the leases is "not known", not none.
+function endingSoon(leases: readonly LeaseRecord[] | undefined, now: number): OverviewTile {
+  const count = leases?.filter((lease) => isExpiring(lease.ttlDeadline, now)).length;
+  return {
+    label: "Ending soon",
+    to: "/leases",
+    ...(count === undefined ? {} : { unit: "under 5 min" }),
+    value: count === undefined ? "—" : formatCount(count),
+  };
+}
+
 // why: Needs you lists problems only, in the Inbox's own order, so its first rows are the Inbox's.
 function inboxOf(input: {
   readonly workers: readonly WorkerView[];
-  readonly requests: readonly WaitingRequest[];
   readonly couldNotCheck: readonly string[];
-  readonly now: number;
+  readonly context: InboxContext;
 }): OverviewInbox {
-  const { couldNotCheck, now, requests, workers } = input;
-  const problems = inGroupOrder(inboxItems(workers, { now, requests })).filter(
+  const { context, couldNotCheck, workers } = input;
+  const problems = inGroupOrder(inboxItems(workers, context)).filter(
     (item) => inboxGroup(item) !== "Heads-up",
   );
   return {
@@ -205,6 +222,8 @@ export function overviewOf(input: {
   readonly workers: readonly WorkerView[];
   readonly requests: readonly WaitingRequest[];
   readonly events: readonly ConsoleEvent[];
+  readonly leases?: readonly LeaseRecord[] | undefined;
+  readonly tokens?: readonly TokenRecord[] | undefined;
   readonly figures?: FiguresState;
   readonly couldNotCheck?: readonly string[];
   readonly now: number;
@@ -213,8 +232,10 @@ export function overviewOf(input: {
     couldNotCheck = [],
     events,
     figures = { kind: "loading" },
+    leases,
     now,
     requests,
+    tokens,
     workers,
   } = input;
   const platforms = [platformUse(workers, "ios"), platformUse(workers, "android")];
@@ -233,13 +254,16 @@ export function overviewOf(input: {
           ...(tone === undefined ? {} : { tone }),
         };
       }),
-    inbox: inboxOf({ couldNotCheck, now, requests, workers }),
+    ending: endingSoon(leases, now),
+    inbox: inboxOf({
+      context: { leases, now, requests, tokens },
+      couldNotCheck,
+      workers,
+    }),
     figures,
     platforms,
-    tiles: [
-      ...tiles(workers, requests, platforms, now),
-      ...(figures.kind === "ready" ? [figures.data.granted, figures.data.wait] : []),
-    ],
+    tiles: tiles(workers, requests, now),
+    ...(figures.kind === "ready" ? { wait: figures.data.wait } : {}),
     workers: workers.map(overviewWorker),
   };
 }
