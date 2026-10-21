@@ -104,7 +104,13 @@ export function InboxBody(props: {
   if (rows.length === 0) {
     // why: an Inbox that could not read everything never claims nothing needs you.
     if (unchecked !== null) return unchecked;
-    return <Empty>{filter === "all" ? "Nothing needs you." : "Nothing in this group."}</Empty>;
+    return (
+      <div className="table-card">
+        <p className="muted table-empty">
+          {filter === "all" ? "Nothing needs you." : "Nothing in this group."}
+        </p>
+      </div>
+    );
   }
   return (
     <>
