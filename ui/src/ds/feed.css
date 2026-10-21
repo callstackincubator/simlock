@@ -4,6 +4,8 @@
 
 .feed {
   position: relative;
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 
 /* As a page's last part the feed fills the page's height; the box's height comes from the page,
@@ -27,8 +29,6 @@
   overflow-y: auto;
   overflow-anchor: none;
   overscroll-behavior: contain;
-  border: 1px solid var(--border);
-  background: var(--surface);
 }
 
 .feed-box:focus-visible {

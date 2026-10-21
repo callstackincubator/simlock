@@ -215,3 +215,8 @@
   width: 3.5rem;
   text-align: right;
 }
+
+.table-empty {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+}
