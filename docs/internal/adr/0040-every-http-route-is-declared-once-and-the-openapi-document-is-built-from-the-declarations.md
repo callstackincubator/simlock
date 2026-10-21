@@ -45,8 +45,9 @@ flowchart LR
 
 The repo moves from Zod 3 to Zod 4. Every schema accepts and refuses the
 same inputs as before, except whole numbers above 2^53−1 and ±Infinity,
-which Zod 4 refuses; they were refused later with our own message, and
-now get Zod's. Our own messages (refinements, custom errors, the
+which Zod 4 refuses with its own 400 message. Before, a value such as
+`ttlMs` or `timeoutMs` above 2^53−1 was accepted (no route, dispatcher or
+wait-queue cap refuses it); now it is a 400. Our own messages (refinements, custom errors, the
 hand-written query messages that move into schemas) stay word for word.
 Zod's own default messages in a 400 `BAD_REQUEST` may change wording;
 codes and statuses do not. The JSON Schema text MCP `tools/list` publishes
@@ -90,6 +91,8 @@ The document's `info.version` is the package version.
 - **Auth:** one bearer security scheme; `/v1/healthz` declares none.
 - **SSE:** a stream route declares `text/event-stream` with the schema of
   one message, `{event, data}`, `event` an enum of its event names. The
+  exception is `/v1/events/stream`: its `event` is a string and its `data`
+  the event envelope with an open payload. The
   description says the stream repeats such messages. OpenAPI 3.2's
   `itemSchema` is not used: the website renderer does not show it.
 - **Events:** `/v1/events` and `/v1/events/stream` type the event envelope;
