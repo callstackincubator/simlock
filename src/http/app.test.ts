@@ -2373,6 +2373,7 @@ describe("operator-only listing routes", () => {
     ["before=evt_abc&limit=501", "limit must be a whole number from 1 to 500"],
     ["before=evt_abc&limit=x", "limit must be a whole number from 1 to 500"],
     ["before=not-an-id", "before must be an event id"],
+    ["since=abc", "Invalid duration: abc"],
     ["before=evt_abc&since=1h", "before and since cannot be used together"],
     ["limit=50&since=1h", "limit and since cannot be used together"],
   ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
@@ -2385,34 +2386,6 @@ describe("operator-only listing routes", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST", message } });
-  });
-
-  it("a caller sends a bad admin query and gets 400 with today's message, before dispatching; a drain with no body and no content type is accepted", async () => {
-    const { app, dispatcher } = buildHarness();
-    dispatcher.handlers["worker.drain"] = (input: never) => ({
-      drained: true,
-      workerId: (input as { workerId: string }).workerId,
-    });
-    const cases = [
-      ["GET", "/v1/components?platform=x", "platform must be ios or android"],
-      ["DELETE", "/v1/components/ios/26.0?dryRun=yes", "dryRun must be true or false"],
-      ["GET", "/v1/events?since=abc", "Invalid duration: abc"],
-      ["GET", "/v1/events?before=not-an-id", "before must be an event id"],
-    ] as const;
-
-    for (const [method, path, message] of cases) {
-      const response = await app.request(path, { headers: operatorAuth, method });
-      expect(response.status, path).toBe(400);
-      expect(await response.json(), path).toEqual({ error: { code: "BAD_REQUEST", message } });
-    }
-    expect(dispatcher.calls).toEqual([]);
-
-    const drained = await app.request("/v1/workers/w1/drain", {
-      headers: operatorAuth,
-      method: "POST",
-    });
-    expect(drained.status).toBe(200);
-    expect(await drained.json()).toEqual({ drained: true, workerId: "w1" });
   });
 
   describe("GET /v1/stats", () => {

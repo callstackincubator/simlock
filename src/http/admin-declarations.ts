@@ -48,11 +48,7 @@ export const workerRemoveRoute = declareRoute({
   notes: "Gateway only: a worker answers 501 UNSUPPORTED_IN_WORKER_MODE.",
   request: { params: workerParamsSchema },
   reply: OPERATIONS["worker.remove"].output,
-  errors: {
-    404: ["UNKNOWN_WORKER"],
-    409: ["WORKER_CONNECTED"],
-    501: ["UNSUPPORTED_IN_WORKER_MODE"],
-  },
+  errors: { 409: ["WORKER_CONNECTED"], 501: ["UNSUPPORTED_IN_WORKER_MODE"] },
 });
 
 export const componentListRoute = declareRoute({
