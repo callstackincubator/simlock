@@ -146,14 +146,17 @@ they name; never build again or restart review at round 1.
    `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number; it picks the lenses
    (`docs/internal/REVIEW.md`). Before every review round
-   and every fix run, run `node .agents/scripts/ci-failures.mjs <M>` and
-   `gh pr view <M> --json mergeable` once. The script reads the newest
-   finished CI run, which is often older than the head: newer pushes cancel
-   theirs. Each failed test no open `flaky-test` issue names joins the fix
-   run's `fixes` as `ci: <its line> run <id>`, and a conflict as a line
-   asking to merge the base branch (`stack: gh stack sync` for a stacked
-   PR). With no fix run due, they get one
-   before the round.
+   and every fix run, run `node .agents/scripts/ci-triage.mjs <M>` and
+   `gh pr view <M> --json mergeable` once. The triage reads the newest
+   finished CI run, which is often older than the head (newer pushes cancel
+   theirs), and sorts each failed test: `flaky` and `unknown` get its
+   `rerun <id>` lines run as `gh run rerun <id> --failed`, no fix run;
+   `base` means the branch inherited the failure: run
+   `.agents/scripts/stack-sync.sh <top PR>` and let CI run again; only
+   `reach`, and `unknown` red a second time, joins the fix run's `fixes`
+   as `ci: <its line> run <id>`. A conflict joins as `stack: merge
+origin/<parent branch>`. With no fix run due, they get one before the
+   round.
 3. **Decide** on the review report:
    - Incomplete assessment: preserve findings and missing scope; park. It
      is neither a defect nor a pass.
@@ -288,14 +291,26 @@ Runnable: open, `task:ready`, unassigned, and every issue under its Depends
 on closed or a task of this feature whose PR passed review (open, not a
 draft). Check the Depends on yourself; no workflow promotes tasks.
 
+- **Before the first build**: the feature's ADR branches fork from an old
+  `main`, so run `.agents/scripts/stack-sync.sh <the top ADR PR>` to merge
+  `main` forward into them, then start `reviewer` on each open ADR PR
+  (round 1, in the background) while the first task builds. An ADR PR
+  passes review the way a task's does (step 2, items 3 to 5, ADR-only
+  counts) and must be ready before the stack merges; its review never
+  waits for the gate to refuse.
 - A task's build stage gets `base: <branch of the stack's top PR>`; with no
-  PR yet, no `base` (it starts from `main`).
-- Its review passed (step 2, item 6): `gh pr ready <M>` and `gh stack link
-<PR below> <M>` (PR numbers, bottom to top; none below yet: nothing to
-  link). When its branch did not start from the stack's top (another task
-  joined meanwhile), one `implementer` fix run with `fixes: stack: gh stack
-sync` brings every branch up to date; a conflict it resolved gets a fix
-  check on that PR. PR body Status: `Gate: waiting for the stack`.
+  PR yet, no `base` (it starts from `main`). As soon as the build reports
+  its draft PR, `gh stack link <PR below> <M>` (PR numbers, bottom to top;
+  none below yet: nothing to link): the stack is linked at build time, so
+  every later sync sees the whole chain.
+- Its review passed (step 2, item 6): `gh pr ready <M>`. When its branch
+  did not start from the stack's top (another task joined meanwhile), run
+  `.agents/scripts/stack-sync.sh <top PR>` yourself: it merges forward,
+  bottom to top, in temporary worktrees, and never rebases. It stops on
+  the first conflict (`conflict <branch> <parent> <files>`): send that
+  task's branch one `implementer` fix run with `fixes: stack: merge
+origin/<parent>`, then a fix check on that PR, then the script again.
+  PR body Status: `Gate: waiting for the stack`.
 - Deliver up to two runnable tasks at once, each in its own worktree. Start
   a stage for one as soon as the other's agent is running; never wait on one
   task to move the other.
@@ -306,12 +321,11 @@ sync` brings every branch up to date; a conflict it resolved gets a fix
   stack stays open and nothing merges; the maintainer decides.
 
 **Merging the stack.** When every task has joined the stack and nothing is
-in flight, run the gate on the top PR: `merge-pr.sh <top>` gates every PR
-in the stack and merges them all, bottom to top. A conflict with `main`
-(another feature merged meanwhile): one `implementer` fix run with `fixes:
-stack: gh stack sync`, never one merge run per branch; a conflict it
-resolved gets a fix check on that PR; then the gate again. Red CI: the fix
-run goes to the lowest red PR, then the same sync carries it up.
+in flight, run `.agents/scripts/stack-sync.sh <top>` once more (another
+feature may have merged meanwhile), resolve a conflict as above, then the
+gate on the top PR: `merge-pr.sh <top>` gates every PR in the stack and
+merges them all, bottom to top. Red CI: the fix run goes to the lowest red
+PR, then the same sync carries it up.
 
 Stop when nothing is runnable and nothing is in flight.
 

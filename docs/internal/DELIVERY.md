@@ -104,8 +104,10 @@ What any change includes without its spec asking is listed once, in
   you.
 - **Merge.** Agents merge only through `.agents/scripts/merge-pr.sh`
   (delivery rule 15). A feature's PRs form one GitHub stack, its ADR PRs at
-  the bottom, and merge together, so `main` never holds half a feature. A
-  bug merges on its own.
+  the bottom, and merge together, so `main` never holds half a feature.
+  The stack is kept current by `.agents/scripts/stack-sync.sh`, which
+  merges forward bottom to top and never rebases, so no human has to
+  force-push. A bug merges on its own.
 - The same reviews run on a person's PR when you ask; the agent posts the
   findings as a comment and pushes nothing.
 
