@@ -2108,6 +2108,47 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(JSON.parse(output.stdout)).toEqual({ findings });
   });
 
+  it("simlock doctor prints a service-broken finding to stderr, naming each missing path, and keeps the finding in the JSON report", async () => {
+    const node = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const main = "/Users/me/simlock/dist/daemon/main.js";
+    for (const testCase of [
+      {
+        missing: [node],
+        line: `Service broken: com.callstack.simlock.worker (launchd) names missing ${node}. Run \`simlock daemon install\` again.`,
+      },
+      {
+        missing: [node, main],
+        line: `Service broken: com.callstack.simlock.worker (launchd) names missing ${node}, ${main}. Run \`simlock daemon install\` again.`,
+      },
+    ]) {
+      const output = outputCapture();
+      const findings = [
+        {
+          kind: "service-broken" as const,
+          manager: "launchd" as const,
+          name: "com.callstack.simlock.worker",
+          missing: testCase.missing,
+          remedy: "Run `simlock daemon install` again.",
+        },
+      ];
+
+      await expect(
+        runCli(
+          ["doctor"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(output.stderr.split("\n").filter((line) => line.startsWith("Service broken"))).toEqual(
+        [testCase.line],
+      );
+      expect(JSON.parse(output.stdout)).toEqual({ findings });
+    }
+  });
+
   it("simlock doctor prints a driver-advisory finding to stderr as `Warning [<platform>] <code>: <message>`", async () => {
     const output = outputCapture();
     const findings = [
