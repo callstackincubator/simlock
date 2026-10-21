@@ -53,7 +53,7 @@ export function useSearchSession(
     choose: (id) => {
       const chosen = results.find((result) => result.id === id);
       hide();
-      if (chosen !== undefined) navigate(chosen.to);
+      if (chosen?.target.kind === "go") navigate(chosen.target.to);
     },
     groups: searchGroups(results, typed).map((group) => ({
       items: group.results,
