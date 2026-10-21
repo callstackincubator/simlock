@@ -142,7 +142,7 @@ async function openInbox(page: Page, daemon: RunningDaemon): Promise<void> {
 }
 
 function rows(page: Page): Locator {
-  return page.getByRole("list", { name: "Needs you" }).getByRole("link");
+  return page.locator("main").getByRole("list").getByRole("link");
 }
 
 function item(page: Page, condition: string, subject: string): Locator {
@@ -325,6 +325,39 @@ test.describe("the Inbox view", () => {
       expect(new URL(page.url()).pathname).toBe(address);
     } finally {
       await host.dispose();
+    }
+  });
+
+  test("an Inbox row opens /inbox/<key> with the what-happened box and the item's details; a cleared item says This is no longer in the Inbox.", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
+    try {
+      const [a] = await workers(fleet.gateway);
+      expect((await fleet.gateway.cli(["worker", "drain", a?.id ?? ""])).code).toBe(0);
+      await openInbox(page, fleet.gateway);
+
+      await item(page, "drained", "worker-a").click();
+
+      await expect(page).toHaveURL(new RegExp(`/inbox/${encodeURIComponent(`${a?.id}/drained`)}$`));
+      const drawer = page.getByRole("dialog");
+      await expect(drawer.getByRole("heading", { name: "worker-a" })).toBeVisible();
+      await expect(drawer.getByRole("region", { name: "What happened" })).toContainText(
+        "worker-a is drained",
+      );
+      await expect(facts(page)).toContainText(/Leases still held\s*0/);
+      await expect(drawer.getByRole("link", { name: "Open worker" })).toHaveAttribute(
+        "href",
+        `/fleet/${encodeURIComponent(a?.id ?? "")}`,
+      );
+
+      expect((await fleet.gateway.cli(["worker", "undrain", a?.id ?? ""])).code).toBe(0);
+      await untilTheDaemonSays(fleet.gateway, (views) => views[0]?.drained === false);
+
+      await expect(drawer).toContainText("This is no longer in the Inbox.", { timeout: 1_000 });
+      await expect(drawer.getByRole("region", { name: "What happened" })).toHaveCount(0);
+    } finally {
+      await disposeFleet(fleet);
     }
   });
 
