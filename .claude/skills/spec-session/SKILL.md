@@ -210,19 +210,24 @@ every task depends only on earlier ones. A small feature is one task. For
 each task, write a body from `docs/internal/templates/task.md` with Scope,
 Technical spec, Done when, Out of scope and Depends on filled in.
 
-Size each task to about 30 Tests lines and about 20 modules touched at
-most: every stage of delivery grows with them. A task over either splits
-again along a seam its tests can drive on their own; when no such seam
-exists, keep it whole and say why under its Scope.
+Size each task to about 10 Tests lines (one per behaviour, its cases in
+the line) and about 20 modules touched at most: every stage of delivery
+grows with them, and a build past about 15 lines has needed a second or
+third agent. A task over either splits again along a seam its tests can
+drive on their own; when no such seam exists, keep it whole and say why
+under its Scope.
 
 **Order.** Most check findings come from text (a behaviour with no test,
 two tasks that disagree), so write in this order:
 
 1. The feature's Shared values table, before any task: every value, state,
    error code and message more than one task uses, who writes it, who
-   reads it, which wins. Then the Completion conditions mapped to tasks,
-   and the open work from the `work` explorer, each with its Depends on or
-   why none.
+   reads it, which wins. Then the Behaviours table: one row per thing an
+   invoker (a caller, a user, a stored record, an event) does and sees,
+   with its seam, its cases and the task that delivers it; a task's Tests
+   lines are these rows and nothing else, one line per row. Then the
+   Completion conditions mapped to tasks, and the open work from the
+   `work` explorer, each with its Depends on or why none.
 2. The tasks in dependency order. Before writing task N, re-read tasks 1
    to N-1 and every ADR section a Shared values row cites.
 3. Each task section as its template comment says. The tables carry the
@@ -285,6 +290,15 @@ writing it. An overlap with one goes under Depends on in this feature's
 task.
 
 ## 8. Check the spec
+
+**Round 0, the feature first.** Post the feature body (Decisions, Shared
+values, Behaviours, Tasks as a list) before any task body, and start one
+`spec-checker` with `#<feature> feature`. Its `undefined`, `boundary`,
+`failure-mode` and `fact` findings are decisions: put them to the
+maintainer in one interview round, fold the answers into the feature, and
+only then write the tasks from the Behaviours table. Its writing findings
+you fix yourself. Half of what the task checks used to find were decisions
+the interview had not asked.
 
 **Round 1, fresh.** Start `spec-checker` agents with the Agent tool,
 `run_in_background: false`, all in one message: one per task, with

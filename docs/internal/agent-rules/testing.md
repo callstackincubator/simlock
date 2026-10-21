@@ -36,11 +36,14 @@ prove the behaviour, each at the cheapest level that can prove it
    thing: otherwise it stays green when the input is refused for another
    reason.
 
-3. **What a caller can see is tested; in a strict area, every path is.**
-   Every behaviour a caller, a user, a stored record or an event can see
-   has a test that goes red when its code is deleted, error paths and
-   fallbacks included. A branch whose deletion nobody can see needs no test:
-   it is a candidate for deletion. In the strict areas
+3. **What a caller can see is tested, once, at the invoker's seam; in a
+   strict area, every path is.** Every behaviour a caller, a user, a
+   stored record or an event can see has a test that goes red when its
+   code is deleted, error paths and fallbacks included: one scenario test
+   at the highest seam that can see it (a command, a route, a tool call,
+   a module's `index.ts`), with the platform faked, its cases as a table.
+   Branch coverage below that seam is not a goal, and a branch whose
+   deletion nobody can see needs no test: it is a candidate for deletion. In the strict areas
    [toolchain.md](toolchain.md) names, which guard safety rules or state
    that runs under concurrency, production code that can be deleted with a
    green suite is untested, whether anyone can see the difference or not;
