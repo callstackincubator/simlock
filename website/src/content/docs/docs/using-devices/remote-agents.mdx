@@ -196,7 +196,8 @@ Errors come back as JSON with an HTTP status:
 | `422` | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` | The device you asked for cannot be made on this machine or fleet. Check `GET /v1/catalog`. |
 | `503` | `NO_CAPACITY` | Nothing is free and you sent `noWait: true`. Try again after the `Retry-After` seconds. |
 | `404` | `UNKNOWN_LEASE` | The lease has ended or never existed. Request a new one. |
-| `400` | `BAD_REQUEST` | The body is wrong, for example both `device` and `class`, or a `ttlMs` above the maximum. |
+| `400` | `BAD_REQUEST` | The body is wrong, for example both `device` and `class`, or a `ttlMs` above the maximum. A body that is not valid JSON is `BAD_REQUEST` with the message `Invalid JSON body`. |
+| `415` | `UNSUPPORTED_MEDIA_TYPE` | A request with a body did not send `Content-Type: application/json`. |
 
 See [Errors](/simlock/docs/using-devices/errors) for what each one means.
 

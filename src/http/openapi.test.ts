@@ -32,6 +32,9 @@ describe("buildOpenApiDocument", () => {
       statuses: ["200", "401", "403", "500", "503"],
       tags: ["System"],
     });
+    expect(Object.keys(replySchema(status, "200").properties ?? {})).toEqual(
+      expect.arrayContaining(["devices", "leases", "capacity", "daemon"]),
+    );
     expect(summarize(add)).toMatchObject({
       description: expect.stringContaining("Role: admin."),
       tags: ["Devices"],
@@ -69,6 +72,7 @@ function summarize(
 interface JsonSchema {
   readonly required?: readonly string[];
   readonly properties?: {
+    readonly [name: string]: unknown;
     readonly error?: {
       readonly properties?: { readonly code?: { readonly enum?: readonly string[] } };
     };
