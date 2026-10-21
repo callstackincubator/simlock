@@ -788,6 +788,13 @@ function validateGatewayMembership(config: Config): void {
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
   }
+  // why: a joined worker is reached through the gateway; its own listener would be a second entrance.
+  if (url !== undefined && config.http.enabled) {
+    throw invalidValue(
+      "http.enabled",
+      "false when gateway.url is set (joined workers are reached through the gateway)",
+    );
+  }
 }
 
 /** Last layer that names a strategy wins; absent everywhere means the default. */
