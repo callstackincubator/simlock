@@ -2040,14 +2040,36 @@ describe("Doctor", () => {
       expect(prerequisiteFindings(report)).toEqual([]);
     });
 
-    it("leaves prerequisite-missing findings out of doctor.reconciled", async () => {
+    it("a service check that throws adds no finding and does not fail the run", async () => {
+      const { doctor } = await doctorWith({
+        serviceCheck: {
+          manager: "launchd",
+          name: "com.callstack.simlock.worker",
+          check: async () => {
+            throw new Error("launchctl timed out");
+          },
+        },
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(report.findings.map((finding) => finding.kind)).not.toContain("service-broken");
+    });
+
+    it("leaves prerequisite-missing and service-broken findings out of doctor.reconciled", async () => {
       const { doctor, eventBus } = await doctorWith({
         prerequisiteChecks: [prerequisiteCheck("android", [EMULATOR])],
+        serviceCheck: {
+          manager: "launchd",
+          name: "com.callstack.simlock.worker",
+          check: async () => ["/gone/node"],
+        },
       });
 
       const report = await doctor.reconcile({ prerequisites: true });
 
       expect(prerequisiteFindings(report)).toHaveLength(1);
+      expect(report.findings.map((finding) => finding.kind)).toContain("service-broken");
       const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
       const payload = reconciled!.payload as {
         readonly driftFindings: readonly { readonly kind: string }[];
