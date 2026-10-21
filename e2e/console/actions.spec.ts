@@ -243,6 +243,10 @@ test.describe("the console acts", () => {
       await expect(remove).toBeDisabled();
       await dialog.getByRole("textbox").fill("gone-");
       await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("gone-a ");
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("Gone-A");
+      await expect(remove).toBeDisabled();
       await dialog.getByRole("textbox").fill("gone-a");
       await expect(remove).toBeEnabled();
 
@@ -501,6 +505,24 @@ test.describe("the console acts", () => {
           .click();
       };
 
+      await page.route("**/v1/workers/*/drain", (route) => route.abort());
+      await act("toast-b", "Drain");
+      const refused = toastOf("Couldn't drain toast-b");
+      await expect(refused).toBeVisible();
+      await page.clock.runFor(500);
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await page.mouse.move(0, 0);
+      await page.clock.fastForward(30_000);
+      await page.clock.runFor(500);
+      await expect(refused).toBeVisible();
+      await expect(
+        refused.getByRole("button", { name: "Close", includeHidden: true }),
+      ).toBeVisible();
+      await refused.getByRole("button", { name: "Close", includeHidden: true }).click();
+      await page.clock.runFor(500);
+      await expect(refused).toBeHidden();
+      await page.unroute("**/v1/workers/*/drain");
+
       await act("toast-a", "Drain");
       const drained = toastOf("toast-a drained");
       await expect(drained).toBeVisible();
@@ -513,20 +535,6 @@ test.describe("the console acts", () => {
       await page.clock.fastForward(6_500);
       await page.clock.runFor(500);
       await expect(drained).toBeHidden();
-
-      await page.route("**/v1/workers/*/drain", (route) => route.abort());
-      await act("toast-b", "Drain");
-      const refused = toastOf("Couldn't drain toast-b");
-      await expect(refused).toBeVisible();
-      await page.clock.fastForward(30_000);
-      await expect(refused).toBeVisible();
-      await expect(
-        refused.getByRole("button", { name: "Close", includeHidden: true }),
-      ).toBeVisible();
-      await refused.getByRole("button", { name: "Close", includeHidden: true }).click();
-      await page.clock.runFor(500);
-      await expect(refused).toBeHidden();
-      await page.unroute("**/v1/workers/*/drain");
 
       await act("toast-a", "Undrain");
       await act("toast-b", "Drain");

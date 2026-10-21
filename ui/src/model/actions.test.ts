@@ -133,6 +133,7 @@ function checksInbox(): void {
     worker({ drained: true, id: "wrk_drained" }),
     worker({ connection: "disconnected", id: "wrk_gone" }),
     worker({ connection: "incompatible", id: "wrk_old" }),
+    worker({ connection: "incompatible", drained: true, id: "wrk_old_drained" }),
     worker({
       devices: [
         {
@@ -159,6 +160,8 @@ function checksInbox(): void {
   expect(of("wrk_gone/disconnected").fix).toBeUndefined();
   expect(shape(of("wrk_gone/disconnected").menu)).toEqual(["drain", "remove-worker!"]);
   expect(of("wrk_old/incompatible").fix).toBeUndefined();
+  expect(of("wrk_old_drained/incompatible").fix).toBeUndefined();
+  expect(shape(of("wrk_old_drained/incompatible").menu)).toEqual(["undrain"]);
   expect(shape(of("wrk_old/incompatible").menu)).toEqual(["drain"]);
   expect(of("request/req_1/waiting").fix).toBeUndefined();
   expect(shape(of("request/req_1/waiting").menu)).toEqual(["cancel-request!"]);

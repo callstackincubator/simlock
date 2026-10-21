@@ -55,7 +55,7 @@ export function MenuRow(props: {
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="menu-positioner">
-          <ContextMenu.Popup className="menu" onClick={(event) => event.stopPropagation()}>
+          <ContextMenu.Popup className="menu">
             <MenuItems entries={entries} />
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
