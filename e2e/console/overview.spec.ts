@@ -353,4 +353,26 @@ test.describe("the Overview's Inbox lines", () => {
       await gateway.dispose();
     }
   });
+
+  test("with /v1/lease-requests stubbed to fail, Overview says Could not check: waiting requests and not Nothing needs you", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await page.route(
+        (url) => url.pathname === "/v1/lease-requests",
+        (route) =>
+          route.fulfill({
+            json: { error: { code: "INTERNAL", message: "The queue is down." } },
+            status: 500,
+          }),
+      );
+      await openOverview(page, host);
+
+      await expect(page.getByText("Could not check: waiting requests")).toBeVisible();
+      await expect(page.getByText("Nothing needs you")).toHaveCount(0);
+    } finally {
+      await host.dispose();
+    }
+  });
 });
