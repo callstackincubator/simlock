@@ -243,7 +243,7 @@ test.describe("the Overview's figures", () => {
       const links = [
         { follow: () => tile(page, "Waiting").getByRole("link").click(), path: "/queue" },
         { follow: () => tile(page, "Workers").getByRole("link").click(), path: "/fleet" },
-        { follow: () => page.getByRole("link", { name: /^All \d+$/ }).click(), path: "/fleet" },
+        { follow: () => page.getByRole("link", { name: "Open Fleet" }).click(), path: "/fleet" },
         { follow: () => page.getByRole("link", { name: "All events" }).click(), path: "/activity" },
       ];
       await openOverview(page, host);
@@ -464,6 +464,29 @@ test.describe("the Overview's five numbers", () => {
         .poll(() => tileText(page, "Wait p95"))
         .toBe(`Wait p95 | ${waitText(stats.totals.wait.p95)} | last hour`);
       await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 1 | under 5 min");
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+});
+
+test.describe("the Overview's workers table", () => {
+  test("lists all workers with no pager, and Open Fleet goes to /fleet", async ({ page }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+    ]);
+    try {
+      await openOverview(page, fleet.gateway);
+
+      const workersPanel = page.getByRole("region", { name: "Workers" });
+      await expect(workersPanel.locator("tbody tr")).toHaveCount(2);
+      await expect(workersPanel.getByRole("link", { name: "worker-a" })).toBeVisible();
+      await expect(workersPanel.getByRole("link", { name: "worker-b" })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: /pages$/ })).toHaveCount(0);
+
+      await page.getByRole("link", { name: "Open Fleet" }).click();
+      await expect(page).toHaveURL(/\/fleet$/);
     } finally {
       await disposeFleet(fleet);
     }
