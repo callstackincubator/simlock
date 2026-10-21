@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import type { DaemonRole } from "./paths.js";
@@ -27,8 +28,14 @@ export interface ServiceDefinitionInput {
   readonly env: NodeJS.ProcessEnv;
 }
 
+function homeHash(root: string): string {
+  return createHash("sha256").update(root).digest("hex").slice(0, 6);
+}
+
 export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinition {
-  const name = `com.callstack.simlock.${input.role}`;
+  const base = `com.callstack.simlock.${input.role}`;
+  const name =
+    input.root === join(input.home, ".simlock") ? base : `${base}.${homeHash(input.root)}`;
   return {
     role: input.role,
     name,

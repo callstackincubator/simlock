@@ -17,20 +17,18 @@ function serviceAccess(environment: CommandContext["environment"]): {
   return { manager: service.manager, definition: service.definition };
 }
 
-async function startDaemon(context: CommandContext, json: boolean): Promise<void> {
+async function startDaemon(context: CommandContext): Promise<StatusGetOutput> {
   const { environment, token } = context;
   const client = await connectDaemonClient(environment, token, { launch: true });
-  let status: StatusGetOutput;
   try {
-    status = await client.getStatus();
+    return await client.getStatus();
   } finally {
     await client.close();
   }
-  if (json) writeResult((value) => environment.stdout.write(value), { status: "running" });
-  else {
-    const lines = ["Daemon running", ...consoleLines(status.daemon)];
-    environment.stdout.write(`${lines.join("\n")}\n`);
-  }
+}
+
+function runningLines(status: StatusGetOutput): string {
+  return `${["Daemon running", ...consoleLines(status.daemon)].join("\n")}\n`;
 }
 
 // fallow-ignore-next-line complexity -- daemon subcommand parsing is a single CLI boundary.
@@ -51,16 +49,31 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
   if (values.follow && command !== "logs") throw new UsageError("--follow applies only to logs");
   if (command === "start") {
-    await startDaemon(context, values.json === true);
+    const status = await startDaemon(context);
+    if (values.json) writeResult((value) => environment.stdout.write(value), { status: "running" });
+    else environment.stdout.write(runningLines(status));
     return 0;
   }
   if (command === "install") {
     const { manager, definition } = serviceAccess(environment);
     const service = await definition();
     await manager.install(service);
-    environment.stdout.write(`Service installed: ${service.name} (${manager.manager})\n`);
-    await startDaemon(context, false);
-    environment.stdout.write("To start after a reboot, turn on automatic login for this user.\n");
+    const status = await startDaemon(context);
+    if (values.json) {
+      writeResult((value) => environment.stdout.write(value), {
+        status: "installed",
+        service: {
+          state: "installed",
+          manager: manager.manager,
+          name: service.name,
+          path: service.path,
+        },
+      });
+    } else {
+      environment.stdout.write(`Service installed: ${service.name} (${manager.manager})\n`);
+      environment.stdout.write(runningLines(status));
+      environment.stdout.write("To start after a reboot, turn on automatic login for this user.\n");
+    }
     return 0;
   }
   if (command === "stop") {

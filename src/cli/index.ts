@@ -137,6 +137,7 @@ function isHelp(value: string | undefined): boolean {
 
 const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["daemon", "start"],
+  ["daemon", "install"],
   ["config", "set"],
   ["mcp"],
 ];
