@@ -1968,17 +1968,17 @@ describe("loadConfig modes (ADR 0005)", () => {
       {
         name: "empty URL",
         contents: { gateway: { url: "", token: "t" }, http: { enabled: true } },
-        error: "gateway.url",
+        error: "a ws:// or wss:// URL",
       },
       {
         name: "malformed URL",
         contents: { gateway: { url: "not a url", token: "t" }, http: { enabled: true } },
-        error: "gateway.url",
+        error: "a ws:// or wss:// URL",
       },
       {
         name: "http URL",
         contents: { gateway: { url: "http://fleet.example", token: "t" }, http: { enabled: true } },
-        error: "gateway.url",
+        error: "a ws:// or wss:// URL",
       },
       {
         name: "https URL",
@@ -1986,7 +1986,7 @@ describe("loadConfig modes (ADR 0005)", () => {
           gateway: { url: "https://fleet.example", token: "t" },
           http: { enabled: true },
         },
-        error: "gateway.url",
+        error: "a ws:// or wss:// URL",
       },
       {
         name: "URL without token",
@@ -1996,7 +1996,7 @@ describe("loadConfig modes (ADR 0005)", () => {
       {
         name: "token without URL",
         contents: { gateway: { token: "t" }, http: { enabled: true } },
-        error: "gateway.url",
+        error: "a gateway URL, since gateway.token is set",
       },
       {
         name: "removed mode key",
@@ -2023,7 +2023,7 @@ describe("loadConfig modes (ADR 0005)", () => {
   it.each(["http://fleet.example/v1/uplink", "fleet.example", "not a url"])(
     "rejects a gateway.url that is not a WebSocket URL: %s",
     async (url) => {
-      await expect(load({ gateway: { url } })).rejects.toThrow("gateway.url");
+      await expect(load({ gateway: { url } })).rejects.toThrow("a ws:// or wss:// URL");
     },
   );
 
