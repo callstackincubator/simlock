@@ -95,6 +95,9 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
   if (params["physical"] === true) {
     return refusal("refused: physical devices are not available through agent-device");
   }
+  if (typeof fields.target === "string" && !Object.hasOwn(CLASS_OF_TARGET, fields.target)) {
+    return refusal(`refused: unknown --target ${fields.target}; use mobile, tv or desktop`);
+  }
   const device = deviceRefusal(fields);
   if (device !== undefined) return device;
   if (present(ttl) && !(typeof ttl === "number" && Number.isFinite(ttl) && ttl > 0)) {
