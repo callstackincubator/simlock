@@ -1,15 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ApiPath } from "../data/api";
 import type { ResourceState } from "../data/live/connection";
 import type { PaletteGroup } from "../ds";
 import { leaseRows, type LeaseList, type TokenList } from "../model/leases";
-import {
-  buildResults,
-  type GroupStatus,
-  searchGroups,
-  type SearchGroupName,
-} from "../model/search";
+import { buildResults, groupStatuses, searchGroups } from "../model/search";
 import { type WaitingList, waitingTable } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
 import { useActions } from "./actions";
@@ -23,10 +18,30 @@ export interface SearchPalette {
   readonly hide: () => void;
 }
 
+// why: a drawer or a dialog is already open over the console, and the search opens over none; a
+// toast is a non-modal dialog and does not count.
+const MODAL_DIALOG =
+  '[role="dialog"]:not([aria-modal="false"]), [role="alertdialog"]:not([aria-modal="false"])';
+
+function isSearchChord(event: KeyboardEvent): boolean {
+  return (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+}
+
+// why: ⌘K on a Mac and Ctrl+K elsewhere both open the search; the browser's own use of the chord is
+// stopped while the console has focus.
 export function useSearchPalette(): SearchPalette {
   const [open, setOpen] = useState(false);
   const show = useCallback(() => setOpen(true), []);
   const hide = useCallback(() => setOpen(false), []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isSearchChord(event) || document.querySelector(MODAL_DIALOG) !== null) return;
+      event.preventDefault();
+      show();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [show]);
   return { hide, open, show };
 }
 
@@ -60,6 +75,11 @@ function useSettledOnce<T>(path: ApiPath): Source<T> {
   return kept.kind === "loading" ? live : kept;
 }
 
+// why: a read that failed or has not answered lists nothing; the group says why.
+function listOf<T, U>(source: Source<T>, pick: (data: T) => readonly U[]): readonly U[] {
+  return source.kind === "ready" && source.data !== undefined ? pick(source.data) : [];
+}
+
 // why: the list is built when the dialog opens; a group that was loading fills in once its data
 // arrives (the Actions only once every read they come from has settled), and then never changes.
 export function useSearchSession(
@@ -75,37 +95,35 @@ export function useSearchSession(
   const mode = useDaemonMode();
   const { run } = useActions();
   const results = useMemo(() => {
-    const workerList = workers.kind === "ready" ? (workers.data?.workers ?? []) : [];
+    const workerList = listOf(workers, (data) => data.workers);
     return buildResults({
       leases: leaseRows({
-        leases: leases.kind === "ready" ? (leases.data?.leases ?? []) : [],
+        leases: listOf(leases, (data) => data.leases),
         now: at,
-        tokens: tokens.kind === "ready" ? (tokens.data?.tokens ?? []) : [],
+        tokens: listOf(tokens, (data) => data.tokens),
         workers: workerList,
       }),
       mode,
       pages,
       requests: waitingTable(
-        requests.kind === "ready" ? (requests.data?.requests ?? []) : [],
+        listOf(requests, (data) => data.requests),
         workerList,
         at,
       ).rows,
       workers: workerList,
     });
   }, [at, leases, mode, pages, requests, tokens, workers]);
-  const statuses: Partial<Record<SearchGroupName, GroupStatus>> = {
-    ...(workers.kind === "ready" ? {} : { Devices: workers.kind, Workers: workers.kind }),
-    ...(leases.kind === "failed" ? { Leases: "failed" as const } : {}),
-    ...(leases.kind === "loading" || tokens.kind === "loading" || workers.kind === "loading"
-      ? { Leases: "loading" as const }
-      : {}),
-    ...(requests.kind === "ready" ? {} : { Requests: requests.kind }),
-    ...([workers, leases, tokens, requests].some((source) => source.kind === "loading")
-      ? { Actions: "loading" as const }
-      : {}),
-  };
   const [typed, type] = useState("");
-  const groups = searchGroups(results, typed, statuses);
+  const groups = searchGroups(
+    results,
+    typed,
+    groupStatuses({
+      leases: leases.kind,
+      requests: requests.kind,
+      tokens: tokens.kind,
+      workers: workers.kind,
+    }),
+  );
   return {
     choose: (id) => {
       const chosen = results.find((result) => result.id === id);

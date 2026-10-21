@@ -16,9 +16,6 @@ import { ROUTES, routeFor } from "./routes";
 
 const PAGES = ROUTES.map((route) => ({ label: route.label, path: route.path }));
 
-const MODAL_DIALOG =
-  '[role="dialog"]:not([aria-modal="false"]), [role="alertdialog"]:not([aria-modal="false"])';
-
 export function Shell() {
   const path = usePath();
   const route = routeFor(path);
@@ -26,22 +23,6 @@ export function Shell() {
   const sidebar = useSidebar();
   const palette = useSearchPalette();
   useTokenCheck();
-
-  // why: ⌘K on a Mac and Ctrl+K elsewhere both open the search; the browser's own use of the
-  // chord is stopped while the console has focus.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        // why: a drawer or a dialog is already open over the console, and the search opens over
-        // none; a toast is a non-modal dialog and does not count.
-        if (document.querySelector(MODAL_DIALOG) !== null) return;
-        event.preventDefault();
-        palette.show();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [palette.show]);
 
   useEffect(() => {
     document.title = route === undefined ? "Simlock" : `${route.label} · Simlock`;

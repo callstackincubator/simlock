@@ -10,14 +10,7 @@ import { devicePath } from "./paths";
 import type { WaitingRow } from "./waiting";
 import { type WorkerView, workerName, workerPath } from "./workers";
 
-export const SEARCH_GROUPS = [
-  "Pages",
-  "Workers",
-  "Devices",
-  "Leases",
-  "Requests",
-  "Actions",
-] as const;
+const SEARCH_GROUPS = ["Pages", "Workers", "Devices", "Leases", "Requests", "Actions"] as const;
 export type SearchGroupName = (typeof SEARCH_GROUPS)[number];
 
 export interface SearchResult {
@@ -175,4 +168,29 @@ export function searchGroups(
     }
     return found.length === 0 ? [] : [{ name, results: found }];
   });
+}
+
+export type ReadKind = "loading" | "failed" | "ready";
+
+// why: a group shows "Loading…" until the reads it comes from have settled: Leases wait for the
+// tokens and workers that name them, and the Actions for every read they are made from; a read
+// that failed is a fallback there, but a failure of the group's own read is the group's note.
+export function groupStatuses(reads: {
+  readonly workers: ReadKind;
+  readonly leases: ReadKind;
+  readonly tokens: ReadKind;
+  readonly requests: ReadKind;
+}): Partial<Record<SearchGroupName, GroupStatus>> {
+  const { leases, requests, tokens, workers } = reads;
+  const loading = [workers, leases, tokens, requests].includes("loading");
+  const own = (read: ReadKind): GroupStatus | undefined => (read === "ready" ? undefined : read);
+  const lease = [leases, tokens, workers].includes("loading") ? "loading" : own(leases);
+  const entries: [SearchGroupName, GroupStatus | undefined][] = [
+    ["Workers", own(workers)],
+    ["Devices", own(workers)],
+    ["Leases", lease],
+    ["Requests", own(requests)],
+    ["Actions", loading ? "loading" : undefined],
+  ];
+  return Object.fromEntries(entries.filter(([, status]) => status !== undefined));
 }
