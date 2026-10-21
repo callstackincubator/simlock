@@ -26,7 +26,7 @@ Daemon running
 Console: http://127.0.0.1:4701/
 ```
 
-If the daemon is already running, `daemon start` does nothing and prints the same lines.
+If the daemon is already running, `daemon start` does nothing and prints the same lines. A daemon process started by hand beside a running one logs `Daemon already running` to `daemon.log` and exits 0.
 
 The daemon runs detached from your terminal: closing the terminal does not stop it. It does not survive a reboot.
 
@@ -63,6 +63,8 @@ Daemon stopping
 Stopping the daemon does not end leases and does not shut down devices. Running simulators and emulators keep running, and the next daemon picks them up. See [What a restart keeps](#what-a-restart-keeps).
 
 `daemon stop` returns as soon as the daemon has agreed to stop. The daemon then finishes the work already in progress, such as a device reset, before it exits, which can take a while. A command sent in the meantime fails with `DAEMON_STOPPING`.
+
+Sending SIGTERM to the daemon process is the same clean stop: it finishes the work in progress, removes `admin.token` and exits 0.
 
 To restart:
 
