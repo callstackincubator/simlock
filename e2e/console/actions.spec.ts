@@ -53,6 +53,22 @@ function rowOf(page: Page, name: string): Locator {
   return page.locator("main tbody tr").filter({ hasText: name });
 }
 
+async function startWithStoppedWorker(label: string) {
+  const fleet = await startFleet([{ driverScript: { ios: IOS }, label }]);
+  const [stopped] = fleet.workers as [RunningDaemon];
+  await stopped.stop();
+  await waitFor(
+    async () => {
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      return (listed.json as { workers: { connection: string }[] }).workers.some(
+        (view) => view.connection === "disconnected",
+      );
+    },
+    { label: "the gateway sees the stopped worker disconnected" },
+  );
+  return fleet;
+}
+
 test.describe("the console acts", () => {
   test("a lease is released from its row's menu after a dialog, and a toast follows", async ({
     page,
@@ -429,6 +445,38 @@ test.describe("the console acts", () => {
       await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Actions for bar-a" }).click();
       await expect(page.getByRole("menuitem", { name: "Undrain" })).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
+  test("a right-click on a row opens the same menu as its ⋯, Escape closes it, and the keyboard moves through it", async ({
+    page,
+  }) => {
+    const fleet = await startWithStoppedWorker("ctx-a");
+    try {
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      const row = rowOf(page, "ctx-a");
+      await row.getByRole("button", { name: "Actions for ctx-a" }).click();
+      const viaButton = await page.getByRole("menuitem").allInnerTexts();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+
+      await row.click({ button: "right" });
+      await expect(page.getByRole("menu")).toBeVisible();
+      expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(viaButton);
+      expect(viaButton).toEqual(["Drain", "Remove worker"]);
+
+      await page.keyboard.press("ArrowDown");
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toBeFocused();
+      await page.keyboard.press("ArrowUp");
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toBeFocused();
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await expect(page).toHaveURL(/\/fleet$/);
     } finally {
       await disposeFleet(fleet);
     }
