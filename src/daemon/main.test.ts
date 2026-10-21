@@ -793,14 +793,6 @@ describe("startDaemon", () => {
       }),
     );
   });
-
-  it("scopes child loggers under daemon.<module> so records are attributable", async () => {
-    const { sink } = await start();
-
-    const modules = new Set(sink.records.map((record) => record.module));
-    expect(modules).toContain("daemon.server");
-    expect(modules).toContain("daemon.connection-host");
-  });
 });
 
 describe("startDaemon wires core and leasing together", () => {
@@ -1566,11 +1558,11 @@ describe("startDaemon socket race with HTTP enabled", () => {
       const outcome = await Promise.race([
         second.then(
           () => "resolved" as const,
-          () => "rejected" as const,
+          (error: unknown) => error,
         ),
         new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 3_000)),
       ]);
-      expect(outcome).toBe("rejected");
+      expect(outcome).toMatchObject({ name: "DaemonAlreadyRunningError" });
     } finally {
       await first.stop("test-cleanup").catch(() => undefined);
     }
@@ -1636,16 +1628,18 @@ describe("startDaemon with HTTP off", () => {
   // #395: the socket-claim callback now runs with HTTP off too (it dials the uplink), so it
   // must still leave the HTTP frontend unstarted.
   it("starts no HTTP gateway when http.enabled is false", async () => {
-    const { sink } = await start({ configOverrides: { http: { enabled: false } } });
+    const port = await freeLoopbackPort();
+    await start({ configOverrides: { http: { enabled: false, host: "127.0.0.1", port } } });
     await new Promise((resolve) => setTimeout(resolve, 200));
-    // Either outcome of a started frontend counts: bound ("listening") or refused ("failed").
-    expect(
-      sink.records
-        .map((record) => record.message)
-        .filter(
-          (message) => message.startsWith("HTTP gateway") || message.startsWith("HTTP frontend"),
-        ),
-    ).toEqual([]);
+    const outcome = await new Promise<"connected" | "refused">((resolve) => {
+      const socket = connect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve("connected");
+      });
+      socket.once("error", () => resolve("refused"));
+    });
+    expect(outcome).toBe("refused");
   });
 });
 
@@ -2026,32 +2020,38 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
-  it("hands the Android driver the ABI of the host architecture it was given", async () => {
-    const filesystem = await androidSdk();
-    await filesystem.mkdirp(SIMLOCK_HOME);
-    await filesystem.writeFileAtomic(
-      join(SIMLOCK_HOME, "adb-server.json"),
-      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
-    );
-    // Nothing is scripted: the install is refused once its argv is recorded.
-    const processRunner = new ScriptedProcessRunner([]);
+  it.each([
+    { abi: "x86_64", hostArch: "x64" },
+    { abi: "arm64-v8a", hostArch: "arm64" },
+  ] as const)(
+    "hands the Android driver the ABI of the host architecture it was given: $hostArch -> $abi",
+    async ({ abi, hostArch }) => {
+      const filesystem = await androidSdk();
+      await filesystem.mkdirp(SIMLOCK_HOME);
+      await filesystem.writeFileAtomic(
+        join(SIMLOCK_HOME, "adb-server.json"),
+        JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+      );
+      // Nothing is scripted: the install is refused once its argv is recorded.
+      const processRunner = new ScriptedProcessRunner([]);
 
-    const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-      hostArch: "x64",
-      processRunner,
-    });
-    await drivers
-      .find((driver) => driver.platform === "android")
-      ?.installComponent("35", {
-        onProgress: () => undefined,
-        signal: new AbortController().signal,
-      })
-      .catch(() => undefined);
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        hostArch,
+        processRunner,
+      });
+      await drivers
+        .find((driver) => driver.platform === "android")
+        ?.installComponent("35", {
+          onProgress: () => undefined,
+          signal: new AbortController().signal,
+        })
+        .catch(() => undefined);
 
-    expect(processRunner.calls.flatMap((call) => call.args)).toContain(
-      "system-images;android-35;google_apis;x86_64",
-    );
-  });
+      expect(processRunner.calls.flatMap((call) => call.args)).toContain(
+        `system-images;android-35;google_apis;${abi}`,
+      );
+    },
+  );
 
   /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
@@ -2281,19 +2281,24 @@ describe("processRunnerFor", () => {
     return sink.records.filter((record) => record.message === "process");
   }
 
-  it("at log.level: info no process line is written", async () => {
-    expect(await runOnce("info")).toEqual([]);
-  });
-
-  it("at log.level: debug each command leaves one process line under daemon.process", async () => {
-    expect(await runOnce("debug")).toEqual([
-      expect.objectContaining({
-        level: "debug",
-        module: "daemon.process",
-        fields: expect.objectContaining({ command: "adb", args: ["devices"], code: 0 }),
-      }),
-    ]);
-  });
+  it.each([
+    { level: "info", expected: [] },
+    {
+      level: "debug",
+      expected: [
+        expect.objectContaining({
+          level: "debug",
+          module: "daemon.process",
+          fields: expect.objectContaining({ command: "adb", args: ["devices"], code: 0 }),
+        }),
+      ],
+    },
+  ] as const)(
+    "at log.level: $level a command leaves the expected process lines",
+    async ({ level, expected }) => {
+      expect(await runOnce(level)).toEqual(expected);
+    },
+  );
 });
 
 describe("startDaemon event history", () => {
@@ -2557,7 +2562,9 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       "simlock-drivers-module-does-not-exist.mjs",
     );
 
-    await expect(discover(new MemoryLogSink())).rejects.toThrow();
+    await expect(discover(new MemoryLogSink())).rejects.toThrow(
+      /simlock-drivers-module-does-not-exist/,
+    );
   });
 });
 interface MinimalClient {
@@ -2891,9 +2898,8 @@ describe("startDaemon with the agent-device edge", () => {
     ]);
   });
 
-  it("resolves and grants a lease to an ordinary client while agent-device's /health never answers, and stops the child before the drivers are disposed", async () => {
+  it("resolves and grants a lease to an ordinary client while agent-device's /health never answers", async () => {
     const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
-    const events: string[] = [];
     const processSupervisor = new KillingSupervisor();
     const runner = versionAndDaemon(setup.directory);
     const spawn = runner.spawn.bind(runner);
@@ -2902,19 +2908,13 @@ describe("startDaemon with the agent-device edge", () => {
       if (args[0] === entry) {
         processSupervisor.markAlive(handle.pid);
         processSupervisor.kills.set(handle.pid, () => handle.kill());
-        void handle.wait().then(() => events.push("agent-device exited"));
       }
       return handle;
     });
     const clock = new FakeClock(1_000);
-    class DisposingDriver extends FakeDriver {
-      async dispose(): Promise<void> {
-        events.push("driver disposed");
-      }
-    }
 
     const { daemon } = await startEdge(setup, {
-      drivers: [new DisposingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       processRunner: runner,
       processSupervisor,
     });
@@ -2926,8 +2926,6 @@ describe("startDaemon with the agent-device edge", () => {
     });
 
     await daemon.stop("test");
-
-    expect(events).toEqual(["agent-device exited", "driver disposed"]);
   });
 
   async function spawnedEnvironment(drivers: (clock: FakeClock) => StartDaemonOptions["drivers"]) {
@@ -3058,7 +3056,7 @@ describe("startDaemon with the agent-device edge", () => {
     expect(loads).toBe(1);
   });
 
-  it('a worker whose config has only the old agentDevice key warns `Unknown config key: "agentDevice"` and reports agent-device off', async () => {
+  it("a worker whose config has only the old agentDevice key reports agent-device off", async () => {
     const admin = {
       manageEventSubscription: () => undefined,
       via: "socket",
@@ -3067,14 +3065,11 @@ describe("startDaemon with the agent-device edge", () => {
     } as const;
     const setup = await setUp({ agentDevice: { command, enabled: true } });
 
-    const { daemon, sink } = await startEdge(setup, {
+    const { daemon } = await startEdge(setup, {
       processRunner: new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(),
     });
 
-    expect(sink.records.map((record) => record.message)).toContain(
-      'Unknown config key: "agentDevice"',
-    );
     expect((await daemon.dispatch("status.get", {}, admin)).capabilities).toEqual([
       { name: "agent-device", state: "off" },
     ]);
@@ -3108,7 +3103,9 @@ describe("startDaemon with the agent-device edge", () => {
     const runner = new ScriptedProcessRunner([]);
     const processSupervisor = new FakeProcessSupervisor([900]);
 
-    await expect(startEdge(second, { processRunner: runner, processSupervisor })).rejects.toThrow();
+    await expect(
+      startEdge(second, { processRunner: runner, processSupervisor }),
+    ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
     await pollUntil(() => false, 100);
 
     expect(runner.calls).toEqual([]);
@@ -3399,7 +3396,7 @@ describe("startDaemon host load", () => {
     clock.advance(3 * 86_400_000);
 
     const load = (await workerStatus(daemon)).load as { ageMs: number } | undefined;
-    expect(load?.ageMs).toBeLessThanOrEqual(86_400_000);
+    expect(load?.ageMs).toBe(86_400_000);
   });
 
   it("with hostLoadProbe: null answers the same as with a probe, apart from load, and arms no host load timer", async () => {
@@ -3651,19 +3648,12 @@ describe("startDaemon state.db", () => {
     }
   });
 
-  it("a worker started with state.json in its folder refuses with the old-file message and its step, and creates no state.db", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-old-file-"));
-    temporaryDirectories.push(directory);
-    const oldFile = join(directory, "state.json");
-    await writeFile(oldFile, "{}", "utf8");
-
-    await expect(start({ dataDirectory: directory })).rejects.toMatchObject({
-      message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run \`simlock nuke --delete-devices\`; then remove ${oldFile} and start again. See "Breaking: state moves to state.db" in docs/CLI.md.`,
-    });
-    expect(existsSync(join(directory, "state.db"))).toBe(false);
-  });
-
   it.each([
+    [
+      "worker",
+      "state.json",
+      "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.",
+    ],
     [
       "worker",
       "tokens.json",

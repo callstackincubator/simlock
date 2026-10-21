@@ -415,7 +415,7 @@ describe("Android screen capture: open", () => {
     );
   });
 
-  it("streams a physical phone through its target: the screen read, the push, the server start and the close's removal go through its run and spawn with the phone's serial, and its socket through its connect", async () => {
+  it("streams a physical phone through its target: the screen read, the push, the server start and the close's removal go through its run and spawn, and its socket through its connect", async () => {
     const world = await setup({ device: PHONE });
     const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
     const feed = await drive(world.clock, waitThenStart(world.target, opening));
@@ -497,6 +497,8 @@ describe("Android screen capture: open", () => {
     await watcher;
     expect(world.target.connects).toHaveLength(4);
     expect(world.clock.now() - started).toBeGreaterThanOrEqual(3 * CONNECT_RETRY_MS);
+    // why: two drive steps of slack; a retry interval slower than CONNECT_RETRY_MS overshoots this.
+    expect(world.clock.now() - started).toBeLessThan(3 * CONNECT_RETRY_MS + 2 * 10);
     expect(frameTag((await feed.body.getReader().read()).value)).toBe(SCREEN_FRAME_TAG.meta);
   });
 
@@ -560,7 +562,7 @@ describe("Android screen capture: open", () => {
     ).catch((caught: unknown) => caught);
     expect((error as Error).message).toMatch(/exited before it streamed/);
     expect((error as Error).message).toMatch(/Aborted/);
-    expect(world.clock.now() - started).toBeLessThan(START_DEADLINE_MS);
+    expect(world.clock.now() - started).toBeLessThan(CONNECT_RETRY_MS);
   });
 
   it("refuses at once when adb has no transport for the serial", async () => {
@@ -677,7 +679,9 @@ describe("Android screen capture: a phone's screen state", () => {
       });
       const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
       const feed = await drive(world.clock, waitThenStart(world.target, opening));
-      expect(await feed.body.getReader().read(), printed).toBeDefined();
+      expect(frameTag((await feed.body.getReader().read()).value), printed).toBe(
+        SCREEN_FRAME_TAG.meta,
+      );
 
       expect(world.target.screenSteps, printed).toEqual(["read", "wake", "read"]);
       expect(world.target.wakes, printed).toEqual([WAKE_MS]);
@@ -728,29 +732,18 @@ describe("Android screen capture: a phone's screen state", () => {
     expect(emulator.target.wakes).toEqual([]);
   });
 
-  it("goes on to the push for every other wakefulness, including a word that is not one and no line at all", async () => {
-    for (const printed of ["Awake", "Dreaming", "Awaken", "asleep"]) {
-      const world = await setup({
-        device: PHONE,
-        power: { code: 0, stdout: `  mWakefulness=${printed}\n` },
-      });
-      const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
-      const feed = await drive(world.clock, waitThenStart(world.target, opening));
-      expect(await feed.body.getReader().read(), printed).toBeDefined();
-
-      expect(world.target.log[0], printed).toBe(`push ${SERVER} ${DEVICE_JAR}`);
-      expect(world.target.powerReads, printed).toEqual([SCREEN_READ_MS]);
-      expect(world.target.wakes, printed).toEqual([]);
-    }
-  });
-
-  it("goes on to the push when the screen read has no matching line, exits non-zero, or times out, and asks for it with a 10 s limit", async () => {
-    for (const answer of [
-      { code: 0, stdout: "  mPolicyBoost=0\n" },
-      { code: 1, stdout: "  mWakefulness=Asleep\n" },
-      "slow",
-    ] as const) {
-      const world = await setup({ device: PHONE, power: answer });
+  it.each([
+    { name: "Awake", power: { code: 0, stdout: "  mWakefulness=Awake\n" } },
+    { name: "Dreaming", power: { code: 0, stdout: "  mWakefulness=Dreaming\n" } },
+    { name: "Awaken", power: { code: 0, stdout: "  mWakefulness=Awaken\n" } },
+    { name: "asleep", power: { code: 0, stdout: "  mWakefulness=asleep\n" } },
+    { name: "no matching line", power: { code: 0, stdout: "  mPolicyBoost=0\n" } },
+    { name: "a non-zero exit", power: { code: 1, stdout: "  mWakefulness=Asleep\n" } },
+    { name: "a slow read", power: "slow" },
+  ] as const)(
+    "goes on to the push, without a wake, after one 10 s screen read that says $name",
+    async ({ name, power }) => {
+      const world = await setup({ device: PHONE, power });
       const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
       // why: a timed-out read ends 10 s of fake clock after the open, and waitThenStart's capped
       // flush-wait cannot span it; the file's uncapped watcher pattern waits for the peer whenever
@@ -762,13 +755,15 @@ describe("Android screen capture: a phone's screen state", () => {
       })();
       const feed = await drive(world.clock, opening);
       await watcher;
-      expect(await feed.body.getReader().read(), String(answer)).toBeDefined();
+      expect(frameTag((await feed.body.getReader().read()).value), name).toBe(
+        SCREEN_FRAME_TAG.meta,
+      );
 
-      expect(world.target.powerReads, String(answer)).toEqual([SCREEN_READ_MS]);
-      expect(world.target.wakes, String(answer)).toEqual([]);
-      expect(world.target.log[0], String(answer)).toBe(`push ${SERVER} ${DEVICE_JAR}`);
-    }
-  });
+      expect(world.target.powerReads, name).toEqual([SCREEN_READ_MS]);
+      expect(world.target.wakes, name).toEqual([]);
+      expect(world.target.log[0], name).toBe(`push ${SERVER} ${DEVICE_JAR}`);
+    },
+  );
 
   it("checks for a stop after each of the first read, the wake and the second read, and does nothing after the step it was stopped in", async () => {
     const asleep = { code: 0, stdout: "  mWakefulness=Asleep\n" };
@@ -971,15 +966,21 @@ describe("Android screen capture: the body", () => {
     const feed = await opened(world);
     const peer = world.target.server.last;
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
-    for (let index = 0; index < 50; index += 1) peer.send(mediaPacket({ pts: index }, SAMPLE.p1));
+    // why: a delta frame carries only the picture, so each picture ends in its own index byte.
+    for (let index = 0; index < 50; index += 1) {
+      const picture = Uint8Array.from(SAMPLE.p1);
+      picture[picture.length - 1] = index + 1;
+      peer.send(mediaPacket({ pts: index }, picture));
+    }
     const reader = feed.body.getReader();
-    const tags: (number | undefined)[] = [];
+    const deltas: (number | undefined)[] = [];
     for (let index = 0; index < 53; index += 1) {
       for (let flush = 0; flush < 3; flush += 1)
         await new Promise((resolve) => setImmediate(resolve));
-      tags.push(frameTag((await reader.read()).value));
+      const frame = (await reader.read()).value;
+      if (frameTag(frame) === SCREEN_FRAME_TAG.delta) deltas.push(frame?.at(-1));
     }
-    expect(tags.filter((tag) => tag === SCREEN_FRAME_TAG.delta)).toHaveLength(50);
+    expect(deltas).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
   });
 
   it("says a still screen is alive every few seconds, and keeps the frames that follow in order", async () => {
@@ -989,16 +990,32 @@ describe("Android screen capture: the body", () => {
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
     const reader = feed.body.getReader();
     for (let index = 0; index < 3; index += 1) await reader.read();
-    const quiet = reader.read();
-    for (let flush = 0; flush < 10; flush += 1)
-      await new Promise((resolve) => setImmediate(resolve));
-    world.clock.advance(ALIVE_AFTER_MS);
-    const alive = (await quiet).value;
-    expect(frameTag(alive)).toBe(SCREEN_FRAME_TAG.alive);
-    expect(alive?.length).toBe(5);
+    const flushAll = async (): Promise<void> => {
+      for (let flush = 0; flush < 10; flush += 1)
+        await new Promise((resolve) => setImmediate(resolve));
+    };
+    for (const round of [1, 2]) {
+      const quiet = reader.read();
+      let settled = false;
+      void quiet.then(() => (settled = true));
+      await flushAll();
+      world.clock.advance(ALIVE_AFTER_MS - 1);
+      await flushAll();
+      expect(settled, `round ${String(round)} before ${String(ALIVE_AFTER_MS)} ms`).toBe(false);
+      world.clock.advance(1);
+      const alive = (await quiet).value;
+      expect(frameTag(alive), `round ${String(round)}`).toBe(SCREEN_FRAME_TAG.alive);
+      expect(alive?.length, `round ${String(round)}`).toBe(5);
+    }
     const next = reader.read();
-    peer.send(mediaPacket({ pts: 1 }, SAMPLE.p1));
-    expect(frameTag((await next).value)).toBe(SCREEN_FRAME_TAG.delta);
+    const first = Uint8Array.from(SAMPLE.p1);
+    first[first.length - 1] = 1;
+    const second = Uint8Array.from(SAMPLE.p1);
+    second[second.length - 1] = 2;
+    peer.send(mediaPacket({ pts: 1 }, first), mediaPacket({ pts: 2 }, second));
+    const deltas = [(await next).value, (await reader.read()).value];
+    expect(deltas.map(frameTag)).toEqual([SCREEN_FRAME_TAG.delta, SCREEN_FRAME_TAG.delta]);
+    expect(deltas.map((frame) => frame?.at(-1))).toEqual([1, 2]);
   });
 
   it("says nothing is alive while the encoder has not painted a first picture, on an emulator and on a phone", async () => {

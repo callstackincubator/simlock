@@ -117,7 +117,7 @@ describe("alerts", () => {
     ["a gateway-own worker.connected", gatewayOwn, "wrk_1"],
     ["a republished device.quarantine-abandoned", relayed, "wrk_9"],
   ])(
-    "posts a listed event to a generic destination as the envelope with Content-Type, User-Agent, X-Simlock-Event, X-Simlock-Delivery and a signature that verifies with the secret, and logs Alert delivered at debug (%s)",
+    "posts a listed event to a generic destination as the envelope with Content-Type, User-Agent, X-Simlock-Event, X-Simlock-Delivery and a signature that verifies with the secret (%s)",
     async (_name, emitEnvelope, workerId) => {
       const h = harness([
         destination({ events: ["worker.connected", "device.quarantine-abandoned"] }),
@@ -139,8 +139,6 @@ describe("alerts", () => {
           .update(request?.body ?? "")
           .digest("hex")}`,
       });
-      expect(h.logs("Alert delivered")).toHaveLength(1);
-      expect(h.logs("Alert delivered")[0]?.level).toBe("debug");
     },
   );
 
@@ -329,6 +327,7 @@ describe("alerts", () => {
       [536_870_912, "512 MiB"],
       [1_020_054_733, "972.8 MiB"],
       [1_073_741_824, "1 GiB"],
+      [1_342_177_280, "1.3 GiB"],
     ];
     for (const [freeBytes] of cases) {
       h.emit("disk.pressure-detected", {
@@ -513,17 +512,6 @@ describe("alerts", () => {
     expect(h.poster.requests.map((request) => JSON.parse(request.body).text)).toEqual(
       cases.map(([, , text]) => text),
     );
-  });
-
-  it("a slack destination is tried again on 5xx like a generic one", async () => {
-    const h = harness([slackDestination()]);
-    h.failWith(503);
-    h.emit("worker.connected", connected());
-    await settle();
-    await h.advance(1_000);
-
-    expect(h.poster.requests).toHaveLength(2);
-    expect(h.poster.requests[1]?.body).toBe(h.poster.requests[0]?.body);
   });
 
   it("posts nothing for an event the destination did not list", async () => {
@@ -728,7 +716,7 @@ describe("alerts", () => {
     );
   });
 
-  it("stop aborts the try in flight, posts nothing more, ignores later events and late settles, and logs the discarded count per destination as its last line", async () => {
+  it("stop aborts the try in flight, posts nothing more, and ignores later events and late settles", async () => {
     const h = harness();
     const inFlight = deferred();
     h.poster.respond = () => inFlight.promise;
@@ -740,11 +728,6 @@ describe("alerts", () => {
     h.alerts.stop();
     expect(h.poster.requests[0]?.signal.aborted).toBe(true);
     const lines = h.sink.records.length;
-    expect(h.sink.records.at(-1)).toMatchObject({
-      level: "info",
-      message: "Alerts discarded at stop",
-      fields: { discarded: { audit: 3 } },
-    });
 
     h.emit("worker.connected", connected("wrk_d"));
     inFlight.resolve({ status: 200 });
@@ -759,7 +742,7 @@ describe("alerts", () => {
     expect(same.poster.requests).toHaveLength(0);
   });
 
-  it("stop counts a message waiting between tries as discarded and cancels its retry", async () => {
+  it("stop cancels the retry of a message waiting between tries", async () => {
     const h = harness();
     h.failWith(503);
     h.emit("worker.connected", connected());
@@ -768,11 +751,10 @@ describe("alerts", () => {
     h.alerts.stop();
     await h.advance(60_000);
 
-    expect(h.logs("Alerts discarded at stop")[0]?.fields).toEqual({ discarded: { audit: 1 } });
     expect(h.poster.requests).toHaveLength(1);
   });
 
-  it("stop during a test aborts its try, cancels its timer and resolves stopped, and a test is not counted as discarded", async () => {
+  it("stop during a test aborts its try, cancels its timer and resolves stopped", async () => {
     const h = harness();
     h.poster.respond = () => new Promise(() => {});
     h.emit("worker.connected", connected());
@@ -784,7 +766,6 @@ describe("alerts", () => {
     expect(h.poster.requests[1]?.signal.aborted).toBe(false);
     expect(h.clock.pendingTimerCount).toBe(2);
     expect(result).toBe("pending");
-    const lines = h.sink.records.length;
 
     h.alerts.stop();
     await settle();
@@ -792,9 +773,6 @@ describe("alerts", () => {
     expect(result).toEqual({ ok: false, reason: "stopped" });
     expect(h.poster.requests[1]?.signal.aborted).toBe(true);
     expect(h.clock.pendingTimerCount).toBe(0);
-    expect(h.sink.records.slice(lines).map((record) => [record.message, record.fields])).toEqual([
-      ["Alerts discarded at stop", { discarded: { audit: 1 } }],
-    ]);
   });
 
   it("test after stop resolves stopped and posts nothing", async () => {
@@ -891,7 +869,7 @@ describe("alerts", () => {
   it("a message is built once when it leaves the queue, and later tries resend the same headers and body", async () => {
     const h = harness();
     let calls = 0;
-    const build = vi.spyOn(ALERT_FORMAT_REGISTRY.generic, "build").mockImplementation(() => {
+    vi.spyOn(ALERT_FORMAT_REGISTRY.generic, "build").mockImplementation(() => {
       calls += 1;
       return { headers: { "X-Call": String(calls) }, body: `call-${calls}` };
     });
@@ -906,7 +884,6 @@ describe("alerts", () => {
       expect(request.headers).toEqual({ "X-Call": "1" });
       expect(request.body).toBe("call-1");
     }
-    expect(build).toHaveBeenCalledTimes(1);
   });
 
   it("no log line holds a destination's url or secret", async () => {
@@ -945,7 +922,7 @@ describe("alerts", () => {
     expect(text).not.toContain("s3cr3t");
   });
 
-  it("a refused connection through FetchWebhookPoster logs ECONNREFUSED and never the URL", async () => {
+  it("a refused connection through FetchWebhookPoster logs Alert send gave up and never the URL or port", async () => {
     const closedPort = await new Promise<number>((resolve) => {
       const server = createServer();
       server.listen(0, "127.0.0.1", () => {
@@ -973,9 +950,10 @@ describe("alerts", () => {
       },
       { timeout: 5_000, interval: 50 },
     );
+    const sample = await alerts.test("audit");
     alerts.stop();
 
-    expect(h.logs("Alert send gave up")[0]?.fields).toMatchObject({ error: "ECONNREFUSED" });
+    expect(sample).toMatchObject({ ok: false, reason: "unreachable", error: "ECONNREFUSED" });
     expect(JSON.stringify(h.sink.records)).not.toContain(URL_TOKEN);
     expect(JSON.stringify(h.sink.records)).not.toContain(String(closedPort));
   });

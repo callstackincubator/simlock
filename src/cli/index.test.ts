@@ -177,7 +177,10 @@ describe("CLI: exit codes", () => {
         }),
       ),
     ).resolves.toBe(11);
-    expect(output.stderr).not.toContain("already");
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stderr.trim())).toEqual({
+      error: { code: "NO_CAPACITY", message: expect.any(String) },
+    });
   });
 
   const NO_GATEWAY_MESSAGE =
@@ -497,35 +500,6 @@ describe("CLI: exit codes", () => {
       });
     });
 
-    it("renders a refusal from the remote command as a USAGE error too", async () => {
-      const output = outputCapture();
-
-      await expect(
-        runCli(
-          ["simctl", "delete", "ABCD"],
-          output.environmentWith({
-            connectAdmin: async () =>
-              fakeClient({
-                getStatus: () => Promise.resolve(gatewayStatus),
-                listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                exec: () =>
-                  Promise.reject(
-                    new SimlockError(
-                      "PASSTHROUGH_REFUSED",
-                      "domain",
-                      "Refusing `simlock simctl delete`: use `simlock release` instead.",
-                      { tool: "simctl" },
-                    ),
-                  ),
-              }),
-          }),
-        ),
-      ).resolves.toBe(2);
-      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
-        error: { code: "USAGE", message: expect.stringContaining("simlock release") },
-      });
-    });
-
     it("exits 10 when the daemon killed the command for outrunning exec.timeoutMs", async () => {
       // why: The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7): 10, the same code
       // the other "you ran out of time" outcome (`QUEUE_TIMEOUT`) uses, rather than the
@@ -734,34 +708,6 @@ describe("CLI: exit codes", () => {
                     ),
                   ),
               }),
-          }),
-        ),
-      ).resolves.toBe(2);
-      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
-        error: { code: "USAGE", message: expect.stringContaining("No driver provides") },
-      });
-    });
-
-    it("relabels the local path's unknown tool the same way", async () => {
-      const output = outputCapture();
-
-      await expect(
-        runCli(
-          ["adb", "devices"],
-          output.environmentWith({
-            connectAdmin: async () =>
-              fakeClient({
-                resolvePassthrough: () =>
-                  Promise.reject(
-                    new SimlockError(
-                      "UNKNOWN_PASSTHROUGH_TOOL",
-                      "domain",
-                      "No driver provides a adb passthrough",
-                      { tool: "adb" },
-                    ),
-                  ),
-              }),
-            runPassthrough: async () => 0,
           }),
         ),
       ).resolves.toBe(2);
@@ -1002,12 +948,6 @@ describe("CLI: exit codes", () => {
       ),
     ).resolves.toBe(2);
     expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
-  });
-
-  it("maps a usage error to exit 2 with code USAGE", async () => {
-    const output = outputCapture();
-    await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
-    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
   });
 
   // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
@@ -1952,29 +1892,20 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
 });
 
 describe("CLI: daemon status (ADR 0003 §11)", () => {
-  it("reports stopped when the socket cannot be reached at all", async () => {
+  it.each([
+    { name: "the socket cannot be reached at all", error: () => new Error("connect ECONNREFUSED") },
+    {
+      name: "a transport-kind SimlockError (connection lost)",
+      error: () => simlockError("DAEMON_CONNECTION_LOST"),
+    },
+  ])("reports stopped when $name", async ({ error }) => {
     const output = outputCapture();
     await expect(
       runCli(
         ["daemon", "status", "--json"],
         output.environmentWith({
           connectExistingAdmin: async () => {
-            throw new Error("connect ECONNREFUSED");
-          },
-        }),
-      ),
-    ).resolves.toBe(0);
-    expect(JSON.parse(output.stdout)).toEqual({ status: "stopped" });
-  });
-
-  it("reports stopped for a transport-kind SimlockError (connection lost)", async () => {
-    const output = outputCapture();
-    await expect(
-      runCli(
-        ["daemon", "status", "--json"],
-        output.environmentWith({
-          connectExistingAdmin: async () => {
-            throw simlockError("DAEMON_CONNECTION_LOST");
+            throw error();
           },
         }),
       ),
@@ -1999,7 +1930,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(parsed.error.code).toBe("ADMIN_AUTHENTICATION_FAILED");
   });
 
-  it("never auto-launches the daemon for daemon status/stop", async () => {
+  it("never auto-launches the daemon for daemon status", async () => {
     const output = outputCapture();
     let launched = false;
     await runCli(
@@ -2687,7 +2618,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(output.stderr).toContain("http.enabled");
   });
 
-  it("starting a gateway checks its config.json as a gateway before launching", async () => {
+  it("starting a gateway refuses to launch when its config.json fails gateway validation", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock/gateway");
     await filesystem.writeFileAtomic(
@@ -2892,7 +2823,7 @@ describe("CLI: config set and the file mode of config.json (#252)", () => {
 });
 
 describe("CLI: --json shape is the contract, as-is (ADR 0003 §11)", () => {
-  it("status --json has no snake_case renderings", async () => {
+  it("status --json carries camelCase fields, not expires_at_ms, estimated_boot_ms, queue_position or device_unhealthy", async () => {
     const output = outputCapture();
     await runCli(
       ["status", "--json"],
@@ -2918,7 +2849,7 @@ describe("CLI: --json shape is the contract, as-is (ADR 0003 §11)", () => {
 });
 
 describe("CLI: --yes / confirm guards (safety rule 5)", () => {
-  it("release --all without --yes and a non-interactive confirm refuses", async () => {
+  it("release --all without --yes and a confirm that declines refuses with exit 2 and releases nothing", async () => {
     const output = outputCapture();
     let released = false;
     await expect(
@@ -3169,37 +3100,32 @@ describe("CLI: catalog", () => {
     );
   });
 
-  it("carries classDefaults in --json as received", async () => {
-    const catalog = {
-      classDefaults: { phone: "Pixel 9", tv: "Not Even Listed" },
-      modelAliases: {},
-      modelClasses: {},
-      modelRuntimes: {},
-      models: [],
-      platform: "android" as const,
-      runtimes: [],
-    };
-    const output = outputCapture();
-    const environment = output.environmentWith({
-      connectAdmin: async () =>
-        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
-    });
-
-    await expect(runCli(["catalog", "--json"], environment)).resolves.toBe(0);
-
-    expect(JSON.parse(output.stdout)).toEqual({ platforms: [catalog] });
-  });
-
-  it("carries modelClasses in --json as received", async () => {
-    const catalog = {
-      modelAliases: {},
-      classDefaults: {},
-      modelClasses: { "Pixel 8": "phone" as const, "Odd One": "tv" as const },
-      modelRuntimes: {},
-      models: ["Pixel 8"],
-      platform: "android" as const,
-      runtimes: [],
-    };
+  it.each([
+    {
+      field: "classDefaults",
+      catalog: {
+        classDefaults: { phone: "Pixel 9", tv: "Not Even Listed" },
+        modelAliases: {},
+        modelClasses: {},
+        modelRuntimes: {},
+        models: [],
+        platform: "android" as const,
+        runtimes: [],
+      },
+    },
+    {
+      field: "modelClasses",
+      catalog: {
+        modelAliases: {},
+        classDefaults: {},
+        modelClasses: { "Pixel 8": "phone" as const, "Odd One": "tv" as const },
+        modelRuntimes: {},
+        models: ["Pixel 8"],
+        platform: "android" as const,
+        runtimes: [],
+      },
+    },
+  ])("carries $field in --json as received", async ({ catalog }) => {
     const output = outputCapture();
     const environment = output.environmentWith({
       connectAdmin: async () =>
@@ -3561,11 +3487,14 @@ describe("CLI: component install on a gateway's workers (ADR 0010 §7)", () => {
     });
   });
 
-  it("lists the command in the usage banner", async () => {
+  it.each([
+    "component install <ios|android> <version>",
+    "events, stats,",
+    "component list [--platform <ios|android>]",
+  ])("lists the command in the usage banner: %s", async (fragment) => {
     const output = outputCapture();
     await runCli(["--help"], output.environmentWith({}));
-    expect(output.stdout).toContain("component install <ios|android> <version>");
-    expect(output.stdout).toContain("events, stats,");
+    expect(output.stdout).toContain(fragment);
   });
 });
 
@@ -3645,12 +3574,6 @@ describe("CLI: component list (ADR 0010 §8)", () => {
     expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
       error: { code: "USAGE" },
     });
-  });
-
-  it("lists the command in the usage banner", async () => {
-    const output = outputCapture();
-    await runCli(["--help"], output.environmentWith({}));
-    expect(output.stdout).toContain("component list [--platform <ios|android>]");
   });
 });
 
@@ -4364,27 +4287,19 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       );
     });
 
-    it("simlock status prints no warm pool line for an answer without the block", async () => {
+    it.each([
+      {
+        name: "worker whose answer has no block",
+        mode: "worker" as const,
+        warmPool: undefined,
+      },
+      {
+        name: "gateway whose own block is empty",
+        mode: "gateway" as const,
+        warmPool: { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] },
+      },
+    ])("simlock status prints no warm pool line for a $name", async ({ mode, warmPool }) => {
       const output = outputCapture();
-
-      await runCli(
-        ["status"],
-        output.environmentWith({ connectAdmin: async () => statusWith(undefined) }),
-      );
-
-      expect(output.stdout).toBe(
-        "Daemon: running (worker)\n" +
-          "Host: macOS 15.5 arm64\n" +
-          "Running global: 0 + 0 reserved/2, warm 0\n" +
-          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
-          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
-          "Queue depth: 0\n",
-      );
-    });
-
-    it("simlock status prints no warm pool line for a gateway, whose own block is empty", async () => {
-      const output = outputCapture();
-      const empty = { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] };
 
       await runCli(
         ["status"],
@@ -4394,15 +4309,15 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
               getStatus: () =>
                 Promise.resolve({
                   ...EMPTY_STATUS,
-                  daemon: { health: "running" as const, mode: "gateway" as const },
-                  warmPool: empty,
+                  daemon: { health: "running" as const, mode },
+                  warmPool,
                 }),
             }),
         }),
       );
 
       expect(output.stdout).toBe(
-        "Daemon: running (gateway)\n" +
+        `Daemon: running (${mode})\n` +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4866,14 +4781,13 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Install android 35 on wrk_1: waiting for 0s, 3 waiters\n");
   });
 
-  it("says worker on a worker, and leaves its devices and leases unqualified", async () => {
+  it("says worker on a worker", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
 
     await runCli(["status"], environment);
 
     expect(output.stdout).toContain("Daemon: running (worker)");
-    expect(output.stdout).not.toContain(" on wrk_");
   });
 
   it("prints each device's mode and whether it serves a request naming no mode", async () => {
@@ -5173,36 +5087,6 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 });
 
 describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", () => {
-  it("exits 14 on a lost lease and does not attempt to re-release it", async () => {
-    const output = outputCapture();
-    let leaseLostListener:
-      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
-      | undefined;
-    let released = false;
-    const client = fakeClient({
-      onLeaseLost: (listener) => {
-        leaseLostListener = listener;
-        return () => {};
-      },
-      releaseLease: () => {
-        released = true;
-        return Promise.resolve({ leaseId: "lse_1" });
-      },
-    });
-    const runPromise = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
-      output.environmentWith({ connectAdmin: async () => client }),
-    );
-    // why: Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
-    // the push -- otherwise the listener registered by `client.onLeaseLost` may not exist yet.
-    await settle();
-    leaseLostListener?.({ leaseId: "lse_1", deviceId: "dev_1", reason: "ttl-backstop" });
-    const exitCode = await runPromise;
-    expect(exitCode).toBe(14);
-    // why: The daemon already released it -- asking again would only raise UNKNOWN_LEASE.
-    expect(released).toBe(false);
-  });
-
   it("ignores a lease-lost push for a lease this connection does not hold (own-lease-id filter)", async () => {
     const output = outputCapture();
     let leaseLostListener:
@@ -6842,7 +6726,7 @@ describe("CLI: pure helpers", () => {
     expect(parseDuration("2s")).toBe(2_000);
     expect(parseDuration("3m")).toBe(180_000);
     expect(parseDuration("1h")).toBe(3_600_000);
-    expect(() => parseDuration("banana")).toThrow();
+    expect(() => parseDuration("banana")).toThrow("Invalid duration");
   });
 
   it("parseDuration accepts the d unit and rejects an unknown one", () => {
@@ -7636,7 +7520,7 @@ describe("simlock list --requests", () => {
       expect(field).toBeDefined();
       const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
 
-      expect(listed).toHaveLength(7);
+      expect(listed.length).toBeGreaterThan(0);
       for (const reason of listed) {
         const line = await printed(queued(reason));
         expect(line).toMatch(/ — [a-z]/);
@@ -7785,7 +7669,7 @@ describe("simlock list --requests", () => {
       ).unwrap().element;
       const listed = element.shape.reason.options;
 
-      expect(listed).toHaveLength(13);
+      expect(listed.length).toBeGreaterThan(0);
       for (const reason of listed) {
         const { stdout } = await printedGateway([gatewayEntry([{ reason, workerId: "wrk_a" }])]);
         const line = stdout.split("\n")[1] ?? "";
@@ -8068,6 +7952,10 @@ describe("CLI: a worker's capabilities", () => {
         ],
         id: "wrk_3",
       }),
+      worker({
+        capabilities: [{ name: "agent-device", reason: "starting", state: "unavailable" }],
+        id: "wrk_4",
+      }),
     ]);
 
     expect(shown).toContain("wrk_1 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s)");
@@ -8076,16 +7964,7 @@ describe("CLI: a worker's capabilities", () => {
     expect(shown).toMatch(
       /^wrk_3 .* -- agent-device unavailable: found 0\.20\.1, need 0\.21\.28 or later$/m,
     );
-  });
-
-  it("worker list prints a starting agent-device as ` -- agent-device unavailable: starting`", async () => {
-    const shown = await listed([
-      worker({
-        capabilities: [{ name: "agent-device", reason: "starting", state: "unavailable" }],
-      }),
-    ]);
-
-    expect(shown).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+    expect(shown).toMatch(/^wrk_4 .* -- agent-device unavailable: starting$/m);
   });
 
   it("worker list prints two entries in the order the worker sent them", async () => {

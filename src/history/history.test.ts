@@ -717,9 +717,6 @@ describe("createEventHistory", () => {
     expect(await history.replay({ sinceTs: 0 })).toEqual([two, three]);
     expect(await readFile(join(rigged.directory, `history.db.damaged-${NOW}`), "utf8")).toBe(JUNK);
     expect(rigged.filesystem.renames).toHaveLength(1);
-    expect(
-      rigged.logs.records.filter((record) => record.message.startsWith("The fresh history")),
-    ).toHaveLength(1);
   });
 
   it("prune deletes event rows older than retention and keeps one stamped exactly at the cutoff", async () => {

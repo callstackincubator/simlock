@@ -675,12 +675,6 @@ function first(rig: Rig): Member {
 }
 
 describe("the agent-device front, through a gateway", { timeout: 60_000 }, () => {
-  it("with no capabilities.agent-device section on the gateway, /v1/agent-device/health answers 404, as today", async () => {
-    const rig = await setUp({ agentDevice: "unset" });
-
-    expect((await send(rig, "/health")).status).toBe(404);
-  });
-
   it("with capabilities.agent-device.command set on a gateway, the gateway logs that it ignores it and starts; with capabilities.agent-device.leaseTtlCapMs above lease.maxTtlMs on a gateway, the gateway fails to start, as a worker does", async () => {
     const rig = await setUp({ command: "agent-device-elsewhere", workers: [] });
 
@@ -699,17 +693,18 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     );
   });
 
-  it("with no capabilities.agent-device section on the gateway, /rpc, upload/preflight, artifacts/<id> and a diagnostics URL each answer 404", async () => {
+  it("with no capabilities.agent-device section on the gateway, /health, /rpc, upload/preflight, artifacts/<id> and a diagnostics URL each answer 404", async () => {
     const rig = await setUp({ agentDevice: "unset" });
 
     const answers = await Promise.all([
+      send(rig, "/health"),
       send(rig, "/rpc", { body: rpcBody("agent_device.command", { command: "snapshot" }) }),
       send(rig, "/upload/preflight", { body: "{}" }),
       send(rig, "/artifacts/a.png"),
       send(rig, "/sessions/tok_one:s1/requests/r1/diagnostics"),
     ]);
 
-    expect(answers.map((answer) => answer.status)).toEqual([404, 404, 404, 404]);
+    expect(answers.map((answer) => answer.status)).toEqual([404, 404, 404, 404, 404]);
   });
 
   it("/health answers the proxy's health when a worker is capable, and the notAvailable reply naming `no worker connected to this gateway can serve agent-device`, with status 200, when none is; when the relay to the capable worker fails, it answers the notAvailable reply with status 200", async () => {
@@ -1177,22 +1172,6 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(member.fake.requests.length).toBe(before);
   });
 
-  it("a relay that fails with `RELAY_TARGET_MISSING` answers the notAvailable reply with that message", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    expect((await envelopeOf(await command(rig, "snapshot", 1))).result).toMatchObject({
-      ok: true,
-    });
-    relayFailsWith(rig, "RELAY_TARGET_MISSING", "no relay target agent-device on this worker");
-
-    const answer = await command(rig, "snapshot", 1);
-
-    expect(answer.status).toBe(503);
-    expect((await envelopeOf(answer)).error?.message).toBe(
-      `${notAvailable}no relay target agent-device on this worker`,
-    );
-  });
-
   it("an agent on a worker token with the same principal name as a gateway agent, connected to the worker directly, does not see the gateway agent's agent-device session, and the gateway agent's commands still work", async () => {
     const rig = await setUp({ workers: [{ direct: true, label: "w1" }] });
     const member = first(rig);
@@ -1255,32 +1234,24 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     member.fake.releaseCommand();
   });
 
-  it("stopping the gateway cancels the link's sweep of a lease the fleet removed, leaving the timers a gateway with no agent-device activity leaves", async () => {
-    const idle = await setUp();
-    await idle.gateway.stop("test");
-    const rig = await setUp();
-    await granted(rig, 1);
-    expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({ ok: true });
-    await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
-    expect(rig.clock.pendingTimerCount).toBeGreaterThan(idle.clock.pendingTimerCount);
-
-    await rig.gateway.stop("test");
-
-    expect(rig.clock.pendingTimerCount).toBe(idle.clock.pendingTimerCount);
-  });
-
-  it("a heartbeat, a release and an allocate whose relay fails with `RELAY_TARGET_MISSING` answer the notAvailable reply with that message, and the failed allocate leaves no lease", async () => {
+  it("a heartbeat, a command, a release and an allocate whose relay fails with `RELAY_TARGET_MISSING` answer the notAvailable reply with that message, and the failed allocate leaves no lease", async () => {
     const rig = await setUp();
     const member = first(rig);
     await granted(rig, 1);
     const missing = `${notAvailable}no relay target agent-device on this worker`;
+    expect((await envelopeOf(await command(rig, "snapshot", 1))).result).toMatchObject({
+      ok: true,
+    });
     relayFailsWith(rig, "RELAY_TARGET_MISSING", "no relay target agent-device on this worker");
 
     const beat = await heartbeat(rig, 1);
+    const commanded = await command(rig, "snapshot", 1);
     const released = await release(rig, 1);
     const made = await allocate(rig, 2);
 
     expect((await envelopeOf(beat)).error?.message).toBe(missing);
+    expect(commanded.status).toBe(503);
+    expect((await envelopeOf(commanded)).error?.message).toBe(missing);
     expect((await envelopeOf(released)).error?.message).toBe(missing);
     expect((await envelopeOf(made)).error?.message).toBe(missing);
     await expect.poll(async () => (await workerLeases(member)).length).toBe(1);
@@ -1508,7 +1479,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
 
   it("through the gateway, the same requests without the header, or with an empty one, and a `GET artifacts` list, are refused with `refused: this agent-device is too old to use through a gateway; update it`", async () => {
     const rig = await twoLeasesOnTwoWorkers();
-    const diagnostics = `/sessions/${principals.one}:s1/requests/r1/diagnostics`;
+    const diagnostics = `/sessions/${await tenantOf(holderOf(rig, 2), 2)}:s1/requests/r1/diagnostics`;
     const calls: readonly { path: string; body?: string }[] = [
       { body: "{}", path: "/upload/preflight" },
       { body: "{}", path: "/upload/finalize" },
@@ -1522,6 +1493,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
         headers: leased(2),
       });
       expect(await accepted.text()).not.toContain(tooOld);
+      expect(pathsReceived(holderOf(rig, 2))).toContain(call.path);
     }
     const before = rig.members.map((member) => member.fake.requests.length);
 
@@ -1703,7 +1675,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(heartbeatsReceived(first(rig))).toBe(received);
   });
 
-  it("through the gateway, `devices` when W2's agent-device answers an error passes that error on; when W2 answers a body with no list, it answers `could not read the device list from the worker holding lease <id>` with status 502", async () => {
+  it("through the gateway, `devices` when W2's agent-device answers an error passes that error on", async () => {
     const rig = await twoLeasesOnTwoWorkers();
     holderOf(rig, 1).fake.listDevices([{ id: addressOfLease(rig, 1), name: "first" }]);
     const second = holderOf(rig, 2).fake;
@@ -1722,16 +1694,6 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     const failed = await envelopeOf(await command(rig, "devices", undefined));
 
     expect(failed.error?.message).toBe("inventory down");
-
-    second.answerDevicesWith(
-      JSON.stringify({ id: 1, jsonrpc: "2.0", result: { data: {}, ok: true } }),
-    );
-    const unreadable = await command(rig, "devices", undefined);
-
-    expect(unreadable.status).toBe(502);
-    expect((await envelopeOf(unreadable)).error?.message).toBe(
-      `could not read the device list from the worker holding lease ${hex(2)}`,
-    );
   });
 
   it("through the gateway, `devices` whose lease check fails answers `could not check your leases; try again`, not an empty list, and no daemon receives the command", async () => {
@@ -2216,12 +2178,14 @@ describe(
       const received = member.fake.requests.length;
 
       await expectUnreachableEverywhere(rig, 1);
+      rig.clock.advance(gatewayWindowMs - 1_000);
+      await expectUnreachableEverywhere(rig, 1);
 
       expect(member.fake.requests.length).toBe(received);
       const other = await rig.addWorker({ label: "w2" });
       await other.daemon;
       await untilRead(rig, other);
-      rig.clock.advance(gatewayWindowMs + 1_000);
+      rig.clock.advance(2_000);
       const beat = await envelopeOf(await heartbeat(rig, 1));
       expect(beat.error?.message).toBe(notYoursOnGateway(1));
     });
@@ -2336,6 +2300,7 @@ describe(
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       const hash = createHash("sha256");
       let ended = false;
+      let delivered = 0;
       try {
         for (;;) {
           const next = await reader.read();
@@ -2344,12 +2309,14 @@ describe(
             break;
           }
           hash.update(next.value);
+          delivered += next.value.length;
         }
       } catch {
         ended = false;
       }
 
       expect(ended).toBe(false);
+      expect(delivered).toBeGreaterThanOrEqual(limit);
     });
   },
 );

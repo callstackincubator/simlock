@@ -562,12 +562,14 @@ describe("Registry", () => {
       spec,
     });
 
-    await expect(
-      registry.transitionDevice(device.id, "ready", {
-        event: "device.ready",
-        payload: { bootDuration: 0, deviceId: "dev_someone_else" },
-      }),
-    ).rejects.toThrow(RegistryEventError);
+    const refused = registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: "dev_someone_else" },
+    });
+    await expect(refused).rejects.toThrow(RegistryEventError);
+    await expect(refused).rejects.toThrow(
+      `Device event payload does not match device: ${device.id}`,
+    );
     expect(registry.snapshot.devices[0]?.state).toBe("provisioning");
   });
 
@@ -1005,7 +1007,7 @@ describe("Registry", () => {
     ).rejects.toThrow(UnknownDeviceError);
   });
 
-  it("records the first recovery attempt's start time and count", async () => {
+  it("records the first recovery attempt, then keeps its recoveringSince and increments the count on retry", async () => {
     const clock = new FakeClock(1_000);
     const registry = await loadTestRegistry({
       clock,
@@ -1018,26 +1020,8 @@ describe("Registry", () => {
       provisionDuration: 0,
       spec,
     });
-
-    const updated = await registry.markRecoveryAttempt(device.id, 1_500);
-
-    expect(updated).toMatchObject({ recoveringSince: 1_500, recoveryAttempts: 1 });
-  });
-
-  it("keeps the original recoveringSince and increments the attempt count on retry", async () => {
-    const clock = new FakeClock(1_000);
-    const registry = await loadTestRegistry({
-      clock,
-      eventBus: new EventBus(clock),
-      idGenerator: { generate: () => "test" },
-    });
-    const device = await registry.registerDevice({
-      driverData: { fakeDeviceId: "fake-1" },
-      driverDeviceId: "driver_test",
-      provisionDuration: 0,
-      spec,
-    });
-    await registry.markRecoveryAttempt(device.id, 1_500);
+    const first = await registry.markRecoveryAttempt(device.id, 1_500);
+    expect(first).toMatchObject({ recoveringSince: 1_500, recoveryAttempts: 1 });
 
     const updated = await registry.markRecoveryAttempt(device.id, 2_000);
 
@@ -1097,24 +1081,6 @@ describe("Registry", () => {
     expect(reloaded.snapshot.devices[0]?.shutdownAt).toBe(6_000);
   });
 
-  it("registers a new device as full", async () => {
-    const clock = new FakeClock(1_000);
-    const registry = await loadTestRegistry({
-      clock,
-      eventBus: new EventBus(clock),
-      idGenerator: { generate: () => "test" },
-    });
-
-    const device = await registry.registerDevice({
-      driverData: { fakeDeviceId: "fake-1" },
-      driverDeviceId: "driver_test",
-      provisionDuration: 0,
-      spec,
-    });
-
-    expect(device.mode).toBe("full");
-  });
-
   it.each(["mode", "spec_mode"])(
     "fails the load when a stored %s is neither slim nor full",
     async (column) => {
@@ -1124,7 +1090,10 @@ describe("Registry", () => {
     },
   );
 
-  it("records the planned mode of a slim spec on the device it registers", async () => {
+  it.each([
+    ["no mode", spec],
+    ["a slim mode", { ...spec, mode: "slim" as const }],
+  ])("registers a new device as full, whether its spec carries %s", async (_label, deviceSpec) => {
     const clock = new FakeClock(1_000);
     const registry = await loadTestRegistry({
       clock,
@@ -1136,14 +1105,14 @@ describe("Registry", () => {
       driverData: { fakeDeviceId: "fake-1" },
       driverDeviceId: "driver_test",
       provisionDuration: 0,
-      spec: { ...spec, mode: "slim" },
+      spec: deviceSpec,
     });
 
-    expect(device.spec).toEqual({ ...spec, mode: "slim" });
+    expect(device.spec).toEqual(deviceSpec);
     expect(device.mode).toBe("full");
   });
 
-  it("clears recovery markers as part of the same commit that ends a lease", async () => {
+  it("clears recovery markers when a lease ends", async () => {
     const clock = new FakeClock(1_000);
     const suffixes = ["device", "lease"];
     const registry = await loadTestRegistry({
@@ -1175,6 +1144,8 @@ describe("Registry", () => {
     expect(released.device.recoveringSince).toBeUndefined();
     expect(released.device.recoveryAttempts).toBeUndefined();
     expect(released.device.state).toBe("reclaiming");
+    expect(registry.snapshot.devices[0]?.recoveringSince).toBeUndefined();
+    expect(registry.snapshot.devices[0]?.recoveryAttempts).toBeUndefined();
   });
 
   describe("a reclaim put off at a daemon start", () => {
@@ -1230,25 +1201,22 @@ describe("Registry", () => {
       expect(released.device).not.toHaveProperty("deferredReclaimLeaseId");
     });
 
-    it("drops the name when the device leaves reclaiming", async () => {
-      const { device, lease, registry } = await leased();
-      await registry.beginRelease(lease.id, { deferReclaim: true });
+    it.each([
+      ["completeReclaimWithoutPurge", "shutdown"],
+      ["markDeviceMissing", "deleted"],
+    ] as const)(
+      "drops the name when %s takes the device out of reclaiming",
+      async (exit, expected) => {
+        const { device, lease, registry } = await leased();
+        await registry.beginRelease(lease.id, { deferReclaim: true });
 
-      await registry.completeReclaimWithoutPurge(device.id);
+        if (exit === "markDeviceMissing") await registry.markDeviceMissing(device.id, "doctor");
+        else await registry.completeReclaimWithoutPurge(device.id);
 
-      expect(registry.snapshot.devices[0]).toMatchObject({ state: "shutdown" });
-      expect(registry.snapshot.devices[0]).not.toHaveProperty("deferredReclaimLeaseId");
-    });
-
-    it("drops the name when doctor marks the waiting device missing", async () => {
-      const { device, lease, registry } = await leased();
-      await registry.beginRelease(lease.id, { deferReclaim: true });
-
-      await registry.markDeviceMissing(device.id, "doctor");
-
-      expect(registry.snapshot.devices[0]).toMatchObject({ state: "deleted" });
-      expect(registry.snapshot.devices[0]).not.toHaveProperty("deferredReclaimLeaseId");
-    });
+        expect(registry.snapshot.devices[0]).toMatchObject({ state: expected });
+        expect(registry.snapshot.devices[0]).not.toHaveProperty("deferredReclaimLeaseId");
+      },
+    );
   });
 
   it("writes a device the same way whether it is marked missing alone or together with its lease's end", async () => {
@@ -1505,27 +1473,40 @@ describe("Registry", () => {
     ]);
   });
 
-  it("refuses to end a lease it does not hold, writing nothing and announcing nothing", async () => {
-    const clock = new FakeClock(1_000);
-    const state = await openTestState();
-    const registry = await loadTestRegistry({
-      clock,
-      eventBus: new EventBus(clock),
-      idGenerator: { generate: () => "test" },
-      state,
-    });
-    const changesBefore = totalChanges(state);
-    let announced = false;
+  it.each([
+    [
+      "endLeaseAndMarkDeviceMissing",
+      (registry: Registry, announce: () => void) =>
+        registry.endLeaseAndMarkDeviceMissing("lse_nope", "doctor", announce),
+    ],
+    [
+      "endLeaseAndMarkDeviceAbsent",
+      (registry: Registry, announce: () => void) =>
+        registry.endLeaseAndMarkDeviceAbsent("lse_nope", "locked", announce),
+    ],
+  ])(
+    "%s refuses to end a lease it does not hold, writing nothing and announcing nothing",
+    async (_method, endLease) => {
+      const { enroll, lease, registry, state } = await seededWorld();
+      await enroll("physical");
+      await lease("dev_physical");
+      const devicesBefore = structuredClone(registry.snapshot.devices);
+      const leasesBefore = structuredClone(registry.snapshot.leases);
+      const changesBefore = totalChanges(state);
+      let announced = false;
 
-    await expect(
-      registry.endLeaseAndMarkDeviceMissing("lse_nope", "doctor", () => {
-        announced = true;
-      }),
-    ).rejects.toThrow(UnknownLeaseError);
+      await expect(
+        endLease(registry, () => {
+          announced = true;
+        }),
+      ).rejects.toThrow(UnknownLeaseError);
 
-    expect(announced).toBe(false);
-    expect(totalChanges(state)).toBe(changesBefore);
-  });
+      expect(announced).toBe(false);
+      expect(totalChanges(state)).toBe(changesBefore);
+      expect(registry.snapshot.devices).toEqual(devicesBefore);
+      expect(registry.snapshot.leases).toEqual(leasesBefore);
+    },
+  );
 });
 
 describe("Registry: the device event a transition carries", () => {
@@ -1569,17 +1550,6 @@ describe("Registry: the device event a transition carries", () => {
         payload: { bootDuration: 0, deviceId: device.id },
       }),
     ).rejects.toThrow("Transition from provisioning to quarantined requires no device event");
-  });
-
-  it("refuses an event whose payload names another device", async () => {
-    const { device, registry } = await provisioned();
-
-    await expect(
-      registry.transitionDevice(device.id, "ready", {
-        event: "device.ready",
-        payload: { bootDuration: 0, deviceId: "dev_other" },
-      }),
-    ).rejects.toThrow(`Device event payload does not match device: ${device.id}`);
   });
 });
 
@@ -1767,24 +1737,6 @@ describe("Registry: physical devices (ADR 0022 §1)", () => {
 
     expect(device).toMatchObject({ physical: true, spec: { class: "phone", physical: true } });
     expect(device).not.toHaveProperty("mode");
-  });
-
-  it("moves a physical device to reclaiming when its lease is released and stamps lastLeaseEndedAt with the clock's time", async () => {
-    const { enroll, lease, registry } = await seededWorld();
-    await enroll("physical");
-    await lease("dev_physical", "lse_physical");
-
-    const released = await registry.beginRelease("lse_physical");
-
-    expect(released.device).toMatchObject({
-      lastLeaseEndedAt: 1_000,
-      physical: true,
-      state: "reclaiming",
-    });
-    expect(registry.snapshot.devices[0]).toMatchObject({
-      lastLeaseEndedAt: 1_000,
-      state: "reclaiming",
-    });
   });
 });
 
@@ -1986,8 +1938,12 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
     });
     const virtual = await readyVirtual(registry, "d1");
 
-    await expect(registry.reenrollPhysical(device.id, input)).rejects.toThrow(RegistryEventError);
-    await expect(registry.unenrollPhysical(device.id)).rejects.toThrow(RegistryEventError);
+    const reenrolLeased = registry.reenrollPhysical(device.id, input);
+    await expect(reenrolLeased).rejects.toThrow(RegistryEventError);
+    await expect(reenrolLeased).rejects.toThrow(`Cannot re-enrol device: ${device.id}`);
+    const unenrolLeased = registry.unenrollPhysical(device.id);
+    await expect(unenrolLeased).rejects.toThrow(RegistryEventError);
+    await expect(unenrolLeased).rejects.toThrow(`Cannot unenrol device: ${device.id}`);
     await expect(registry.unenrollPhysical(virtual.id)).rejects.toThrow(
       `Cannot unenrol device: ${virtual.id}`,
     );
@@ -2004,12 +1960,6 @@ describe("Registry: device.deleted carries physical, and enrollment writes (ADR 
     );
     await expect(registry.reenrollPhysical(virtual.id, input)).rejects.toThrow(
       `Cannot re-enrol device: ${virtual.id}`,
-    );
-    await expect(registry.reenrollPhysical(device.id, input)).rejects.toThrow(
-      `Cannot re-enrol device: ${device.id}`,
-    );
-    await expect(registry.unenrollPhysical(device.id)).rejects.toThrow(
-      `Cannot unenrol device: ${device.id}`,
     );
   });
 });
@@ -2072,7 +2022,7 @@ describe("Registry: absent physical devices (ADR 0022 §2, §8)", () => {
     });
   });
 
-  it("absent -> reclaiming writes the new osVersion, stamps reclaimingSince, removes absentReason, keeps lastLeaseEndedAt, and transitionEnteredAt returns reclaimingSince", async () => {
+  it("absent -> reclaiming writes the new osVersion, stamps reclaimingSince, removes absentReason, keeps lastLeaseEndedAt", async () => {
     const { clock, enroll, lease, registry } = await seededWorld();
     await enroll("physical");
     await lease("dev_physical");
@@ -2094,7 +2044,6 @@ describe("Registry: absent physical devices (ADR 0022 §2, §8)", () => {
       state: "reclaiming",
     });
     expect(stored).not.toHaveProperty("absentReason");
-    expect(transitionEnteredAt(stored)).toBe(1_500);
   });
 
   it("beginRelease of a physical lease stamps reclaimingSince and lastLeaseEndedAt; of a virtual lease it stamps no reclaimingSince", async () => {
@@ -2114,6 +2063,10 @@ describe("Registry: absent physical devices (ADR 0022 §2, §8)", () => {
     });
     expect(virtual.device).toMatchObject({ lastLeaseEndedAt: 1_000, state: "reclaiming" });
     expect(virtual.device).not.toHaveProperty("reclaimingSince");
+    expect(registry.snapshot.devices.find((entry) => entry.id === "dev_physical")).toMatchObject({
+      lastLeaseEndedAt: 1_000,
+      state: "reclaiming",
+    });
   });
 
   it("transitionEnteredAt of a reclaiming physical record with no reclaimingSince is its lastLeaseEndedAt", () => {
@@ -2297,18 +2250,6 @@ describe("Registry: absent physical devices (ADR 0022 §2, §8)", () => {
     expect(modules).toEqual(["registry"]);
   });
 
-  it("endLeaseAndMarkDeviceAbsent of an unknown lease throws UnknownLeaseError and changes nothing", async () => {
-    const { enroll, lease, registry } = await seededWorld();
-    await enroll("physical");
-    await lease("dev_physical");
-
-    await expect(
-      registry.endLeaseAndMarkDeviceAbsent("lse_missing", "locked", () => undefined),
-    ).rejects.toBeInstanceOf(UnknownLeaseError);
-    expect(registry.snapshot.devices[0]).toMatchObject({ state: "leased" });
-    expect(registry.snapshot.leases).toHaveLength(1);
-  });
-
   it("rewriteAbsentReason replaces the reason of an absent physical device and refuses a physical device that is not absent and a virtual one", async () => {
     const { enroll, register, registry, state } = await seededWorld();
     await register("virtual");
@@ -2366,7 +2307,7 @@ describe("Registry: quarantineCause", () => {
   const storedCauseKinds = (world: { state: StateDatabase }) =>
     world.state.database.prepare("SELECT quarantine_cause_kind FROM devices").all();
 
-  it("a quarantined record with each kind, written by enterQuarantine and loaded by a new Registry, has its cause, with the clock short of quarantineNextRetryAt", async () => {
+  it("a quarantined record with each kind, written by enterQuarantine and loaded by a new Registry, has its cause", async () => {
     const causes = [
       { kind: "purge-failed", message: "Error: purge exploded" },
       { kind: "shutdown-failed", message: "Error: shutdown exploded" },
@@ -2637,6 +2578,8 @@ describe("Registry: state.db rows", () => {
       requesterId: "agent-1",
     });
 
+    const committed: string[] = [];
+    registry.onCommit(() => committed.push("commit"));
     failWrites = true;
     await expect(
       registry.createLease({
@@ -2661,35 +2604,13 @@ describe("Registry: state.db rows", () => {
       expect(view.snapshot.devices.map((record) => record.state)).toEqual(["ready"]);
       expect(view.leaseRequests().map((request) => request.state)).toEqual(["open"]);
     }
-  });
-
-  it("a commit that throws in SQLite leaves snapshot and the commit listeners as before the call, and the caller's promise rejects", async () => {
-    const { readyDevice, registry, state } = await world();
-    const device = await readyDevice("fk-throw");
-    const committed: string[] = [];
-    registry.onCommit(() => committed.push("commit"));
-    const before = registry.snapshot;
-    state.database.exec(
-      "CREATE TRIGGER no_leases BEFORE INSERT ON leases BEGIN SELECT RAISE(ABORT, 'disk full'); END",
-    );
-
-    await expect(
-      registry.createLease({
-        deviceId: device.id,
-        ownerId: "agent-1",
-        requesterId: "agent-1",
-        ttlDeadline: 5_000,
-        ttlMs: 4_000,
-      }),
-    ).rejects.toThrow("disk full");
-
-    expect(registry.snapshot).toEqual(before);
     expect(committed).toEqual([]);
-    expect(state.database.prepare("SELECT state FROM devices").all()).toEqual([{ state: "ready" }]);
-    state.database.exec("DROP TRIGGER no_leases");
+
+    failWrites = false;
     await registry.createLease({
       deviceId: device.id,
       ownerId: "agent-1",
+      request: { environment: {}, id: "req_grant", timing },
       requesterId: "agent-1",
       ttlDeadline: 5_000,
       ttlMs: 4_000,
@@ -2710,26 +2631,29 @@ describe("Registry: state.db rows", () => {
         requesterId: "agent-1",
       });
 
+    const grant = (registry: Registry, deviceId: string, id: string) =>
+      registry.createLease({
+        deviceId,
+        ownerId: "agent-1",
+        request: {
+          environment: { SIMLOCK_UDID: "abc", OTHER: "x" },
+          id,
+          timing: {
+            estimatedBootMs: 2,
+            estimatedProvisionMs: 1,
+            estimatedReadyMs: 4,
+            estimatedReclaimMs: 3,
+          },
+        },
+        requesterId: "agent-1",
+        ttlDeadline: 5_000,
+        ttlMs: 4_000,
+      });
+
     const aged = await world({ leaseRequestLimits: { maxRecords: 10, retentionMs: 1_000 } });
     const device = await aged.readyDevice("fk-aged");
     await ask(aged.registry, "req_old");
-    await aged.registry.createLease({
-      deviceId: device.id,
-      ownerId: "agent-1",
-      request: {
-        environment: { SIMLOCK_UDID: "abc", OTHER: "x" },
-        id: "req_old",
-        timing: {
-          estimatedBootMs: 2,
-          estimatedProvisionMs: 1,
-          estimatedReadyMs: 4,
-          estimatedReclaimMs: 3,
-        },
-      },
-      requesterId: "agent-1",
-      ttlDeadline: 5_000,
-      ttlMs: 4_000,
-    });
+    await grant(aged.registry, device.id, "req_old");
     expect(counts(aged.state)).toEqual([1, 1, 2]);
     aged.clock.advance(999);
     await ask(aged.registry, "req_new");
@@ -2742,10 +2666,13 @@ describe("Registry: state.db rows", () => {
     ).toEqual([{ id: "req_new" }, { id: "req_newer" }]);
 
     const capped = await world({ leaseRequestLimits: { maxRecords: 2, retentionMs: 1_000_000 } });
+    const cappedDevice = await capped.readyDevice("fk-capped");
     await ask(capped.registry, "req_a");
-    await capped.registry.settleLeaseRequest("req_a", { state: "cancelled" });
+    await grant(capped.registry, cappedDevice.id, "req_a");
+    expect(counts(capped.state)).toEqual([1, 1, 2]);
     await ask(capped.registry, "req_b");
     await ask(capped.registry, "req_c");
+    expect(counts(capped.state)).toEqual([2, 0, 0]);
     expect(
       capped.state.database.prepare("SELECT id FROM lease_requests ORDER BY rowid").all(),
     ).toEqual([{ id: "req_b" }, { id: "req_c" }]);

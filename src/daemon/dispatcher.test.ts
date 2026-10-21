@@ -61,6 +61,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
+import { RequestCancelledError } from "../leasing/index.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 const threads = vi.hoisted(() => ({
@@ -445,10 +446,12 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
 
 describe("Dispatcher: parsing", () => {
   it("rejects a malformed input with BAD_REQUEST before the handler runs", async () => {
-    const { dispatcher } = await buildDispatcher();
+    const { dispatcher, registry } = await buildDispatcher();
     const rejection = dispatcher.dispatch("lease.request", { model: "iPhone 17" }, session());
     await expect(rejection).rejects.toBeInstanceOf(DispatchError);
     await expect(rejection).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(registry.snapshot.leases).toEqual([]);
+    expect(registry.leaseRequests()).toEqual([]);
   });
 
   it("rejects a lease.request naming both a class and a model with BAD_REQUEST, the message naming both fields", async () => {
@@ -1270,7 +1273,11 @@ describe("Dispatcher: ownership", () => {
       ),
     ).resolves.toMatchObject({ result: "cancelled" });
 
-    await expect(queuedRequest).rejects.toThrow();
+    const cancelled = await queuedRequest.then(
+      () => undefined,
+      (rejected: unknown) => rejected,
+    );
+    expect(cancelled).toBeInstanceOf(RequestCancelledError);
   });
 });
 
@@ -1895,18 +1902,16 @@ describe("Dispatcher: #parseOutput", () => {
     };
     const { dispatcher } = await buildDispatcher({ catalog: badCatalog });
 
-    await expect(dispatcher.dispatch("catalog.get", {}, session())).rejects.toThrow(
-      /does not match its contract output schema/,
+    const error = await dispatcher.dispatch("catalog.get", {}, session()).then(
+      () => undefined,
+      (rejected: unknown) => rejected,
     );
-    try {
-      await dispatcher.dispatch("catalog.get", {}, session());
-      expect.unreachable();
-    } catch (error: unknown) {
-      // Fails closed, generically -- not the raw zod issues (which could describe internal
-      // shape) and not the malformed payload itself.
-      expect(error).toBeInstanceOf(Error);
-      expect(String(error)).not.toContain("notAValidCatalogEntry");
-    }
+
+    // Fails closed, generically -- not the raw zod issues (which could describe internal
+    // shape) and not the malformed payload itself.
+    expect(classifyError(error) ?? "INTERNAL").toBe("INTERNAL");
+    expect((error as Error).message).toMatch(/does not match its contract output schema/);
+    expect(String(error)).not.toContain("notAValidCatalogEntry");
   });
 });
 
@@ -2024,7 +2029,7 @@ describe("Dispatcher: image tags", () => {
       .catch((caught: unknown) => caught);
 
     expect(classifyError(error)).toBe("BAD_REQUEST");
-    expect(driver.calls.map((call) => call.operation)).not.toContain("resolveSpec");
+    expect(driver.calls).toEqual([]);
   });
 });
 
@@ -2048,28 +2053,6 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
       ),
     ).rejects.toMatchObject({ name: "RuntimeMissingError" });
     expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
-  });
-
-  it("catalog.get does not list an uninstalled runtime under downloads.policy 'always'", async () => {
-    // The fake driver has only 26.5 installed; under 'always' any other version is a download
-    // away, and the catalog still lists only what is on the machine.
-    const { dispatcher, driver } = await buildDispatcher({
-      downloadsPolicy: "always",
-      driverOptions: { knownModels: ["iPhone 17 Pro"] },
-    });
-
-    const catalog = await dispatcher.dispatch("catalog.get", {}, session());
-
-    expect(catalog.platforms).toEqual([
-      expect.objectContaining({
-        modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
-        platform: "ios",
-        runtimes: ["26.5"],
-      }),
-    ]);
-    // The policy never reaches the driver, so nothing it could download can leak into the list.
-    const listCalls = driver.calls.filter((call) => call.operation === "listCatalog");
-    expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
   });
 
   it("catalog.get keeps a custom model whose name is too long for the mark listed, without the mark, in an answer the contract accepts", async () => {
@@ -2097,6 +2080,9 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
       const catalog = await dispatcher.dispatch("catalog.get", {}, session());
 
       expect(catalog.platforms[0]?.images).toEqual(installed);
+      // Only what is on the machine is listed, however much of the rest a policy would download.
+      expect(catalog.platforms[0]?.runtimes).toEqual(["26.5"]);
+      expect(catalog.platforms[0]?.modelRuntimes).toEqual({ "iPhone 17 Pro": ["26.5"] });
       // The driver is asked with no policy, so no policy can add an image it would download.
       const listCalls = driver.calls.filter((call) => call.operation === "listCatalog");
       expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
@@ -2193,12 +2179,16 @@ describe("Dispatcher: status.get installs in progress", () => {
 
   it("lists no install once it has failed", async () => {
     const { driver, installer, installs } = await withInstaller();
-    driver.releaseInstalls();
-    driver.failOn("installComponent", 1, new Error("installer exited 1"));
-    const call = installer.install({ component: "27.0", platform: "ios" });
-    // Listed from the moment it is asked for, before the driver has run.
-    expect(installer.inProgress()).toHaveLength(1);
+    // The first install is held; the second waits behind it and fails once its turn comes.
+    const first = installer.install({ component: "27.0", platform: "ios" });
+    const call = installer.install({ component: "28.0", platform: "ios" });
+    await flushPromises();
+    expect(await installs()).toHaveLength(2);
 
+    driver.failOn("installComponent", 2, new Error("installer exited 1"));
+    driver.releaseInstalls();
+
+    await first;
     await expect(call).rejects.toThrow("installer exited 1");
     expect(await installs()).toEqual([]);
   });
@@ -2629,23 +2619,18 @@ describe("Dispatcher: component.install", () => {
     return fractions;
   }
 
-  it("turns a percentage of 1.1 into a fraction of exactly 0.011", async () => {
+  it.each([
     // 1.1 / 100 is 0.011000000000000001 in floating point.
-    const [fraction] = await fractionsFor([1.1]);
-
-    expect(String(fraction)).toBe("0.011");
-  });
-
-  it("turns a percentage of 64.1 into a fraction of exactly 0.641", async () => {
+    { expected: [0.011, 1], percents: [1.1] },
     // 64.1 / 100 is 0.6409999999999999 in floating point.
-    const [fraction] = await fractionsFor([64.1]);
-
-    expect(String(fraction)).toBe("0.641");
-  });
-
-  it("sends a percentage of 99.96 as 0.999, keeping a fraction of 1 for 100", async () => {
-    await expect(fractionsFor([99.96, 100])).resolves.toEqual([0.999, 1]);
-  });
+    { expected: [0.641, 1], percents: [64.1] },
+    { expected: [0.999, 1], percents: [99.96, 100] },
+  ])(
+    "sends the percentages $percents as the fractions $expected, rounded to three decimals",
+    async ({ expected, percents }) => {
+      await expect(fractionsFor(percents)).resolves.toEqual(expected);
+    },
+  );
 
   it("sends no fraction with more than three decimals for any percentage from 0 to 100 in steps of 0.1", async () => {
     // Summed rather than computed, so the percentages carry the noise a driver's own arithmetic
@@ -3074,16 +3059,28 @@ describe("Dispatcher: startup-readiness parking", () => {
     await flush();
     expect(statusSettled).toBe(true);
 
-    let catalogSettled = false;
-    void dispatcher.dispatch("catalog.get", {}, session()).then(() => {
-      catalogSettled = true;
-    });
+    const parked = {
+      "catalog.get": dispatcher.dispatch("catalog.get", {}, session()),
+      "lease.request": dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        session(),
+      ),
+      "list.get": dispatcher.dispatch("list.get", { kind: "devices" }, session({ role: "admin" })),
+    };
+    const settled = new Set<string>();
+    for (const [operation, answer] of Object.entries(parked)) {
+      void answer.then(
+        () => settled.add(operation),
+        () => settled.add(operation),
+      );
+    }
     await flush();
-    expect(catalogSettled).toBe(false);
+    expect([...settled]).toEqual([]);
 
     releaseReady();
     await flush();
-    expect(catalogSettled).toBe(true);
+    expect([...settled].sort()).toEqual(["catalog.get", "lease.request", "list.get"]);
   });
 });
 
@@ -3205,7 +3202,7 @@ describe("Dispatcher: device.exec", () => {
     expect(env).toEqual({ PATH: "/usr/bin", SIMLOCK_SCOPED: "1", UNRELATED: "kept" });
   });
 
-  it("writes stdin to the child once and closes it", async () => {
+  it("hands the request's stdin to the process runner as the command's input", async () => {
     const runner = new ScriptedProcessRunner([{ match: command }]);
     const { dispatcher, leaseId } = await withLease({ processRunner: runner });
 
@@ -3238,17 +3235,22 @@ describe("Dispatcher: device.exec", () => {
     await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
   });
 
-  it("refuses a verb the driver refuses, exactly as driver.passthrough does", async () => {
+  it("refuses a verb the driver refuses with PASSTHROUGH_REFUSED and spawns nothing", async () => {
     const runner = new ScriptedProcessRunner([]);
     const { dispatcher, leaseId } = await withLease({ processRunner: runner });
 
-    await expect(
-      dispatcher.dispatch(
+    const error = await dispatcher
+      .dispatch(
         "device.exec",
         { args: ["delete", "ABCD"], leaseId, tool: "simctl" },
         session({ principal: "tok_agent" }),
-      ),
-    ).rejects.toThrow(/Refusing/);
+      )
+      .then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+
+    expect(classifyError(error)).toBe("PASSTHROUGH_REFUSED");
     // Refused before anything was spawned -- the point of the refusal list is that the command
     // never runs, not that its output is discarded.
     expect(runner.calls).toEqual([]);
@@ -3349,21 +3351,29 @@ describe("Dispatcher: device.exec", () => {
     ).resolves.toEqual({ exitCode: 0 });
   });
 
-  it("refuses a tool no driver claims with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST", async () => {
-    // A well-formed request for a wrapper this daemon has no driver for is not a malformed
-    // one -- same distinction `driver.passthrough` draws, and the same error code.
-    const runner = new ScriptedProcessRunner([]);
-    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+  it.each([
+    { args: ["devices"], message: /No driver provides a adb passthrough/, tool: "adb" },
+    { args: [], message: /No driver provides a bash passthrough/, tool: "bash" },
+  ])(
+    "refuses a tool no driver claims ($tool) with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST",
+    async ({ args, message, tool }) => {
+      // A well-formed request for a wrapper this daemon has no driver for is not a malformed
+      // one -- same distinction `driver.passthrough` draws, and the same error code.
+      const runner = new ScriptedProcessRunner([]);
+      const { dispatcher, leaseId } = await withLease({ processRunner: runner });
 
-    await expect(
-      dispatcher.dispatch(
-        "device.exec",
-        { args: ["devices"], leaseId, tool: "adb" },
-        session({ principal: "tok_agent" }),
-      ),
-    ).rejects.toThrow(/No driver provides a adb passthrough/);
-    expect(runner.calls).toEqual([]);
-  });
+      const error = await dispatcher
+        .dispatch("device.exec", { args, leaseId, tool }, session({ principal: "tok_agent" }))
+        .then(
+          () => undefined,
+          (rejected: unknown) => rejected,
+        );
+
+      expect(classifyError(error)).toBe("UNKNOWN_PASSTHROUGH_TOOL");
+      expect((error as Error).message).toMatch(message);
+      expect(runner.calls).toEqual([]);
+    },
+  );
 
   it("passes the lease's driver device to passthrough for device.exec and no device for driver.passthrough", async () => {
     const calls: RecordedPassthrough[] = [];
@@ -3461,6 +3471,7 @@ describe("Dispatcher: device.exec", () => {
       );
 
     expect(classifyError(error)).toBe("UNKNOWN_LEASE");
+    expect((error as Error).message).toMatch(/Unknown lease: lse_gone/);
     expect(calls).toEqual([]);
     expect(runner.calls).toEqual([]);
   });
@@ -3521,36 +3532,6 @@ describe("Dispatcher: device.exec", () => {
     expect(seen).toEqual([{ hasTerminal: false, platform: "ios" }, undefined]);
   });
 
-  it("answers UNKNOWN_LEASE for an id that names no lease, rather than running the command", async () => {
-    const runner = new ScriptedProcessRunner([]);
-    const { dispatcher } = await withLease({ processRunner: runner });
-
-    await expect(
-      dispatcher.dispatch(
-        "device.exec",
-        { args: ["list", "devices"], leaseId: "lse_gone", tool: "simctl" },
-        session({ principal: "tok_agent" }),
-      ),
-    ).rejects.toThrow(/Unknown lease: lse_gone/);
-    expect(runner.calls).toEqual([]);
-  });
-
-  it("answers a tool no driver wraps with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST", async () => {
-    // Which wrappers exist is the drivers' answer, so `bash` is a well-formed request this
-    // host cannot serve -- the same distinction, and the same code, `driver.passthrough` draws.
-    const runner = new ScriptedProcessRunner([]);
-    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
-
-    await expect(
-      dispatcher.dispatch(
-        "device.exec",
-        { args: [], leaseId, tool: "bash" },
-        session({ principal: "tok_agent" }),
-      ),
-    ).rejects.toThrow(/No driver provides a bash passthrough/);
-    expect(runner.calls).toEqual([]);
-  });
-
   it("escalates to SIGKILL when a timed-out command ignores SIGTERM", async () => {
     // SIGTERM is a request. A tool that ignores it (or is itself stuck) must not be able to
     // hold the operation -- and the caller's connection -- open past the grace window.
@@ -3578,6 +3559,8 @@ describe("Dispatcher: device.exec", () => {
     expect(settled).toBe(false);
 
     clock.advance(10_000);
+    await flush();
+    expect(settled).toBe(true);
     await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
   });
 
@@ -4242,22 +4225,24 @@ describe("Dispatcher: status.get capabilities", () => {
       { name: "agent-device", state: "available" },
     ]);
 
-    expect(await capabilitiesAfter(async () => ({ state: "broken" }))).toEqual([
-      { name: "agent-device", reason: "reported an invalid status", state: "unavailable" },
-    ]);
+    for (const state of ["broken", "AVAILABLE"]) {
+      expect(await capabilitiesAfter(async () => ({ state }))).toEqual([
+        { name: "agent-device", reason: "reported an invalid status", state: "unavailable" },
+      ]);
+    }
   });
 
-  it("answers a source that reports available with a reason as available with none", async () => {
-    expect(await capabilitiesAfter(async () => ({ reason: "fine", state: "available" }))).toEqual([
-      { name: "agent-device", state: "available" },
-    ]);
-  });
-
-  it("answers a source that reports off with a reason as off with none", async () => {
-    expect(await capabilitiesAfter(async () => ({ reason: "no", state: "off" }))).toEqual([
-      { name: "agent-device", state: "off" },
-    ]);
-  });
+  it.each([
+    { reason: "fine", state: "available" },
+    { reason: "no", state: "off" },
+  ] as const)(
+    "answers a source that reports $state with a reason as $state with none",
+    async ({ reason, state }) => {
+      expect(await capabilitiesAfter(async () => ({ reason, state }))).toEqual([
+        { name: "agent-device", state },
+      ]);
+    },
+  );
 
   it("answers a source that reports unavailable with no reason as unavailable with reason unknown", async () => {
     expect(await capabilitiesAfter(async () => ({ state: "unavailable" }))).toEqual([
@@ -4290,13 +4275,19 @@ describe("Dispatcher: status.get capabilities", () => {
       ),
       clock,
     });
-    const answer = dispatcher.dispatch("status.get", {}, session());
+    let settled = false;
+    const answer = dispatcher.dispatch("status.get", {}, session()).then((result) => {
+      settled = true;
+      return result;
+    });
 
     for (let elapsed = 0; elapsed < 1_500; elapsed += 100) {
       await new Promise((resolve) => setImmediate(resolve));
       clock.advance(100);
     }
+    await new Promise((resolve) => setImmediate(resolve));
 
+    expect(settled).toBe(true);
     expect((await answer).capabilities).toEqual([
       {
         name: "agent-device",
@@ -4374,7 +4365,11 @@ describe("Dispatcher: lease.request requires", () => {
         { ...REQUIRES, fleetRequestId: "req_gw1", noWait: true },
         session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
       ),
-    ).rejects.toMatchObject({ code: "CAPABILITY_MISSING" });
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      message: "This worker cannot serve agent-device",
+    });
 
     expect(registry.leaseRequests()).toEqual([]);
     expect(eventBus.replay().map((event) => event.event)).not.toContain("lease.declined");

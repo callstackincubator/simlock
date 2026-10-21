@@ -156,8 +156,11 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     [["fails", "e2e/fake-driver/x.ts", "../../dist/core/registry.js", "unbuilt"]],
   ],
   [
-    "fails a file importing a private gateway file",
-    [["fails", "src/cli/x.ts", "../gateway/queue.js"]],
+    "fails a cli or core file importing a private gateway file",
+    [
+      ["fails", "src/cli/x.ts", "../gateway/queue.js"],
+      ["fails", "src/core/x.ts", "../gateway/queue.js"],
+    ],
   ],
   [
     "guards a component that no config names, from the moment it has an index",
@@ -167,30 +170,36 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
-    "fails a daemon file importing core's testing helpers",
-    [["fails", "src/daemon/x.ts", "../core/testing.js"]],
-  ],
-  [
-    "passes core's testing helpers in a daemon test file and in an http test helper",
+    "passes a module's testing file in a daemon test file, and fails the same import in a daemon file",
     [
+      ["fails", "src/daemon/x.ts", "../core/testing.js"],
       ["passes", "src/daemon/x.test.ts", "../core/testing.js"],
       ["passes", "src/http/test-fakes.ts", "../core/testing.js"],
+      ["passes", "src/daemon/x.test.ts", "../leasing/testing.js"],
+      ["fails", "src/daemon/x.ts", "../leasing/testing.js"],
+      ["passes", "src/daemon/x.test.ts", "../agent-device/testing.js"],
+      ["passes", "src/agent-device/host/x.test.ts", "../testing.js"],
+      ["fails", "src/daemon/x.ts", "../agent-device/testing.js"],
     ],
   ],
   [
-    "passes a core test file importing node:fs/promises, and fails the same import in a core file",
+    "passes a core or agent-device test file importing node:fs, and fails the same import in a core file",
     [
       ["passes", "src/core/x.test.ts", "node:fs/promises"],
       ["fails", "src/core/x.ts", "node:fs/promises"],
+      ["passes", "src/agent-device/host/x.test.ts", "node:fs"],
     ],
   ],
   [
-    "fails a core file importing fs, child_process or a driver",
+    "fails a core or leasing file importing fs, child_process or a driver",
     [
       ["fails", "src/core/x.ts", "fs"],
       ["fails", "src/core/x.ts", "node:child_process"],
       ["fails", "src/core/x.ts", "child_process"],
       ["fails", "src/core/x.ts", "../drivers/ios/index.js"],
+      ["fails", "src/leasing/x.ts", "node:fs"],
+      ["fails", "src/leasing/x.ts", "child_process"],
+      ["fails", "src/leasing/x.ts", "../drivers/ios/index.js"],
     ],
   ],
   [
@@ -211,10 +220,6 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
-    "fails a core file importing a private gateway file",
-    [["fails", "src/core/x.ts", "../gateway/queue.js"]],
-  ],
-  [
     "fails a test file importing a private file, and passes the component's testing file",
     [
       ["fails", "src/http/x.test.ts", "../core/lease-ports.js"],
@@ -226,8 +231,12 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
-    "passes a file inside capacity importing its sibling",
-    [["passes", "src/core/capacity/x.ts", "./limits.js"]],
+    "passes a file inside capacity or a driver importing its sibling",
+    [
+      ["passes", "src/core/capacity/x.ts", "./limits.js"],
+      ["passes", "src/drivers/ios/x.ts", "./simctl.js"],
+      ["passes", "src/drivers/android/sub/x.ts", "../adb.js"],
+    ],
   ],
   [
     "fails a gateway file importing from drivers, http, cli or mcp",
@@ -282,13 +291,6 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
       ["fails", "src/drivers/ios/x.ts", "../android/adb.js"],
       ["passes", "src/drivers/x.ts", "./ios/index.js"],
       ["passes", "src/drivers/android/x.ts", "../ios/index.js"],
-    ],
-  ],
-  [
-    "passes a file inside a driver importing its sibling",
-    [
-      ["passes", "src/drivers/ios/x.ts", "./simctl.js"],
-      ["passes", "src/drivers/android/sub/x.ts", "../adb.js"],
     ],
   ],
   [
@@ -347,21 +349,6 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
-    "fails a leasing file importing node:fs, child_process or a driver",
-    [
-      ["fails", "src/leasing/x.ts", "node:fs"],
-      ["fails", "src/leasing/x.ts", "child_process"],
-      ["fails", "src/leasing/x.ts", "../drivers/ios/index.js"],
-    ],
-  ],
-  [
-    "passes leasing's testing file in a daemon test file, and fails the same import in a daemon file",
-    [
-      ["passes", "src/daemon/x.test.ts", "../leasing/testing.js"],
-      ["fails", "src/daemon/x.ts", "../leasing/testing.js"],
-    ],
-  ],
-  [
     "fails a leasing file importing a private core file, and passes core's index; a leasing test may import core's testing file",
     [
       ["fails", "src/leasing/x.ts", "../core/registry.js"],
@@ -399,14 +386,6 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     [
       ["fails", "src/daemon/x.ts", "../agent-device/host/agent-device-supervisor.js"],
       ["passes", "src/daemon/x.ts", "../agent-device/index.js"],
-    ],
-  ],
-  [
-    "passes agent-device's testing file in a daemon test file and in agent-device's own test, and fails it in a daemon file",
-    [
-      ["passes", "src/daemon/x.test.ts", "../agent-device/testing.js"],
-      ["passes", "src/agent-device/host/x.test.ts", "../testing.js"],
-      ["fails", "src/daemon/x.ts", "../agent-device/testing.js"],
     ],
   ],
   ...[
@@ -488,10 +467,6 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
       ["passes", "src/daemon/main.ts", "../module-registry/index.js"],
       ["fails", "src/daemon/main.ts", "../modules/host.js"],
     ],
-  ],
-  [
-    "passes an agent-device test file importing node:fs",
-    [["passes", "src/agent-device/host/x.test.ts", "node:fs"]],
   ],
 ];
 

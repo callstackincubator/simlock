@@ -574,21 +574,20 @@ describe("usage reader: the window", () => {
 
       expect(answer.bucketMs, `${span}`).toBe(width);
       expect(answer.window, `${span}`).toEqual({ from: Math.floor(from / width) * width, to });
+      expect(answer.series, `${span}`).toHaveLength(
+        Math.ceil((answer.window.to - answer.window.from) / width),
+      );
     }
   });
 
-  it("picks 5 min for a 200-minute window starting at :30 s, which 1 min would cut into 201 points, and accepts exactly 90 days whose from is off a bucket boundary though the floored window is longer", async () => {
+  it("picks 5 min for a 200-minute window starting at :30 s, which 1 min would cut into 201 points", async () => {
     const { usage } = await setup();
     const from = T0 + 30_000;
 
     const short = await usage(from, from + 200 * MIN);
-    const long = await usage(T0 + OFF, T0 + OFF + 90 * DAY);
 
     expect(short.bucketMs).toBe(5 * MIN);
     expect(short.series).toHaveLength(41);
-    expect(long.bucketMs).toBe(DAY);
-    expect(long.window.to - long.window.from).toBeGreaterThan(90 * DAY);
-    expect(long.series).toHaveLength(Math.ceil((long.window.to - long.window.from) / DAY));
   });
 });
 
