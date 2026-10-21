@@ -1,0 +1,135 @@
+---
+title: Errors reference
+description: Every Simlock error code with its CLI exit code, its HTTP status, what it means and what to do about it.
+---
+
+A failed `simlock` command writes one line to stderr and exits with a non-zero code:
+
+```json
+{"error":{"code":"RUNTIME_MISSING","message":"Runtime missing for ios 18.4"}}
+```
+
+The HTTP API answers with the same codes in the response body, with the status in the tables below:
+
+```json
+{"error":{"code":"NO_CAPACITY","message":"No device capacity is currently available"}}
+```
+
+Branch on `code`, not on the message: the message wording can change, the code does not. For how a failing lease looks from the agent's side, see [Errors](/simlock/docs/using-devices/errors).
+
+## Exit codes
+
+| Exit | Error codes | Meaning |
+| --- | --- | --- |
+| 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
+| 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `GATEWAY_NOT_PRESENT`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
+| 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
+| 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
+| 12 | `NO_DRIVER`, `CAPABILITY_MISSING`, `RUNTIME_MISSING`, `UNKNOWN_MODEL`, `INSUFFICIENT_DISK_SPACE`, `LICENSE_NOT_ACCEPTED`, `DOWNLOADS_DISABLED`, `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE`, `DEVICE_NOT_ENROLLABLE`, `UNKNOWN_DEVICE`, `HISTORY_NOT_KEPT`, `UNKNOWN_WORKER`, `UNKNOWN_ALERT_DESTINATION` | What you named does not exist here, or this machine cannot provide it. |
+| 13 | `REQUESTER_ALREADY_LEASED`, `LEASE_ID_TAKEN` | The request clashes with a lease or request that already exists. |
+| 14 | — | `simlock lease` without `--detach`: the daemon ended the lease before you did (expiry, an operator's release, or a device that could not be recovered). The `lease-lost` line on stderr gives the reason. |
+| 15 | — | `simlock component install` with `--worker` or `--all-workers`: at least one worker did not end `installed` or `already-installed`. The result on stdout says which. |
+
+`simlock simctl` and `simlock adb` exit with the wrapped tool's own exit code, which can be any of these numbers. For those two commands, look for the `{"error":...}` line on stderr, which only Simlock writes.
+
+## Leasing a device
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `NO_CAPACITY` | 11 | 503 | No device can start now, and the request was told not to wait (`--no-wait`). Through a gateway: no worker that takes requests can serve it. | Try again later, or drop `--no-wait` to queue. Over HTTP the answer carries `Retry-After: 5`. |
+| `QUEUE_TIMEOUT` | 10 | 500 | The request waited in the queue for its whole `--timeout` and got no device. | Raise `--timeout`, or check `simlock list --requests` for why requests wait. |
+| `REQUESTER_ALREADY_LEASED` | 13 | 409 | Your requester identity already holds its limit of leases (`lease.maxPerRequester`, 1 by default) or has a request waiting. The message names your lease. | Release that lease first, or give each agent session its own identity. |
+| `LEASE_ID_TAKEN` | 13 | 409 | `--lease-id` names an ID that an active lease or a waiting request already holds. | Use a new ID. Never reuse a lease ID. |
+| `IDEMPOTENCY_CONFLICT` | 2 | 409 | A lease request reused an idempotency key its requester already sent for a different device or lease ID. | Send a new key for a new request. |
+| `PROVISION_FAILED` | 1 | 500 | Creating or booting a device for the request failed twice. The message carries the platform tool's error. | Read the message and `simlock daemon logs`, then run `simlock doctor`. |
+| `UNKNOWN_MODEL` | 12 | 422 | The model is not one this platform offers here, or no model of the requested class exists. | Run `simlock catalog` for the models and their exact names. |
+| `RUNTIME_MISSING` | 12 | 422 | The OS version, or an image of the `--image-tag`, is not installed. A range or an image tag never downloads. | Add `--allow-download`, install it with `simlock component install`, or pick an installed version from `simlock catalog`. |
+| `NO_DRIVER` | 12 | 422 | This daemon has no driver for the platform: iOS on Linux, or a platform whose prerequisites are missing. | Run `simlock doctor` to see what is missing, install it, then restart the daemon. |
+| `CAPABILITY_MISSING` | 12 | 422 | No worker that could serve the request has every capability it asks for. Only the programmatic client names capabilities. | Ask for fewer capabilities, or enable the module on a worker. |
+| `UNKNOWN_LEASE` | 1 | 404 | No active lease has this ID: it was released, it expired, or it never existed. | Take a new lease. |
+| `BAD_REQUEST` | 2 | 400 | The request has an invalid value: an unknown class or mode, both `--device` and `--class`, a TTL over `lease.maxTtlMs`, `--image-tag` on iOS, `--physical` with `--mode`, and so on. The message names the field. | Fix the value the message names. |
+| `CANCELLED` | 1 | 499 | The programmatic client gave up a lease request it was waiting on. Never sent by the daemon. | Nothing, unless you did not mean to cancel. |
+
+## Runtimes, images and downloads
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `DOWNLOAD_TIMEOUT` | 10 | 504 | An install ran longer than `downloads.timeoutMs` (20 minutes by default), counting the time it waited behind another download on the same platform. | Run it again, or raise `downloads.timeoutMs`. |
+| `DOWNLOADS_DISABLED` | 12 | 403 | `downloads.policy` is `never`, so no install starts. | Change `downloads.policy`, or install the component by hand. |
+| `INSUFFICIENT_DISK_SPACE` | 12 | 422 | The component does not fit in the free disk space. The message gives the bytes needed and available. | Free disk space, or remove components with `simlock component remove`. |
+| `LICENSE_NOT_ACCEPTED` | 12 | 422 | An Android SDK licence must be accepted before the install. `downloads.acceptAndroidLicenses` is `false` by default. | Accept the licences with `sdkmanager --licenses`, or set `downloads.acceptAndroidLicenses` to `true`. |
+| `COMPONENT_NOT_OWNED` | 12 | 409 | `component remove` of a component Simlock did not install, or one that changed on disk since. | Remove it with the platform's own tools if you mean to. |
+| `COMPONENT_IN_USE` | 12 | 409 | `component remove` of a component a device still uses, Simlock's or one of yours. | Delete those devices first. |
+| `COMPONENT_BUSY` | 11 | 409 | `component remove` while an install or removal runs or waits on that platform. | Try again once it ends. |
+
+## Physical devices
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `DEVICE_NOT_ENROLLABLE` | 12 | 422 | `device add` of a device that cannot be enrolled. The reason is one of: not connected, network only, not trusted, Developer Mode off, OS too old, unsupported kind, locked, unreadable, a simulator or emulator, or enrolled on the other platform. | Fix what the message names (connect it by USB, trust this computer, turn on Developer Mode, unlock it) and run `device add` again. |
+| `DEVICE_BUSY` | 11 | 409 | `device add` or `device remove` of a device that is leased, being cleaned, or held by another operation. | Try again once that ends. |
+| `UNKNOWN_DEVICE` | 12 | 404 | `device remove` of an ID that is not an enrolled device. | Check the ID with `simlock list --devices`. |
+
+## Running commands on a device
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `PASSTHROUGH_REFUSED` | 2 | 422 | Simlock refuses this `simctl`, `adb` or `devicectl` command: a verb that creates, erases or deletes devices or touches every device at once (such as `simctl erase` or `adb kill-server`), a flag that points the tool at another device set or adb server, `simctl` on a physical device, or `adb shell` with no command where there is no terminal. | Drop the refused flag or verb, or name the command to run. The message says which. |
+| `UNKNOWN_PASSTHROUGH_TOOL` | 2 | 422 | A tool Simlock does not wrap. | Use `simctl` or `adb`. |
+| `EXEC_TIMEOUT` | 10 | 504 | A command run on a device through a gateway ran longer than `exec.timeoutMs` (10 minutes by default) and was stopped. | Split the work, or raise `exec.timeoutMs` on the worker. |
+
+## Daemon and connection
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection before it finished. The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause (often the configuration), and run the command again. |
+| `DAEMON_CONNECTION_LOST` | 1 | 503 | The connection to the daemon dropped mid-command. A lease held by `simlock lease` is not released and stays yours until its deadline. | Start the daemon again; renew the lease with `simlock lease renew <lease-id>` or let it expire. |
+| `DAEMON_STOPPING` | 1 | 503 | The daemon is shutting down, or stopped while an install was running. | Run the command again once the daemon is back. |
+| `PROTOCOL_VERSION_UNSUPPORTED` | 1 | 400 | The CLI and the running daemon are different Simlock versions that cannot talk to each other. | Restart the daemon after an upgrade: `simlock daemon stop`, then any command. |
+| `UNKNOWN_REQUEST` | 2 | 400 | The daemon does not know this operation, usually because it is older than the CLI. | Restart the daemon so it runs the installed version. |
+| `BAD_FRAME` | 2 | 400 | The daemon could not read a message on its socket. | Only a custom client can cause this; fix the client. |
+| `HANDSHAKE_REQUIRED` | 1 | 400 | A client sent a request on the socket before the handshake. | Only a custom client can cause this; fix the client. |
+| `UNKNOWN_DAEMON_ERROR` | 1 | 500 | The daemon answered with a code this client does not know, usually because the daemon is newer. The message is the daemon's. | Upgrade the client to the daemon's version. |
+| `INTERNAL` | 1 | 500 | Something unexpected failed. | Check `simlock daemon logs`. If it repeats, report it with the log. |
+| `DOCTOR_UNAVAILABLE` | 1 | 503 | This daemon has no doctor to run. A daemon started by `simlock` always has one. | Check `simlock daemon logs`, and report it if it repeats. |
+| `NUKE_UNAVAILABLE` | 1 | 503 | This daemon has no reset for `nuke` to run. A daemon started by `simlock` always has one. | Check `simlock daemon logs`, and report it if it repeats. |
+
+## Access
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `FORBIDDEN` | 1 | 403 | Your role may not do this, or the lease belongs to a different requester. The CLI falls back to the agent role when it has no working admin credential. | Pass `--token` or set `SIMLOCK_ADMIN_TOKEN`, or run the command on the daemon's machine as the user who runs it. |
+| `ADMIN_AUTHENTICATION_FAILED` | 1 | 401 | The admin credential was rejected. The CLI does not stop on it: it connects as an agent and writes a notice. | Check the token, or create a new one with `simlock token create`. |
+
+## Gateway and workers
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `GATEWAY_NOT_PRESENT` | 2 | 404 | `--gateway` on a machine with no gateway. Raised by the CLI and MCP server before they connect, never over HTTP. | Start one with `simlock --gateway daemon start`, or drop `--gateway`. |
+| `UNSUPPORTED_IN_GATEWAY_MODE` | 2 | 501 | The command acts on one machine's devices or components (`doctor`, `cleanup`, `nuke`, `device`, `component list`, `component remove`, `component install` without a worker flag), and the daemon that answered is a gateway. | Run it against the worker, with `--local` on that machine. For `component install`, name workers with `--worker` or `--all-workers`. |
+| `UNSUPPORTED_IN_WORKER_MODE` | 2 | 501 | The command acts on a gateway's workers or alerts (`worker drain`, `undrain`, `remove`, `alerts test`, `component install --worker`), and the daemon that answered is a worker. | Run it against the gateway, with `--gateway` on that machine. |
+| `UNKNOWN_WORKER` | 12 | 404 | The gateway has no worker with this ID. | Check the ID with `simlock worker list`. |
+| `WORKER_CONNECTED` | 2 | 409 | `worker remove` of a worker that is still connected. | Drain it, stop it or let it disconnect, then remove it. |
+| `WORKER_UNREACHABLE` | 1 | 503 | The worker that holds this lease or would serve this request is not connected to the gateway. | Check the worker is running and can reach the gateway. |
+| `RELAY_TARGET_MISSING` | 1 | 503 | The gateway asked a worker for an optional feature, such as the screen stream or agent-device, that the worker does not run. | Turn the feature on for that worker, or upgrade it to the gateway's version. |
+| `UNKNOWN_ALERT_DESTINATION` | 12 | 404 | `alerts test` names a destination the gateway's configuration does not list, or the gateway has none. | Check the names under the gateway's alert configuration. |
+| `ALERT_SEND_FAILED` | 1 | 502 | The alert receiver answered with a status that is not 2xx, could not be reached, or did not answer in time. The message says which. | Check the destination's URL and the receiver. |
+
+## Usage history
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `HISTORY_NOT_KEPT` | 12 | 422 | `stats` for a window that ends before the oldest figure the history holds. The message says when the figures start. | Ask for a later window. |
+| `HISTORY_UNAVAILABLE` | 1 | 503 | The history file could not be opened, so no usage figures can be read. | Check `simlock daemon logs` for why. |
+
+## Codes outside this table
+
+The CLI and the HTTP API each add a few codes of their own:
+
+| Code | Where | Exit or HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
+| `UNAUTHENTICATED` | HTTP | 401 | The request has no token, or one the daemon does not accept. | Send a valid token as `Authorization: Bearer <token>`. |
+| `UNKNOWN_LEASE_REQUEST` | HTTP | 404 | No lease request has this ID. | Check the ID the create call returned. |
+| `REQUEST_NOT_CANCELLABLE` | HTTP | 409 | The lease request was already granted, or device work for it is under way. When it was granted, the answer carries the `leaseId`. | Release the lease in place of cancelling the request. |

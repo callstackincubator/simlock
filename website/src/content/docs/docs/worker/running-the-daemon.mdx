@@ -1,0 +1,203 @@
+---
+title: Running the daemon
+description: Start, stop and check the worker daemon, find its files and logs, and know what a restart keeps.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The daemon is the background process that owns this machine's devices and leases. Every `simlock` command talks to it. You rarely start it yourself: the first command that needs it starts it.
+
+## Start the daemon
+
+Any command that needs the daemon starts it when it is not running, then waits for it, up to 20 seconds. To start it on purpose, for example after a config change:
+
+```sh
+simlock daemon start
+```
+
+```text
+Daemon running
+```
+
+When the daemon serves HTTP, a second line gives the console address:
+
+```text
+Daemon running
+Console: http://127.0.0.1:4701/
+```
+
+If the daemon is already running, `daemon start` does nothing and prints the same lines.
+
+The daemon runs detached from your terminal: closing the terminal does not stop it. It does not survive a reboot.
+
+<Aside type="note">
+Simlock does not install a service that starts the daemon at login or at boot. The first `simlock` command after a reboot starts it again.
+</Aside>
+
+## Check whether it is running
+
+```sh
+simlock daemon status
+```
+
+This never starts the daemon. It prints `Daemon stopped` when no daemon is running, or the same report as `simlock status` when one is. The first line says how the daemon is doing:
+
+```text
+Daemon: running (worker)
+```
+
+`starting` means it is still reading the machine's devices; devices, leases and capacity appear once it finishes. See [Monitoring](/simlock/docs/worker/monitoring) for the rest of the report.
+
+Add `--json` for a machine-readable answer: `{"status":"stopped"}` when nothing runs.
+
+## Stop the daemon
+
+```sh
+simlock daemon stop
+```
+
+```text
+Daemon stopping
+```
+
+Stopping the daemon does not end leases and does not shut down devices. Running simulators and emulators keep running, and the next daemon picks them up. See [What a restart keeps](#what-a-restart-keeps).
+
+`daemon stop` returns as soon as the daemon has agreed to stop. The daemon then finishes the work already in progress, such as a device reset, before it exits, which can take a while. A command sent in the meantime fails with `DAEMON_STOPPING`.
+
+To restart:
+
+```sh
+simlock daemon stop
+simlock daemon start
+```
+
+If `daemon start` fails with `DAEMON_STOPPING`, the old daemon has not exited yet. Wait a few seconds and run `simlock daemon start` again.
+
+## Where files live
+
+Everything the worker keeps is under `~/.simlock`:
+
+| Path | What it holds |
+| --- | --- |
+| `config.json` | Your settings. See [Configuration](/simlock/docs/worker/configuration). |
+| `state.db` | Devices, leases, enrolled physical devices, the warm pool's memory and HTTP tokens. |
+| `history.db` | The event history and usage figures behind `simlock events` and `simlock stats`. |
+| `daemon.log`, `daemon.log.1` | The daemon's log, and the one older file kept after it rotates. |
+| `daemon.sock` | The local socket the CLI and agents connect to. |
+| `admin.token` | The secret the CLI uses to connect as an admin. |
+| `devices/ios`, `devices/android` | The simulators and emulators Simlock made. These take the most space. See [Cleanup](/simlock/docs/worker/cleanup#where-devices-live). |
+
+A gateway on the same machine keeps its own files in `~/.simlock/gateway`, with its own daemon. Commands reach it with `--gateway`, for example `simlock --gateway daemon status`. See [Setting up a gateway](/simlock/docs/gateway/setup).
+
+To run a separate install on the same account, set `SIMLOCK_HOME` to another folder. Every command and the daemon it starts use that folder instead of `~/.simlock`. Keep the path short: the socket path must fit the system limit (104 bytes on macOS, 108 on Linux), and a longer one fails with `Point SIMLOCK_HOME at a shorter directory.`
+
+<Aside type="caution">
+`~/.simlock/devices` can grow to tens of gigabytes. Do not delete folders in it by hand while the daemon runs. Use `simlock cleanup`, or [`simlock nuke`](/simlock/docs/worker/cleanup#reset-a-machine-with-nuke) to start over.
+</Aside>
+
+## Read the daemon log
+
+```sh
+simlock daemon logs            # the last 100 lines
+simlock daemon logs --follow   # the last 100 lines, then each new line until Ctrl-C
+```
+
+Each line is one JSON object with a `timestamp` (milliseconds since 1970), a `level`, the part of the daemon that wrote it (`module`), a `message`, and sometimes `fields`:
+
+```json
+{"timestamp":1761037402114,"level":"warn","module":"daemon","message":"Unknown config key: \"idle.shutdownAfter\""}
+```
+
+The log rotates at 5 MiB (`log.rotateBytes`): the full file becomes `daemon.log.1` and the oldest one is dropped. `log.level` sets how much is written (`debug`, `info`, `warn`, `error`; default `info`). See [Monitoring](/simlock/docs/worker/monitoring#read-the-daemon-log).
+
+## What a restart keeps
+
+When the daemon starts again, after a `daemon stop`, a crash or a reboot, it compares what it has on record with the devices that really exist:
+
+- **A lease whose device is still running is kept.** Its holder can go on renewing it. If its time ran out while no daemon was running, it expires as the daemon starts.
+- **A lease whose device is not running ends.** This is what happens after a reboot. The lease ends as expired when its time had already run out, and as released with reason `device-lost` otherwise. The device is reset and returns to the pool, or is marked missing when it no longer exists.
+- **A lease on a physical device is kept.** It ends as it would without a restart: when its time runs out or the device is unplugged.
+- **A request still waiting in the queue fails.** Its requester gets `INTERNAL` with the message `The daemon restarted before this lease request settled; send it again with a new key`. Ask for the device again.
+- **When a platform's tools cannot be read at start**, its leased devices are left as they are, and a later start sorts them out.
+
+Settings in `config.json` are read only at start, so a restart is how a config change takes effect.
+
+## Upgrade Simlock
+
+<Steps>
+
+1. Stop the running daemon, so the new version does not meet the old one:
+
+   ```sh
+   simlock daemon stop
+   ```
+
+   A daemon from a different version may refuse every other command with `PROTOCOL_VERSION_UNSUPPORTED`. `simlock daemon stop` still works against it.
+
+2. Install the new version:
+
+   ```sh
+   npm i -g simlock
+   ```
+
+3. Start the daemon and check it:
+
+   ```sh
+   simlock daemon start
+   simlock doctor
+   ```
+
+</Steps>
+
+Leases on running devices survive the upgrade, as for any restart.
+
+### Upgrading from a version that kept state in `state.json`
+
+Older versions kept their state in `~/.simlock/state.json` and HTTP tokens in `~/.simlock/tokens.json`. The current version keeps both in `state.db` and does not read the old files. While either old file exists, the daemon refuses to start:
+
+```json
+{"error":{"code":"DAEMON_STARTUP_FAILED","message":"The daemon could not start: Found /Users/dana/.simlock/state.json, which this Simlock no longer reads. To upgrade: with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove /Users/dana/.simlock/state.json and start again. ..."}}
+```
+
+Nothing is carried over: the devices the old version made are not known to the new one. Clear them with the old version first.
+
+<Aside type="caution">
+The next steps delete every device Simlock made on this machine and end every lease. Tell the agents using this machine first.
+</Aside>
+
+<Steps>
+
+1. With the older Simlock still installed, release every lease, then delete its devices:
+
+   ```sh
+   simlock release --all
+   simlock nuke --delete-devices
+   simlock daemon stop
+   ```
+
+   Answer `y` when a command asks you to confirm.
+
+   If you already installed the new version, install the old one again for this step, for example `npm i -g simlock@<old-version>`.
+
+2. Remove the old files named in the message:
+
+   ```sh
+   rm ~/.simlock/state.json ~/.simlock/tokens.json
+   ```
+
+3. Install the new version and start it:
+
+   ```sh
+   npm i -g simlock
+   simlock daemon start
+   ```
+
+4. If agents reached this worker over HTTP, their tokens are gone with `tokens.json`. Create new ones with `simlock token create --role agent`. See [Remote agents](/simlock/docs/using-devices/remote-agents).
+
+</Steps>
+
+A gateway has its own message: remove the files it names in `~/.simlock/gateway`, create each worker's join token again, and set it on that worker. See [Joining workers](/simlock/docs/gateway/joining-workers).
+
+## When the daemon will not start
+
+A command that has to start the daemon and cannot fails with `DAEMON_STARTUP_FAILED`, and the message carries the daemon's own reason. A config the daemon would refuse is caught before the start, and the error names the key. [Troubleshooting](/simlock/docs/worker/troubleshooting#the-daemon-will-not-start) lists each cause and its fix.

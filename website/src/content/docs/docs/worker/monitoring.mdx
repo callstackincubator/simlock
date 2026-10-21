@@ -1,0 +1,181 @@
+---
+title: Monitoring a worker
+description: See what a worker is doing now, what happened earlier, and how its devices were used, from the command line.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Three commands cover a worker:
+
+- `simlock status` shows the machine right now: capacity, devices, leases and the queue.
+- `simlock events` shows what happened, as one JSON line per event.
+- `simlock stats` adds up how the devices were used over a time window.
+
+Each command connects to the daemon on this machine and starts it if it is not running. The [web console](/simlock/docs/worker/console) shows the same information in a browser.
+
+## See the machine right now
+
+```sh
+simlock status
+```
+
+```text
+Daemon: running (worker)
+Console: http://127.0.0.1:4701/
+Host: macOS 15.5 arm64; xcode 16.4 (16F6)
+Load: CPU 38% busy (10 cores) · memory 9.2 GiB of 32.0 GiB available · swap 0 MiB used · pressure normal · disk 212.4 GiB of 994.7 GiB free · read 2s ago
+Running global: 3 + 1 reserved/6, warm 1
+Capacity ios: managed 4/8, running 3 + 1 reserved/4, warm 1
+Capacity android: managed 0/4, running 0 + 0 reserved/2, warm 0
+RAM budget: 11.50 GiB/22.00 GiB used
+warm pool: enabled, reserve ios 0 android 0
+  iPhone 16 / 18.4 / full   wanted 1  ready 1  booting 0
+Device dev_6f1c2a9e-3b7d-4e0a-9c55-2d8f1e4a7b10: leased, mode full, serves default mode: yes
+Device dev_0b93d4c1-8a2e-4f6b-b1d7-5e9c3a2f8d64: ready, mode full, serves default mode: yes
+Lease lse_9d2e7b14-6c3a-4f81-a0e5-7b1c9d4e2f36: claude-code:5f0e8a3c-1b2d-4c6e-9f7a-0d3b8e1c4a92 since 1761036720000, last renewed 1761037320000
+Queue depth: 0
+```
+
+What each line means:
+
+| Line | What it tells you |
+| --- | --- |
+| `Daemon` | `starting`, `running` or `failed`, and whether this daemon is a `worker` or a `gateway`. |
+| `Console` | The web console's address. Shown only when HTTP is on. |
+| `Host` | The operating system, the CPU architecture, and the Xcode version the iOS tools report. |
+| `Load` | CPU, memory, swap and free disk, and how many seconds ago they were read. A part that could not be read says `unavailable`. |
+| `History` | Shown only when something is wrong with the event history. See [Troubleshooting](/simlock/docs/worker/troubleshooting#the-event-history-is-not-written). |
+| `Running global` | Devices running now, plus slots held for devices that are booting, out of the most that may run at once, and how many of the running ones are warm. |
+| `Capacity ios` / `Capacity android` | Per platform: `managed` is devices that exist out of the device limit; `running` is as above. `(over limit)` means more devices exist than the limit allows, for example after you lowered it. `(at RAM budget)` means no more devices fit in the memory set aside for them. |
+| `RAM budget` | Memory the running devices use out of the budget. Shown only with the `resource` capacity strategy. |
+| `warm pool` | Whether the warm pool is on, the running slots it keeps free per platform, and one row per target: how many devices you want ready, how many are ready, how many are booting, and why a target is short. |
+| `Device` | One line per device: its id, state, and its device mode, or `physical` and its class for an enrolled physical device. Markers in brackets flag a problem, such as `quarantined (purge retry 2, ...)` or `stalled`. |
+| `Lease` | One line per lease: its id, the requester holding it, and when it was granted and last renewed, in milliseconds since 1970. |
+| `Install` | A runtime or system image being downloaded, how long for, and how many requests wait on it. |
+| `Queue depth` | How many lease requests are waiting. |
+
+A device's state is one of `provisioning`, `ready`, `leased`, `reclaiming`, `quarantined`, `absent` (a physical device that is unplugged, locked or not trusted), `shutdown` or `deleted`. [Capacity](/simlock/docs/worker/capacity) explains the limits and the warm pool.
+
+Right after the daemon starts, status prints `Devices, leases and capacity appear once startup finishes.` in place of the device lines. Run it again a few seconds later.
+
+`simlock status --json` prints the same facts as one JSON object, for scripts.
+
+To check whether the daemon is running without starting it, use `simlock daemon status`. It prints `Daemon stopped` when no daemon runs.
+
+### See why requests are waiting
+
+```sh
+simlock list --requests
+```
+
+```text
+Request req_3c8e1f52-9a4d-4b7e-8f20-6d1a5c9e3b74: codex:7a1d4e9b-2c3f-4e8a-b6d0-1f5c8a3e9d27, ios iPhone 16 18.4, queued at 1, waiting 42s — full: running limit for iOS
+```
+
+Each waiting request shows who asked, the device it asked for, its place in the queue and the reason it waits: `full: device limit`, `full: running limit`, `full: running limit for iOS`, `full: RAM budget`, `behind an earlier request`, `a matching device is starting`, or `every matching device is leased or absent` for a physical device.
+
+## Read the event stream
+
+Simlock records an event for every lease, device, capacity, download and cleanup change. Each event prints as one JSON line:
+
+```sh
+simlock events
+```
+
+```json
+{"id":"evt_2b7c9e14-5d3a-4f8e-a1c6-9e0d2b4f7a35","seq":812,"timestamp":1761037320412,"event":"lease.granted","payload":{"deviceId":"dev_6f1c2a9e-3b7d-4e0a-9c55-2d8f1e4a7b10","leaseId":"lse_9d2e7b14-6c3a-4f81-a0e5-7b1c9d4e2f36","requester":"claude-code:5f0e8a3c-1b2d-4c6e-9f7a-0d3b8e1c4a92","requestId":"req_1e4b8d2a-7c9f-4a3e-b5d1-2f6c9e0a8b43","source":"warm","platform":"ios"},"module":"lease-lifecycle"}
+```
+
+- With no flags you get the events the daemon holds in memory: the last 1,000 (`eventBuffer.capacity`) since it started. The list is empty after a restart.
+- `--since <duration>` reads further back, from the event history on disk, which survives restarts and crashes. A duration is a number with `ms`, `s`, `m`, `h` or `d`, such as `30m` or `2d`. A bare number is milliseconds.
+- `--follow` keeps printing new events until you press Ctrl-C. With `--since` it prints the history first, then live events, with nothing missed or printed twice.
+
+```sh
+simlock events --since 1h --follow
+```
+
+While following, each live event prints wrapped in an object with a `subscriptionId` and the event under `event`; events replayed from history print bare, as above.
+
+`simlock events --since 1d` works with the daemon stopped: it reads the history file directly and does not start a daemon.
+
+Filter the stream with `jq`, for example to watch every lease that ended without a grant:
+
+```sh
+simlock events --follow | jq -c 'if .subscriptionId then .event else . end | select(.event == "lease.rejected")'
+```
+
+The [events reference](/simlock/docs/reference/events) lists every event and its fields.
+
+## Measure how devices were used
+
+```sh
+simlock stats --since 7d
+```
+
+```text
+Usage from 2026-10-14T09:00:00.000Z to 2026-10-21T09:00:00.000Z
+
+Totals
+  Requests:     214 (209 granted, 5 rejected)
+  Granted:      warm 160, booted 41, provisioned 8
+  Rejected:     no-wait 3, timeout 2
+  Wait:         p50 400ms, p95 38s, max 2m 10s (209 samples)
+  Held:         p50 14m 2s, p95 52m 30s, max 3h 41m (205 samples)
+```
+
+The report goes on with turnaround, provisioning and boot times, slot, RAM and queue use, incidents, and one section each per platform, per worker and per requester.
+
+- With no flag the window is the last 24 hours.
+- `--since 30d` counts back from now. `--from` and `--to` name both ends as ISO 8601 times with `Z` or an offset, such as `2026-10-15T00:00Z`. Without `--to`, the window ends now.
+- A window is at most 90 days.
+- If the worker has not kept figures for the whole window, a line says `Figures cover from ...` and the counts start there.
+- `--json` prints the figures as one JSON object, including a series of up to 200 points for charts.
+- `--csv` prints one row per lease request in the window, for a spreadsheet. It holds at most the newest 100,000 requests; a notice on stderr says when the window had more.
+
+## Choose how much history to keep
+
+Set these with `simlock config set <key> <value>`. They take effect on the next daemon restart. Times are in milliseconds.
+
+| Key | Default | What it keeps |
+| --- | --- | --- |
+| `eventLog.retention` | `604800000` (7 days) | How long `simlock events --since` can reach back. |
+| `eventLog.maxBytes` | `268435456` (256 MiB) | The most disk the event history uses. When it is full, the oldest events go first. At least 16 MiB. |
+| `metrics.retention` | `7776000000` (90 days) | How far back `simlock stats` can count. Must be at least `eventLog.retention`. The figures stay after the events they came from are pruned. |
+| `eventBuffer.capacity` | `1000` | How many recent events plain `simlock events` shows. |
+
+For example, to keep 30 days of events:
+
+```sh
+simlock config set eventLog.retention 2592000000
+simlock daemon stop
+```
+
+The next command starts the daemon with the new value.
+
+## Read the daemon log
+
+The daemon writes its own log, separate from the events, to `~/.simlock/daemon.log`. Each line is one JSON object with a time, a level, the part of the daemon that wrote it, and a message.
+
+```sh
+simlock daemon logs            # the last 100 lines
+simlock daemon logs --follow   # keep printing new lines
+```
+
+The log rolls over at `log.rotateBytes` (5 MiB by default). Simlock keeps one older file, `daemon.log.1`, and `simlock daemon logs` reads both.
+
+`log.level` sets how much the daemon writes: `debug`, `info` (the default), `warn` or `error`. Turn on `debug` while you chase a problem, then turn it back:
+
+```sh
+simlock config set log.level debug
+simlock daemon stop
+```
+
+<Aside type="caution">
+At `debug` the log records every command Simlock runs against the platform tools, and every read request. It grows fast; set `log.level` back to `info` when you are done.
+</Aside>
+
+## Related
+
+- [Troubleshooting](/simlock/docs/worker/troubleshooting): what to do when status or the log shows a problem.
+- [Events reference](/simlock/docs/reference/events): every event and its fields.
+- [Configuration reference](/simlock/docs/reference/configuration): every key.

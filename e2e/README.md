@@ -37,7 +37,7 @@ Each `withDaemon()` allocates a temp `SIMLOCK_HOME` (so config, state, socket an
 log are per-test) and, in the fast lane, points `SIMLOCK_DRIVERS_MODULE` at
 `e2e/fake-driver` — the daemon then talks to a scripted driver instead of real
 hardware without knowing the difference. Both variables are documented in
-[../docs/CLI.md](../docs/CLI.md#environment-variables).
+the [CLI reference](../website/src/content/docs/docs/reference/cli.mdx).
 
 The fake driver reads a JSON script file, re-read on every call so a test can
 change behaviour mid-flight, and appends every call it receives to a log file.

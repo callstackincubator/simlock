@@ -1555,9 +1555,8 @@ describe("lease routes", () => {
     });
 
     it("forwards requesterId unchanged for both an operator and an agent token, leaving the FORBIDDEN decision to device.exec's own authorize hook", async () => {
-      // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
-      // "Authentication"): the token is the identity, except for an operator token proxying
-      // for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
+      // why: Requester identity is never client-declared over HTTP: the token is the identity,
+      // except for an operator token proxying for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
       // that an agent token may not supply `requesterId` at all, which left that rule living
       // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
       // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised
@@ -2103,6 +2102,51 @@ describe("operator-only listing routes", () => {
     const response = await app.request("/v1/events?since=nonsense", { headers: operatorAuth });
     expect(response.status).toBe(400);
     expect(JSON.stringify(await response.json())).toContain("Invalid duration: nonsense");
+  });
+
+  it("GET /v1/events with before and limit dispatches events.replay with beforeId and limit, and answers HISTORY_NOT_KEPT with 422 and oldestTs in the body and HISTORY_UNAVAILABLE with 503", async () => {
+    const { app, dispatcher } = buildHarness();
+    const asked: unknown[] = [];
+    dispatcher.handlers["events.replay"] = (input) => {
+      asked.push(input);
+      throw new DispatchError("HISTORY_NOT_KEPT", "The history does not hold that event.", {
+        oldestTs: 1_234,
+      });
+    };
+    const notKept = await app.request("/v1/events?before=evt_abc&limit=50", {
+      headers: operatorAuth,
+    });
+    dispatcher.handlers["events.replay"] = () => {
+      throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be read.");
+    };
+    const unavailable = await app.request("/v1/events?before=evt_abc", { headers: operatorAuth });
+
+    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50 }]);
+    expect(notKept.status).toBe(422);
+    expect(await notKept.json()).toMatchObject({
+      error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
+    });
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
+  });
+
+  it.each([
+    ["before=evt_abc&limit=0", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=501", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=x", "limit must be a whole number from 1 to 500"],
+    ["before=not-an-id", "before must be an event id"],
+    ["before=evt_abc&since=1h", "before and since cannot be used together"],
+    ["limit=50&since=1h", "limit and since cannot be used together"],
+  ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.replay"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request(`/v1/events?${query}`, { headers: operatorAuth });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST", message } });
   });
 
   describe("GET /v1/stats", () => {

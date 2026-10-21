@@ -1,0 +1,207 @@
+---
+title: Remote agents
+description: Lease and use a device from another machine over Simlock's HTTP API with an agent token, against a worker or a gateway.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The `simlock` CLI talks only to the daemon on its own machine; it cannot target a remote host. An agent on another machine uses Simlock's HTTP API instead, with an agent token. The same calls work against a single worker and against a gateway.
+
+## Before you start
+
+On the machine you connect to:
+
+- **A worker** has HTTP off by default. Turn it on, then restart the daemon:
+
+  ```sh
+  simlock config set http.enabled true
+  simlock daemon stop
+  simlock daemon start
+  ```
+
+  It listens on `127.0.0.1:4701`.
+
+- **A gateway** has HTTP on by default, on `127.0.0.1:4700`.
+
+Both listen only on the machine itself until you change `http.host`. Simlock does not do HTTPS: put a reverse proxy with TLS in front of it before you open it to a network (see [Configuration reference](/simlock/docs/reference/configuration)).
+
+## Get an agent token
+
+On the worker, or on the gateway for a fleet, create one token per agent:
+
+```sh
+simlock token create --role agent --label ci-runner-3
+```
+
+```json
+{"secret":"slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM","token":{"id":"tok_9f2c71e4-5a3b-4c8d-b1e6-0d7a2f4c9e15","role":"agent","label":"ci-runner-3","createdAt":1792834812000}}
+```
+
+The secret is shown once. Every request sends it as `Authorization: Bearer <secret>`.
+
+The token is the requester: its leases belong to it, and it can hold one lease at a time. Agents that share a token share that one lease. A token works only on the daemon that created it; a gateway's tokens are not valid on its workers.
+
+<Aside type="danger">
+An agent token on a worker reaches the whole worker, not only one device. A command run through `exec` runs on the worker as the daemon's user, and its arguments can read and write files anywhere that user can (for example, `adb pull` writes a file to a path you choose on the worker). Through a gateway, the command runs on whichever worker holds the device. Give agent tokens only to agents you would let run commands on those machines.
+</Aside>
+
+## Lease a device
+
+The examples use `curl` and `jq`, with these variables:
+
+```sh
+export SIMLOCK_URL=https://simlock.example.com
+export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
+```
+
+<Steps>
+
+1. **Ask for a device.** The body takes the same choices as `simlock lease`: `platform` (required), `device` or `class`, `os`, `mode`, `imageTag`, `physical`, `ttlMs`, `timeoutMs`, `noWait` and `allowDownload`.
+
+   ```sh
+   curl -sS -X POST "$SIMLOCK_URL/v1/lease-requests" \
+     -H "Authorization: Bearer $SIMLOCK_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"platform":"ios","device":"iPhone 16","ttlMs":1800000}'
+   ```
+
+   The answer is `201` with a request, not yet a device:
+
+   ```json
+   {"request":{"createdAt":"2026-10-21T09:12:00.000Z","id":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","state":"queued","queuePosition":2}}
+   ```
+
+   When a device is free at once, `state` is already `granted`. A request Simlock can refuse right away fails here instead, with an error status (see [When something goes wrong](/simlock/docs/using-devices/remote-agents#when-something-goes-wrong)).
+
+2. **Wait for the grant.** Read the request with `?wait=60`. The call returns as soon as the state changes, or after 60 seconds (the longest wait). Repeat it until `state` is `granted`, `failed` or `cancelled`:
+
+   ```sh
+   REQ=req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241
+   while :; do
+     BODY=$(curl -sS "$SIMLOCK_URL/v1/lease-requests/$REQ?wait=60" \
+       -H "Authorization: Bearer $SIMLOCK_TOKEN")
+     case $(echo "$BODY" | jq -r .request.state) in
+       granted|failed|cancelled) break ;;
+     esac
+   done
+   echo "$BODY"
+   ```
+
+   While it waits, `state` is `queued` (with `queuePosition`), `downloading`, `reclaiming`, `provisioning` or `booting` (with `etaSeconds`). A granted request carries the lease:
+
+   ```json
+   {"request":{"createdAt":"2026-10-21T09:12:00.000Z","id":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","state":"granted","lease":{"id":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","requestId":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","platform":"ios","device":"iPhone 16","os":"18.6","udid":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","deviceId":"dev_8c1f2e7a-4b6d-4e0f-9a3c-5d2b7e1f0a64","createdAt":"2026-10-21T09:12:41.000Z","expiresAt":"2026-10-21T09:42:41.000Z","ttlMs":1800000,"dataPlane":null,"mode":"full"}}}
+   ```
+
+   A failed request carries `error` with a `code` and `message`, such as `QUEUE_TIMEOUT` when `timeoutMs` ran out.
+
+   To follow progress as a stream instead, open `GET /v1/lease-requests/<id>/events`. It sends one Server-Sent Event per state change and ends with `granted` or `failed`.
+
+3. **Keep the lease alive.** Renew before `expiresAt`. Renewing every third of the TTL leaves room for a failed attempt:
+
+   ```sh
+   LEASE=lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3
+   curl -sS -X POST "$SIMLOCK_URL/v1/leases/$LEASE/renew" \
+     -H "Authorization: Bearer $SIMLOCK_TOKEN"
+   ```
+
+   ```json
+   {"expiresAt":"2026-10-21T09:52:10.000Z","leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","notices":[]}
+   ```
+
+   A renew sets the deadline to now plus the lease's TTL. Send `{"ttlMs": 3600000}` as the body to change the TTL. `notices` lists device problems since the last renew, such as `{"event":"device_unhealthy"}` and `{"event":"device_recovered","attempts":1}`.
+
+   Losing your connection does nothing to the lease. A lease nobody renews expires at `expiresAt`, and the device is wiped. A renew of a lease that has ended answers `404 UNKNOWN_LEASE`: request a new one.
+
+4. **Run commands on the device.** `exec` runs one `simctl` or `adb` command (or `devicectl` on a physical iPhone or iPad) on the machine that holds the device, and streams the output back:
+
+   ```sh
+   curl -sS -N -X POST "$SIMLOCK_URL/v1/leases/$LEASE/exec" \
+     -H "Authorization: Bearer $SIMLOCK_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"tool":"simctl","args":["launch","6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","com.example.myapp"]}'
+   ```
+
+   ```text
+   event: output
+   data: {"stream":"stdout","chunk":"com.example.myapp: 48213\n"}
+
+   event: exit
+   data: {"exitCode":0}
+   ```
+
+   Read the details below before you rely on it.
+
+5. **Release the device** when you are done:
+
+   ```sh
+   curl -sS -X DELETE "$SIMLOCK_URL/v1/leases/$LEASE" \
+     -H "Authorization: Bearer $SIMLOCK_TOKEN"
+   ```
+
+   ```json
+   {"device":{"id":"dev_8c1f2e7a-4b6d-4e0f-9a3c-5d2b7e1f0a64","state":"reclaiming"},"released":true}
+   ```
+
+   The answer is `202`. Simlock wipes the device in the background.
+
+</Steps>
+
+## Running commands with exec
+
+- **Name your device in the arguments.** Use the lease's `udid` for `simctl`. Other agents' devices are on the same worker, so never use `booted`.
+- **On Android, find the emulator's serial first.** The lease's `udid` is the emulator's AVD name (`simlock_…`), not its adb serial. Run `adb devices`, then `adb -s <serial> emu avd name` on each emulator until the name matches, and use that serial with `-s`.
+- **On a physical device, Simlock names the device for you.** `devicectl` gets `--device <UDID>` added, and `adb` on a physical Android phone gets the phone's serial.
+- **Paths are on the worker.** `{"tool":"simctl","args":["install","<udid>","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API has no way to upload a file; get it there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
+- **No terminal.** `stdin` in the body is sent to the command once. Interactive commands, such as a bare `adb shell`, are refused.
+- **Output is text.** Each chunk is decoded as UTF-8, so binary output to stdout (a screenshot written to `-`) does not survive. Write it to a file on the worker instead.
+- **Time limit.** A command that runs longer than 10 minutes is stopped, and the stream ends with an `error` event carrying `EXEC_TIMEOUT`. Disconnecting does not stop the command.
+- **Refused commands.** The commands `simlock simctl` and `simlock adb` refuse (see [Working with a device](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses)) are refused here too, with `422 PASSTHROUGH_REFUSED`, before anything runs.
+
+## More calls
+
+| Call | What it does |
+| --- | --- |
+| `DELETE /v1/lease-requests/<id>` | Cancel a request that is still queued. `204` on success; `409 REQUEST_NOT_CANCELLABLE` once device work has started or it was granted (release the lease instead). |
+| `GET /v1/leases/<id>` | Read the lease again, for example after your agent restarts. `expiresAt` is the current deadline. |
+| `GET /v1/leases/<id>/events` | Server-Sent Events for `device_unhealthy`, `device_recovered` and `lease_lost`. The stream ends after `lease_lost`. |
+| `GET /v1/leases` | Your leases. |
+| `GET /v1/catalog?platform=ios` | The models and runtimes you can ask for, as `simlock catalog --json` prints them. |
+| `GET /v1/identity` | Who the token is. |
+
+An `Idempotency-Key` header on `POST /v1/lease-requests` (1 to 200 characters) makes the request safe to send again: the same key returns the stored request instead of queueing a second one, for 10 minutes after it finished.
+
+## Through a gateway
+
+Send the same calls to the gateway, with a token created on the gateway. The gateway picks a worker for you and forwards renew, release and exec to it.
+
+- A lease id from a gateway names its worker: `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c6a1d`. Pass it back exactly as you got it. The lease also carries `worker` with the worker's id and label.
+- `allowDownload` downloads nothing through a gateway: only runtimes already installed on a worker count.
+- A request no worker can serve fails at once, with or without `noWait`.
+- When the worker that holds your lease is not connected, calls for it answer `503 WORKER_UNREACHABLE`. The lease is still yours until it expires; retry.
+
+## When something goes wrong
+
+Errors come back as JSON with an HTTP status:
+
+```json
+{"error":{"code":"REQUESTER_ALREADY_LEASED","message":"Requester tok_9f2c71e4-5a3b-4c8d-b1e6-0d7a2f4c9e15 already holds lease lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3; release it (`simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3`) before requesting another device"}}
+```
+
+| Status | Code | What to do |
+| --- | --- | --- |
+| `401` | `UNAUTHENTICATED` | The token is missing or unknown. Check the `Authorization` header. |
+| `403` | `FORBIDDEN` | The lease or request belongs to another token, or the route needs an operator token. |
+| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds a lease or has a request waiting. Release or cancel it first. |
+| `422` | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` | The device you asked for cannot be made on this machine or fleet. Check `GET /v1/catalog`. |
+| `503` | `NO_CAPACITY` | Nothing is free and you sent `noWait: true`. Try again after the `Retry-After` seconds. |
+| `404` | `UNKNOWN_LEASE` | The lease has ended or never existed. Request a new one. |
+| `400` | `BAD_REQUEST` | The body is wrong, for example both `device` and `class`, or a `ttlMs` above the maximum. |
+
+See [Errors](/simlock/docs/using-devices/errors) for what each one means.
+
+## Related
+
+- How leases, TTLs and the queue work: [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
+- Choosing `device`, `class`, `os` and `mode`: [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+- Token roles and access: [Access control](/simlock/docs/gateway/access-control).

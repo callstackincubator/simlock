@@ -51,7 +51,7 @@ repo, which is what separates it from the three rows above.
 `emulator`, `avdmanager` and `sdkmanager`, and `adb` are **prerequisites this
 project invokes and does not carry**. They arrive with the user's Xcode or Android
 SDK installation, at whatever version that installation happens to be, and
-simlock never downloads, bundles, or pins one. `docs/CONFIGURATION.md` and the
+simlock never downloads, bundles, or pins one. The website's requirements page and the
 driver prerequisite checks are where their absence is reported.
 
 Worth keeping the two ideas apart, because the confusion is cheap to make: a

@@ -55,7 +55,7 @@ group() {
 
 git diff "$fork" "$head" | grep '^-' | grep -v '^---' >"$tmp/removed" || true
 git diff "$fork" "$head" | grep '^+' | grep -v '^+++' >"$tmp/added" || true
-git diff "$fork" "$head" -- . ':(exclude)*.md' | grep '^-' | grep -v '^---' >"$tmp/removed-code" || true
+git diff "$fork" "$head" -- . ':(exclude)*.md' ':(exclude)*.mdx' | grep '^-' | grep -v '^---' >"$tmp/removed-code" || true
 
 # Deleted or moved paths. A mention may drop the root directory and the extension
 # ("core/wait-queue" for src/core/wait-queue.ts), so the search is the last two segments without
@@ -87,18 +87,18 @@ if [ -s "$tmp/gone" ]; then
   group "$tmp/gone" "$tmp/name-hits" word name "(declaration removed)"
 fi
 
-# Quoted names (an event, a config key, an error code, a path) on a removed line of a code file
-# that no added line and no code file at the head contains, but a Markdown file still does.
+# why: Quoted names (an event, a config key, an error code, a path) on a removed line of a code file
+# that no added line and no code file at the head contains, but a Markdown or MDX file still does.
 grep -oE "[\"'\`][A-Za-z0-9_.:/-]{4,}[\"'\`]" "$tmp/removed-code" | sed "s/^.//; s/.\$//" |
   grep -E '[._:/-]' | sort -u >"$tmp/strings" || true
 if [ -s "$tmp/strings" ]; then
   {
     grep -o -F -f "$tmp/strings" "$tmp/added" || true
-    search ". :(exclude)*.md" -h -o -F -f "$tmp/strings"
+    search ". :(exclude)*.md :(exclude)*.mdx" -h -o -F -f "$tmp/strings"
   } | sort -u >"$tmp/still-used"
   comm -23 "$tmp/strings" "$tmp/still-used" >"$tmp/dropped"
   if [ -s "$tmp/dropped" ]; then
-    search "*.md" -n -F -f "$tmp/dropped" >"$tmp/string-hits"
+    search "*.md *.mdx" -n -F -f "$tmp/dropped" >"$tmp/string-hits"
     group "$tmp/dropped" "$tmp/string-hits" any string "(no code file has it)"
   fi
 fi

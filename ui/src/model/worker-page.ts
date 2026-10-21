@@ -1,8 +1,16 @@
 import { defined } from "./defined";
-import { type DeviceSlot, platformSlots, slotsLabel, workerHealth } from "./fleet";
+import {
+  type DeviceSlot,
+  hasIssue,
+  platformSlots,
+  slotsLabel,
+  workerHealth,
+  workerSlots,
+} from "./fleet";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { holderOf, leasePath, type TokenRecord } from "./leases";
+import { devicePath } from "./paths";
 import { formatDuration } from "./time";
 import {
   connectionStatus,
@@ -43,12 +51,24 @@ export interface WorkerUse {
   readonly percent: number;
 }
 
+export interface RowMeter {
+  readonly label: string;
+  readonly percent?: number;
+  readonly tone: MeterTone;
+}
+
 export interface WorkerRow {
   readonly id: string;
+  readonly connection: WorkerView["connection"];
+  readonly takesLeases: boolean;
+  readonly slots: readonly DeviceSlot[];
+  readonly slotsLabel: string;
+  readonly meters: readonly RowMeter[];
   readonly name: string;
   readonly mono: boolean;
   readonly to: string;
   readonly health: Toned;
+  readonly system?: string;
   readonly use?: WorkerUse;
 }
 
@@ -62,20 +82,55 @@ function useOf(worker: WorkerView): WorkerUse | undefined {
   return { limit, percent: limit === 0 ? 0 : (running / limit) * 100, running };
 }
 
+function systemOf(worker: WorkerView): string | undefined {
+  const { host } = worker;
+  return host === undefined ? undefined : `${host.os} ${host.osVersion}`;
+}
+
 export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const use = useOf(worker);
+  const system = systemOf(worker);
+  const slots = workerSlots(worker);
   return {
+    connection: worker.connection,
+    takesLeases: !worker.drained,
     health: workerHealth(worker),
     id: worker.id,
+    meters: loadFigures(worker).map((card) => ({
+      label: card.label,
+      tone: card.tone,
+      ...(card.percent === undefined ? {} : { percent: card.percent }),
+    })),
+    slots,
+    slotsLabel: slotsLabel(slots),
     mono: worker.label === undefined,
     name: workerName(worker),
     to: `${workerPath(worker.id)}${search}`,
+    ...(system === undefined ? {} : { system }),
     ...(use === undefined ? {} : { use }),
   };
 }
 
+// why: the filter lives in the address beside the page, so opening a worker and coming back shows
+// the same list the page number was counted in; an unknown value is All.
+export function readFilter(search: string): WorkerFilter {
+  const asked = new URLSearchParams(search).get("filter");
+  return WORKER_FILTERS.find((entry) => entry.value === asked)?.value ?? "all";
+}
+
+// why: a new filter starts at the first page, since the page the operator was on may not exist in
+// it; the other keys of the query stay.
+export function writeFilter(search: string, filter: WorkerFilter): string {
+  const params = new URLSearchParams(search);
+  params.delete("page");
+  if (filter === "all") params.delete("filter");
+  else params.set("filter", filter);
+  const written = params.toString();
+  return written === "" ? "" : `?${written}`;
+}
+
 function matches(worker: WorkerView, filter: WorkerFilter): boolean {
-  if (filter === "issues") return workerHealth(worker).tone !== "ok";
+  if (filter === "issues") return hasIssue(worker);
   if (filter === "busy") return (useOf(worker)?.percent ?? 0) >= BUSY_PERCENT;
   return true;
 }
@@ -85,6 +140,21 @@ export function filterWorkers(
   filter: WorkerFilter,
 ): readonly WorkerView[] {
   return workers.filter((worker) => matches(worker, filter));
+}
+
+// why: the search matches any part of what a row shows to identify a worker: its name, its id and
+// its system, whatever the case.
+export function searchWorkers(
+  workers: readonly WorkerView[],
+  query: string,
+): readonly WorkerView[] {
+  const wanted = query.trim().toLowerCase();
+  if (wanted === "") return workers;
+  return workers.filter((worker) =>
+    [workerName(worker), worker.id, systemOf(worker) ?? ""].some((text) =>
+      text.toLowerCase().includes(wanted),
+    ),
+  );
 }
 
 export function upMeta(workers: readonly WorkerView[]): string {
@@ -207,6 +277,9 @@ function platformCards(worker: WorkerView): readonly PlatformCard[] {
 
 export interface DeviceRow {
   readonly id: string;
+  readonly to: string;
+  readonly lease?: { readonly id: string; readonly to: string };
+  readonly udid?: string;
   readonly model: string;
   readonly runtime: string;
   readonly platform: string;
@@ -234,6 +307,7 @@ function deviceRow(
   now: number,
   tokens: readonly TokenRecord[],
   leaseIds: ReadonlySet<string>,
+  search: string,
 ): DeviceRow {
   const entered = stateEnteredAt(device, worker);
   // why: a virtual device shows its mode only where it is not the one the worker serves by default,
@@ -246,8 +320,10 @@ function deviceRow(
     platform: platformName(device.spec.platform),
     runtime: device.spec.osVersion,
     status: deviceStateStatus(device.state),
+    to: `${devicePath(worker.id, device.id)}${writeWorkerTab(search, "devices")}`,
     ...leaseFacts(device, worker, now, tokens, leaseIds),
     ...defined({
+      udid: device.physical ? device.driverDeviceId : undefined,
       imageTag: virtual ? device.spec.imageTag : undefined,
       mode: virtual && !device.servesDefaultMode ? device.mode : undefined,
       since: entered === undefined ? undefined : formatDuration(now - entered),
@@ -261,16 +337,18 @@ function leaseFacts(
   now: number,
   tokens: readonly TokenRecord[],
   leaseIds: ReadonlySet<string>,
-): Pick<DeviceRow, "expires" | "holder" | "renewed"> {
+): Pick<DeviceRow, "expires" | "holder" | "lease" | "renewed"> {
   const lease = worker.leases?.find((candidate) => candidate.deviceId === device.id);
   if (lease === undefined) return {};
   const holder = holderOf(lease.requesterId, tokens);
+  const onPage = leaseIdOnPage(worker, lease.id, leaseIds);
   return {
+    lease: { id: onPage, to: leasePath(onPage) },
     expires: formatDuration(lease.ttlDeadline - now),
     holder: {
       id: holder.id,
       name: holder.label ?? holder.id,
-      to: leasePath(leaseIdOnPage(worker, lease.id, leaseIds)),
+      to: leasePath(onPage),
     },
     renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
   };
@@ -307,6 +385,22 @@ export interface OverviewTab {
   readonly leases?: { readonly count: number; readonly running: number | undefined };
   readonly platforms: readonly PlatformCard[];
   readonly devices?: readonly DeviceRow[];
+}
+
+// why: a reading from a worker that is not connected is stale, so it has no figures.
+function loadFigures(worker: WorkerView): readonly FigureCard[] {
+  return worker.connection === "connected" ? figureCards(worker) : [];
+}
+
+// why: a worker that is gone or drained is the first thing an operator should read on its page, so it
+// says so above everything else.
+function bannersOf(worker: WorkerView, now: number): readonly string[] {
+  return [
+    ...(worker.connection === "disconnected"
+      ? [`Disconnected · last seen ${formatDuration(now - worker.lastSeenAt)} ago`]
+      : []),
+    ...(worker.drained ? ["Drained"] : []),
+  ];
 }
 
 function loadOf(
@@ -346,6 +440,7 @@ export interface CatalogRow {
 
 export interface HostTab {
   readonly id: string;
+  readonly version?: string;
   readonly connection: Toned;
   readonly drained: boolean;
   readonly health?: Toned;
@@ -389,6 +484,7 @@ function hostTabOf(worker: WorkerView): HostTab {
     })),
     id: worker.id,
     protocol: protocolOf(worker),
+    ...(worker.version === undefined ? {} : { version: worker.version }),
     ...(worker.health === undefined ? {} : { health: healthStatus(worker.health) }),
     ...(capabilityRows === undefined ? {} : { capabilities: capabilityRows }),
     ...(host === undefined
@@ -470,35 +566,63 @@ function warmTabOf(worker: WorkerView, now: number): WarmTab {
   };
 }
 
-export type WorkerTab = "overview" | "host" | "warm-pool";
+export type WorkerTab = "devices" | "warm-pool" | "host" | "events";
 
-export interface WorkerInspector {
+// why: the tab lives in the URL as `?tab=`, so a reload or a shared link shows the same tab; a value
+// the page does not offer, such as a warm pool on a starting worker, is the Devices tab.
+function readWorkerTab(search: string, tabs: readonly { readonly value: WorkerTab }[]): WorkerTab {
+  const asked = new URLSearchParams(search).get("tab");
+  return tabs.find((tab) => tab.value === asked)?.value ?? "devices";
+}
+
+// why: every other key of the query stays, the drawer's paging included.
+export function writeWorkerTab(search: string, tab: WorkerTab): string {
+  const params = new URLSearchParams(search);
+  params.set("tab", tab);
+  return `?${params.toString()}`;
+}
+
+export interface WorkerPage {
   readonly id: string;
+  readonly tab: WorkerTab;
+  readonly banners: readonly string[];
   readonly title: string;
+  readonly connection: WorkerView["connection"];
+  readonly drained: boolean;
   readonly mono: boolean;
   readonly health: Toned;
-  readonly os?: string;
-  readonly version?: string;
+  readonly system?: string;
   readonly tabs: readonly { readonly value: WorkerTab; readonly label: string }[];
   readonly overview: OverviewTab;
   readonly host: HostTab;
   readonly warm?: WarmTab;
 }
 
-export function workerInspectorOf(input: {
+export function workerPageOf(input: {
   readonly worker: WorkerView;
   readonly now: number;
+  readonly search?: string;
   readonly tokens: readonly TokenRecord[];
   readonly leaseIds?: readonly string[];
-}): WorkerInspector {
+}): WorkerPage {
   const { now, tokens, worker } = input;
   const leaseIds = new Set(input.leaseIds ?? []);
   const starting = worker.health === "starting";
   const incompatible = worker.connection === "incompatible";
   const { host } = worker;
   const leases = worker.leases;
+  const tabs: WorkerPage["tabs"] = [
+    { label: "Devices", value: "devices" },
+    ...(starting ? [] : [{ label: "Warm pool", value: "warm-pool" } as const]),
+    { label: "Host", value: "host" },
+    { label: "Events", value: "events" },
+  ];
   return {
+    banners: bannersOf(worker, now),
+    connection: worker.connection,
+    drained: worker.drained,
     health: workerHealth(worker),
+    tab: readWorkerTab(input.search ?? "", tabs),
     host: hostTabOf(worker),
     id: worker.id,
     mono: worker.label === undefined,
@@ -513,17 +637,14 @@ export function workerInspectorOf(input: {
       ...(starting
         ? {}
         : {
-            devices: (worker.devices ?? []).map((d) => deviceRow(d, worker, now, tokens, leaseIds)),
+            devices: (worker.devices ?? []).map((d) =>
+              deviceRow(d, worker, now, tokens, leaseIds, input.search ?? ""),
+            ),
           }),
     },
-    tabs: [
-      { label: "Overview", value: "overview" },
-      { label: "Host", value: "host" },
-      ...(starting ? [] : [{ label: "Warm pool", value: "warm-pool" } as const]),
-    ],
+    tabs,
     title: workerName(worker),
-    ...(host === undefined ? {} : { os: `${host.os} ${host.osVersion}` }),
-    ...(worker.version === undefined ? {} : { version: worker.version }),
+    ...(host === undefined ? {} : { system: `${host.os} ${host.osVersion}` }),
     ...(starting ? {} : { warm: warmTabOf(worker, now) }),
   };
 }

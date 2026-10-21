@@ -1,50 +1,27 @@
-import { eventSummary, eventTone } from "./activity";
-import { attentionItems, attentionTone } from "./attention";
-import type { ConsoleEvent } from "./events";
-import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
+import {
+  inboxGroup,
+  type InboxContext,
+  inboxItems,
+  inGroupOrder,
+  inboxSubject,
+  inboxTone,
+} from "./inbox";
+import { platformSlots } from "./fleet";
+import { isExpiring, type LeaseRecord, type TokenRecord } from "./leases";
 import type { FiguresState } from "./figures";
-import { minuteLabel } from "./history";
-import { formatBusyPercent, loadGauges } from "./load";
-import { levelOf } from "./load-thresholds";
 import { formatCount } from "./paging";
-import { itemPath } from "./paths";
+import { inboxPath } from "./paths";
 import { formatDuration } from "./time";
-import type { Tone, Toned } from "./tones";
+import type { Tone } from "./tones";
 import type { WaitingRequest } from "./waiting";
-import { isUnread, leasesHeld, type WorkerView, workerName, workerPath } from "./workers";
+import { type WorkerRow, workerRow } from "./worker-page";
+import { isUnread, leasesHeld, type WorkerDevice, type WorkerView } from "./workers";
 
 export interface OverviewTile {
   readonly label: string;
   readonly value: string;
   readonly unit?: string;
   readonly to?: string;
-}
-
-export interface PlatformUse {
-  readonly name: string;
-  readonly running?: number;
-  readonly limit?: number;
-  readonly leasedPercent: number;
-  readonly readyPercent: number;
-  readonly busyPercent: number;
-}
-
-export interface Gauge {
-  readonly percent: number;
-  readonly text: string;
-  readonly tone: Tone | "neutral";
-}
-
-export interface OverviewWorker {
-  readonly id: string;
-  readonly name: string;
-  readonly to: string;
-  readonly health: Toned;
-  readonly slots: readonly DeviceSlot[];
-  readonly slotsLabel: string;
-  readonly cpu?: Gauge;
-  readonly memory?: Gauge;
-  readonly leases?: number;
 }
 
 export interface OverviewItem {
@@ -55,116 +32,172 @@ export interface OverviewItem {
   readonly to: string;
 }
 
-export interface OverviewActivity {
-  readonly key: string;
-  readonly time: string;
+export interface OverviewInbox {
+  // why: a read that failed leaves the Inbox unchecked there, so the page never says it is clear.
+  readonly couldNotCheck: readonly string[];
+  readonly problems: number;
+  readonly needsYou: readonly OverviewItem[];
+}
+
+export interface CapacityPart {
+  readonly count: number;
+  readonly kind: PartKind;
+  readonly percent: number;
+  readonly word: string;
+}
+
+export interface PlatformCapacity {
   readonly name: string;
-  readonly tone?: Tone;
-  readonly text: string;
-  readonly to: string;
+  readonly parts: readonly CapacityPart[];
+  readonly notRead: number;
 }
 
 export interface Overview {
+  readonly capacity: readonly PlatformCapacity[];
   readonly tiles: readonly OverviewTile[];
+  readonly wait?: OverviewTile;
+  readonly ending: OverviewTile;
   readonly figures: FiguresState;
-  readonly platforms: readonly PlatformUse[];
-  readonly workers: readonly OverviewWorker[];
-  readonly attention: readonly OverviewItem[];
-  readonly activity: readonly OverviewActivity[];
+  readonly workers: readonly WorkerRow[];
+  readonly inbox: OverviewInbox;
 }
 
-const ACTIVITY_ROWS = 8;
+const NEEDS_YOU_ROWS = 4;
 
 function percentOf(part: number, whole: number): number {
   return whole === 0 ? 0 : (part / whole) * 100;
 }
 
-function platformUse(workers: readonly WorkerView[], platform: "ios" | "android"): PlatformUse {
-  const live = workers.filter((worker) => worker.connection === "connected");
-  const name = platform === "ios" ? "iOS" : "Android";
-  if (workers.some(isUnread)) {
-    return { busyPercent: 0, leasedPercent: 0, name, readyPercent: 0 };
+const PARTS = [
+  { kind: "leased", word: "leased" },
+  { kind: "ready", word: "ready" },
+  { kind: "busy", word: "booting" },
+  { kind: "drained", word: "drained" },
+  { kind: "broken", word: "quarantined" },
+  { kind: "absent", word: "absent" },
+  { kind: "shutdown", word: "shut down" },
+  { kind: "offline", word: "offline" },
+  { kind: "free", word: "free" },
+] as const;
+
+export type PartKind = (typeof PARTS)[number]["kind"];
+
+const PART_OF_STATE: Readonly<Record<string, PartKind>> = {
+  absent: "absent",
+  leased: "leased",
+  provisioning: "busy",
+  quarantined: "broken",
+  ready: "ready",
+  reclaiming: "busy",
+  shutdown: "shutdown",
+};
+
+// why: where a device is decides before what it is doing: on a worker that is not connected its
+// state is the last one heard, so it counts as offline; on a drained worker a ready device is
+// not available to lease, so it counts as drained.
+function partOf(worker: WorkerView, device: WorkerDevice): PartKind | undefined {
+  if (device.state === "deleted") return undefined;
+  if (worker.connection !== "connected") return "offline";
+  if (device.state === "ready" && worker.drained) return "drained";
+  return PART_OF_STATE[device.state];
+}
+
+function devicePartsOf(worker: WorkerView, platform: "ios" | "android"): readonly PartKind[] {
+  return (worker.devices ?? []).flatMap((device) => {
+    const part = device.spec.platform === platform ? partOf(worker, device) : undefined;
+    return part === undefined ? [] : [part];
+  });
+}
+
+function platformCapacity(
+  workers: readonly WorkerView[],
+  platform: "ios" | "android",
+): PlatformCapacity {
+  const counts = new Map<PartKind, number>();
+  const add = (kind: PartKind, count: number) => counts.set(kind, (counts.get(kind) ?? 0) + count);
+  for (const worker of workers) {
+    for (const part of devicePartsOf(worker, platform)) add(part, 1);
+    // why: the bar is the room every worker may run, so a full bar means no room left.
+    add("free", platformSlots(worker, platform).filter((slot) => slot.kind === "free").length);
   }
-  const limit = live.reduce((sum, worker) => sum + (worker.capacity?.[platform].limit ?? 0), 0);
-  const devices = live.flatMap((worker) =>
-    (worker.devices ?? []).filter((device) => device.spec.platform === platform),
-  );
-  const count = (...states: readonly string[]) =>
-    devices.filter((device) => states.includes(device.state)).length;
-  const leased = count("leased");
-  const ready = count("ready");
-  const busy = count("provisioning", "reclaiming");
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
   return {
-    busyPercent: percentOf(busy, limit),
-    leasedPercent: percentOf(leased, limit),
-    limit,
-    name,
-    readyPercent: percentOf(ready, limit),
-    running: leased + ready + busy,
-  };
-}
-
-function gauge(percent: number | undefined): Gauge | undefined {
-  if (percent === undefined) return undefined;
-  const tone = levelOf(percent);
-  return { percent, text: formatBusyPercent(percent), tone: tone === "idle" ? "neutral" : tone };
-}
-
-function overviewWorker(worker: WorkerView): OverviewWorker {
-  const slots = isUnread(worker) ? [] : workerSlots(worker);
-  const gauges =
-    worker.connection === "connected" && worker.load !== undefined ? loadGauges(worker.load) : {};
-  const cpu = gauge(gauges.cpu);
-  const memory = gauge(gauges.memory);
-  return {
-    health: workerHealth(worker),
-    id: worker.id,
-    name: workerName(worker),
-    slots,
-    slotsLabel: isUnread(worker) ? "Not reported" : slotsLabel(slots),
-    to: workerPath(worker.id),
-    ...(worker.leases === undefined ? {} : { leases: worker.leases.length }),
-    ...(cpu === undefined ? {} : { cpu }),
-    ...(memory === undefined ? {} : { memory }),
+    name: platform === "ios" ? "iOS" : "Android",
+    notRead: workers.filter(isUnread).length,
+    parts: PARTS.flatMap(({ kind, word }) => {
+      const count = counts.get(kind) ?? 0;
+      return count === 0 ? [] : [{ count, kind, percent: percentOf(count, total), word }];
+    }),
   };
 }
 
 function tiles(
   workers: readonly WorkerView[],
   requests: readonly WaitingRequest[],
-  platforms: readonly PlatformUse[],
   now: number,
 ): readonly OverviewTile[] {
   const held = leasesHeld(workers);
-  const limit = platforms.reduce((sum, platform) => sum + (platform.limit ?? 0), 0);
   const connected = workers.filter((worker) => worker.connection === "connected").length;
   const oldest = Math.min(...requests.map((request) => request.createdAt));
-  const unknown = held === undefined;
+  const devices = workers.flatMap((worker) =>
+    (worker.devices ?? []).filter((entry) => entry.state !== "deleted"),
+  );
+  const ready = devices.filter((entry) => entry.state === "ready").length;
   return [
     {
-      label: "Utilisation",
-      ...(unknown ? {} : { unit: "%" }),
-      value: unknown ? "—" : String(Math.round(percentOf(held, limit))),
-    },
-    {
-      label: "Leases",
+      label: "Leased",
       to: "/leases",
-      ...(unknown ? {} : { unit: `of ${formatCount(limit)}` }),
-      value: unknown ? "—" : formatCount(held),
+      ...(held === undefined ? {} : { unit: `of ${formatCount(devices.length)} · ${ready} ready` }),
+      value: held === undefined ? "—" : formatCount(held),
     },
     {
       label: "Waiting",
-      to: "/waiting",
+      to: "/queue",
       unit: requests.length === 0 ? "none" : `longest ${formatDuration(now - oldest)}`,
       value: formatCount(requests.length),
     },
     {
       label: "Workers",
-      to: "/workers",
-      unit: `of ${formatCount(workers.length)} up`,
+      to: "/fleet",
+      unit: `of ${formatCount(workers.length)}`,
       value: formatCount(connected),
     },
   ];
+}
+
+// why: the same rule the Leases filter and the Inbox use, against the daemon's clock; a failed read
+// of the leases is "not known", not none.
+function endingSoon(leases: readonly LeaseRecord[] | undefined, now: number): OverviewTile {
+  const count = leases?.filter((lease) => isExpiring(lease.ttlDeadline, now)).length;
+  return {
+    label: "Ending soon",
+    to: "/leases",
+    ...(count === undefined ? {} : { unit: "under 5 min" }),
+    value: count === undefined ? "—" : formatCount(count),
+  };
+}
+
+// why: Needs you lists problems only, in the Inbox's own order, so its first rows are the Inbox's.
+function inboxOf(input: {
+  readonly workers: readonly WorkerView[];
+  readonly couldNotCheck: readonly string[];
+  readonly context: InboxContext;
+}): OverviewInbox {
+  const { context, couldNotCheck, workers } = input;
+  const problems = inGroupOrder(inboxItems(workers, context)).filter(
+    (item) => inboxGroup(item) !== "Heads-up",
+  );
+  return {
+    needsYou: problems.slice(0, NEEDS_YOU_ROWS).map((item) => ({
+      key: item.key,
+      subject: inboxSubject(item),
+      to: inboxPath(item.key),
+      tone: inboxTone(item.condition),
+      word: item.condition,
+    })),
+    couldNotCheck,
+    problems: problems.length,
+  };
 }
 
 // why: the overview reads three routes the other pages read too, and every figure on it is worked
@@ -172,43 +205,32 @@ function tiles(
 export function overviewOf(input: {
   readonly workers: readonly WorkerView[];
   readonly requests: readonly WaitingRequest[];
-  readonly events: readonly ConsoleEvent[];
+  readonly leases?: readonly LeaseRecord[] | undefined;
+  readonly tokens?: readonly TokenRecord[] | undefined;
   readonly figures?: FiguresState;
+  readonly couldNotCheck?: readonly string[];
   readonly now: number;
 }): Overview {
-  const { events, figures = { kind: "loading" }, now, requests, workers } = input;
-  const platforms = [platformUse(workers, "ios"), platformUse(workers, "android")];
+  const {
+    couldNotCheck = [],
+    figures = { kind: "loading" },
+    leases,
+    now,
+    requests,
+    tokens,
+    workers,
+  } = input;
   return {
-    activity: [...events]
-      .sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
-      .slice(0, ACTIVITY_ROWS)
-      .map((event) => {
-        const tone = eventTone(event.event);
-        return {
-          key: event.id,
-          name: event.event,
-          text: eventSummary(event, workers),
-          time: minuteLabel(event.timestamp),
-          to: itemPath("/events", event.id),
-          ...(tone === undefined ? {} : { tone }),
-        };
-      }),
-    attention: attentionItems(workers).map((item) => ({
-      key: item.key,
-      subject:
-        "device" in item
-          ? `${item.device.spec.model} on ${workerName(item.worker)}`
-          : workerName(item.worker),
-      to: itemPath("/attention", item.key),
-      tone: attentionTone(item.condition),
-      word: item.condition,
-    })),
+    capacity: [platformCapacity(workers, "ios"), platformCapacity(workers, "android")],
+    ending: endingSoon(leases, now),
+    inbox: inboxOf({
+      context: { leases, now, requests, tokens },
+      couldNotCheck,
+      workers,
+    }),
     figures,
-    platforms,
-    tiles: [
-      ...tiles(workers, requests, platforms, now),
-      ...(figures.kind === "ready" ? [figures.data.granted, figures.data.wait] : []),
-    ],
-    workers: workers.map(overviewWorker),
+    tiles: tiles(workers, requests, now),
+    ...(figures.kind === "ready" ? { wait: figures.data.wait } : {}),
+    workers: workers.map((worker) => workerRow(worker)),
   };
 }

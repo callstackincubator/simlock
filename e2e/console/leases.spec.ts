@@ -117,13 +117,20 @@ async function untilTheDaemonSays(
 async function openLeases(page: Page, daemon: RunningDaemon, path = "/leases"): Promise<void> {
   await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
-  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
+  // why: the drawer hides the page behind it from assistive technology, so a direct load finds the heading by hidden role too.
+  await expect(
+    page.getByRole("heading", { includeHidden: true, level: 1, name: "Leases" }),
+  ).toBeVisible();
 }
 
 function leaseRow(page: Page, id: string): Locator {
   return page
-    .getByRole("list", { name: "Leases" })
-    .locator(`a[href="/leases/${encodeURIComponent(id)}/"]`);
+    .locator("main tbody tr")
+    .filter({ has: page.locator(`a[href^="/leases/${encodeURIComponent(id)}/"]`) });
+}
+
+function rowLink(page: Page, id: string): Locator {
+  return leaseRow(page, id).locator("a").first();
 }
 
 function inspectorTitle(page: Page, name: string | RegExp): Locator {
@@ -144,6 +151,12 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
+}
+
+async function boxOf(locator: Locator): Promise<{ x: number; width: number }> {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("the element has no box");
+  return box;
 }
 
 test.describe("the leases page", () => {
@@ -171,9 +184,7 @@ test.describe("the leases page", () => {
 
       await openLeases(page, fleet.gateway);
 
-      await expect(page.getByRole("list", { name: "Leases" }).getByRole("listitem")).toHaveCount(
-        listed.length,
-      );
+      await expect(page.locator("main tbody tr")).toHaveCount(listed.length);
       await expect(page.getByText(`${listed.length} held`)).toBeVisible();
       for (const lease of listed) {
         const row = leaseRow(page, lease.id);
@@ -208,7 +219,7 @@ test.describe("the leases page", () => {
     }
   });
 
-  test("with no lease named in the address the first lease shows in the inspector, and the address stays", async ({
+  test("a lease row opens a dialog named after its holder at the lease's address, on its Details tab, over the table, and nothing opens by itself", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -219,9 +230,227 @@ test.describe("the leases page", () => {
 
       await openLeases(page, host);
 
-      await expect(inspectorTitle(page, /agent-first/)).toBeVisible();
-      await expect(leaseRow(page, first?.id ?? "")).toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       expect(new URL(page.url()).pathname).toBe("/leases");
+
+      await leaseRow(page, first?.id ?? "").click();
+
+      const drawer = page.getByRole("dialog", { name: /agent-first/ });
+      await expect(drawer).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(`/leases/${encodeURIComponent(first?.id ?? "")}/`);
+      await expect(drawer.getByRole("tab", { name: "Details" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await expect(fact(page, "Device", "UDID")).not.toHaveText("—");
+      await expect(page.locator("main table")).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("loading /leases/<id> directly opens the drawer over the table", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-direct");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+
+      await expect(page.getByRole("dialog", { name: /agent-direct/ })).toBeVisible();
+      await expect(leaseRow(page, lease.id)).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("loaded directly at a lease's address, closing the drawer replaces the address with /leases and focus goes to the heading", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-direct");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+      const drawer = page.getByRole("dialog", { name: /agent-direct/ });
+      await expect(drawer).toBeVisible();
+      const entries = await page.evaluate(() => window.history.length);
+
+      await page.keyboard.press("Escape");
+
+      await expect(drawer).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe("/leases");
+      expect(await page.evaluate(() => window.history.length)).toBe(entries);
+      await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeFocused();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the dim layer covers the sidebar: its links cannot be clicked while the drawer is open", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-dim");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host);
+      await leaseRow(page, lease.id).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+
+      const covered = await page.evaluate(() => {
+        const link = document.querySelector<HTMLElement>(".sidebar-nav a");
+        const box = link?.getBoundingClientRect();
+        if (box === undefined) return undefined;
+        const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return top?.classList.contains("drawer-dim");
+      });
+
+      expect(covered).toBe(true);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the drawer animates once: switching its tabs does not restart the animation", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-motion");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host);
+      await page.evaluate(() => {
+        const counted = window as unknown as { drawerStarts: number };
+        counted.drawerStarts = 0;
+        document.addEventListener(
+          "animationstart",
+          (event) => {
+            if ((event.target as Element).classList.contains("drawer")) counted.drawerStarts += 1;
+          },
+          true,
+        );
+      });
+
+      await leaseRow(page, lease.id).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      for (const name of ["Screen", "Details", "Screen", "Details"]) {
+        await page.getByRole("tab", { name }).click();
+      }
+      await page.waitForTimeout(400);
+
+      expect(
+        await page.evaluate(() => (window as unknown as { drawerStarts: number }).drawerStarts),
+      ).toBe(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("at 360px wide the drawer fills the width and the page has no sideways scroll", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-narrow");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await page.setViewportSize({ height: 740, width: 360 });
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toBeVisible();
+      expect((await drawer.boundingBox())?.width).toBeCloseTo(360, 0);
+      expect(await hasHorizontalScroll(page)).toBe(false);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the drawer's close button is 40px tall with the button border", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-icon");
+      const [lease] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host, `/leases/${encodeURIComponent(lease.id)}/`);
+
+      const shape = await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Close" })
+        .evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { border: style.borderTopWidth, height: element.getBoundingClientRect().height };
+        });
+
+      expect(shape).toEqual({ border: "1px", height: 40 });
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the Events tab lists the events that name the lease", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-events");
+      await leaseOverSocket(host, "agent-other");
+      const [lease] = (await listLeases(host)) as [ListedLease, ListedLease];
+      await openLeases(page, host);
+      await leaseRow(page, lease.id).click();
+
+      await page.getByRole("tab", { name: "Events" }).click();
+
+      const events = page.getByRole("dialog").getByRole("tabpanel");
+      await expect(events.getByText("lease.granted")).toHaveCount(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the search sets ?q= without adding history entries, a lease opened from it keeps ?q=, and closing returns to the filtered table", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-needle");
+      await leaseOverSocket(host, "agent-hay");
+      const found = (await listLeases(host)).find((lease) => lease.requesterId === "agent-needle");
+      await openLeases(page, host, "/leases?page=2");
+      const entries = await page.evaluate(() => window.history.length);
+
+      await page.getByRole("searchbox", { name: "Search leases" }).pressSequentially("NEEDLE");
+
+      await expect(page.locator("main tbody tr")).toHaveCount(1);
+      expect(new URL(page.url()).search).toBe("?q=NEEDLE");
+      expect(await page.evaluate(() => window.history.length)).toBe(entries);
+
+      await leaseRow(page, found?.id ?? "").click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      expect(new URL(page.url()).search).toBe("?q=NEEDLE");
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      expect(new URL(page.url()).search).toBe("?q=NEEDLE");
+      await expect(page.locator("main tbody tr")).toHaveCount(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the toolbar puts the filter chips on the left and the search box on the right, at the page title's padding", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-bar");
+      await openLeases(page, host);
+
+      const title = await boxOf(page.getByRole("heading", { level: 1, name: "Leases" }));
+      const chips = await boxOf(page.getByRole("group", { name: "Filter leases" }));
+      const search = await boxOf(page.getByRole("searchbox", { name: "Search leases" }));
+      const table = await boxOf(page.locator("main .table-card"));
+
+      expect(chips.x).toBeCloseTo(title.x, 0);
+      expect(search.x).toBeGreaterThan(chips.x + chips.width);
+      expect(search.x + search.width).toBeCloseTo(table.x + table.width, 0);
     } finally {
       await host.dispose();
     }
@@ -248,9 +477,6 @@ test.describe("the leases page", () => {
       await leaseRow(page, granted.id).click();
 
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
-      await expect(
-        page.getByRole("navigation", { name: "Breadcrumb" }).getByText(granted.id),
-      ).toBeVisible();
       await expect(fact(page, "Lease", "Holder")).toHaveText(`ci-runner-3 ${ci.id}`);
       await expect(fact(page, "Device", "Worker")).toHaveText("worker-a");
       await expect(fact(page, "Device", "Model")).toHaveText(granted.device);
@@ -265,6 +491,7 @@ test.describe("the leases page", () => {
       await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
 
       // A worker's own lease, which the gateway did not issue, opens too.
+      await page.keyboard.press("Escape");
       await leaseRow(page, local?.id ?? "").click();
       await expect(inspectorTitle(page, /local-agent/)).toBeVisible();
       await expect(fact(page, "Device", "Worker")).toHaveText("worker-b");
@@ -312,7 +539,7 @@ test.describe("the leases page", () => {
       await expect(leaseRow(page, soon.id)).toBeVisible();
       await expect(leaseRow(page, later.id)).toBeVisible();
 
-      await page.getByRole("radio", { name: "Expiring" }).check();
+      await page.getByRole("radio", { name: "Ending < 5 min" }).check();
       await expect(leaseRow(page, soon.id)).toBeVisible();
       await expect(leaseRow(page, later.id)).toHaveCount(0);
 
@@ -320,7 +547,7 @@ test.describe("the leases page", () => {
       await expect(leaseRow(page, later.id)).toBeVisible();
 
       await page.getByRole("radio", { name: "Android" }).check();
-      await expect(page.getByText("No leases match this filter.")).toBeVisible();
+      await expect(page.getByText("No leases match this filter or search.")).toBeVisible();
     } finally {
       await host.dispose();
     }
@@ -333,7 +560,7 @@ test.describe("the leases page", () => {
       await leaseOverSocket(host, "agent-2");
       const [released, kept] = (await listLeases(host)) as [ListedLease, ListedLease];
       await openLeases(page, host);
-      await expect(page.getByRole("list", { name: "Leases" }).getByRole("listitem")).toHaveCount(2);
+      await expect(page.locator("main tbody tr")).toHaveCount(2);
 
       expect((await host.cli(["release", released.id])).code).toBe(0);
       await untilTheDaemonSays(host, (leases) => leases.every((lease) => lease.id !== released.id));
@@ -345,7 +572,7 @@ test.describe("the leases page", () => {
     }
   });
 
-  test("a lease's page says it is not found once the lease is released, with a way back", async ({
+  test('a lease that ends while its drawer is open, and an address naming a lease never held, show "This lease is not held."', async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -358,22 +585,14 @@ test.describe("the leases page", () => {
 
       expect((await host.cli(["release", released.id])).code).toBe(0);
 
-      await expect(page.getByText("Lease not found.")).toBeVisible();
+      const drawer = page.getByRole("dialog");
+      await expect(drawer.getByText("This lease is not held.")).toBeVisible();
       await expect(fact(page, "Device", "UDID")).toHaveCount(0);
-      await page.getByRole("link", { name: "All leases" }).click();
-      expect(new URL(page.url()).pathname).toBe("/leases");
-    } finally {
-      await host.dispose();
-    }
-  });
+      await expect(drawer.getByRole("button", { name: "Close" })).toBeVisible();
 
-  test("an address naming no lease says it is not found", async ({ page }) => {
-    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
-    try {
-      await openLeases(page, host, "/leases/lse_nobody/");
-
-      await expect(page.getByText("Lease not found.")).toBeVisible();
-      await expect(page.getByRole("link", { name: "All leases" })).toBeVisible();
+      await page.goto(new URL("/leases/lse_nobody/", host.url).toString());
+      await expect(page.getByRole("dialog").getByText("This lease is not held.")).toBeVisible();
+      await expect(page.locator("main")).toContainText("No leases.");
     } finally {
       await host.dispose();
     }
@@ -423,6 +642,7 @@ test.describe("the leases page", () => {
       await leaseRow(page, granted.id).click();
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
       await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
+      await page.getByRole("tab", { name: "Screen" }).click();
       await expect(page.getByRole("button", { name: "Show screen" })).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
@@ -456,13 +676,10 @@ test.describe("the leases page", () => {
         page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Leases" }),
       );
       await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
-      await follow(leaseRow(page, granted.id));
+      await follow(rowLink(page, granted.id));
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
-      await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(granted.id);
-      await follow(
-        page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Leases" }),
-      );
-      expect(new URL(page.url()).pathname).toBe("/leases");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/leases");
     } finally {
       await host.dispose();
     }

@@ -15,6 +15,7 @@ import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
   HOUR,
+  plainProjection,
   removeUsageRigs,
   requested,
   ringEventHistory,
@@ -133,8 +134,8 @@ function stallOptions(
 
 function resolveEventHistoryOverride(
   eventBus: EventBus,
-  override: Pick<EventHistoryHandle, "replay" | "status"> | undefined,
-): Pick<EventHistoryHandle, "replay" | "status"> {
+  override: Pick<EventHistoryHandle, "replay" | "replayPage" | "status"> | undefined,
+): Pick<EventHistoryHandle, "replay" | "replayPage" | "status"> {
   return override ?? ringEventHistory(eventBus);
 }
 
@@ -270,7 +271,7 @@ async function buildDispatcher(
     readonly passthroughOverride?: PassthroughResolver;
     readonly execEnv?: NodeJS.ProcessEnv;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
-    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly withoutTokens?: boolean;
     /** `status.get`'s host block; a fixed machine with no tools by default. */
@@ -1358,6 +1359,7 @@ describe("Dispatcher: events.replay", () => {
           asked.push(input);
           return fromHistory;
         },
+        replayPage: async () => ({ events: [], kind: "events" }),
         status: () => ({ opened: true, writing: true }),
       },
     });
@@ -1366,6 +1368,77 @@ describe("Dispatcher: events.replay", () => {
       dispatcher.dispatch("events.replay", { sinceTs: 10 }, session({ role: "admin" })),
     ).resolves.toEqual(fromHistory);
     expect(asked).toEqual([{ sinceTs: 10 }]);
+  });
+});
+
+describe("Dispatcher: events.replay paging", () => {
+  afterEach(removeUsageRigs);
+
+  const admin = session({ role: "admin" });
+
+  async function pagedRig(
+    rows: number,
+    options: Parameters<typeof usageRig>[0] = {},
+  ): Promise<{
+    readonly rig: Awaited<ReturnType<typeof usageRig>>;
+    readonly ids: string[];
+    readonly dispatcher: Dispatcher;
+  }> {
+    const rig = await usageRig(options);
+    for (let row = 0; row < rows; row += 1) {
+      rig.at(T0 + row);
+      rig.emit("daemon.stopping", { reason: `r${row + 1}` });
+    }
+    const { dispatcher } = await buildDispatcher({ eventHistory: rig.history });
+    return { dispatcher, ids: rig.bus.replay().map((event) => event.id), rig };
+  }
+
+  const reasons = (events: readonly { readonly payload?: unknown }[]): unknown[] =>
+    events.map((event) => (event.payload as { reason: string }).reason);
+
+  it("events.replay with beforeId and limit pages through the worker dispatcher over a real history: the page, HISTORY_NOT_KEPT, an empty table, HISTORY_UNAVAILABLE, and 100 at most for beforeId alone", async () => {
+    const { dispatcher, ids } = await pagedRig(150);
+    const page = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: ids[4] as string, limit: 2 },
+      admin,
+    );
+    expect(reasons(page)).toEqual(["r3", "r4"]);
+    const unbounded = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: ids[149] as string },
+      admin,
+    );
+    expect(unbounded).toHaveLength(100);
+    await expect(
+      dispatcher.dispatch("events.replay", { beforeId: "evt_gone", limit: 2 }, admin),
+    ).rejects.toMatchObject({ code: "HISTORY_NOT_KEPT", details: { oldestTs: T0 } });
+
+    const empty = await pagedRig(0);
+    await expect(
+      empty.dispatcher.dispatch("events.replay", { beforeId: "evt_any", limit: 2 }, admin),
+    ).resolves.toEqual([]);
+
+    const failing = plainProjection("failing", () => ({
+      apply: () => {
+        throw new Error("projection broke");
+      },
+      prune: () => undefined,
+    }));
+    const notWriting = await pagedRig(1, { projections: [failing] });
+    expect(notWriting.rig.history.status().writing).toBe(false);
+    const unstarted = await buildDispatcher();
+    for (const { dispatcher: target } of [notWriting, unstarted]) {
+      await expect(
+        target.dispatch("events.replay", { beforeId: "evt_any", limit: 2 }, admin),
+      ).rejects.toMatchObject({ code: "HISTORY_UNAVAILABLE" });
+    }
+  });
+
+  it("events.replay with limit alone returns the newest n events, oldest first, through the worker dispatcher", async () => {
+    const { dispatcher } = await pagedRig(5);
+    const page = await dispatcher.dispatch("events.replay", { limit: 2 }, admin);
+    expect(reasons(page)).toEqual(["r4", "r5"]);
   });
 });
 
@@ -4507,6 +4580,8 @@ describe("Dispatcher: usage.get", () => {
     const gate = { open: true };
     const eventHistory = {
       replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      replayPage: (input: { readonly beforeId?: string; readonly limit: number }) =>
+        rig.history.replayPage(input),
       status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
     };
     return { eventHistory, gate, rig, ...options };

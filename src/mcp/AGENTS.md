@@ -3,7 +3,7 @@
 Does: one agent session over stdin/stdout — its tools, a renew timer, lazy reconnect.
 Entry: `main.ts` → `runMcpStdio({ daemonFlag })`; `simlock mcp` loads it on demand (`src/cli/commands/mcp.ts`).
 Uses: client, lease-policy, agent-identity, contract, ports. Never imports: core, daemon, drivers, http.
-Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
+Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-started/connect-your-agent.mdx), [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx).
 
 ## Files
 

@@ -15,6 +15,8 @@
  */
 import type { z } from "zod";
 
+import type { EventEnvelope } from "../bus/index.js";
+import type { EventsPageRead } from "../history/index.js";
 import type { Clock } from "../ports/clock.js";
 import type { Logger } from "../ports/logger.js";
 import type { LinkChannel } from "../link/index.js";
@@ -427,6 +429,30 @@ export async function usageAnswer(
   throw new DispatchError(
     "HISTORY_NOT_KEPT",
     `The history does not reach back to the end of that window; its figures start at ${new Date(result.oldestTs).toISOString()}.`,
+    { oldestTs: result.oldestTs },
+  );
+}
+
+export async function eventsPageAnswer(read: Promise<EventsPageRead>): Promise<EventEnvelope[]> {
+  let result: EventsPageRead;
+  try {
+    result = await read;
+  } catch (error) {
+    throw new DispatchError(
+      "INTERNAL",
+      `The events could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (result.kind === "events") return result.events;
+  if (result.kind === "unavailable") {
+    throw new DispatchError(
+      "HISTORY_UNAVAILABLE",
+      "The history could not be read, so no older events can be returned; see daemon.log.",
+    );
+  }
+  throw new DispatchError(
+    "HISTORY_NOT_KEPT",
+    `The history does not hold that event; it starts at ${new Date(result.oldestTs).toISOString()}.`,
     { oldestTs: result.oldestTs },
   );
 }

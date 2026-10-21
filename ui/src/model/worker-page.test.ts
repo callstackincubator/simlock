@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import { listSearch } from "./paging";
 import {
   filterWorkers,
+  readFilter,
   upMeta,
-  type WorkerInspector,
-  workerInspectorOf,
+  type WorkerPage,
+  workerPageOf,
   workerRow,
+  writeFilter,
 } from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
 
@@ -85,12 +87,12 @@ const LOAD = {
 function inspect(
   view: WorkerView,
   now = NOW,
-  tokens: Parameters<typeof workerInspectorOf>[0]["tokens"] = [],
+  tokens: Parameters<typeof workerPageOf>[0]["tokens"] = [],
 ) {
-  return workerInspectorOf({ now, tokens, worker: view });
+  return workerPageOf({ now, tokens, worker: view });
 }
 
-function figure(inspector: WorkerInspector, label: string) {
+function figure(inspector: WorkerPage, label: string) {
   return inspector.overview.figures.find((card) => card.label === label);
 }
 
@@ -102,7 +104,7 @@ describe("a worker's row in the list", () => {
       health: { tone: "ok", word: "connected" },
       mono: false,
       name: "worker-a",
-      to: "/workers/wrk_1",
+      to: "/fleet/wrk_1",
       use: { limit: 8, percent: 12.5, running: 1 },
     });
   });
@@ -115,7 +117,7 @@ describe("a worker's row in the list", () => {
     const row = workerRow(worker({ drained: true }));
 
     expect(row.health).toEqual({ tone: "warn", word: "drained" });
-    expect(Object.keys(row).sort()).toEqual(["health", "id", "mono", "name", "to", "use"]);
+    expect(JSON.stringify({ ...row, health: undefined })).not.toContain("drained");
   });
 
   it("has no use for a worker that is not connected or has reported no capacity", () => {
@@ -123,10 +125,20 @@ describe("a worker's row in the list", () => {
     expect(workerRow(worker({ capacity: undefined })).use).toBeUndefined();
   });
 
+  it("reads the filter from the address, All when it is absent or unknown, and a new one starts at the first page", () => {
+    expect(readFilter("?filter=busy")).toBe("busy");
+    expect(readFilter("?filter=nope")).toBe("all");
+    expect(readFilter("")).toBe("all");
+    expect(writeFilter("?page=3&q=ci", "issues")).toBe("?q=ci&filter=issues");
+    expect(writeFilter("?filter=busy&page=3", "all")).toBe("");
+  });
+
   it("keeps the list's page and size on the link, and nothing of a worker's own pagers", () => {
     expect(listSearch("?page=2&size=50&devices-page=3&warm-pool-size=50")).toBe("?page=2&size=50");
     expect(listSearch("?devices-page=3")).toBe("");
-    expect(workerRow(worker(), "?page=2").to).toBe("/workers/wrk_1?page=2");
+    expect(listSearch("?q=ci&page=2&size=50")).toBe("?page=2&size=50&q=ci");
+    expect(listSearch("?page=2&filter=busy")).toBe("?page=2&filter=busy");
+    expect(workerRow(worker(), "?page=2").to).toBe("/fleet/wrk_1?page=2");
   });
 });
 
@@ -333,7 +345,7 @@ describe("a worker's capacity and leases", () => {
     expect(inspector.overview.devices).toBeUndefined();
     expect(inspector.overview.leases).toBeUndefined();
     expect(inspector.warm).toBeUndefined();
-    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["overview", "host"]);
+    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["devices", "host", "events"]);
     expect(inspector.host.capabilities).toBeUndefined();
     expect(inspector.health).toEqual({ tone: "warn", word: "starting" });
   });
@@ -371,8 +383,8 @@ describe("a worker's device rows", () => {
   it("links a holder to the lease's page under the id the daemon lists it by, a gateway's worker-qualified one included", () => {
     const view = worker({ devices: [device({ state: "leased" })], leases: [LEASE] });
     const holderOn = (leaseIds: readonly string[]) =>
-      workerInspectorOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]
-        ?.holder?.to;
+      workerPageOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]?.holder
+        ?.to;
 
     expect(holderOn([`${view.id}.l_1`])).toBe(`/leases/${encodeURIComponent(`${view.id}.l_1`)}/`);
     expect(holderOn(["l_1"])).toBe("/leases/l_1/");
@@ -418,10 +430,17 @@ describe("a worker's device rows", () => {
       id: "dev_p",
       mode: undefined,
       physical: true,
+      driverDeviceId: "00008130-AAAA",
       spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
     });
     const rows =
-      inspect(worker({ devices: [physical, device({ id: "dev_v" })] })).overview.devices ?? [];
+      inspect(worker({ devices: [physical, device({ id: "dev_v", driverDeviceId: "SIM-1" })] }))
+        .overview.devices ?? [];
+
+    expect(rows.map((row) => [row.id, row.udid])).toEqual([
+      ["dev_p", "00008130-AAAA"],
+      ["dev_v", undefined],
+    ]);
 
     expect(rows.map((row) => [row.id, row.physical, row.mode, row.imageTag])).toEqual([
       ["dev_p", true, undefined, undefined],
@@ -646,5 +665,26 @@ describe("a worker's warm pool tab", () => {
       ["iOS", "19.0", { tone: "ok", word: "downloading" }, "7 s", "1 waiter"],
       ["Android", "36", { tone: "idle", word: "waiting" }, "3 s", "3 waiters"],
     ]);
+  });
+});
+
+describe("a worker page's tab", () => {
+  const tabOf = (search: string, view: WorkerView = worker()) =>
+    workerPageOf({ now: NOW, search, tokens: [], worker: view }).tab;
+
+  it("is the one ?tab= names, and Devices for a value the page does not offer", () => {
+    expect(tabOf("?tab=host")).toBe("host");
+    expect(tabOf("?tab=events&page=2")).toBe("events");
+    expect(tabOf("")).toBe("devices");
+    expect(tabOf("?tab=overview")).toBe("devices");
+    expect(tabOf("?tab=")).toBe("devices");
+  });
+
+  it("is Devices when ?tab= names the warm pool of a starting worker, which has none", () => {
+    const starting = worker({ health: "starting" });
+
+    expect(tabOf("?tab=warm-pool")).toBe("warm-pool");
+    expect(tabOf("?tab=warm-pool", starting)).toBe("devices");
+    expect(tabOf("?tab=host", starting)).toBe("host");
   });
 });

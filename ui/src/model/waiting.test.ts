@@ -80,8 +80,8 @@ describe("the waiting table", () => {
     const rows = waitingTable([onGateway, onHost, inFleetQueue], workers, NOW).rows;
 
     expect(rows.map((row) => row.queue)).toEqual([
-      { kind: "worker", name: "worker-b", to: "/workers/wrk_2" },
-      { kind: "worker", name: "host", to: "/workers/wrk_1" },
+      { kind: "worker", name: "worker-b", to: "/fleet/wrk_2" },
+      { kind: "worker", name: "host", to: "/fleet/wrk_1" },
       { kind: "gateway" },
     ]);
   });
@@ -134,7 +134,7 @@ describe("the waiting table", () => {
   it("shows how long a request has waited, when it was created, and the path that opens it", () => {
     expect(rowOf({ id: "req a/b" })).toMatchObject({
       created: "2026-10-02 11:58:45 UTC",
-      to: "/waiting/req%20a%2Fb",
+      to: "/queue/req%20a%2Fb",
       waited: "1 min 15 s",
     });
   });
@@ -161,16 +161,16 @@ describe("the waiting table", () => {
 describe("choosing a waiting request", () => {
   const rows = waitingTable([request({ id: "a" }), request({ id: "b" })], [], NOW).rows;
 
-  it("chooses the first row of the page when the URL names none", () => {
-    expect(chooseWaiting(rows, undefined, rows.slice(1))).toEqual({ chosen: rows[1], gone: false });
+  it("chooses nothing when the URL names none, so the drawer stays shut", () => {
+    expect(chooseWaiting(rows, undefined)).toEqual({ chosen: undefined, gone: false });
   });
 
-  it("chooses the request the URL names, even from another page", () => {
-    expect(chooseWaiting(rows, "a", rows.slice(1))).toEqual({ chosen: rows[0], gone: false });
+  it("chooses the request the URL names, whatever page it is on", () => {
+    expect(chooseWaiting(rows, "a")).toEqual({ chosen: rows[0], gone: false });
   });
 
   it("calls a named request that is no longer waiting gone, and chooses nothing", () => {
-    expect(chooseWaiting(rows, "granted", rows)).toEqual({ chosen: undefined, gone: true });
+    expect(chooseWaiting(rows, "granted")).toEqual({ chosen: undefined, gone: true });
   });
 });
 

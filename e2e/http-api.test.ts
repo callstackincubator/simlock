@@ -5,8 +5,8 @@ import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 /**
- * Reserves a free TCP port by binding to port 0 and releasing it immediately. Config
- * validation rejects `http.port: 0` (it requires 1-65535, see `docs/CONFIGURATION.md`),
+ * why: Reserves a free TCP port by binding to port 0 and releasing it immediately. Config
+ * validation rejects `http.port: 0` (it requires 1-65535, see the configuration reference),
  * so the daemon itself can't pick its own ephemeral port -- this is the test's own
  * stand-in for that. There is a small window between release and the daemon binding
  * the same port, same as any "reserve a port for a subprocess" approach; nothing else
@@ -211,7 +211,7 @@ describe("HTTP API", () => {
   });
 
   it("refuses a ttlMs above lease.maxTtlMs on both routes, whatever shape the request takes", async () => {
-    // ADR 0004 §4 and docs/HTTP-API.md: over the cap is `400 BAD_REQUEST`, never a silent
+    // why: ADR 0004 §4: over the cap is `400 BAD_REQUEST`, never a silent
     // clamp and never a `201` that fails later on the request resource.
     const port = await reservePort();
     const env = await withDaemon({

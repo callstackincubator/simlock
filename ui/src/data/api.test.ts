@@ -121,6 +121,65 @@ describe("createApiClient", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("a write sends its method and path with the token, maps an error body to ApiError, sends a 401 to the session, and on a network error throws without calling refuse", async () => {
+    const sent = answering(202, { released: true });
+    const writer = createApiClient({ fetch: sent.fetch, token: () => "slk_operator" });
+
+    await writer.write("DELETE", "/v1/leases/lse_1");
+    await writer.write("POST", "/v1/workers/wrk_1/drain");
+
+    expect(sent.calls.map(({ input, init }) => [input, init.method])).toEqual([
+      ["/v1/leases/lse_1", "DELETE"],
+      ["/v1/workers/wrk_1/drain", "POST"],
+    ]);
+    expect(sent.calls[0]?.init.credentials).toBe("same-origin");
+    expect(sent.calls[0]?.init.headers).toEqual({ Authorization: "Bearer slk_operator" });
+
+    const conflict = createApiClient({
+      fetch: answering(409, {
+        error: { code: "WORKER_CONNECTED", message: "Stop the worker first" },
+      }).fetch,
+      token: () => "slk_operator",
+    });
+    const refused = conflict.write("DELETE", "/v1/workers/wrk_1");
+    await expect(refused).rejects.toBeInstanceOf(ApiError);
+    await expect(refused).rejects.toMatchObject({
+      code: "WORKER_CONNECTED",
+      message: "Stop the worker first",
+      status: 409,
+    });
+
+    const onRefused = vi.fn();
+    const signedOut = createApiClient({
+      fetch: answering(401, { error: { code: "UNAUTHENTICATED", message: "Unknown bearer token" } })
+        .fetch,
+      onRefused,
+      token: () => "slk_revoked",
+    });
+    await expect(signedOut.write("DELETE", "/v1/leases/lse_1")).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(onRefused.mock.calls).toEqual([["unauthorized"]]);
+
+    const unreachable: Fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+    const readRefused = vi.fn();
+    const reader = createApiClient({
+      fetch: unreachable,
+      onRefused: readRefused,
+      token: () => "slk_operator",
+    });
+    await expect(reader.getJson("/v1/leases")).rejects.toBeInstanceOf(TypeError);
+    expect(readRefused.mock.calls).toEqual([["not-simlock"]]);
+    const writeRefused = vi.fn();
+    const unanswered = createApiClient({
+      fetch: unreachable,
+      onRefused: writeRefused,
+      token: () => "slk_operator",
+    });
+    await expect(unanswered.write("DELETE", "/v1/leases/lse_1")).rejects.toBeInstanceOf(TypeError);
+    expect(writeRefused).not.toHaveBeenCalled();
+  });
+
   it("a read hands back the response's Date header with its body", async () => {
     const date = "Fri, 02 Oct 2026 12:00:00 GMT";
     const fetch: Fetch = async () =>

@@ -1,0 +1,572 @@
+---
+title: CLI reference
+description: Every simlock command and subcommand, with its synopsis, every flag and its default, the global flags, the environment variables and the output format.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page lists what each command accepts. For what a command is for and when to use it, follow the guide link in each section. For what an error code means, see the [errors reference](/simlock/docs/reference/errors).
+
+## Commands at a glance
+
+| Command | What it does | Guide |
+| --- | --- | --- |
+| [`simlock lease`](#simlock-lease) | Lease a device and hold it until the command exits | [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) |
+| [`simlock release`](#simlock-release) | Give a lease back | [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) |
+| [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
+| [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
+| [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
+| [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
+| [`simlock status`](#simlock-status) | Show the daemon, its devices and its leases | [Monitoring](/simlock/docs/worker/monitoring) |
+| [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [Monitoring](/simlock/docs/worker/monitoring) |
+| [`simlock events`](#simlock-events) | Print business events | [Events reference](/simlock/docs/reference/events) |
+| [`simlock stats`](#simlock-stats) | Show usage figures for a time window | [Monitoring](/simlock/docs/worker/monitoring) |
+| [`simlock whoami`](#simlock-whoami) | Show who the daemon thinks you are | [Access control](/simlock/docs/gateway/access-control) |
+| [`simlock daemon`](#simlock-daemon) | Start, stop and inspect the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
+| [`simlock config`](#simlock-config) | Read and change the daemon's configuration | [Configuration](/simlock/docs/worker/configuration) |
+| [`simlock doctor`](#simlock-doctor) | Check prerequisites and repair drift | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
+| [`simlock cleanup`](#simlock-cleanup) | Run the cleanup rules now | [Cleanup](/simlock/docs/worker/cleanup) |
+| [`simlock nuke`](#simlock-nuke) | Emergency reset of every lease and device | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
+| [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Runtimes and images](/simlock/docs/worker/runtimes-and-images) |
+| [`simlock device`](#simlock-device) | Enrol or forget a physical device | [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices) |
+| [`simlock token`](#simlock-token) | Create, list and revoke access tokens | [Access control](/simlock/docs/gateway/access-control) |
+| [`simlock worker`](#simlock-worker) | List and manage a gateway's workers | [Managing workers](/simlock/docs/gateway/managing-workers) |
+| [`simlock alerts`](#simlock-alerts) | Send a sample message to an alert destination | [Alerts](/simlock/docs/gateway/alerts) |
+
+Every command and subcommand also accepts `--help` (or `-h`), which prints its usage and exits 0. A flag a command does not list is a usage error (exit 2).
+
+## Global flags
+
+These flags work anywhere on the command line, before or after the command.
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--token <secret>` | Connect as admin with this token. `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
+| `--gateway` | Send the command to this machine's gateway, the daemon in `~/.simlock/gateway`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
+| `--local` | Send the command to this machine's worker, the daemon in `~/.simlock`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
+| `--help`, `-h` | As the first word, or with no command: print the list of commands. | — |
+
+`--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`.
+
+<Aside type="caution">
+The CLI takes these flags out of the whole command line, including the arguments after `simctl` and `adb`. `simlock adb shell echo --local` runs `adb shell echo` against the worker. Quote or rename an argument that collides with one of them.
+</Aside>
+
+### Which daemon a command reaches
+
+With `--gateway`, the command goes to the gateway. With `--local`, it goes to the worker. With neither, it goes to the gateway only when this machine has a gateway (`~/.simlock/gateway` holds an `instance.json` or `config.json`) and no worker has started here yet (`~/.simlock/instance.json` does not exist). Otherwise it goes to the worker.
+
+`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. Three commands are exempt, because they create the gateway or run before it: `daemon start`, `config set` and `mcp`.
+
+When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
+
+### Admin credential
+
+Most commands that change or inspect the whole machine need the admin role. The CLI uses the first credential it finds:
+
+1. `--token <secret>`.
+2. The `SIMLOCK_ADMIN_TOKEN` environment variable.
+3. The `admin.token` file the daemon writes into its data folder (`~/.simlock` for a worker, `~/.simlock/gateway` for a gateway).
+
+If none is found, or the daemon rejects the one found, the CLI connects as an agent and writes one notice line to stderr:
+
+```json
+{"notice":"admin credential unavailable; connecting as agent (admin-only commands will fail with FORBIDDEN)"}
+```
+
+An admin-only command then fails with `FORBIDDEN` (exit 1). On the machine where the daemon runs, as the same user, the `admin.token` file makes you admin with no setup.
+
+### The daemon starts on demand
+
+A command that needs the daemon starts it when nothing is listening. The CLI checks the configuration first, so a bad `config.json` fails on the command's stderr. If the daemon does not answer within 20 seconds, or exits while starting, the command fails with `DAEMON_STARTUP_FAILED` (exit 1) and the message carries the daemon's own start error. `daemon stop`, `daemon status` and `events --since` (without `--follow`) never start a daemon.
+
+## simlock lease
+
+Lease a device. The command waits for a device, prints the grant, then stays running: it renews the lease and releases it when the command ends. See [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) and [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+
+```text
+simlock lease --platform <ios|android> [--device <model> | --class <class>]
+              [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+              [--timeout <duration>] [--lease-id <id>] [--physical]
+              [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
+              [--export-env] [--bind-pid <pid>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--platform <ios or android>` | The platform to lease on. Required. | — |
+| `--device <model>` | An exact model, such as `"iPhone 16"` or `"Pixel 9"`. Cannot be combined with `--class`. | None |
+| `--class <class>` | Any model of this class: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`. | `phone` when `--device` is not given |
+| `--os <version or range>` | An exact OS version (`18.4`, `35`), or a range such as `>=18 <26` or `18 - 26`. A range never downloads. | The newest runtime installed for the platform |
+| `--mode <slim or full>` | The device mode. `full` is guaranteed; `slim` is best effort and falls back to `full`. | The serving worker's default mode (`full` unless configured) |
+| `--image-tag <tag>` | Android only: the system image type, such as `google_apis_playstore`. Never downloads. | Simlock picks an installed image |
+| `--agent-id <id>` | The requester identity for this lease. Must not be empty. | See [Requester identity](#requester-identity) |
+| `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
+| `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
+| `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag` or `--allow-download`. | Off: simulators and emulators only |
+| `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
+| `--detach` | Print the grant and exit. Nothing renews or releases the lease after that. | Off |
+| `--ttl <duration>` | How long the lease lives without a renew. More than `lease.maxTtlMs` (4h by default) is a `BAD_REQUEST`. | `lease.defaultTtlMs` (15m by default) |
+| `--allow-download` | Allow Simlock to download a missing runtime or system image. `downloads.policy` can force downloads on (`always`) or off (`never`). Has no effect through a gateway. | Off |
+| `--export-env` | Print the lease's environment as shell `export` lines in place of the JSON grant, for `eval "$(...)"`. | Off |
+| `--bind-pid <pid>` | Release the lease when this process exits, in place of the command's parent. Positive integer. Ignored with `--detach`. | The parent process |
+
+Without `--detach`, the command renews the lease every third of its TTL and releases it on `SIGINT`, `SIGTERM`, or when the watched process exits. It exits:
+
+- 0 after it released the lease on request.
+- 14 when the daemon ended the lease first (TTL expiry, an operator's `release`, or a device that could not be recovered). A `lease-lost` line on stderr says why.
+- 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon dropped. The lease is not released and stays yours until its deadline; the stderr line names it.
+
+### simlock lease renew
+
+Push a lease's deadline out. Use it for a lease taken with `--detach`. Renewing a lease taken under a different [requester identity](#requester-identity) needs the admin role.
+
+```text
+simlock lease renew <lease-id> [--ttl <duration>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<lease-id>` | The lease to renew. Required. | — |
+| `--ttl <duration>` | The new TTL, up to `lease.maxTtlMs`. | The TTL the lease was granted with |
+
+Prints the renewed lease as one JSON line.
+
+## simlock release
+
+Give a lease back. The command returns as soon as the lease ends; the device is cleaned in the background. See [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
+
+```text
+simlock release <lease-id>
+simlock release --all [--yes]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<lease-id>` | The lease to release. | — |
+| `--all` | Release every lease on the daemon. Needs the admin role. Asks for confirmation. | Off |
+| `--yes` | Skip the confirmation for `--all`. Required when there is no terminal to ask in. | Off |
+
+Releasing a lease taken under a different [requester identity](#requester-identity) needs the admin role. A lease ID and `--all` together are a usage error.
+
+## simlock simctl
+
+Run `xcrun simctl` against Simlock's iOS device set. Simlock's simulators live in their own set, so a bare `xcrun simctl` does not see them. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
+
+```text
+simlock simctl [--lease <lease-id>] <simctl-args...>
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the simctl arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
+| `<simctl-args...>` | Passed to `xcrun simctl` as written. | — |
+
+Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back, and a piped stdin is sent along. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, and a caller-supplied `--set` or `--profiles`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back.
+
+## simlock adb
+
+Run `adb` against Simlock's adb server, which is where Simlock's emulators are. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
+
+```text
+simlock adb [--lease <lease-id>] <adb-args...>
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the adb arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
+| `<adb-args...>` | Passed to `adb` as written. | — |
+
+The command exits with `adb`'s own exit code. Simlock refuses `adb kill-server`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand.
+
+## simlock catalog
+
+Show what you can lease: per platform, the installed runtimes and the default, the models grouped by class with the default model of each class, and, on Android, the installed system images. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+
+```text
+simlock catalog [--platform <ios|android>] [--json]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--platform <ios or android>` | Show one platform only. | Both |
+| `--json` | Print one JSON line in place of the text view. | Off |
+
+## simlock mcp
+
+Start Simlock's MCP server on stdin and stdout, for an agent to call. It offers the tools `list_devices`, `lease_simulator`, `release_simulator` and `lease_status`. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+
+```text
+simlock mcp
+```
+
+Takes no flags other than the [global flags](#global-flags). Stdout carries only MCP messages; diagnostics go to stderr. The server starts the daemon on the first tool call that needs it, and releases its lease when it exits.
+
+## simlock status
+
+Show the daemon's health and mode, its console address, capacity, devices, leases and queue depth. Works for any caller. See [Monitoring](/simlock/docs/worker/monitoring).
+
+```text
+simlock status [--json]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--json` | Print one JSON line in place of the text view. | Off |
+
+## simlock list
+
+List one kind of record as JSON. Needs the admin role. See [Monitoring](/simlock/docs/worker/monitoring).
+
+```text
+simlock list [--devices|--leases|--rules|--requests]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--devices` | Every device the daemon manages. | Used when no flag is given |
+| `--leases` | Every active lease. | Off |
+| `--rules` | The cleanup rules. | Off |
+| `--requests` | The requests waiting for a device, as text: who asked, for what, how long, and why each waits. | Off |
+
+Only one of the four flags at a time.
+
+## simlock events
+
+Print business events, one JSON line each. Needs the admin role. See the [events reference](/simlock/docs/reference/events).
+
+```text
+simlock events [--follow] [--since <duration>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--since <duration>` | Read events from this far back, from the history on disk, which survives restarts. | Off: only the recent events the daemon holds in memory (up to `eventBuffer.capacity`, 1000 by default), which start empty after a restart |
+| `--follow` | Keep printing live events until you press Ctrl-C. With `--since`, prints the history first, with no gap and no duplicates. | Off |
+
+`--since` without `--follow` reads the history file directly when no daemon is running, and does not start one.
+
+## simlock stats
+
+Show usage figures for a time window: requests, wait and hold times, provisioning and boot times, capacity and incidents, split by platform, worker and requester. Needs the admin role. See [Monitoring](/simlock/docs/worker/monitoring).
+
+```text
+simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--since <duration>` | The window ends now and starts this long ago. Cannot be combined with `--from`. | `24h` |
+| `--from <ISO time>` | The window's start, in ISO 8601 with `Z` or an offset, such as `2026-10-01T00:00:00Z`. | — |
+| `--to <ISO time>` | The window's end. Needs `--from`. | Now |
+| `--json` | Print one JSON line in place of the text view. | Off |
+| `--csv` | Print every request in the window as CSV, one row each. Cannot be combined with `--json`. | Off |
+
+The CSV holds at most the newest requests of the window up to a fixed limit; when it is cut short, a `notice` line on stderr says so. A window that ends before the oldest figure the history holds fails with `HISTORY_NOT_KEPT` (exit 12).
+
+## simlock whoami
+
+Show the identity your connection has: principal, name, role and how it was resolved. See [Access control](/simlock/docs/gateway/access-control).
+
+```text
+simlock whoami [--json]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--json` | Print one JSON line in place of the text view. | Off |
+
+## simlock daemon
+
+Start, stop and inspect the daemon. See [Running the daemon](/simlock/docs/worker/running-the-daemon).
+
+```text
+simlock daemon start [--json]
+simlock daemon stop [--json]
+simlock daemon status [--json]
+simlock daemon logs [--follow | --json]
+```
+
+| Subcommand | What it does |
+| --- | --- |
+| `start` | Start the daemon if it is not running and print `Daemon running` with the console address. `simlock --gateway daemon start` creates the gateway on first run. |
+| `stop` | Ask the daemon to stop and print `Daemon stopping`. Needs the admin role. Never starts a daemon. |
+| `status` | Print the daemon's status, or `Daemon stopped` when none is running. Never starts a daemon. Exits 1 when a daemon answers but refuses the connection. |
+| `logs` | Print the last 100 lines of `daemon.log`. |
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--json` | Print one JSON line in place of the text. `start` prints `{"status":"running"}`, `stop` prints `{"status":"stopping"}`, `status` prints the status or `{"status":"stopped"}`, `logs` prints `{"logs":"..."}`. | Off |
+| `--follow` | `logs` only: keep printing new lines, across log rotations, until Ctrl-C. Cannot be combined with `--json`. | Off |
+
+## simlock config
+
+Read or change the daemon's configuration. See [Configuration](/simlock/docs/worker/configuration) and the [configuration reference](/simlock/docs/reference/configuration) for every key.
+
+```text
+simlock config
+simlock config get <key>
+simlock config set <key> <value>
+```
+
+| Subcommand | What it does |
+| --- | --- |
+| (none) | Print the daemon's whole effective configuration as one JSON line. Needs the admin role. |
+| `get <key>` | Print one value. `<key>` is a dotted path, such as `lease.defaultTtlMs`. An unknown key is a usage error. Needs the admin role. |
+| `set <key> <value>` | Write one value to `config.json` in the daemon's data folder. `<value>` is read as JSON when it parses (`900000`, `true`, `["ios"]`), else as a string. Does not contact the daemon. |
+
+`config set` checks the whole file after the change and refuses an invalid value or an unknown key with a usage error (exit 2), leaving the file as it was. The file is written with owner-only permissions. A change takes effect the next time the daemon starts; the command prints `Updated <key> in <path>; takes effect on daemon restart.`
+
+None of the subcommands take flags.
+
+## simlock doctor
+
+Check this machine's prerequisites and compare the daemon's records with the devices that exist. Findings you must act on go to stderr as text; the full report goes to stdout as one JSON line. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
+
+```text
+simlock doctor [--fix] [--purge-orphans] [--yes]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--fix` | Apply the safe corrections to the records. Needs the admin role. Never installs a prerequisite. | Off: report only |
+| `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Needs the admin role. Asks for confirmation. | Off |
+| `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
+
+A gateway refuses `doctor` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2): run it on each worker.
+
+## simlock cleanup
+
+Run the cleanup rules now, in place of waiting for their next pass. Needs the admin role. See [Cleanup](/simlock/docs/worker/cleanup).
+
+```text
+simlock cleanup [--dry-run] [--rule <name>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--dry-run` | Print what each rule would do, without doing it. | Off |
+| `--rule <name>` | Run one rule only. `simlock list --rules` names them. | Every rule |
+
+A gateway refuses `cleanup` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+
+## simlock nuke
+
+Emergency reset: release every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
+
+<Aside type="danger">
+`nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
+</Aside>
+
+```text
+simlock nuke [--delete-devices] [--yes]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--delete-devices` | Also delete every device Simlock manages. | Off |
+| `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
+
+A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+
+## simlock component
+
+Install, list and remove iOS simulator runtimes and Android system images. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+
+```text
+simlock component install <ios|android> <version> [--worker <id>... | --all-workers]
+simlock component list [--platform <ios|android>]
+simlock component remove <ios|android> <version> [--dry-run] [--yes]
+```
+
+### simlock component install
+
+Install one runtime or system image. Needs the admin role. Progress goes to stderr as JSON lines; the result goes to stdout as one JSON line.
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<ios or android> <version>` | The platform and the version to install, such as `ios 18.4` or `android 35`. Required. | — |
+| `--worker <id>` | On a gateway: install on this worker. Repeat for more workers. | — |
+| `--all-workers` | On a gateway: install on every worker. Cannot be combined with `--worker`. | — |
+
+Without a worker flag the component installs on the machine the daemon runs on, and a gateway refuses with `UNSUPPORTED_IN_GATEWAY_MODE`. With a worker flag, a worker refuses with `UNSUPPORTED_IN_WORKER_MODE`. On a gateway, the command exits 15 when any worker did not end `installed` or `already-installed`; the per-worker result on stdout says which.
+
+### simlock component list
+
+List the installed runtimes and system images as one JSON line. Works for any caller.
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--platform <ios or android>` | List one platform only. | Both |
+
+### simlock component remove
+
+Remove a runtime or system image that Simlock installed. Needs the admin role.
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<ios or android> <version>` | The component to remove. Required. | — |
+| `--dry-run` | Report what would be removed, without removing it or asking. | Off |
+| `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
+
+Simlock refuses to remove a component it did not install (`COMPONENT_NOT_OWNED`) or one a device still uses (`COMPONENT_IN_USE`). A gateway refuses `component list` and `component remove` with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+## simlock device
+
+Enrol a physical device plugged into this machine, or forget one. Needs the admin role. See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
+
+```text
+simlock device add --platform <ios|android> <id> [--json]
+simlock device remove <id> [--json]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<id>` | The device's ID: the UDID for iOS, the adb serial for Android. Required. | — |
+| `--platform <ios or android>` | `add` only: which platform the device is. Required for `add`. | — |
+| `--json` | Print one JSON line in place of the text line. | Off |
+
+`add` prints a line such as `Enrolled iPhone 15 Pro (iOS 18.4) as 00008110-001A2B3C4D5E, 12 user apps recorded.` `remove` forgets the device and changes nothing on it. A gateway refuses both with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+## simlock token
+
+Create, list and revoke the tokens that agents, operators and workers use to connect. Needs the admin role. See [Access control](/simlock/docs/gateway/access-control).
+
+```text
+simlock token create --role <agent|operator|worker> [--label <text>]
+simlock token list
+simlock token revoke <token-id>
+```
+
+| Subcommand | Flag | Meaning | Default |
+| --- | --- | --- | --- |
+| `create` | `--role <agent, operator or worker>` | What the token may do. `worker` tokens let a worker join a gateway. Required. | — |
+| `create` | `--label <text>` | A name to tell the token apart in `token list`. Must not be empty. | None |
+| `revoke` | `<token-id>` | The ID `token list` shows. Required. | — |
+
+Every subcommand prints one JSON line. `create` prints the secret once; it cannot be shown again.
+
+## simlock worker
+
+List the workers of a gateway and take them in and out of service. See [Managing workers](/simlock/docs/gateway/managing-workers).
+
+```text
+simlock worker list [--json]
+simlock worker drain <worker-id>
+simlock worker undrain <worker-id>
+simlock worker remove <worker-id>
+```
+
+| Subcommand | What it does |
+| --- | --- |
+| `list` | Show each worker: connection, devices, capacity and installs. On a single machine it shows the machine itself. `--json` prints one JSON line in place of the text view. |
+| `drain` | Stop sending new requests to the worker. Its leases run on. |
+| `undrain` | Send new requests to the worker again. |
+| `remove` | Forget a worker that is not connected. A connected worker is refused with `WORKER_CONNECTED`: drain it and let it disconnect first. |
+
+All four need the admin role. `drain`, `undrain` and `remove` print one JSON line, and on a worker they fail with `UNSUPPORTED_IN_WORKER_MODE` (exit 2).
+
+## simlock alerts
+
+Send one sample message to one of the gateway's alert destinations, to check it works. Needs the admin role. See [Alerts](/simlock/docs/gateway/alerts).
+
+```text
+simlock alerts test <destination> [--json]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<destination>` | The destination's name in the gateway's alert configuration. Required. | — |
+| `--json` | Print one JSON line in place of the text line. | Off |
+
+On success it prints `Sent a test message to <destination>: HTTP <status>`. A name the gateway does not list fails with `UNKNOWN_ALERT_DESTINATION` (exit 12); a receiver that does not take the message fails with `ALERT_SEND_FAILED` (exit 1). A worker refuses with `UNSUPPORTED_IN_WORKER_MODE`.
+
+## Output
+
+Simlock is built for agents, so most output is JSON lines.
+
+| Stream | What goes there |
+| --- | --- |
+| stdout | The command's result. JSON by default, one line, for `lease`, `lease renew`, `release`, `list`, `events`, `cleanup`, `doctor`, `nuke`, `config`, `config get`, `token`, `component`, and `worker drain`, `undrain` and `remove`. A text view by default, with `--json` for one JSON line, for `status`, `catalog`, `stats`, `whoami`, `daemon`, `worker list`, `alerts test` and `device`. `list --requests`, `config set` and `lease --export-env` print text only. |
+| stderr | Progress and notices as JSON lines, and the error line when a command fails. `doctor` also writes the findings you must act on here as text. |
+
+A lease in progress writes lines like these to stderr:
+
+```json
+{"push":"progress","stage":"queued","queuePosition":1}
+{"push":"progress","stage":"booting","etaMs":60000}
+{"push":"device-unhealthy","leaseId":"3f6c2a9e-8b1d-4c57-9e0a-5d2b7f41c8e3","deviceId":"7d1e0b52-4a3c-4f8e-b6a9-2c5d8e9f1a04"}
+{"push":"lease-lost","leaseId":"3f6c2a9e-8b1d-4c57-9e0a-5d2b7f41c8e3","deviceId":"7d1e0b52-4a3c-4f8e-b6a9-2c5d8e9f1a04","reason":"expired"}
+```
+
+A failed command writes exactly one error line to stderr:
+
+```json
+{"error":{"code":"NO_CAPACITY","message":"No device capacity is currently available"}}
+```
+
+`code` is one of the codes in the [errors reference](/simlock/docs/reference/errors), or `USAGE` for a bad flag, a missing argument or an unknown command, or `INTERNAL` for anything unexpected. A usage message for an unknown command or a missing argument ends with ``(run `simlock --help` for usage)``.
+
+### Durations
+
+Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole number followed by `ms`, `s`, `m`, `h` or `d`, such as `90s`, `15m` or `2d`. A number with no unit is milliseconds. Anything else is a usage error.
+
+### Exit codes
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Success. |
+| 1 | The command failed: an internal error, a lost or failed daemon connection, a refused credential, or another failure listed under 1 in the errors reference. |
+| 2 | The request was wrong: a usage error, an invalid request, or a command this daemon does not run. |
+| 10 | A deadline ran out: the queue wait, a passthrough command, or a download. |
+| 11 | Busy: no capacity with `--no-wait`, or a device or component held by other work. Try again later. |
+| 12 | What you asked for does not exist here or cannot be provided: a model, a runtime, a worker, a device. |
+| 13 | You already hold a lease, or the lease ID is taken. |
+| 14 | `lease` without `--detach`: the daemon ended the lease before you did. |
+| 15 | `component install` with `--worker` or `--all-workers`: at least one worker did not install. |
+
+`simlock simctl` and `simlock adb` exit with the tool's own exit code, which can collide with these numbers. Check stderr for an `{"error":...}` line, which only Simlock writes. The [errors reference](/simlock/docs/reference/errors#exit-codes) lists which error code gives which exit code.
+
+## Environment variables
+
+### Read by the CLI and the MCP server
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `SIMLOCK_HOME` | The folder Simlock keeps everything in. The worker uses it directly; a gateway uses its `gateway` subfolder. A path so long that the daemon's socket path would pass the system limit fails with `USAGE` (exit 2). | `~/.simlock` |
+| `SIMLOCK_ADMIN_TOKEN` | An admin credential: an operator token or the daemon's `admin.token` secret. Used when `--token` is not given. | Unset: the CLI reads `admin.token` |
+| `SIMLOCK_AGENT_ID` | The requester identity. When set, it wins over the session variables below. | Unset |
+| `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
+| `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |
+
+### Requester identity
+
+Simlock limits leases per requester (one by default), so each agent session needs one stable identity. The CLI uses the first of these:
+
+1. `--agent-id <id>` on `simlock lease`.
+2. `SIMLOCK_AGENT_ID`, when set.
+3. `CLAUDE_CODE_SESSION_ID`, as `claude-code:<id>`, when set and not empty.
+4. `CODEX_SESSION_ID`, as `codex:<id>`, when set and not empty.
+5. An ID made from the process ID, different for every command.
+
+Under Claude Code and Codex, every `simlock` command in one session is the same requester with no setup. `simlock mcp` resolves the same way, falling back to `mcp:<pid>`. Codex does not pass `CODEX_SESSION_ID` to an MCP server, so under Codex the MCP server and the CLI are two requesters and can hold two leases. Elsewhere, set a different `SIMLOCK_AGENT_ID` for each agent session; a single value shared by several agents makes them one requester with one lease.
+
+### Read by a daemon the CLI starts
+
+A daemon started on demand inherits the environment of the command that started it. Set these in that shell, or restart the daemon after you change them.
+
+| Variable | Meaning |
+| --- | --- |
+| `ANDROID_HOME`, `ANDROID_SDK_ROOT` | Where the Android SDK is, tried in this order, then `~/Library/Android/sdk`. |
+| `JAVA_HOME` | The JDK the Android SDK tools run on. |
+
+### Set in a lease's environment
+
+`simlock lease --export-env` prints these, and the JSON grant carries them under `environment`. Set them before you run the platform tool directly.
+
+| Variable | When | Meaning |
+| --- | --- | --- |
+| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator | The device set to pass to `xcrun simctl --set`. |
+| `SIMLOCK_DEVICE_UDID` | Physical iOS device | The device's UDID. |
+| `ANDROID_ADB_SERVER_PORT` | Android | The adb server that sees the device: Simlock's own server for an emulator, `5037` for a physical device. |
+| `ANDROID_SERIAL` | Physical Android device | The device's adb serial. |

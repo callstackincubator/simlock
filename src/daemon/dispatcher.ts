@@ -56,6 +56,7 @@ import {
   capabilityReason,
   type capabilitySchema,
   consoleUrlField,
+  EVENTS_PAGE_DEFAULT,
   fitPlatformCatalog,
   OPERATIONS,
   requestedDevice,
@@ -72,6 +73,7 @@ import {
   DispatchError,
   identityGet,
   runDispatch,
+  eventsPageAnswer,
   usageAnswer,
   type DispatchSession,
   type ErasedHandler,
@@ -137,7 +139,7 @@ export interface DispatcherOptions {
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly config: Config;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
@@ -812,7 +814,16 @@ export class Dispatcher {
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
-    this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+    input.beforeId === undefined && input.limit === undefined
+      ? this.options.eventHistory.replay(
+          input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
+        )
+      : eventsPageAnswer(
+          this.options.eventHistory.replayPage({
+            ...(input.beforeId === undefined ? {} : { beforeId: input.beforeId }),
+            limit: input.limit ?? EVENTS_PAGE_DEFAULT,
+          }),
+        );
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

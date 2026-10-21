@@ -1,0 +1,184 @@
+---
+title: Programmatic client
+description: Lease, renew and release devices from a Node.js program on the same machine as the daemon, with simlock/client and simlock/admin.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A Node.js program on the machine that runs the Simlock daemon can lease devices without starting `simlock` commands. The `simlock` package has two entry points:
+
+| Import | For | Can |
+| --- | --- | --- |
+| `simlock/client` | Agents and tools that need devices | Lease, renew, release, run commands on a leased device, read the catalog and status |
+| `simlock/admin` | Operator tools | Everything above, plus every lease and device, tokens, cleanup, events and stopping the daemon |
+
+Both talk to the daemon over its local socket. They have no network transport: a program on another machine uses the [HTTP API](/simlock/docs/using-devices/remote-agents) instead.
+
+## Before you start
+
+- Node.js 22.13 or later.
+- The daemon is running on this machine. The client never starts it. Start it with `simlock daemon start`, or run any `simlock` command, which starts it on demand.
+- Install the package in your project:
+
+  ```sh
+  npm i simlock
+  ```
+
+## Connect
+
+```ts
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { connectSimlock } from "simlock/client";
+
+const client = await connectSimlock({
+  endpoint: join(homedir(), ".simlock", "daemon.sock"),
+  principal: "build-bot-1",
+});
+```
+
+- `endpoint` is the daemon's socket: `~/.simlock/daemon.sock`. If you set `SIMLOCK_HOME`, it is `$SIMLOCK_HOME/daemon.sock`. A gateway's socket is `~/.simlock/gateway/daemon.sock`.
+- `principal` is your requester id. Leases you take belong to it, and it can hold one lease at a time. Give every agent or worker process its own value. Without it, every client that leaves it out shares the daemon's own default id, and with it one lease.
+
+One client is one connection. It does not reconnect: if the daemon stops, every call in progress fails with `DAEMON_CONNECTION_LOST`, and you connect again. Your lease is not released by a lost connection.
+
+## A complete example
+
+This program leases an iPhone simulator, keeps the lease alive, installs and launches an app, and releases the device.
+
+```ts title="lease-and-launch.mts"
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { connectSimlock, isSimlockError } from "simlock/client";
+
+const client = await connectSimlock({
+  endpoint: join(homedir(), ".simlock", "daemon.sock"),
+  principal: "build-bot-1",
+});
+
+try {
+  const grant = await client.requestLease(
+    { platform: "ios", model: "iPhone 16", ttlMs: 10 * 60_000, timeoutMs: 5 * 60_000 },
+    { onProgress: (progress) => console.error("waiting:", progress.stage) },
+  );
+  const { lease, device } = grant;
+  console.error(`leased ${device.spec.model} ${device.driverDeviceId} as ${lease.id}`);
+
+  // The client never renews for you. Renew every third of the TTL.
+  const renewal = setInterval(() => {
+    client.renewLease({ leaseId: lease.id }).catch((error) => console.error("renew failed:", error));
+  }, lease.ttlMs / 3);
+  client.onLeaseLost((push) => {
+    if (push.leaseId === lease.id) console.error(`lease lost: ${push.reason}`);
+  });
+
+  try {
+    const run = async (args: string[]) => {
+      const { exitCode } = await client.exec(
+        { leaseId: lease.id, tool: "simctl", args },
+        { onOutput: ({ stream, chunk }) => (stream === "stdout" ? process.stdout : process.stderr).write(chunk) },
+      );
+      if (exitCode !== 0) throw new Error(`simctl ${args[0]} exited with ${exitCode}`);
+    };
+    await run(["install", device.driverDeviceId, resolve("build/Debug-iphonesimulator/MyApp.app")]);
+    await run(["launch", device.driverDeviceId, "com.example.myapp"]);
+  } finally {
+    clearInterval(renewal);
+    await client.releaseLease({ leaseId: lease.id });
+  }
+} catch (error) {
+  if (!isSimlockError(error)) throw error;
+  console.error(`${error.code}: ${error.message}`);
+  process.exitCode = 1;
+} finally {
+  await client.close();
+}
+```
+
+Run it with a TypeScript runner, for example `npx tsx lease-and-launch.mts`.
+
+What the calls do:
+
+| Call | Does |
+| --- | --- |
+| `requestLease(request, { onProgress, signal })` | Waits in the queue and resolves with the grant: `device`, `environment`, `lease` and `timing`, the same fields `simlock lease` prints. |
+| `renewLease({ leaseId, ttlMs? })` | Sets the deadline to now plus the TTL. Resolves with the lease, including the new `ttlDeadline`. |
+| `releaseLease({ leaseId })` | Ends the lease. The device is wiped in the background. |
+| `exec({ leaseId, tool, args, stdin? }, { onOutput })` | Runs `simctl` or `adb` (or `devicectl` on a physical iPhone or iPad) against the device and resolves with `{ exitCode }`. |
+| `listLeases()` | Your leases. |
+| `getCatalog({ platform? })` | What you can ask for, as `simlock catalog --json` prints it. |
+| `onLeaseLost`, `onDeviceUnhealthy`, `onDeviceRecovered` | Tell you what happens to a lease this client took. Each returns a function that stops listening. |
+| `close()` | Closes the connection. It does not release your leases. |
+
+`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` and `leaseId`. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+
+`exec` arguments are passed to the tool unchanged. Name your device by its UDID (`device.driverDeviceId`) for `simctl`, or its serial (`device.address`) with `-s` for `adb`. Use absolute paths: the command runs in the daemon's process, not in your program's working directory.
+
+## Stop waiting
+
+Pass an `AbortSignal` to stop waiting for a device:
+
+```ts
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 60_000);
+const grant = await client.requestLease({ platform: "android", class: "tablet" }, { signal: controller.signal });
+```
+
+Aborting takes the request out of the queue and rejects with `CANCELLED`. If Simlock was already creating or booting the device, the work finishes, and the client releases the device as soon as it is granted. An abort after the grant does nothing; release the lease yourself.
+
+## Handle errors
+
+Every failure the daemon reports is a `SimlockError` with a `code` and a `message`. Check it with `isSimlockError`:
+
+```ts
+try {
+  await client.requestLease({ platform: "ios", model: "iPhone 16", noWait: true });
+} catch (error) {
+  if (!isSimlockError(error)) throw error;
+  if (error.code === "NO_CAPACITY") console.error("No device is free right now; try again later.");
+  else if (error.code === "REQUESTER_ALREADY_LEASED") console.error(error.message);
+  else throw error;
+}
+```
+
+The message of `REQUESTER_ALREADY_LEASED` names the lease you already hold.
+
+The codes are the ones the CLI prints. See [Errors](/simlock/docs/using-devices/errors).
+
+## The admin client
+
+`simlock/admin` gives an operator tool the whole daemon: every lease and device, releasing any lease, tokens, configuration, events, cleanup and stopping the daemon.
+
+```ts
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { connectSimlockAdmin } from "simlock/admin";
+
+const home = join(homedir(), ".simlock");
+const admin = await connectSimlockAdmin({
+  endpoint: join(home, "daemon.sock"),
+  credential: (await readFile(join(home, "admin.token"), "utf8")).trim(),
+  principal: "ops-dashboard",
+});
+
+const leases = await admin.list({ kind: "leases" });
+console.log(leases);
+await admin.close();
+```
+
+The `credential` is one of:
+
+- The contents of `~/.simlock/admin.token`. The daemon writes this file, readable only by its own user, each time it starts, with a new secret, and deletes it when it stops. Read it again after a restart.
+- The secret of an operator token, from `simlock token create --role operator`.
+
+<Aside type="caution">
+The admin credential lets a program release every agent's lease and stop the daemon. Keep it out of agent processes; give agents `simlock/client` instead.
+</Aside>
+
+A missing or wrong credential fails the connection with `ADMIN_AUTHENTICATION_FAILED`. An admin client has every method of the agent client too.
+
+## Related
+
+- How leases and TTLs work: [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
+- Leasing from another machine: [Remote agents](/simlock/docs/using-devices/remote-agents).

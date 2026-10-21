@@ -71,3 +71,23 @@
   color: var(--text-muted);
   cursor: default;
 }
+
+/* A square button that holds an icon alone. It has a button's edge and its 40px height. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  border-color: var(--text);
+  background: var(--surface);
+}
