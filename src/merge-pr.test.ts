@@ -376,29 +376,30 @@ describe("merge-pr.sh re-run of red CI", { timeout: 20_000 }, () => {
     expect(result.status).toBe(0);
   });
 
-  it("re-runs a job GitHub cancelled, and merges when the re-run passes", () => {
-    const result = gate({ runs: [run("cancelled")], runsAfterRerun: [run("success")] });
-    expect(result.reruns).toBe(1);
-    expect(result.merged).toBe(true);
-  });
-
-  it("re-runs a job GitHub cancelled, though the Quality check that needs it failed, and merges when the re-run passes", () => {
-    const result = gate({
+  it.each([
+    {
+      name: "a job",
+      runs: [run("cancelled")],
+      runsAfterRerun: [run("success")],
+    },
+    {
+      name: "a job, though the Quality check that needs it failed,",
       runs: [run("cancelled", "E2E (2/3)"), run("failure")],
       runsAfterRerun: [run("success", "E2E (2/3)"), run("success")],
-    });
-    expect(result.reruns).toBe(1);
-    expect(result.merged).toBe(true);
-  });
-
-  it("re-runs a Quality check GitHub cancelled while every job it needs passed, and merges when the re-run passes", () => {
-    const result = gate({
+    },
+    {
+      name: "a Quality check, while every job it needs passed,",
       runs: [run("success", "E2E (2/3)"), run("cancelled")],
       runsAfterRerun: [run("success", "E2E (2/3)"), run("success")],
-    });
-    expect(result.reruns).toBe(1);
-    expect(result.merged).toBe(true);
-  });
+    },
+  ])(
+    "re-runs $name GitHub cancelled, and merges when the re-run passes",
+    ({ runs, runsAfterRerun }) => {
+      const result = gate({ runs, runsAfterRerun });
+      expect(result.reruns).toBe(1);
+      expect(result.merged).toBe(true);
+    },
+  );
 
   it("does not count a pull request in the flaky-test list as a flaky-test issue", () => {
     const result = gate({

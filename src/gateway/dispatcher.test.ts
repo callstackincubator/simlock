@@ -1656,72 +1656,35 @@ describe("GatewayDispatcher", () => {
       expect(started).toBe(true);
     });
 
-    it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
-      const { directory, dispatcher, workers } = harness();
-      const client = new ScriptedWorkerClient();
-      directory.add("wrk_1", client);
-      workers.connected("wrk_1", undefined, "0.3.0");
-      workers.refresh("wrk_1", {
-        capacity: statusFixture().capacity,
-        health: "running",
-        queueDepth: 0,
-        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
-          .platforms,
-        downloads: { policy: "on-request" },
-      });
-      // Round 6 review: this harness used to connect `wrk_1` to the registry without adding a
-      // client for it, so removing the gate under test made the request route to an unreachable
-      // target, get re-queued by `#staleView`, and fail the test by *timing out* -- an outcome a
-      // gateway with no gate at all produces just as well. Its H3 sibling below already had the
-      // fix and said why; this one had been left behind. A worker able and willing to grant,
-      // plus `noWait`, means an ungated `owner` is caught by the lease actually being issued
-      // (testing rule 2: fail on a named assertion, not a schedule).
-      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    it.each([
+      { owner: "someone-else", principal: "agent-1", role: "agent" as const },
+      { owner: "agent-7", principal: "operator-1", role: "admin" as const },
+    ])(
+      "lease.request: rejects a $role session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H3, H7)",
+      async ({ owner, principal, role }) => {
+        const { directory, dispatcher, workers } = harness();
+        const client = new ScriptedWorkerClient();
+        directory.add("wrk_1", client);
+        workers.connected("wrk_1", undefined, "0.3.0");
+        workers.refresh("wrk_1", {
+          capacity: statusFixture().capacity,
+          health: "running",
+          queueDepth: 0,
+          catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+            .platforms,
+          downloads: { policy: "on-request" },
+        });
+        client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-      await expect(
-        dispatcher.dispatch(
-          "lease.request",
-          { model: "iPhone 17", noWait: true, owner: "someone-else", platform: "ios" },
-          session({ principal: "agent-1", role: "agent" }),
-        ),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    });
-
-    // H3 (round 3 review): §27a's gate here used to be `role !== "admin"`, admitting any HTTP
-    // `operator` bearer token connected directly to this gateway -- the same over-wide check
-    // `daemon/dispatcher.ts`'s own `#leaseRequest` shared. `isGatewayUplink` is narrower: it is
-    // stamped only on a *worker's* connection to its own configured gateway
-    // (`DaemonServer#acceptUplink`), and nothing forwards into a gateway's own front door the
-    // way a gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005. So
-    // no session this handler is ever called with can carry it, and `owner` is unconditionally
-    // `FORBIDDEN` here now, admin included: this test pins that a plain admin session (still
-    // `role: "admin"`, still what an operator token maps to) is refused exactly like an agent's.
-    it("lease.request: rejects a plain admin session (not the gateway's uplink) naming owner with FORBIDDEN -- no session ever reaching this handler is (ADR §27a, H3)", async () => {
-      const { directory, dispatcher, workers } = harness();
-      const client = new ScriptedWorkerClient();
-      directory.add("wrk_1", client);
-      workers.connected("wrk_1", undefined, "0.3.0");
-      workers.refresh("wrk_1", {
-        capacity: statusFixture().capacity,
-        health: "running",
-        queueDepth: 0,
-        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
-          .platforms,
-        downloads: { policy: "on-request" },
-      });
-      // A worker able and willing to grant it -- so a gate that let this session's `owner`
-      // through would be caught by the lease actually being issued, not by an unrelated
-      // `NO_CAPACITY`/timeout that would pass just as well with no gate at all.
-      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-
-      await expect(
-        dispatcher.dispatch(
-          "lease.request",
-          { model: "iPhone 17", noWait: true, owner: "agent-7", platform: "ios" },
-          session({ principal: "operator-1", role: "admin" }),
-        ),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    });
+        await expect(
+          dispatcher.dispatch(
+            "lease.request",
+            { model: "iPhone 17", noWait: true, owner, platform: "ios" },
+            session({ principal, role }),
+          ),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      },
+    );
 
     it("lease.request: forwards owner as `ownerId` end to end when the session is the gateway's own uplink (ADR §27a, H3) -- exercising the same field the worker's own dispatcher gates, on this dispatcher's shared handler shape", async () => {
       const { directory, dispatcher, leaseIndex, workers } = harness();

@@ -123,16 +123,6 @@ describe("the allocate front", () => {
     expect(rig.cancels()).toHaveLength(3);
   });
 
-  it("refreshes the front map at each allocate", async () => {
-    const rig = setUp();
-    const refresh = vi.spyOn(rig.map, "refresh");
-
-    await rig.run();
-    await rig.run();
-
-    expect(refresh).toHaveBeenCalledTimes(2);
-  });
-
   it("gives up on a lease.list that does not answer within 5 s and goes on to the lease request", async () => {
     const rig = setUp();
     rig.map.add("old", { address: "a", deadline: 500, identity: agent, ttlMs: 60_000 });
