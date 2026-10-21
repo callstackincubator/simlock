@@ -14,8 +14,8 @@ name: Release
 #   release   the GitHub release, with the same notes as CHANGELOG.md and the tarball attached
 #   website   the docs site, from the release commit (.github/workflows/website.yml)
 #
-# `dry_run` stops after build, with the tarball to inspect. The version and changelog arithmetic
-# is `node scripts/release.mjs`.
+# `dry_run` stops after build, with the tarball to inspect, and may run from any branch (a release
+# only from main). The version and changelog arithmetic is `node scripts/release.mjs`.
 #
 # Why it is shaped this way:
 # - Every action is pinned to a commit. Nothing is cached (no actions/cache, no setup-node cache):
@@ -64,7 +64,8 @@ concurrency:
 jobs:
   plan:
     name: Plan
-    if: github.ref == 'refs/heads/main'
+    # why: a dry run pushes and publishes nothing, so it may try a branch; a release is main's.
+    if: github.ref == 'refs/heads/main' || inputs.dry_run
     runs-on: ubuntu-24.04
     permissions:
       contents: read
