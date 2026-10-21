@@ -1566,6 +1566,59 @@ describe("warm pool policy", () => {
         expect([...targetedDevices(input(devices, [target(5)]))]).toEqual(["good"]);
       });
 
+      it("protects queued demand only for ready idle grantable devices matching its requirement and mode", () => {
+        const ready = device("ready", "ready");
+        const waiting = [classDemand()];
+        const cases = [
+          ["matching class", view([ready], { waiting }), ["ready"]],
+          [
+            "another matching model",
+            view([{ ...ready, spec: spec("iPhone 17") }], { waiting }),
+            ["ready"],
+          ],
+          ["no demand", view([ready]), []],
+          ["in flight", view([ready], { waiting: [classDemand("full", "ios", true)] }), []],
+          ["claimed", view([ready], { claimed: [ready.id], waiting }), []],
+          ["leased record", view([ready], { leased: [ready], waiting }), []],
+          ["shutdown", view([{ ...ready, state: "shutdown" }], { waiting }), []],
+          [
+            "spent fresh",
+            view([device("ready", "ready", { endedAgo: 1, leaseIdentity: "fresh" })], { waiting }),
+            [],
+          ],
+          [
+            "unused fresh",
+            view([device("ready", "ready", { leaseIdentity: "fresh" })], { waiting }),
+            ["ready"],
+          ],
+          ["mode", view([ready], { waiting: [classDemand("slim")] }), []],
+          ["platform", view([ready], { waiting: [classDemand("full", "android")] }), []],
+          ["model", view([ready], { waiting: [modelDemand("iPhone 17")] }), []],
+          ["class", view([{ ...ready, spec: spec("iPad Pro") }], { waiting }), []],
+          [
+            "OS",
+            view([{ ...ready, spec: spec("iPhone 15", { osVersion: "25.0" }) }], { waiting }),
+            [],
+          ],
+          [
+            "image",
+            view([ready], {
+              waiting: [
+                {
+                  ...classDemand(),
+                  requirement: { ...classDemand().requirement, imageTag: "google_apis" },
+                },
+              ],
+            }),
+            [],
+          ],
+        ] as const;
+
+        for (const [name, policyView, expected] of cases) {
+          expect([...targetedDevices(policyView)], name).toEqual(expected);
+        }
+      });
+
       it("sums the counts of targets of one spec and keeps a different spec apart", () => {
         const devices = [
           ofKind("a", "ready", { createdAt: 1 }),
