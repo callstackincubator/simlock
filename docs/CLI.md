@@ -2408,7 +2408,7 @@ never acts on it.
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
 simlock started, clear the queue. With `--delete-devices`, also destroy every
-registry-managed device. Never touches devices outside the registry. A lease on
+registry-managed device. It also clears what the warm pool has learned from past leases, so no device is booted back unasked afterwards. Never touches devices outside the registry. A lease on
 an enrolled physical device ends like any other, and its apps are uninstalled;
 the device stays enrolled, and `--delete-devices` never deletes one. It stays
 a per-machine command: a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit

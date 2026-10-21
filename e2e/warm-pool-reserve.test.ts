@@ -122,11 +122,12 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     const grants = ["a1", "a2", "a3", "a4", "a5"].map((agent) =>
       lease(env, agent, ["--timeout", "60s"]),
     );
-    await waitFor(async () => (await makeReadyCalls(env)) === 5, {
-      label: "three more boots are running",
+    // why: the warm pool's boot of the released device counts among the three.
+    await waitFor(async () => (await makeReadyCalls(env)) === 4, {
+      label: "two more boots are running beside the warm pool's",
     });
     await new Promise((resolve) => setTimeout(resolve, 1_500));
-    expect(await makeReadyCalls(env)).toBe(5);
+    expect(await makeReadyCalls(env)).toBe(4);
 
     const granted = await Promise.all(grants);
     await untilQuiet(env);

@@ -24,7 +24,7 @@ How one lease request becomes one concrete device, virtual or physical.
 | iOS device types and runtimes | `simctl list -j devicetypes runtimes` | Each resolve, catalog |
 | Existing devices | registry snapshot | Each plan |
 | Enrolled physical devices | registry snapshot; presence from `Driver.listPresentPhysical` | Each physical plan; presence before each grant |
-| Warm targets | `warmPool.targets` (`core/warm-pool/config.ts`) | Every warm-pool pass, downloads off |
+| Warm targets | `warmPool.targets` (`core/warm-pool/config.ts`), and the kinds the pool learned from leases (`core/warm-pool/learned.ts`, `state.db`) | Every warm-pool pass, downloads off |
 
 Never read: the sdkmanager catalog. A preference list is merged in `daemon/main.ts`
 `modelPreferenceWiring`; nothing else builds it.
@@ -50,7 +50,7 @@ In `LeaseAcquisitionCoordinator` (`leasing/lease-acquisition-coordinator.ts`), n
 9. Requirement: class or model target, OS (`range`, `exact`, or `installed` for a class with no
    OS), image tag. An exact model gets `exactRequirement(spec)`.
 
-Warm targets go through the same steps (`resolve`) with `allowDownload: false`; a target names no class.
+Warm targets go through the same steps (`resolve`) with `allowDownload: false`; a target names no class. A learned kind is already a resolved spec and is kept ready like a target.
 
 ## Android `resolveSpec`
 
@@ -81,7 +81,7 @@ same platform, same image tag, model equal or `classOf(model)` equal to the clas
 `classOf` reads the catalog entry read during resolution; a device record stores no class.
 
 1. A `ready`, unclaimed device that serves → grant.
-2. Unless `noWait`: one the warm pool is booting or creating under an ownerless claim (for a target, a released device or a request queued behind) → wait.
+2. Unless `noWait`: one the warm pool is booting or creating under an ownerless claim (for a target or learned kind, a released device or a request queued behind) → wait.
 3. A `shutdown` device that serves → boot it.
 4. Else provision the spec, evict an idle device, wait, or `NO_CAPACITY`.
 
