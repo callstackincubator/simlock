@@ -65,6 +65,8 @@ export interface OverviewActivity {
 }
 
 export interface OverviewInbox {
+  // why: a read that failed leaves the Inbox unchecked there, so the page never says it is clear.
+  readonly couldNotCheck: readonly string[];
   readonly problems: number;
   readonly needsYou: readonly OverviewItem[];
 }
@@ -174,11 +176,13 @@ function tiles(
 }
 
 // why: Needs you lists problems only, in the Inbox's own order, so its first rows are the Inbox's.
-function inboxOf(
-  workers: readonly WorkerView[],
-  requests: readonly WaitingRequest[],
-  now: number,
-): OverviewInbox {
+function inboxOf(input: {
+  readonly workers: readonly WorkerView[];
+  readonly requests: readonly WaitingRequest[];
+  readonly couldNotCheck: readonly string[];
+  readonly now: number;
+}): OverviewInbox {
+  const { couldNotCheck, now, requests, workers } = input;
   const problems = inGroupOrder(inboxItems(workers, { now, requests })).filter(
     (item) => inboxGroup(item) !== "Heads-up",
   );
@@ -190,6 +194,7 @@ function inboxOf(
       tone: inboxTone(item.condition),
       word: item.condition,
     })),
+    couldNotCheck,
     problems: problems.length,
   };
 }
@@ -201,9 +206,17 @@ export function overviewOf(input: {
   readonly requests: readonly WaitingRequest[];
   readonly events: readonly ConsoleEvent[];
   readonly figures?: FiguresState;
+  readonly couldNotCheck?: readonly string[];
   readonly now: number;
 }): Overview {
-  const { events, figures = { kind: "loading" }, now, requests, workers } = input;
+  const {
+    couldNotCheck = [],
+    events,
+    figures = { kind: "loading" },
+    now,
+    requests,
+    workers,
+  } = input;
   const platforms = [platformUse(workers, "ios"), platformUse(workers, "android")];
   return {
     activity: [...events]
@@ -220,7 +233,7 @@ export function overviewOf(input: {
           ...(tone === undefined ? {} : { tone }),
         };
       }),
-    inbox: inboxOf(workers, requests, now),
+    inbox: inboxOf({ couldNotCheck, now, requests, workers }),
     figures,
     platforms,
     tiles: [

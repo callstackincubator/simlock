@@ -17,7 +17,7 @@ function text(html: string): string {
 const quiet: Overview = {
   activity: [],
   figures: { kind: "loading" },
-  inbox: { needsYou: [], problems: 0 },
+  inbox: { couldNotCheck: [], needsYou: [], problems: 0 },
   platforms: [],
   tiles: [],
   workers: [],

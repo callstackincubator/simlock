@@ -214,7 +214,13 @@ function WorkerTable({ workers }: { readonly workers: readonly OverviewWorker[] 
 }
 
 function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
-  if (inbox.problems === 0) return <p className="muted">Nothing needs you</p>;
+  const unchecked =
+    inbox.couldNotCheck.length === 0 ? null : (
+      <p className="muted">{`Could not check: ${inbox.couldNotCheck.join(", ")}`}</p>
+    );
+  if (inbox.problems === 0) {
+    return unchecked ?? <p className="muted">Nothing needs you</p>;
+  }
   return (
     <Panel title="Needs you" flush>
       <ul className="overview-list">

@@ -22,9 +22,11 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   const asked = loadView(useLiveResource<WaitingList>("/v1/lease-requests"));
   // why: a daemon that keeps no queue of its own answers 501; the overview then counts no waiting
-  // requests instead of hiding the whole fleet behind "not available".
+  // requests instead of hiding the whole fleet behind "not available". A read that failed is not
+  // that: the fleet still shows, and the Inbox line says what could not be checked.
+  const failed = asked.kind === "refused";
   const waiting: LoadView<WaitingList> =
-    asked.kind === "unsupported" ? { data: { requests: [] }, kind: "ready" } : asked;
+    asked.kind === "unsupported" || failed ? { data: { requests: [] }, kind: "ready" } : asked;
   const events = loadView(useRecentEvents());
   const figures = useFigures(range);
   const now = useNow();
@@ -32,6 +34,7 @@ export function useOverview(range: ConsoleRange): LoadView<Overview> {
   return mapView(reads, ([[workerList, waitingList], recent]) =>
     overviewOf({
       events: recent,
+      couldNotCheck: failed ? ["waiting requests"] : [],
       figures,
       now: now.server,
       requests: waitingList.requests,
