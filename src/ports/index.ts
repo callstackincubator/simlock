@@ -38,6 +38,7 @@ export type { IpcErrorCode } from "./ipc.js";
 export type { IpcListener } from "./ipc.js";
 export {
   FakeServiceManager,
+  LaunchdServiceManager,
   type ServiceDefinition,
   type ServiceDefinitionInput,
   type ServiceManager,

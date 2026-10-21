@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
+import type { Filesystem } from "./filesystem.js";
 import type { DaemonRole } from "./paths.js";
+import type { ProcessRunner } from "./process-runner.js";
 export type ServiceManagerName = "launchd" | "systemd";
 
 export type ServiceState =
@@ -93,4 +95,26 @@ export class FakeServiceManager implements ServiceManager {
     this.starts.push(definition);
     await this.options.onStart?.(definition);
   }
+}
+
+export interface LaunchdServiceManagerOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+  readonly uid: number;
+}
+
+export class LaunchdServiceManager implements ServiceManager {
+  readonly manager = "launchd";
+
+  constructor(private readonly options: LaunchdServiceManagerOptions) {}
+
+  async state(_definition: ServiceDefinition): Promise<ServiceState> {
+    return { state: "not-installed" };
+  }
+
+  async install(_definition: ServiceDefinition): Promise<void> {}
+
+  async uninstall(_definition: ServiceDefinition): Promise<void> {}
+
+  async start(_definition: ServiceDefinition): Promise<void> {}
 }

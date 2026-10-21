@@ -1,0 +1,142 @@
+import { describe, expect, it } from "vitest";
+
+import { MemoryFilesystem } from "./filesystem.js";
+import { ScriptedProcessRunner } from "./process-runner.js";
+import {
+  LaunchdServiceManager,
+  serviceDefinition,
+  type ServiceDefinition,
+} from "./service-manager.js";
+
+type PlistValue = string | number | boolean | PlistValue[] | { [key: string]: PlistValue };
+
+// why: the test must read the plist the way launchd does, as typed XML, so it does not depend on
+// the order or the spacing the adapter happens to write.
+function parsePlist(xml: string): PlistValue {
+  const tokens = [...xml.matchAll(/<(\/?)([a-z]+)\s*(\/?)>|([^<]+)/g)].filter(
+    (token) => token[4] === undefined || token[4].trim() !== "",
+  );
+  let index = tokens.findIndex((token) => token[2] === "plist") + 1;
+  const text = (): string => {
+    const value = tokens[index]?.[4] ?? "";
+    index += 1;
+    return value.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  };
+  const value = (): PlistValue => {
+    const token = tokens[index];
+    index += 1;
+    const tag = token?.[2];
+    if (tag === "true") return true;
+    if (tag === "false") return false;
+    if (tag === "array") {
+      const items: PlistValue[] = [];
+      while (tokens[index]?.[1] !== "/") items.push(value());
+      index += 1;
+      return items;
+    }
+    if (tag === "dict") {
+      const entries: { [key: string]: PlistValue } = {};
+      while (tokens[index]?.[1] !== "/") {
+        index += 1;
+        const key = text();
+        index += 1;
+        entries[key] = value();
+      }
+      index += 1;
+      return entries;
+    }
+    const content = tokens[index]?.[1] === "/" ? "" : text();
+    index += 1;
+    return tag === "integer" ? Number(content) : content;
+  };
+  return value();
+}
+
+const home = "/Users/me";
+const root = "/Users/me/.simlock";
+
+function definitionFor(role: "worker" | "gateway", env: NodeJS.ProcessEnv = {}): ServiceDefinition {
+  return serviceDefinition({
+    role,
+    root,
+    dataDirectory: role === "gateway" ? `${root}/gateway` : root,
+    home,
+    nodePath: "/opt/node/bin/node",
+    mainPath: "/opt/simlock/dist/daemon/main.js",
+    env,
+  });
+}
+
+async function installed(
+  definition: ServiceDefinition,
+  filesystem = new MemoryFilesystem(),
+): Promise<{
+  readonly plist: { [key: string]: PlistValue };
+  readonly filesystem: MemoryFilesystem;
+}> {
+  const runner = new ScriptedProcessRunner([
+    {
+      match: { command: "launchctl", args: ["bootout", /.*/] },
+      result: { code: 113, stdout: "", stderr: "" },
+    },
+    {
+      match: { command: "launchctl", args: ["bootstrap", /^gui\/\d+$/, definition.path] },
+      result: { code: 0, stdout: "", stderr: "" },
+    },
+  ]);
+  await new LaunchdServiceManager({ runner, filesystem, uid: 501 }).install(definition);
+  expect(await filesystem.exists(definition.path), "the plist exists").toBe(true);
+  const plist = parsePlist(await filesystem.readFile(definition.path));
+  return { plist: plist as { [key: string]: PlistValue }, filesystem };
+}
+
+describe("LaunchdServiceManager (#830)", () => {
+  it("launchd reads the plist install wrote: arguments, saved variables, service keys and log paths", async () => {
+    const saved = {
+      SIMLOCK_DRIVERS_MODULE: "/x/drivers.js",
+      PATH: "/usr/bin:/opt/bin",
+      ANDROID_HOME: "/sdk",
+      ANDROID_SDK_ROOT: "/sdk",
+      ANDROID_AVD_HOME: "/avd",
+      ANDROID_USER_HOME: "/auser",
+      ANDROID_PREFS_ROOT: "/aprefs",
+      ANDROID_SDK_HOME: "/ahome",
+      JAVA_HOME: "/jdk",
+      DEVELOPER_DIR: "/Xcode/Developer",
+    };
+    const cases = [
+      {
+        label: "worker, every saved variable set, secrets present in the shell",
+        role: "worker" as const,
+        env: { ...saved, SIMLOCK_ADMIN_TOKEN: "secret", SIMLOCK_AGENT_ID: "agent" },
+        arguments: ["/opt/node/bin/node", "/opt/simlock/dist/daemon/main.js"],
+        variables: { SIMLOCK_HOME: root, ...saved },
+        logPath: `${root}/daemon.log`,
+      },
+      {
+        label: "gateway, no variable set",
+        role: "gateway" as const,
+        env: {},
+        arguments: ["/opt/node/bin/node", "/opt/simlock/dist/daemon/main.js", "--gateway"],
+        variables: { SIMLOCK_HOME: root },
+        logPath: `${root}/gateway/daemon.log`,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const definition = definitionFor(testCase.role, testCase.env);
+      const { plist } = await installed(definition);
+      expect(plist, testCase.label).toEqual({
+        Label: definition.name,
+        ProgramArguments: testCase.arguments,
+        EnvironmentVariables: testCase.variables,
+        RunAtLoad: true,
+        KeepAlive: { SuccessfulExit: false },
+        AbandonProcessGroup: true,
+        ExitTimeOut: 300,
+        StandardOutPath: testCase.logPath,
+        StandardErrorPath: testCase.logPath,
+      });
+    }
+  });
+});
