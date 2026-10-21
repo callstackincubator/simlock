@@ -593,8 +593,11 @@ A lease names its device in one of three ways:
 
 A class lease is served by the first of these that applies: an idle device
 that is already running and fits, then (unless `--no-wait`) a device the warm
-pool is already booting that fits, which it waits for, then an idle device that
-is shut down and fits (it is booted), then a new device. A device fits when its platform,
+pool is already booting or creating that fits, which it waits for, then an idle device that
+is shut down and fits (it is booted), then a new device. A request queued behind
+another is not left idle meanwhile: the warm pool boots a shut-down device that fits it or
+creates a new one for it, within `warmPool.maxConcurrentBoots`, and the request is granted that
+device once it is ready and the request is next in line. A device fits when its platform,
 class, OS, mode and image tag all satisfy the request: with no `--os` a class
 lease fits a device on any installed runtime, with `--os` a device whose OS
 satisfies it, `--mode full` and `--image-tag`
@@ -1520,7 +1523,7 @@ warm pool: enabled, reserve ios 1 android 0
 `no-driver`, `runtime-missing`, `unknown-model`, `unresolvable`, `boot-failed`,
 `device-limit`, `running-limit`, `reserve` or `ram-budget`; when several apply,
 the first of that list is shown. A target that is filling, held back by
-`warmPool.maxConcurrentBoots` or waiting behind a queued request is not short.
+`warmPool.maxConcurrentBoots` or waiting behind a queued request the pool could not serve is not short.
 In `--json` the block is `warmPool`: `enabled`, `reserveRunning` (`ios`,
 `android`) and `targets`, each with `platform`, `model`, `osVersion` (the one
 the target resolved to, or the one it names when it did not resolve; absent
@@ -2405,7 +2408,7 @@ never acts on it.
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
 simlock started, clear the queue. With `--delete-devices`, also destroy every
-registry-managed device. Never touches devices outside the registry. A lease on
+registry-managed device. It also clears what the warm pool has learned from past leases, so no device is booted back unasked afterwards. Never touches devices outside the registry. A lease on
 an enrolled physical device ends like any other, and its apps are uninstalled;
 the device stays enrolled, and `--delete-devices` never deletes one. It stays
 a per-machine command: a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit

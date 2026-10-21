@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadTestRegistry, testComponentWiring } from "./testing.js";
+import { loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -157,6 +157,7 @@ async function createHarness(
     eventBus,
     idGenerator: { generate: () => `request-${nextId++}` },
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({
       cpuCount: 8,
       totalRamBytes: 32 * gibibyte,

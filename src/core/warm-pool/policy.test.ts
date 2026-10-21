@@ -56,6 +56,14 @@ function device(
   };
 }
 
+function learnedOf(
+  learnedSpec: VirtualSpec,
+  count = 1,
+  lastLeasedAt = now,
+): WarmPolicyView["learned"][number] {
+  return { count, lastLeasedAt, spec: learnedSpec };
+}
+
 function leaseOn(target: VirtualDevice): LeaseRecord {
   return {
     deviceId: target.id,
@@ -98,12 +106,14 @@ function classDemand(
   mode: "slim" | "full" = "full",
   platform: "ios" | "android" = "ios",
   inFlight = false,
+  model = "iPhone 15",
 ) {
   return {
     classOf,
     inFlight,
     mode,
     platform,
+    spec: spec(model, { platform, ...(mode === "slim" ? { mode } : {}) }),
     requirement: {
       imageTag: undefined,
       osVersion: { kind: "installed", versions: ["26.0"] },
@@ -119,6 +129,7 @@ function modelDemand(model: string): WaitingDemand {
     inFlight: false,
     mode: "full",
     platform: "ios",
+    spec: spec(model),
     requirement: {
       imageTag: undefined,
       osVersion: { kind: "exact", version: "26.0" },
@@ -144,23 +155,33 @@ function view(
     reset?: readonly string[];
     targets?: readonly ResolvedTarget[];
     spared?: readonly ResolvedTarget[];
+    learned?: WarmPolicyView["learned"];
     inFlight?: readonly VirtualSpec[];
+    onItsWay?: WarmPolicyView["onItsWay"];
     maxConcurrentBoots?: number;
     blocked?: readonly VirtualSpec[];
     refuseProvision?: CapacityRefusalReason;
     refuseBoot?: CapacityRefusalReason;
+    /** why: a creation the capacity strategy refuses until the plan has shut a device down. */
+    refuseProvisionUntilDown?: CapacityRefusalReason;
+    unplanned?: readonly VirtualSpec[];
   } = {},
 ): WarmPolicyView {
   return {
     admit: {
       boot: () => options.refuseBoot,
-      create: () => options.refuseProvision,
+      create: (_spec, down) =>
+        options.refuseProvision ??
+        ((down?.size ?? 0) === 0 ? options.refuseProvisionUntilDown : undefined),
     },
+    unplanned: options.unplanned ?? [],
     inFlight: options.inFlight ?? [],
+    onItsWay: options.onItsWay ?? [],
     retry: {
       mayAttempt: (target) => !(options.blocked ?? []).some((held) => sameSpec(held, target)),
     },
     spared: options.spared ?? [],
+    learned: options.learned ?? [],
     targets: options.targets ?? [],
     capacity: capacityOf(
       devices,
@@ -184,6 +205,135 @@ function view(
 }
 
 describe("warm pool policy", () => {
+  it("proposes, for waiters behind the head and in queue order, one creation of each waiter's spec, up to maxConcurrentBoots, and nothing for the head", () => {
+    const creation = (model: string) => ({
+      action: "provision",
+      reason: "waiting-request",
+      spec: spec(model),
+      target: spec(model),
+    });
+    const waiter = (model: string, inFlight = false) => classDemand("full", "ios", inFlight, model);
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+    const shutDown = device("shut", "shutdown", { endedAgo: 20 * minute });
+    const three = [waiter("iPhone 15", true), waiter("iPhone 17"), waiter("iPhone 16")];
+
+    expect(evaluate(view([busy], { maxConcurrentBoots: 3, waiting: three }))).toEqual([
+      creation("iPhone 17"),
+      creation("iPhone 16"),
+    ]);
+    expect(evaluate(view([busy], { maxConcurrentBoots: 2, waiting: three }))).toEqual([
+      creation("iPhone 17"),
+    ]);
+    expect(
+      evaluate(
+        view([busy], {
+          maxConcurrentBoots: 3,
+          waiting: [waiter("iPhone 15"), waiter("iPhone 17"), waiter("iPhone 16")],
+        }),
+      ),
+    ).toEqual([creation("iPhone 17"), creation("iPhone 16")]);
+    const refused = {
+      ...view([busy], {
+        maxConcurrentBoots: 1,
+        waiting: [classDemand("full", "android"), waiter("iPhone 17")],
+      }),
+      capacity: capacityOf([busy], { android: 0, global: 10 }),
+    };
+    expect(evaluate(refused)).toEqual([creation("iPhone 17")]);
+    const atCap = view([busy], {
+      inFlight: [spec("iPhone 15")],
+      maxConcurrentBoots: 1,
+      targets: [{ count: 1, spec: spec("iPad Pro", { osVersion: "18.0" }) }],
+      waiting: [waiter("iPhone 15", true), waiter("iPhone 17")],
+    });
+    expect(plan(atCap).proposals).toEqual([]);
+    expect(plan(atCap).targets[0]?.short).toBeUndefined();
+    expect(evaluate(view([shutDown], { waiting: [waiter("iPhone 15")] }))).toEqual([
+      { action: "boot", deviceId: "shut", reason: "waiting-request" },
+    ]);
+    expect(evaluate(view([busy], { waiting: [waiter("iPhone 15")] }))).toEqual([]);
+    expect(
+      evaluate(view([shutDown], { inFlight: [spec("iPad Pro")], waiting: [waiter("iPhone 15")] })),
+    ).toEqual([]);
+  });
+
+  it("matches each device to one waiter in queue order and proposes nothing for a waiter an idle ready device or an onItsWay entry serves", () => {
+    const creation = (model: string) => ({
+      action: "provision",
+      reason: "waiting-request",
+      spec: spec(model),
+      target: spec(model),
+    });
+    const waiter = (model: string, inFlight = false) => classDemand("full", "ios", inFlight, model);
+    const ready = (id: string, options: Parameters<typeof device>[2] = {}) =>
+      device(id, "ready", { endedAgo: 90 * minute, ...options });
+    const two = [waiter("iPhone 15", true), waiter("iPhone 15"), waiter("iPhone 17")];
+    const base = { maxConcurrentBoots: 5, limit: 10 };
+
+    expect(evaluate(view([ready("one")], { ...base, waiting: two }))).toEqual([
+      creation("iPhone 17"),
+    ]);
+    expect(
+      evaluate(
+        view([ready("one")], { ...base, waiting: [waiter("iPhone 15"), waiter("iPhone 17")] }),
+      ),
+    ).toEqual([]);
+    expect(evaluate(view([ready("one"), ready("two")], { ...base, waiting: two }))).toEqual([]);
+    expect(
+      evaluate(
+        view([], {
+          ...base,
+          onItsWay: [{ spec: spec("iPhone 15") }],
+          waiting: two,
+        }),
+      ),
+    ).toEqual([creation("iPhone 17")]);
+    expect(
+      evaluate(
+        view([], {
+          ...base,
+          onItsWay: [{ spec: spec("iPhone 15") }, { deviceId: "other", spec: spec("iPhone 17") }],
+          waiting: two,
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      evaluate(
+        view([ready("slim", { spec: spec("iPhone 15", { mode: "slim" }) })], {
+          ...base,
+          waiting: [waiter("iPhone 15", true), waiter("iPhone 17")],
+        }),
+      ),
+    ).toEqual([creation("iPhone 17")]);
+    // why: the head is the first waiter no ready idle device takes: with one ready device and two
+    // waiters it serves, the second is the head and leasing creates for it.
+    expect(
+      evaluate(
+        view([ready("one")], { ...base, waiting: [waiter("iPhone 15"), waiter("iPhone 15")] }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("proposes no boot for a waiter whose spec the retry schedule holds back after a failed boot", () => {
+    const released = device("lse_15", "shutdown", { endedAgo: 90 * minute });
+    const waiting = [classDemand(), classDemand()];
+
+    expect(evaluate(view([released], { waiting }))).toEqual([
+      { action: "boot", deviceId: "lse_15", reason: "waiting-request" },
+    ]);
+    expect(evaluate(view([released], { waiting, blocked: [spec("iPhone 15")] }))).toEqual([]);
+
+    // why: the converger records the failure under the device's spec, which a class waiter's may differ from.
+    const other = device("lse_17", "shutdown", {
+      endedAgo: 90 * minute,
+      spec: spec("iPhone 17"),
+    });
+    expect(evaluate(view([other], { waiting }))).toEqual([
+      { action: "boot", deviceId: "lse_17", reason: "waiting-request" },
+    ]);
+    expect(evaluate(view([other], { waiting, blocked: [spec("iPhone 17")] }))).toEqual([]);
+  });
+
   it("proposes a boot, not a shutdown, for a released iPhone 15 that serves a waiting class request at the running cap", () => {
     const released = device("lse_15", "shutdown", { endedAgo: 1_000 });
     const leased = device("busy", "leased", { spec: spec("iPhone 17") });
@@ -214,8 +364,6 @@ describe("warm pool policy", () => {
     // Full first: a check that refuses only slim-for-full would pick `full` here.
     const forSlim = evaluate(view([full, slim], { waiting: [classDemand("slim")], limit: 5 }));
 
-    // `reason` tells the waiting-request boot from the recently-released one: both devices were
-    // released a moment ago, so each is booted back either way once a slot is free.
     expect(forFull.find((item) => item.reason === "waiting-request")).toEqual({
       action: "boot",
       deviceId: "full",
@@ -305,24 +453,16 @@ describe("warm pool policy", () => {
     ]);
   });
 
-  it("does not boot a shut-down device released longer ago than idle.shutdownAfterMs without a waiting request", () => {
-    const stale = device("stale", "shutdown", { endedAgo: shutdownAfterMs });
-    const fresh = device("fresh", "shutdown", { endedAgo: shutdownAfterMs - 1 });
-    const neverLeased = device("never", "shutdown");
+  it("proposes no boot back of a shut-down device released a moment ago whose kind is not learned", () => {
+    const fresh = device("fresh", "shutdown", { endedAgo: 1_000 });
+    const later = device("later", "shutdown", { endedAgo: minute });
 
-    const proposals = evaluate(view([stale, fresh, neverLeased]));
-
-    expect(proposals).toEqual([{ action: "boot", deviceId: "fresh", reason: "recently-released" }]);
-  });
-
-  it("with room for one boot and two recently released shut-down devices, proposes the more recently released one", () => {
-    const earlier = device("earlier", "shutdown", { endedAgo: 4 * minute });
-    const later = device("later", "shutdown", { endedAgo: 1 * minute });
-    const busy = device("busy", "leased");
-
-    const proposals = evaluate(view([earlier, later, busy], { limit: 2 }));
-
-    expect(proposals).toEqual([{ action: "boot", deviceId: "later", reason: "recently-released" }]);
+    expect(evaluate(view([fresh, later], { limit: 5 }))).toEqual([]);
+    expect(
+      evaluate(
+        view([fresh, later], { learned: [{ count: 1, lastLeasedAt: now, spec: fresh.spec }] }),
+      ),
+    ).toEqual([{ action: "boot", deviceId: "fresh", reason: "target", target: fresh.spec }]);
   });
 
   it("boots a device for a waiting request before one that was merely released recently", () => {
@@ -337,59 +477,89 @@ describe("warm pool policy", () => {
     expect(proposals).toEqual([{ action: "boot", deviceId: "serving", reason: "waiting-request" }]);
   });
 
-  it("holds the free slot for a waiting request no idle device serves instead of booting a recently released device into it", () => {
+  it("holds the free slot for a waiting request no idle device serves instead of booting a learned kind's device into it", () => {
     const recent = device("recent", "shutdown", { endedAgo: 1_000, spec: spec("iPad Pro") });
     const busy = device("busy", "leased");
     const unserved = classDemand("full", "android");
     const served = device("served", "ready", { endedAgo: 1_000 });
 
-    expect(evaluate(view([recent, busy], { limit: 2, waiting: [unserved] }))).toEqual([]);
-    expect(evaluate(view([recent, busy], { limit: 2 }))).toEqual([
-      { action: "boot", deviceId: "recent", reason: "recently-released" },
-    ]);
-    // A request an idle ready device serves takes no free slot.
-    expect(evaluate(view([recent, busy, served], { limit: 3, waiting: [classDemand()] }))).toEqual([
-      { action: "boot", deviceId: "recent", reason: "recently-released" },
-    ]);
+    const learned = [learnedOf(recent.spec)];
+    const boot = { action: "boot", deviceId: "recent", reason: "target", target: recent.spec };
+
+    expect(evaluate(view([recent, busy], { learned, limit: 2, waiting: [unserved] }))).toEqual([]);
+    expect(evaluate(view([recent, busy], { learned, limit: 2 }))).toEqual([boot]);
+    expect(
+      evaluate(view([recent, busy, served], { learned, limit: 3, waiting: [classDemand()] })),
+    ).toEqual([boot]);
   });
 
-  it("boots a device only for the head of the queue, not for a request behind it", () => {
+  it("boots a shut-down device that serves a waiter behind the head before creating one, and may boot one an operator reset shut down, for the head too", () => {
+    const boot = (deviceId: string) => ({ action: "boot", deviceId, reason: "waiting-request" });
+    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
     const tablet = device("tablet", "shutdown", { endedAgo: 20 * minute, spec: spec("iPad Pro") });
-    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
-    // The head wants an Android device nothing serves; the iOS phone request is behind it.
-    const proposals = evaluate(
-      view([tablet, phone], { waiting: [classDemand("full", "android"), classDemand()] }),
-    );
-
-    expect(proposals).toEqual([]);
-  });
-
-  it("boots nothing for a request behind a head whose device work is in flight", () => {
-    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
     const busy = device("busy", "leased", { spec: spec("iPad Pro") });
-    // The head is a tablet request being served (say by an eviction); the phone waits behind it.
     const tabletHead = {
       ...classDemand("full", "ios", true),
-      requirement: {
-        ...classDemand().requirement,
-        target: { class: "tablet", kind: "class" },
-      },
+      requirement: { ...classDemand().requirement, target: { class: "tablet", kind: "class" } },
     } satisfies WaitingDemand;
+    const options = { maxConcurrentBoots: 3 };
 
-    const proposals = evaluate(
-      view([phone, busy], { limit: 5, waiting: [tabletHead, classDemand()] }),
-    );
-
-    expect(proposals).toEqual([]);
+    expect(
+      evaluate(view([phone, busy], { ...options, waiting: [tabletHead, classDemand()] })),
+    ).toEqual([boot("phone")]);
+    expect(
+      evaluate(
+        view([phone, busy], { ...options, waiting: [tabletHead, classDemand(), classDemand()] }),
+      ).map((proposal) => proposal.action),
+    ).toEqual(["boot", "provision"]);
+    expect(
+      evaluate(view([tablet, busy], { ...options, waiting: [tabletHead, classDemand()] })),
+    ).toEqual([expect.objectContaining({ action: "provision" })]);
+    expect(
+      evaluate(view([phone, tablet], { ...options, reset: ["phone"], waiting: [classDemand()] })),
+    ).toEqual([boot("phone")]);
+    expect(
+      evaluate(
+        view([phone, busy], { ...options, reset: ["phone"], waiting: [tabletHead, classDemand()] }),
+      ),
+    ).toEqual([boot("phone")]);
   });
 
-  it("does not boot back a device an operator reset shut down, though it was released a moment ago", () => {
+  it("proposes no boot that admit.boot refuses for ram-budget, for a waiter or a learned kind's device, and holds the waiter's slot", () => {
+    const serving = device("serving", "shutdown", { endedAgo: 20 * minute });
+    const recent = device("recent", "shutdown", { endedAgo: 1_000, spec: spec("iPad Pro") });
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+    const devices = [serving, recent, busy];
+    const setup = { limit: 2, waiting: [classDemand()] };
+    const refusing = (ids: readonly string[]): WarmPolicyView => {
+      const base = view(devices, setup);
+      return {
+        ...base,
+        admit: {
+          ...base.admit,
+          boot: (candidate) => (ids.includes(candidate.id) ? "ram-budget" : undefined),
+        },
+      };
+    };
+
+    expect(evaluate(refusing([]))).toEqual([
+      { action: "boot", deviceId: "serving", reason: "waiting-request" },
+    ]);
+    expect(evaluate(refusing(["serving"]))).toEqual([]);
+    const learned = [learnedOf(recent.spec)];
+    expect(evaluate(view([recent], { learned, limit: 3 }))).toEqual([
+      { action: "boot", deviceId: "recent", reason: "target", target: recent.spec },
+    ]);
+    expect(evaluate(view([recent], { learned, limit: 3, refuseBoot: "ram-budget" }))).toEqual([]);
+  });
+
+  it("does not boot back a device an operator reset shut down for a learned kind, though it was released a moment ago", () => {
     const reset = device("reset", "shutdown", { endedAgo: 1_000 });
     const other = device("other", "shutdown", { endedAgo: 2_000 });
 
-    expect(evaluate(view([reset, other], { reset: ["reset"] }))).toEqual([
-      { action: "boot", deviceId: "other", reason: "recently-released" },
-    ]);
+    expect(
+      evaluate(view([reset, other], { learned: [learnedOf(reset.spec)], reset: ["reset"] })),
+    ).toEqual([{ action: "boot", deviceId: "other", reason: "target", target: reset.spec }]);
   });
 
   it("does not let a request whose device work is in flight shield an idle ready device it serves from an over-budget shutdown", () => {
@@ -483,51 +653,58 @@ describe("warm pool policy", () => {
     const devices = [tablet];
 
     // The request wants a phone, which no device serves, and the only iOS slot is its own.
+    const learned = [learnedOf(tablet.spec)];
     const held = evaluate({
-      ...view(devices, { waiting: [classDemand()] }),
+      ...view(devices, { learned, waiting: [classDemand()] }),
       capacity: capacityOf(devices, { global: 5, ios: 1 }),
     });
     const free = evaluate({
-      ...view(devices),
+      ...view(devices, { learned }),
       capacity: capacityOf(devices, { global: 5, ios: 1 }),
     });
 
     expect(held).toEqual([]);
-    expect(free).toEqual([{ action: "boot", deviceId: "tablet", reason: "recently-released" }]);
-  });
-
-  it("proposes a device that serves a waiting request once, not again as a recently released one", () => {
-    const serving = device("serving", "shutdown", { endedAgo: 1_000 });
-    const other = device("other", "shutdown", { endedAgo: 2_000, spec: spec("iPad Pro") });
-
-    const proposals = evaluate(view([serving, other], { waiting: [classDemand()] }));
-
-    expect(proposals).toEqual([
-      { action: "boot", deviceId: "serving", reason: "waiting-request" },
-      { action: "boot", deviceId: "other", reason: "recently-released" },
+    expect(free).toEqual([
+      { action: "boot", deviceId: "tablet", reason: "target", target: tablet.spec },
     ]);
   });
 
-  it("boots only as many recently released devices as the tighter of the global and the platform room allows", () => {
+  it("proposes a device that serves a waiting request once, not again for a learned kind", () => {
+    const serving = device("serving", "shutdown", { endedAgo: 1_000 });
+    const other = device("other", "shutdown", { endedAgo: 2_000, spec: spec("iPad Pro") });
+
+    const proposals = evaluate(
+      view([serving, other], {
+        learned: [learnedOf(serving.spec), learnedOf(other.spec)],
+        maxConcurrentBoots: 3,
+        waiting: [classDemand()],
+      }),
+    );
+
+    expect(proposals).toEqual([
+      { action: "boot", deviceId: "serving", reason: "waiting-request" },
+      { action: "boot", deviceId: "other", reason: "target", target: other.spec },
+    ]);
+  });
+
+  it("boots only as many of a learned kind's devices as the tighter of the global and the platform room allows", () => {
     const first = device("first", "shutdown", { endedAgo: 1_000 });
     const second = device("second", "shutdown", { endedAgo: 2_000 });
     const devices = [first, second];
 
+    const learned = [learnedOf(first.spec, 2)];
     const globalTight = evaluate({
-      ...view(devices),
+      ...view(devices, { learned, maxConcurrentBoots: 2 }),
       capacity: capacityOf(devices, { global: 1, ios: 5 }),
     });
     const platformTight = evaluate({
-      ...view(devices),
+      ...view(devices, { learned, maxConcurrentBoots: 2 }),
       capacity: capacityOf(devices, { global: 5, ios: 1 }),
     });
 
-    expect(globalTight).toEqual([
-      { action: "boot", deviceId: "first", reason: "recently-released" },
-    ]);
-    expect(platformTight).toEqual([
-      { action: "boot", deviceId: "first", reason: "recently-released" },
-    ]);
+    const boot = { action: "boot", deviceId: "first", reason: "target", target: first.spec };
+    expect(globalTight).toEqual([boot]);
+    expect(platformTight).toEqual([boot]);
   });
 
   it("proposes no shutdown at exactly the budget, globally or on either platform", () => {
@@ -559,10 +736,21 @@ describe("warm pool policy", () => {
     };
     const free = device("free", "shutdown", { endedAgo: 2_000 });
 
-    expect(evaluate(view([busy, free], { limit: 1 }))).toEqual([]);
+    const learned = [learnedOf(free.spec, 4)];
+    expect(evaluate(view([busy, free], { learned, limit: 1 }))).toEqual([]);
     expect(
-      evaluate(view([busy, claimed, spent, free], { limit: 5, claimed: ["claimed"] })),
-    ).toEqual([{ action: "boot", deviceId: "free", reason: "recently-released" }]);
+      evaluate(
+        view([busy, claimed, spent, free], {
+          claimed: ["claimed"],
+          learned,
+          limit: 5,
+          maxConcurrentBoots: 2,
+        }),
+      ),
+    ).toEqual([
+      { action: "boot", deviceId: "free", reason: "target", target: free.spec },
+      { action: "provision", reason: "target", spec: free.spec, target: free.spec },
+    ]);
   });
 
   it("proposes a boot only where its platform has room", () => {
@@ -577,12 +765,12 @@ describe("warm pool policy", () => {
     const devices = [androidBusy, androidShut, iosShut];
 
     const proposals = evaluate({
-      ...view(devices),
+      ...view(devices, { learned: [learnedOf(androidShut.spec, 2), learnedOf(iosShut.spec)] }),
       capacity: capacityOf(devices, { android: 1, global: 5, ios: 5 }),
     });
 
     expect(proposals).toEqual([
-      { action: "boot", deviceId: "ios-shut", reason: "recently-released" },
+      { action: "boot", deviceId: "ios-shut", reason: "target", target: iosShut.spec },
     ]);
   });
 
@@ -642,28 +830,32 @@ describe("warm pool policy", () => {
       ).toEqual([]);
     });
 
-    it("does not boot a recently released device into a global slot the other platform's reserve holds", () => {
+    it("does not boot a learned kind's device into a global slot the other platform's reserve holds", () => {
       const androidSpec = spec("Pixel 9", { osVersion: "36", platform: "android" });
       const released = device("released", "shutdown", { endedAgo: minute });
       const running = device("android-0", "ready", { endedAgo: minute, spec: androidSpec });
       const reserve = { android: 1, ios: 1 };
 
       // Global limit 3 with one running leaves two, and the two reserves hold both.
-      expect(evaluate(view([released, running], { limit: 3, reserve }))).toEqual([]);
-      expect(evaluate(view([released, running], { limit: 3 }))).toEqual([
-        { action: "boot", deviceId: "released", reason: "recently-released" },
+      const learned = [learnedOf(released.spec)];
+      expect(evaluate(view([released, running], { learned, limit: 3, reserve }))).toEqual([]);
+      expect(evaluate(view([released, running], { learned, limit: 3 }))).toEqual([
+        { action: "boot", deviceId: "released", reason: "target", target: released.spec },
       ]);
     });
 
-    it("does not boot a recently released device into a slot the reserve holds", () => {
+    it("does not boot a learned kind's device into a slot the reserve holds", () => {
       const released = device("released", "shutdown", { endedAgo: minute });
       const running = idleIos(1);
 
+      const learned = [learnedOf(released.spec, 2)];
       expect(
-        evaluate(view([released, ...running], { limits: { ios: 2 }, reserve: { ios: 1 } })),
+        evaluate(
+          view([released, ...running], { learned, limits: { ios: 2 }, reserve: { ios: 1 } }),
+        ),
       ).toEqual([]);
-      expect(evaluate(view([released, ...running], { limits: { ios: 2 } }))).toEqual([
-        { action: "boot", deviceId: "released", reason: "recently-released" },
+      expect(evaluate(view([released, ...running], { learned, limits: { ios: 2 } }))).toEqual([
+        { action: "boot", deviceId: "released", reason: "target", target: released.spec },
       ]);
     });
 
@@ -771,7 +963,7 @@ describe("warm pool policy", () => {
       expect(evaluate(view([shut], { targets: [target(1)] }))).toHaveLength(1);
     });
 
-    it("with maxConcurrentBoots 2 proposes two of a target of three and counts a keep boot against the cap", () => {
+    it("with maxConcurrentBoots 2 proposes two of a target of three and counts a waiter's boot against the cap", () => {
       const one = ofKind("one", "shutdown");
       const two = ofKind("two", "shutdown");
       const three = ofKind("three", "shutdown");
@@ -782,26 +974,73 @@ describe("warm pool policy", () => {
       expect(proposals).toHaveLength(2);
       expect(proposals.every((proposal) => proposal.reason === "target")).toBe(true);
 
-      // A recently released device the keep rule boots is one of the two.
-      const released = device("released", "shutdown", { endedAgo: minute, spec: spec("iPad Pro") });
-      const withKeep = evaluate(
-        view([released, one, two], { maxConcurrentBoots: 2, targets: [target(2)] }),
+      const tablet = device("tablet", "shutdown", { endedAgo: minute, spec: spec("iPad Pro") });
+      const withWaiter = evaluate(
+        view([tablet, one, two], {
+          maxConcurrentBoots: 2,
+          targets: [target(2)],
+          waiting: [modelDemand("iPad Pro")],
+        }),
       );
-      expect(withKeep.map((proposal) => proposal.reason)).toEqual(["recently-released", "target"]);
+      expect(withWaiter.map((proposal) => proposal.reason)).toEqual(["waiting-request", "target"]);
     });
 
     it("proposes nothing while a request is queued on its platform, and proposes while that request is already booting its own device", () => {
       const shut = ofKind("shut", "shutdown");
-      // A request for a model the shut-down device does not serve: the keep rule boots nothing.
       const queued = modelDemand("iPad Pro");
 
       expect(evaluate(view([shut], { targets: [target(1)], waiting: [queued] }))).toEqual([]);
       expect(
-        evaluate(view([shut], { targets: [target(1)], waiting: [{ ...queued, inFlight: true }] })),
+        evaluate(
+          view([shut], {
+            maxConcurrentBoots: 2,
+            targets: [target(1)],
+            waiting: [{ ...queued, inFlight: true }],
+          }),
+        ),
       ).toEqual([{ action: "boot", deviceId: "shut", reason: "target", target: kind }]);
       expect(
-        evaluate(view([shut], { targets: [target(1)], waiting: [classDemand("full", "android")] })),
+        evaluate(
+          view([shut], {
+            maxConcurrentBoots: 2,
+            targets: [target(1)],
+            waiting: [classDemand("full", "android")],
+          }),
+        ),
       ).toHaveLength(1);
+    });
+
+    it("fills a target after the queue's devices within one cap, and keeps it waiting, not short, only behind a waiter the pass could not serve", () => {
+      const shut = ofKind("shut", "shutdown");
+      const phone = device("phone", "shutdown", { endedAgo: 20 * minute, spec: spec("iPhone 15") });
+      const head = modelDemand("iPad Pro");
+      const filling = { targets: [target(1)], waiting: [head] };
+
+      expect(plan(view([shut], { ...filling, maxConcurrentBoots: 2 })).proposals).toEqual([
+        { action: "boot", deviceId: "shut", reason: "target", target: kind },
+      ]);
+      const capped = plan(view([shut], { ...filling, maxConcurrentBoots: 1 }));
+      expect(capped.proposals).toEqual([]);
+      expect(capped.targets[0]).not.toHaveProperty("short");
+
+      expect(
+        evaluate(
+          view([phone, shut], {
+            maxConcurrentBoots: 2,
+            targets: [target(1)],
+            waiting: [classDemand()],
+          }),
+        ),
+      ).toEqual([
+        { action: "boot", deviceId: "phone", reason: "waiting-request" },
+        { action: "boot", deviceId: "shut", reason: "target", target: kind },
+      ]);
+
+      const unservable = plan(
+        view([shut], { ...filling, maxConcurrentBoots: 3, refuseProvision: "device-limit" }),
+      );
+      expect(unservable.proposals).toEqual([]);
+      expect(unservable.targets[0]).not.toHaveProperty("short");
     });
 
     it("proposes a shutdown for a never-leased ready device no target counts once it has been ready longer than idle.shutdownAfterMs", () => {
@@ -862,6 +1101,7 @@ describe("warm pool policy", () => {
       expect(result.targets).toEqual([
         {
           booting: 0,
+          configuredCount: 1,
           count: 1,
           kind: {
             mode: "full",
@@ -869,6 +1109,7 @@ describe("warm pool policy", () => {
             osVersion: "26.0",
             platform: "ios",
           },
+          origin: "configured",
           ready: 0,
           short: "running-limit",
           spec: kind,
@@ -913,6 +1154,7 @@ describe("warm pool policy", () => {
       expect(result.targets).toStrictEqual([
         {
           booting: 0,
+          configuredCount: 1,
           count: 1,
           kind: {
             mode: "full",
@@ -920,6 +1162,7 @@ describe("warm pool policy", () => {
             osVersion: "26.0",
             platform: "ios",
           },
+          origin: "configured",
           ready: 1,
           spec: kind,
           target: "ios iPhone 17 26.0",
@@ -943,13 +1186,14 @@ describe("warm pool policy", () => {
       expect(result.targets.map((report) => report.booting)).toEqual([1, 0]);
     });
 
-    it("reports a target held by the boot cap, or behind a queued request, with no reason", () => {
+    it("reports a target held by the boot cap, or behind a waiter the pass could not serve, with no reason", () => {
       const capped = plan(view([], { inFlight: [spec("iPad Pro")], targets: [target(1)] }));
       expect(capped.targets[0]).toMatchObject({ booting: 0, count: 1, ready: 0 });
       expect(capped.targets[0]).not.toHaveProperty("short");
 
       const queued = plan(
         view([], {
+          refuseProvision: "device-limit",
           targets: [target(1)],
           waiting: [classDemand()],
         }),
@@ -1031,7 +1275,13 @@ describe("warm pool policy", () => {
         "short",
       );
       expect(
-        plan(view([shut], { ...held, waiting: [modelDemand("iPad Pro")] })).targets[0],
+        plan(
+          view([shut], {
+            ...held,
+            refuseProvision: "device-limit",
+            waiting: [modelDemand("iPad Pro")],
+          }),
+        ).targets[0],
       ).not.toHaveProperty("short");
     });
 
@@ -1055,6 +1305,7 @@ describe("warm pool policy", () => {
       expect(result.targets).toStrictEqual([
         {
           booting: 0,
+          configuredCount: 1,
           count: 1,
           kind: {
             mode: "full",
@@ -1062,6 +1313,7 @@ describe("warm pool policy", () => {
             osVersion: "26.0",
             platform: "ios",
           },
+          origin: "configured",
           ready: 1,
           spec: kind,
           target: "ios iPhone 17 26.0",
@@ -1090,6 +1342,7 @@ describe("warm pool policy", () => {
       ]);
       expect(result.targets[0]).toStrictEqual({
         booting: 1,
+        configuredCount: 2,
         count: 2,
         kind: {
           mode: "full",
@@ -1097,6 +1350,7 @@ describe("warm pool policy", () => {
           osVersion: "26.0",
           platform: "ios",
         },
+        origin: "configured",
         ready: 0,
         spec: kind,
         target: "ios iPhone 17 26.0",
@@ -1156,28 +1410,6 @@ describe("warm pool policy", () => {
         expect(result.targets[0]).not.toHaveProperty("short");
       },
     );
-
-    it("counts a recently released device of its kind the keep rule boots as one of the target's, and one of another kind not", () => {
-      const released = device("released", "shutdown", { endedAgo: minute, spec: kind });
-      const other = device("other", "shutdown", { endedAgo: 2 * minute, spec: spec("iPad Pro") });
-      const spare = ofKind("spare", "shutdown");
-
-      expect(
-        evaluate(view([released, spare], { maxConcurrentBoots: 3, targets: [target(1)] })),
-      ).toEqual([{ action: "boot", deviceId: "released", reason: "recently-released" }]);
-      expect(
-        evaluate(view([released, spare], { maxConcurrentBoots: 3, targets: [target(2)] })),
-      ).toEqual([
-        { action: "boot", deviceId: "released", reason: "recently-released" },
-        { action: "boot", deviceId: "spare", reason: "target", target: kind },
-      ]);
-      expect(
-        evaluate(view([other, spare], { maxConcurrentBoots: 3, targets: [target(1)] })),
-      ).toEqual([
-        { action: "boot", deviceId: "other", reason: "recently-released" },
-        { action: "boot", deviceId: "spare", reason: "target", target: kind },
-      ]);
-    });
 
     it("does not count a boot in flight for another kind toward the target's count", () => {
       const result = evaluate(
@@ -1271,6 +1503,7 @@ describe("warm pool policy", () => {
         devices: [leasedReady],
         isClaimed: () => false,
         leases: [leaseOn(leasedReady)],
+        learned: [],
         targets: [target(1)],
       });
 
@@ -1282,6 +1515,7 @@ describe("warm pool policy", () => {
         devices,
         isClaimed: (id: string) => id === "claimed",
         leases: devices.filter((item) => item.state === "leased").map(leaseOn),
+        learned: [] as WarmPolicyView["learned"],
         targets,
       });
 
@@ -1294,6 +1528,27 @@ describe("warm pool policy", () => {
         expect(
           [...targetedDevices(input([newer, older, oldest, iPad], [target(2)]))].sort(),
         ).toEqual(["older", "oldest"]);
+      });
+
+      it("names a learned kind's ready unleased devices up to its count, oldest first, and the larger of a configured and a learned count", () => {
+        const devices = [
+          ofKind("newer", "ready", { createdAt: 20 }),
+          ofKind("older", "ready", { createdAt: 10 }),
+          ofKind("oldest", "ready", { createdAt: 5 }),
+          device("ipad", "ready", { spec: spec("iPad Pro") }),
+        ];
+        const named = (learnedCount: number, targets: readonly ResolvedTarget[] = []) =>
+          [
+            ...targetedDevices({
+              ...input(devices, targets),
+              learned: [learnedOf(kind, learnedCount)],
+            }),
+          ].sort();
+
+        expect(named(2)).toEqual(["older", "oldest"]);
+        expect(named(1)).toEqual(["oldest"]);
+        expect(named(1, [target(2)])).toEqual(["older", "oldest"]);
+        expect(named(3, [target(2)])).toEqual(["newer", "older", "oldest"]);
       });
 
       it("leaves out a leased, claimed, shut-down or spent device and one of another mode", () => {
@@ -1324,6 +1579,180 @@ describe("warm pool policy", () => {
             ),
           ].sort(),
         ).toEqual(["a", "b", "c", "ipad"]);
+      });
+    });
+
+    describe("learned kinds", () => {
+      const older = spec("iPad Pro");
+      const provision = (wanted: VirtualSpec) => ({
+        action: "provision",
+        reason: "target",
+        spec: wanted,
+        target: wanted,
+      });
+
+      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating, and counts a learned kind's leased, reclaiming and claimed devices as had", () => {
+        const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 1, now - 2 * minute)];
+
+        const first = plan(view([], { learned, limit: 1, maxConcurrentBoots: 2 }));
+        expect(first.proposals).toEqual([provision(kind)]);
+        expect(first.targets.map((report) => [report.target, report.origin, report.short])).toEqual(
+          [
+            ["ios iPhone 17 26.0", "learned", undefined],
+            ["ios iPad Pro 26.0", "learned", "running-limit"],
+          ],
+        );
+
+        const configured = spec("iPhone 15");
+        expect(
+          evaluate(view([], { learned, limit: 1, targets: [{ count: 1, spec: configured }] })),
+        ).toEqual([provision(configured)]);
+
+        const shut = ofKind("shut", "shutdown");
+        expect(evaluate(view([shut], { learned: [learnedOf(kind, 1, now)] }))).toEqual([
+          { action: "boot", deviceId: "shut", reason: "target", target: kind },
+        ]);
+
+        const held = [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")];
+        expect(evaluate(view(held, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
+        const claimed = ofKind("claimed", "ready");
+        expect(
+          evaluate(view([claimed], { claimed: ["claimed"], learned: [learnedOf(kind, 1, now)] })),
+        ).toEqual([]);
+        const reclaiming = [
+          ofKind("a", "leased"),
+          ofKind("b", "leased"),
+          ofKind("c", "reclaiming"),
+        ];
+        expect(evaluate(view(reclaiming, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
+
+        const mixed = [ofKind("a", "leased"), ofKind("b", "ready")];
+        expect(
+          evaluate(view(mixed, { learned: [learnedOf(kind, 3, now)], maxConcurrentBoots: 3 })),
+        ).toEqual([provision(kind)]);
+
+        const merged = plan(
+          view([ofKind("a", "leased")], {
+            learned: [learnedOf(kind, 2, now), learnedOf(older, 1, now - minute)],
+            limit: 2,
+            targets: [{ count: 1, spec: kind }],
+          }),
+        );
+        expect(merged.proposals).toEqual([provision(kind)]);
+        expect(
+          merged.targets.map((report) => [report.origin, report.count, report.configuredCount]),
+        ).toEqual([
+          ["configured", 2, 1],
+          ["learned", 1, 0],
+        ]);
+      });
+
+      it("keeps a learned kind's never-leased device out of never-leased-idle while the kind wants it, and proposes one beyond its count after idle.shutdownAfterMs", () => {
+        const old = now - shutdownAfterMs - 1;
+        const wanted = ofKind("wanted", "ready", { createdAt: 1, readyAt: old });
+        const extra = ofKind("extra", "ready", { createdAt: 2, readyAt: old });
+        const young = ofKind("young", "ready", { createdAt: 3, readyAt: now - 1_000 });
+        const learned = [learnedOf(kind, 1, now)];
+
+        expect(evaluate(view([wanted], { learned }))).toEqual([]);
+        expect(evaluate(view([wanted, extra], { learned }))).toEqual([
+          { action: "shutdown", deviceId: "extra", reason: "never-leased-idle" },
+        ]);
+        expect(evaluate(view([wanted, young], { learned }))).toEqual([]);
+        expect(evaluate(view([wanted, extra], { learned: [learnedOf(kind, 2, now)] }))).toEqual([]);
+      });
+
+      it("keeps a learned kind and its devices but plans nothing for it while it is unplanned, and still plans a configured target of its spec", () => {
+        const learned = [learnedOf(kind, 1, now)];
+        const old = now - shutdownAfterMs - 1;
+        const spare = ofKind("spare", "ready", { createdAt: 1, readyAt: old });
+
+        expect(evaluate(view([], { learned, unplanned: [kind] }))).toEqual([]);
+        expect(evaluate(view([spare], { learned, unplanned: [kind] }))).toEqual([]);
+        expect(evaluate(view([], { learned }))).toEqual([provision(kind)]);
+        expect(
+          evaluate(view([], { learned, targets: [{ count: 1, spec: kind }], unplanned: [kind] })),
+        ).toEqual([provision(kind)]);
+      });
+
+      it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request or is already shut down for the budget, for a kind short for ram-budget, device-limit or reserve, or for a configured target", () => {
+        const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 2, now - 2 * minute)];
+        const recent = device("recent", "ready", { endedAgo: 5 * minute, spec: older });
+        const stale = device("stale", "ready", { endedAgo: 30 * minute, spec: older });
+        const displace = { action: "shutdown", deviceId: "stale", reason: "displaced" };
+
+        const base = plan(view([recent, stale], { learned, limit: 2, maxConcurrentBoots: 2 }));
+        expect(base.proposals).toEqual([displace, provision(kind)]);
+        expect(base.targets.map((report) => [report.target, report.ready, report.short])).toEqual([
+          ["ios iPhone 17 26.0", 0, undefined],
+          ["ios iPad Pro 26.0", 1, "running-limit"],
+        ]);
+
+        const refused = (options: Parameters<typeof view>[1]) =>
+          evaluate(view([recent, stale], { learned, maxConcurrentBoots: 2, ...options }));
+        expect(refused({ limit: 2 })).toEqual([displace, provision(kind)]);
+        expect(refused({ limit: 2, targets: [{ count: 1, spec: older }] })).toEqual([]);
+        expect(refused({ limit: 2, waiting: [modelDemand("iPad Pro")] })).toEqual([]);
+        expect(evaluate(view([recent], { learned, limit: 1, maxConcurrentBoots: 2 }))).toEqual([
+          { ...displace, deviceId: "recent" },
+          provision(kind),
+        ]);
+        expect(refused({ handoffInFlight: true, limit: 2 })).toEqual([]);
+        const holder = device("holder", "leased", { spec: spec("iPad Air") });
+        expect(
+          evaluate(
+            view([holder, stale], {
+              learned: [learnedOf(kind, 2, now - minute), learnedOf(older, 1, now - 2 * minute)],
+              limit: 1,
+              maxConcurrentBoots: 2,
+            }),
+          ),
+        ).toEqual([{ action: "shutdown", deviceId: "stale", reason: "over-budget" }]);
+        const droid = device("droid", "ready", {
+          endedAgo: 40 * minute,
+          spec: spec("Pixel 8", { platform: "android" }),
+        });
+        expect(
+          evaluate(
+            view([droid], {
+              learned: [learnedOf(kind, 1, now), learnedOf(droid.spec, 1, now - minute)],
+              limit: 2,
+              limits: { ios: 0 },
+              maxConcurrentBoots: 2,
+            }),
+          ),
+        ).toEqual([]);
+        expect(refused({ limit: 3, refuseProvision: "ram-budget" })).toEqual([]);
+        // why: short for a slot and for RAM the shutdown would not free: no shutdown, or the pool would reboot the victim every pass.
+        expect(refused({ limit: 2, refuseProvision: "ram-budget" })).toEqual([]);
+        expect(refused({ limit: 2, refuseProvisionUntilDown: "ram-budget" })).toEqual([
+          displace,
+          provision(kind),
+        ]);
+        expect(refused({ limit: 2, spared: [{ count: 2, spec: older }] })).toEqual([]);
+        expect(refused({ limit: 3, refuseProvision: "device-limit" })).toEqual([]);
+        expect(refused({ limit: 3, reserve: { ios: 1 } })).toEqual([]);
+
+        const newer = device("newer", "ready", { endedAgo: 30 * minute, spec: kind });
+        expect(
+          evaluate(
+            view([newer], {
+              learned,
+              limit: 1,
+              maxConcurrentBoots: 2,
+            }),
+          ),
+        ).toEqual([]);
+        expect(
+          evaluate(
+            view([recent], {
+              learned: [learnedOf(older, 1, now)],
+              limit: 1,
+              maxConcurrentBoots: 2,
+              targets: [{ count: 1, spec: spec("iPhone 15") }],
+            }),
+          ),
+        ).toEqual([]);
       });
     });
   });

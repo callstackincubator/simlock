@@ -21,7 +21,7 @@ import {
 } from "./index.js";
 import { type FakePhysicalDevice } from "./fake-driver.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
-import { FakeDriver, loadTestRegistry, testComponentWiring } from "./testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js";
 import { WarmPool } from "./warm-pool/index.js";
 
 async function build(
@@ -78,6 +78,7 @@ async function build(
     logger,
     prerequisiteChecks: options.prerequisiteChecks,
     registry,
+    state: testStateOf(registry),
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
   });

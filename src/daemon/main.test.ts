@@ -1144,7 +1144,11 @@ describe("startDaemon wires core and leasing together", () => {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
       driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
-      const { daemon } = await start({ clock, drivers: [driver] });
+      const { daemon } = await start({
+        clock,
+        configOverrides: { warmPool: { enabled: false } },
+        drivers: [driver],
+      });
       const grant = (await daemon.dispatch("lease.request", ios, agent)) as Grant;
       await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
       await settleRealTime();
@@ -1401,6 +1405,7 @@ describe("startDaemon stop with a warm target", () => {
         capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         warmPool: {
+          maxConcurrentBoots: 1,
           targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
         },
       },
