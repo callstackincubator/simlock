@@ -3457,6 +3457,20 @@ describe("createLeasing queued device cleanup", () => {
         "a device booted for a queued requester must not be reaped",
       ).toEqual([]);
       expect(state()).toBe("ready");
+      await harness.engine.cancelPending("behind");
+      expect(
+        [...(await harness.engine.core.targetedDevices())],
+        "cancelling the waiter removes cleanup protection immediately",
+      ).not.toContain(previous.device.id);
+      await reaper.run();
+      await harness.engine.settle();
+      expect(state(), "ordinary idle cleanup resumes after cancellation").toBe("shutdown");
+      expect(harness.bus.replay()).toContainEqual(
+        expect.objectContaining({
+          event: "device.shutdown",
+          payload: { deviceId: previous.device.id, initiator: "cleanup-reaper" },
+        }),
+      );
     } finally {
       reaper.dispose();
       await harness.engine.cancelPending("head");
