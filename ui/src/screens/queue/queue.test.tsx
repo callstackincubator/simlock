@@ -6,6 +6,7 @@ import { figuresOf, waitTile } from "../../model/figures";
 import { statsOf } from "../../model/test-support";
 import { chooseWaiting, type WaitingRequest, waitingTable } from "../../model/waiting";
 import type { WaitingPage } from "../../state/waiting";
+import { inConsole } from "../../state/test-support";
 import { QueueDrawerBody, QueueBody } from ".";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -46,7 +47,7 @@ function pageOf(requests: readonly WaitingRequest[], id?: string): WaitingPage {
 }
 
 function table(page: WaitingPage): string {
-  return renderToStaticMarkup(<QueueBody page={page} />);
+  return inConsole(<QueueBody page={page} />);
 }
 
 function drawer(page: WaitingPage): string {

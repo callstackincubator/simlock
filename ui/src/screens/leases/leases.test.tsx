@@ -1,31 +1,13 @@
-import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { ApiClient, Fetch } from "../../data/api";
-import type { Preferences } from "../../data/preferences";
-import type { Session } from "../../data/session";
-import { ConsoleProvider } from "../../state/services";
 import type { LeaseInspection, LeaseRowView } from "../../state/leases";
 import type { Screen } from "../../state/screen";
 import type { Paging } from "../../ds";
+import { inConsole } from "../../state/test-support";
 import { LeaseDetail, LeaseEventList, LeaseTitle } from "./drawer";
 import { LeaseTable } from "./index";
 import { ScreenView } from "./screen-panel";
-
-// why: a panel rendered for a claim about its markup never talks to a daemon, so the services it
-// reads are there to satisfy the context, and a call into either would be the finding.
-function inConsole(node: ReactNode): string {
-  const services = {
-    api: {} as unknown as ApiClient,
-    fetch: (() => Promise.reject(new Error("unused"))) as unknown as Fetch,
-    preferences: {} as unknown as Preferences,
-    session: {} as unknown as Session,
-    confirm: () => Promise.resolve(),
-    notify: () => undefined,
-  };
-  return renderToStaticMarkup(<ConsoleProvider {...services}>{node}</ConsoleProvider>);
-}
 
 function text(html: string): string {
   return html

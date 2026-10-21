@@ -1,6 +1,8 @@
+import type { MenuEntry } from "../ds";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
 import type { FigureTile } from "../model/figures";
+import { requestActions } from "../model/actions";
 import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import {
@@ -11,6 +13,7 @@ import {
   waitingTable,
 } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
+import { useActions } from "./actions";
 import { useFigures } from "./figures";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
@@ -26,6 +29,12 @@ export interface WaitingPage extends WaitingChoice {
   // why: the id in the URL stands even before the list has loaded, so the drawer can ask for it.
   readonly urlId: string | undefined;
   readonly wait: LoadView<FigureTile>;
+}
+
+// why: the row's ⋯ menu reads the one list of actions a waiting request offers (ADR 0037 §3).
+export function useQueueMenu(): (row: WaitingRow) => readonly MenuEntry[] {
+  const { entries } = useActions();
+  return (row) => entries(requestActions(row));
 }
 
 export function useWaiting(): LoadView<WaitingPage> {

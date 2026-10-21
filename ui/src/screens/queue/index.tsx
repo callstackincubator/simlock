@@ -18,6 +18,7 @@ import {
 } from "../../ds";
 import { useItemId, useListDrawer } from "../../state/drawer";
 import {
+  useQueueMenu,
   useWaiting,
   type WaitingPage,
   type WaitingQueue,
@@ -101,6 +102,7 @@ const COLUMNS: readonly Column<WaitingRow>[] = [
 ];
 
 function QueueTable({ page }: { readonly page: WaitingPage }) {
+  const entries = useQueueMenu();
   return (
     <DataTable
       label="Waiting requests"
@@ -108,6 +110,7 @@ function QueueTable({ page }: { readonly page: WaitingPage }) {
       columns={COLUMNS}
       rowId={(row) => row.key}
       rowTo={(row) => row.to}
+      menu={{ entries, label: (row) => `Actions for ${row.requester}` }}
       empty="No requests are waiting."
       paging={page.paging}
     />
