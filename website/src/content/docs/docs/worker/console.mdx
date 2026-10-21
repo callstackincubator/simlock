@@ -127,7 +127,7 @@ Select the worker to see three tabs:
 
 - **Overview**: CPU, memory and disk, each with a bar; how many leases it holds; a square per device slot for iOS and Android (leased, ready, booting, quarantined or free); and every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
 - **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
-- **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
+- **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
 
 While the daemon is still starting, devices, capacity and the warm pool are left out. They appear once startup finishes.
 

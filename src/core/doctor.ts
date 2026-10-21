@@ -599,7 +599,7 @@ export class Doctor {
   }
 
   /**
-   * The warm pool's targets that cannot be met as configured: those the last pass found a runtime
+   * why: the warm pool's configured targets (a learned kind is never a finding) that cannot be met: those the last pass found a runtime
    * or a model missing for, and the platforms (or the machine) whose targets add up to more than
    * the running limit leaves once the reserve is held back. Read, never acted on, like
    * `prerequisite-missing`. A target short for RAM, the device limit or a failed boot is no

@@ -302,7 +302,7 @@ export class WarmPool {
     });
   }
 
-  /** Every report as the last pass left it: how many are ready, and why not more. Targets that resolved to one spec are one report. */
+  /** why: every configured target's report as the last pass left it: how many are ready, and why not more. Targets that resolved to one spec are one report. */
   targets(): readonly TargetReport[] {
     return this.#reports;
   }
@@ -835,8 +835,7 @@ function shutDownIn(devices: readonly VirtualDevice[], down: ReadonlySet<string>
 }
 
 /**
- * why: status, the short log and `warm-pool.target-missed` describe the operator's targets only in
- * this version, so a learned kind's report is left out and a merged entry is judged by the
+ * why: the short log and `warm-pool.target-missed` describe the operator's targets only, so a learned kind's report is left out and a merged entry is judged by the
  * configured count: a configured target that is met is not short however short the learned count is.
  */
 function configuredOnly(reports: readonly TargetReport[]): TargetReport[] {
