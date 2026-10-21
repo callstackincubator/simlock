@@ -278,32 +278,14 @@ describe("EventBus", () => {
   });
 
   it.each(["docs/internal/EVENTS.md"])(
-    "lists lease-engine among the device.deleted initiators in %s",
+    "lists lease-engine, cleanup-reaper and nuke among the device.deleted initiators in %s",
     (doc) => {
       const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
       const row = markdown.split("\n").find((line) => line.startsWith("| `device.deleted` |"));
       expect(row).toBeDefined();
-      expect(row).toContain("`lease-engine`");
-    },
-  );
-
-  it.each(["docs/internal/EVENTS.md"])(
-    "lists cleanup-reaper among the device.deleted initiators in %s",
-    (doc) => {
-      const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
-      const row = markdown.split("\n").find((line) => line.startsWith("| `device.deleted` |"));
-      expect(row).toBeDefined();
-      expect(row).toContain("`cleanup-reaper`");
-    },
-  );
-
-  it.each(["docs/internal/EVENTS.md"])(
-    "lists nuke among the device.deleted initiators in %s",
-    (doc) => {
-      const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
-      const row = markdown.split("\n").find((line) => line.startsWith("| `device.deleted` |"));
-      expect(row).toBeDefined();
-      expect(row).toContain("`nuke`");
+      for (const initiator of ["lease-engine", "cleanup-reaper", "nuke"]) {
+        expect(row, initiator).toContain(`\`${initiator}\``);
+      }
     },
   );
 

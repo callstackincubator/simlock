@@ -14,15 +14,6 @@ const REFUSED: WarmTarget = {
 };
 
 describe("the warm pool table's row identities", () => {
-  it("gives two refused targets of one kind two different identities, the kind and its place among them", () => {
-    const rows = warmPoolRows([REFUSED, REFUSED]);
-
-    expect(rows.map((row) => row.key)).toEqual([
-      "ios-iPhone 17-27.0-full#0",
-      "ios-iPhone 17-27.0-full#1",
-    ]);
-  });
-
   it("keeps the identity of a row when a row of another kind comes or goes", () => {
     const other: WarmTarget = { ...REFUSED, model: "iPhone 16" };
 

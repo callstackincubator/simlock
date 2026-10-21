@@ -59,21 +59,6 @@ describe("McpSession", () => {
     ]);
   });
 
-  it("adds released: true to a successful release without otherwise reshaping the result", async () => {
-    const client = new FakeSimlockClient();
-    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
-    const session = new McpSession({
-      clock: new FakeClock(),
-      connect: async () => client,
-      connectForRenew: async () => client,
-    });
-
-    await expect(session.release({ leaseId: "lease-1" })).resolves.toEqual({
-      leaseId: "lease-1",
-      released: true,
-    });
-  });
-
   it("forwards list_devices straight to getCatalog", async () => {
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });

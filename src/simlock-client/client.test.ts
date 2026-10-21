@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { connectSimlockAdmin } from "../admin/index.js";
 import { connectSimlock } from "../client/index.js";
+import type { SimlockAdminClient } from "./client.js";
 import type { LeaseGrant } from "./types.js";
 import { completeHello, ScriptedConnection } from "./test-support.js";
 
@@ -181,67 +182,61 @@ describe("connectSimlock: handshake", () => {
     expect(connection.sent).toHaveLength(before);
   });
 
-  it("lists components from an agent client with component.list, sending the platform and returning the daemon's answer", async () => {
+  it.each([
+    {
+      name: "component.list from an agent client",
+      admin: false,
+      operation: "component.list",
+      payload: { platform: "ios" },
+      answer: {
+        components: [
+          {
+            devices: 0,
+            foreignDevices: 2,
+            installedBySimlock: false,
+            platform: "ios",
+            sizeBytes: 9_100_000_000,
+            variant: "23A343",
+            version: "26.0",
+          },
+        ],
+      },
+      call: (client: SimlockAdminClient) => client.listComponents({ platform: "ios" }),
+    },
+    {
+      name: "identity.get from an agent client",
+      admin: false,
+      operation: "identity.get",
+      payload: {},
+      answer: { name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" },
+      call: (client: SimlockAdminClient) => client.identity(),
+    },
+    {
+      name: "component.remove from an admin client",
+      admin: true,
+      operation: "component.remove",
+      payload: { dryRun: true, platform: "ios", version: "26.4" },
+      answer: { outcome: "would-remove", platform: "ios", sizeBytes: 7, version: "26.4" },
+      call: (client: SimlockAdminClient) =>
+        client.removeComponent({ dryRun: true, platform: "ios", version: "26.4" }),
+    },
+  ])("sends $name with its input and returns the daemon's answer", async (row) => {
     const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
+    const connectPromise = row.admin
+      ? connectSimlockAdmin({ connection, credential: "operator-secret" })
+      : connectSimlock({ connection });
     await flushMicrotasks();
-    completeHello(connection);
-    const client = await connectPromise;
-    const answer = {
-      components: [
-        {
-          devices: 0,
-          foreignDevices: 2,
-          installedBySimlock: false,
-          platform: "ios",
-          sizeBytes: 9_100_000_000,
-          variant: "23A343",
-          version: "26.0",
-        },
-      ],
-    };
+    if (row.admin) completeHello(connection, { role: "admin" });
+    else completeHello(connection);
+    const client = (await connectPromise) as SimlockAdminClient;
 
-    const callPromise = client.listComponents({ platform: "ios" });
+    const callPromise = row.call(client);
     await flushMicrotasks();
-    const call = connection.lastSentOf("component.list")!;
-    expect(call.payload).toEqual({ platform: "ios" });
-    connection.reply(call.id, answer);
+    const call = connection.lastSentOf(row.operation)!;
+    expect(call.payload).toEqual(row.payload);
+    connection.reply(call.id, row.answer);
 
-    await expect(callPromise).resolves.toEqual(answer);
-  });
-
-  it("identity() sends identity.get and returns its output", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
-    await flushMicrotasks();
-    completeHello(connection);
-    const client = await connectPromise;
-    const answer = { name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" };
-
-    const callPromise = client.identity();
-    await flushMicrotasks();
-    const call = connection.lastSentOf("identity.get")!;
-    expect(call.payload).toEqual({});
-    connection.reply(call.id, answer);
-
-    await expect(callPromise).resolves.toEqual(answer);
-  });
-
-  it("removes a component from an admin client with component.remove, sending the input and returning the daemon's answer", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
-    await flushMicrotasks();
-    completeHello(connection, { role: "admin" });
-    const client = await connectPromise;
-    const answer = { outcome: "would-remove", platform: "ios", sizeBytes: 7, version: "26.4" };
-
-    const callPromise = client.removeComponent({ dryRun: true, platform: "ios", version: "26.4" });
-    await flushMicrotasks();
-    const call = connection.lastSentOf("component.remove")!;
-    expect(call.payload).toEqual({ dryRun: true, platform: "ios", version: "26.4" });
-    connection.reply(call.id, answer);
-
-    await expect(callPromise).resolves.toEqual(answer);
+    await expect(callPromise).resolves.toEqual(row.answer);
   });
 
   it("the admin client's testAlertDestination sends alerts.test and returns its output", async () => {

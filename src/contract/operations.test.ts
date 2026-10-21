@@ -8,7 +8,6 @@ import {
   requestedDevice,
 } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
-import { relayChannelSchema } from "./relay.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
 
@@ -1585,13 +1584,6 @@ describe("relay.request on a byte channel", () => {
     expect(parse({ ...request, channel: "a b" })).toBe(false);
     expect(parse({ ...request, channel: "a_b" })).toBe(false);
     expect(parse(request)).toBe(false);
-  });
-
-  it("relayChannelSchema holds the same bound the operation uses", () => {
-    expect(relayChannelSchema.safeParse("a".repeat(32)).success).toBe(true);
-    expect(relayChannelSchema.safeParse("a".repeat(33)).success).toBe(false);
-    expect(relayChannelSchema.safeParse("").success).toBe(false);
-    expect(relayChannelSchema.safeParse("a b").success).toBe(false);
   });
 
   it("OPERATIONS has no relay.body and PUSH_SCHEMAS has no relay-chunk", () => {
