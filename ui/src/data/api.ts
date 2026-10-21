@@ -124,6 +124,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         return read(response);
       });
     } catch (error: unknown) {
+      // why: a write that got no answer is the action's own failure, shown as a toast; it never
+      // asks whether the session ended, as a read does.
+      if (sendOptions.method !== undefined) throw error;
       // why: a request that never got an answer (a redirect `fetch` cannot follow, a dropped
       // connection) may be the sign-in proxy's session ending; a timeout or an abort is not.
       if (isNetworkError(error, sendOptions.signal)) refuse("not-simlock");
