@@ -85,6 +85,19 @@ function deviceRefusal(fields: ReturnType<typeof leaseCallFields>): FrontReply |
   return undefined;
 }
 
+function unsupportedSelector(
+  params: Record<string, unknown>,
+  fields: ReturnType<typeof leaseCallFields>,
+): FrontReply | undefined {
+  if (params["physical"] === true) {
+    return refusal("refused: physical devices are not available through agent-device");
+  }
+  if (typeof fields.target === "string" && !Object.hasOwn(CLASS_OF_TARGET, fields.target)) {
+    return refusal(`refused: unknown --target ${fields.target}; use mobile, tv or desktop`);
+  }
+  return undefined;
+}
+
 function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
   const fields = leaseCallFields(params);
   const ttl = fields.ttlMs;
@@ -92,12 +105,8 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
     return refusal("refused: this agent-device is too old for simlock; upgrade it");
   }
   if (notPlain(params)) return refusal("refused: simlock leases only plain devices");
-  if (params["physical"] === true) {
-    return refusal("refused: physical devices are not available through agent-device");
-  }
-  if (typeof fields.target === "string" && !Object.hasOwn(CLASS_OF_TARGET, fields.target)) {
-    return refusal(`refused: unknown --target ${fields.target}; use mobile, tv or desktop`);
-  }
+  const unsupported = unsupportedSelector(params, fields);
+  if (unsupported !== undefined) return unsupported;
   const device = deviceRefusal(fields);
   if (device !== undefined) return device;
   if (present(ttl) && !(typeof ttl === "number" && Number.isFinite(ttl) && ttl > 0)) {
@@ -111,20 +120,24 @@ function holderReply(holder: Awaited<ReturnType<FrontContext["link"]["status"]>>
   return notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING);
 }
 
+function stringFields(fields: ReturnType<typeof leaseCallFields>) {
+  return {
+    ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
+    ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
+  };
+}
+
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
   const device =
     typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
   const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
   const ttlMs = chosenTtl(fields.ttlMs, cap);
-  const imageTag = typeof fields.imageTag === "string" ? fields.imageTag : undefined;
-  const osVersion = typeof fields.osVersion === "string" ? fields.osVersion : undefined;
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
     ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
-    ...(imageTag === undefined ? {} : { imageTag }),
-    ...(osVersion === undefined ? {} : { osVersion }),
+    ...stringFields(fields),
     ...(ttlMs === undefined ? {} : { ttlMs }),
   };
 }
@@ -164,6 +177,18 @@ async function stillWaiting(
 function requiresOf(context: FrontContext): { readonly requires?: string[] } {
   const required = context.link.leaseRequires ?? [];
   return required.length === 0 ? {} : { requires: [...required] };
+}
+
+function leaseInput(context: FrontContext, plan: Plan) {
+  const { leaseId, platform, ...constraints } = plan;
+  return {
+    ...constraints,
+    leaseId,
+    platform,
+    requesterId: leaseId,
+    timeoutMs: QUEUE_WAIT_MS,
+    ...requiresOf(context),
+  };
 }
 
 async function requestLease(
@@ -212,18 +237,7 @@ async function requestLease(
   try {
     const grant = await context.dispatch(
       "lease.request",
-      {
-        leaseId: plan.leaseId,
-        platform: plan.platform,
-        requesterId: plan.leaseId,
-        timeoutMs: QUEUE_WAIT_MS,
-        ...(plan.model === undefined ? {} : { model: plan.model }),
-        ...(plan.class === undefined ? {} : { class: plan.class }),
-        ...(plan.imageTag === undefined ? {} : { imageTag: plan.imageTag }),
-        ...(plan.osVersion === undefined ? {} : { osVersion: plan.osVersion }),
-        ...(plan.ttlMs === undefined ? {} : { ttlMs: plan.ttlMs }),
-        ...requiresOf(context),
-      },
+      leaseInput(context, plan),
       buildHttpSession(identity, {
         onRequestAdmitted: () => {
           admitted = true;
