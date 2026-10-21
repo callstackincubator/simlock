@@ -243,6 +243,48 @@ test.describe("the Inbox view", () => {
     }
   });
 
+  test("a lease stubbed with 4 minutes left shows under Heads-up, and one with 10 minutes does not", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      // why: a lease cannot be 4 minutes from its deadline on a real daemon quickly, so the list is
+      // stubbed, each deadline counted from the daemon's own clock (its Date header).
+      await page.route(
+        (url) => url.pathname === "/v1/leases",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          const lease = (id: string, leftMs: number) => ({
+            deviceId: "dev_stub",
+            grantedAt: now - 60_000,
+            id,
+            idChosenByRequester: false,
+            lastRenewedAt: now - 30_000,
+            ownerId: "tok_stub",
+            requesterId: "tok_stub",
+            ttlDeadline: now + leftMs,
+            ttlMs: 900_000,
+          });
+          await route.fulfill({
+            json: { leases: [lease("lease-soon", 4 * 60_000), lease("lease-later", 10 * 60_000)] },
+            response,
+          });
+        },
+      );
+
+      await openInbox(page, host);
+
+      const headsUp = page.getByRole("region", { name: "Heads-up" });
+      await expect(headsUp.getByRole("link")).toHaveCount(1);
+      await expect(
+        headsUp.getByRole("link", { name: /tok_stub · dev_stub ends in 3:\d\d/ }),
+      ).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("draining a worker adds it to the Inbox view within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
