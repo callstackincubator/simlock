@@ -4211,18 +4211,29 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           count: 1,
           mode: "full" as const,
           model: "iPhone 17",
-          origin: "configured" as const,
+          origin: "learned" as const,
           osVersion: "27.0",
           platform: "ios" as const,
           ready: 0,
           short: "runtime-missing" as const,
+        },
+        {
+          booting: 0,
+          count: 1,
+          imageTag: "google_apis_playstore",
+          mode: "full" as const,
+          model: "Pixel 8",
+          origin: "learned" as const,
+          osVersion: "35",
+          platform: "android" as const,
+          ready: 1,
         },
       ],
     };
     const statusWith = (block: StatusGetOutput["warmPool"]) =>
       fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, warmPool: block }) });
 
-    it("simlock status prints whether the pool is on, the reserve, and each target with how many are wanted, ready and booting, and why it is short", async () => {
+    it("simlock status prints the origin word on every warm pool line, learned lines included, the tag in the name, and a learned line's short:", async () => {
       const output = outputCapture();
 
       await runCli(
@@ -4232,8 +4243,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: enabled, reserve ios 1 android 0\n" +
-          "  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1\n" +
-          "  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 1  booting 1\n" +
+          "  iPhone 17 / 27.0 / full   learned   wanted 1  ready 0  booting 0  short: runtime-missing\n" +
+          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n",
       );
     });
 
@@ -4262,7 +4274,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: enabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+          "  iPhone 17 / slim   configured   wanted 1  ready 0  booting 0\n",
       );
     });
 
@@ -4286,7 +4298,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: disabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / 26.0 / full   wanted 2  ready 0  booting 0  short: disabled\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 0  booting 0  short: disabled\n",
       );
     });
 
