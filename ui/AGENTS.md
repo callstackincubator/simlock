@@ -64,6 +64,17 @@ nothing. `notify` and `confirm` are plain functions `App` passes in through `sta
 error or a timeout on a write throws without asking whether the session ended. The worker actions
 are offered only when `useDaemonMode` says `gateway` (ADR 0037 §4).
 
+## Search
+
+⌘K / Ctrl+K (`app/shell.tsx`, ignored while a modal drawer or dialog is open) or the sidebar's "Search or
+jump to…" opens `CommandPalette` (`ds/command-palette.tsx`). `model/search.ts` builds the results from
+the same views the pages show (pages, workers, their devices, `leaseRows`, `waitingTable`) and the
+actions of `model/actions.ts`, filters them by word prefix and orders them; `state/search.ts` keeps
+each read as it stood the first time it settled (`useSettledOnce`), so the list is built when the
+dialog opens, a group fills in once and then never changes, and runs a result through `navigate` or
+`useActions().run`. The palette keeps its highlight by result id, which Base UI's Autocomplete does
+not (its highlight is an index it resets when the items change), so the listbox is written in `ds/`.
+
 ## Pages
 
 | Path                         | Screen   | Layout                                                                                                                                         |
@@ -101,6 +112,7 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 - Signals: `Status` (square and word), `StatusDot` (square alone, the word as its name),
   `Meter`, `Slots`, `ShareBar`, `SlotLegend`.
 - Controls: `Button`, `ButtonLink`, `Link`, `ChoiceChips` (a radio group), `Tabs`, `SearchField`, `Icon`.
+- Search: `CommandPalette` (Base UI Dialog around a combobox and listbox, written in `ds/`).
 - Actions: `RowMenu` (a ⋯ button and its menu), `MenuRow` (a table row that opens the same menu on a
   right-click), `ActionBar` (a drawer's or page's first safe action and its ⋯; Base UI Menu and
   ContextMenu), `createConfirmer` and `ConfirmHost` (Base UI AlertDialog, type-to-confirm, one host), `createToaster`

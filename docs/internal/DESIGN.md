@@ -224,6 +224,14 @@ put together from them and draws nothing of its own that one of them already dra
 - **Long ids** (a lease's, a worker's, a device's) stay on one line, cut with
   an ellipsis. The whole id is in the element's `title`, in the text a copy or
   a screen reader reads, and on the details page.
+- **Search.** A dialog near the top of the page over a dim layer (`--bg`, 1px `--border-strong`),
+  36rem wide at most: a box, then the results in groups, each group a mono uppercase label in
+  `--text-muted` over its rows. The highlighted row is `--field` with the same 2px `--accent`
+  inset edge as the current page in the sidebar; orange marks interaction only. A group still
+  loading, or one that failed, shows one `--text-muted` line in place of rows. The box is a
+  combobox and the list a listbox, and the highlight is the active descendant; it is kept by the
+  result's id, not its place, so a group that fills in above never moves it. It sits under the
+  confirm dialog, so an action's confirm opens over it.
 - **Buttons.** Primary: filled `--accent` with `--on-accent` text. Secondary:
   outlined in `--border-strong`, `--text`. Quiet: text only. All are labels.
 - **Inputs.** A `--field` fill and a 1px `--border-strong` border. A select is
@@ -271,6 +279,8 @@ put together from them and draws nothing of its own that one of them already dra
   for keyboard focus (`:focus-visible`), not on a mouse click.
 - The first control on every signed-in page is "Skip to content", visible only
   when focused.
+- ⌘K and Ctrl+K open the search while the console has focus and no drawer or dialog is open; the
+  browser's own use of the chord is stopped. Closing the search returns focus to where it was.
 
 ## Motion
 
