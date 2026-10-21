@@ -5,6 +5,7 @@ import { leaseRows, type LeaseList, type TokenList } from "../model/leases";
 import { buildResults, searchGroups } from "../model/search";
 import { type WaitingList, waitingTable } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
+import { useActions } from "./actions";
 import { useDaemonMode, useLiveResource, useNow } from "./live";
 import { navigate } from "./router";
 
@@ -39,6 +40,7 @@ export function useSearchSession(
   const requests = useLiveResource<WaitingList>("/v1/lease-requests").data?.requests ?? [];
   const now = useNow();
   const mode = useDaemonMode();
+  const { run } = useActions();
   const [results] = useState(() =>
     buildResults({
       leases: leaseRows({ leases, now: now.server, tokens, workers }),
@@ -54,6 +56,8 @@ export function useSearchSession(
       const chosen = results.find((result) => result.id === id);
       hide();
       if (chosen?.target.kind === "go") navigate(chosen.target.to);
+      // why: the same runner as the ⋯ menus, so the confirm, the in-flight flag and the toast are theirs.
+      else if (chosen !== undefined) void run(chosen.target.action);
     },
     groups: searchGroups(results, typed).map((group) => ({
       items: group.results,
