@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import { mkdir, open, readFile, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+
+import type { DaemonRole } from "./paths.js";
+import type { ServiceManager } from "./service-manager.js";
 
 /** Starts the detached daemon owned by the operating system rather than the CLI. */
 export interface DaemonLauncher {
@@ -134,4 +137,29 @@ async function readLogSince(logPath: string, ino: number, size: number): Promise
     chunks.push((await readFile(rotatedPath)).subarray(size), await readFile(logPath));
   }
   return Buffer.concat(chunks).subarray(-MAX_OUTPUT_BYTES).toString("utf8");
+}
+
+export interface LauncherForOptions {
+  readonly role: DaemonRole;
+  readonly root: string;
+  readonly dataDirectory: string;
+  readonly mainPath: string;
+  readonly serviceManager: ServiceManager | undefined;
+  readonly notify: (line: string) => void;
+  readonly nodePath?: string;
+  readonly home?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly spawner?: DaemonLauncher;
+}
+
+export function launcherFor(options: LauncherForOptions): DaemonLauncher {
+  return (
+    options.spawner ??
+    new NodeDaemonLauncher({
+      args: [options.mainPath, ...(options.role === "gateway" ? ["--gateway"] : [])],
+      command: options.nodePath ?? process.execPath,
+      logPath: join(options.dataDirectory, "daemon.log"),
+      simlockHome: options.root,
+    })
+  );
 }

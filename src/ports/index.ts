@@ -20,6 +20,7 @@ export {
   type DaemonExit,
   type DaemonLauncher,
   FakeDaemonLauncher,
+  launcherFor,
   type LaunchedDaemon,
   NodeDaemonLauncher,
   startErrorFrom,

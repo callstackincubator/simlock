@@ -19,6 +19,7 @@ import {
   FakeParentWatch,
   FakeServiceManager,
   IpcError,
+  launcherFor,
   MemoryFilesystem,
   MemoryIpcTransport,
   FakeKeySetFetcher,
@@ -8694,5 +8695,62 @@ describe("CLI: daemon install (#830)", () => {
       "Daemon stopping",
       "Service removed: com.callstack.simlock.worker (launchd)",
     ]);
+  });
+});
+
+describe("CLI: a start goes through the service (#830)", () => {
+  it("daemon start and a command's auto-start ask a loaded service to start the daemon and spawn nothing", async () => {
+    const home = "/Users/me";
+    const root = join(home, ".simlock");
+    const cases = [
+      { label: "daemon start", argv: ["daemon", "start", "--json"] },
+      { label: "a command's auto-start", argv: ["status", "--json"] },
+    ];
+    for (const testCase of cases) {
+      const filesystem = new MemoryFilesystem();
+      const ipcTransport = new MemoryIpcTransport();
+      const serviceManager = new FakeServiceManager({
+        state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+        onStart: async () => {
+          await startInMemoryDaemon({
+            adminTokenPath: join(root, "admin.token"),
+            filesystem,
+            ipcTransport,
+            socketPath: join(root, "daemon.sock"),
+          });
+        },
+      });
+      const spawner = new FakeDaemonLauncher(() => undefined, {
+        exit: { code: 1, signal: null },
+      });
+      const notices: string[] = [];
+      const output = outputCapture({
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: launcherFor({
+          role: "worker",
+          root,
+          dataDirectory: root,
+          mainPath: "/opt/simlock/dist/daemon/main.js",
+          nodePath: "/opt/node/bin/node",
+          home,
+          env: {},
+          serviceManager,
+          notify: (line) => notices.push(line),
+          spawner,
+        }),
+        daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      });
+
+      const exitCode = await runCli(testCase.argv, output.environmentWith());
+
+      expect(exitCode, testCase.label).toBe(0);
+      expect(serviceManager.starts, testCase.label).toHaveLength(1);
+      expect(serviceManager.starts[0]?.name, testCase.label).toBe("com.callstack.simlock.worker");
+      expect(spawner.launches, testCase.label).toBe(0);
+      expect(notices, testCase.label).toEqual([]);
+    }
   });
 });
