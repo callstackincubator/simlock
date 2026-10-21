@@ -1,4 +1,3 @@
-import { eventSummary, eventTone } from "./activity";
 import {
   inboxGroup,
   type InboxContext,
@@ -8,14 +7,12 @@ import {
   inboxTone,
 } from "./inbox";
 import { isExpiring, type LeaseRecord, type TokenRecord } from "./leases";
-import type { ConsoleEvent } from "./events";
 import { type DeviceSlot, slotsLabel, workerHealth, workerSlots } from "./fleet";
 import type { FiguresState } from "./figures";
-import { minuteLabel } from "./history";
 import { formatBusyPercent, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
 import { formatCount } from "./paging";
-import { inboxPath, itemPath } from "./paths";
+import { inboxPath } from "./paths";
 import { formatDuration } from "./time";
 import type { Tone, Toned } from "./tones";
 import type { WaitingRequest } from "./waiting";
@@ -61,15 +58,6 @@ export interface OverviewItem {
   readonly to: string;
 }
 
-export interface OverviewActivity {
-  readonly key: string;
-  readonly time: string;
-  readonly name: string;
-  readonly tone?: Tone;
-  readonly text: string;
-  readonly to: string;
-}
-
 export interface OverviewInbox {
   // why: a read that failed leaves the Inbox unchecked there, so the page never says it is clear.
   readonly couldNotCheck: readonly string[];
@@ -98,10 +86,8 @@ export interface Overview {
   readonly figures: FiguresState;
   readonly workers: readonly OverviewWorker[];
   readonly inbox: OverviewInbox;
-  readonly activity: readonly OverviewActivity[];
 }
 
-const ACTIVITY_ROWS = 8;
 const NEEDS_YOU_ROWS = 4;
 
 function percentOf(part: number, whole: number): number {
@@ -262,7 +248,6 @@ function inboxOf(input: {
 export function overviewOf(input: {
   readonly workers: readonly WorkerView[];
   readonly requests: readonly WaitingRequest[];
-  readonly events: readonly ConsoleEvent[];
   readonly leases?: readonly LeaseRecord[] | undefined;
   readonly tokens?: readonly TokenRecord[] | undefined;
   readonly figures?: FiguresState;
@@ -271,7 +256,6 @@ export function overviewOf(input: {
 }): Overview {
   const {
     couldNotCheck = [],
-    events,
     figures = { kind: "loading" },
     leases,
     now,
@@ -280,20 +264,6 @@ export function overviewOf(input: {
     workers,
   } = input;
   return {
-    activity: [...events]
-      .sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
-      .slice(0, ACTIVITY_ROWS)
-      .map((event) => {
-        const tone = eventTone(event.event);
-        return {
-          key: event.id,
-          name: event.event,
-          text: eventSummary(event, workers),
-          time: minuteLabel(event.timestamp),
-          to: itemPath("/activity", event.id),
-          ...(tone === undefined ? {} : { tone }),
-        };
-      }),
     capacity: [platformCapacity(workers, "ios"), platformCapacity(workers, "android")],
     ending: endingSoon(leases, now),
     inbox: inboxOf({

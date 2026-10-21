@@ -15,7 +15,6 @@ function text(html: string): string {
 }
 
 const quiet: Overview = {
-  activity: [],
   figures: { kind: "loading" },
   capacity: [],
   ending: { label: "Ending soon", value: "0" },
@@ -25,12 +24,12 @@ const quiet: Overview = {
 };
 
 describe("the overview screen", () => {
-  it("says so in one line where a fleet has no workers, nothing needs you and nothing happened", () => {
+  it("says so in one line where a fleet has no workers and nothing needs you", () => {
     const shown = text(renderToStaticMarkup(<OverviewBody overview={quiet} />));
 
     expect(shown).toContain("No workers have connected.");
     expect(shown).toContain("Nothing needs you");
-    expect(shown).toContain("No events in the last hour.");
+    expect(shown).not.toContain("Activity");
   });
 
   it("names each worker's health in its square, its devices in words beside the slots, and a muted dash where a count is not known", () => {
@@ -137,7 +136,6 @@ describe("the overview screen", () => {
       renderToStaticMarkup(
         <OverviewBody
           overview={overviewOf({
-            events: [],
             figures: { kind: "refused", message: "The stats are not allowed." },
             now: NOW,
             requests: [],
@@ -187,7 +185,7 @@ describe("the overview screen", () => {
     const shown = text(
       renderToStaticMarkup(
         <OverviewBody
-          overview={overviewOf({ events: [], now: NOW, requests: [], workers: [] })}
+          overview={overviewOf({ now: NOW, requests: [], workers: [] })}
           range="1h"
           onRange={() => undefined}
         />,
@@ -212,7 +210,6 @@ function withFigures(shape: { coversFrom?: number; partial?: boolean }): Overvie
     ...shape,
   });
   return overviewOf({
-    events: [],
     figures: { data: figuresOf(stats, "6h", NOW), kind: "ready" },
     now: NOW,
     requests: [],

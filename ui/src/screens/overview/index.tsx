@@ -24,7 +24,6 @@ import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import {
   type Gauge,
   type Overview,
-  type OverviewActivity,
   type OverviewInbox,
   type OverviewWorker,
   type PlatformCapacity,
@@ -118,9 +117,6 @@ export function OverviewBody(props: {
         </Panel>
         <div className="overview-side">
           <NeedsYou inbox={overview.inbox} />
-          <Panel title="Activity" flush actions={<Link to="/activity">All events</Link>}>
-            <ActivityList rows={overview.activity} />
-          </Panel>
         </div>
       </Row>
     </>
@@ -233,24 +229,5 @@ function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
         <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
       </p>
     </Panel>
-  );
-}
-
-function ActivityList({ rows }: { readonly rows: readonly OverviewActivity[] }) {
-  if (rows.length === 0) return <Empty>No events in the last hour.</Empty>;
-  return (
-    <ul className="overview-list">
-      {rows.map((row) => (
-        <li key={row.key}>
-          <Link to={row.to} className="overview-row activity-row">
-            <span className="mono muted">{row.time}</span>
-            <span className={row.tone === undefined ? "mono" : `mono event-${row.tone}`}>
-              {row.name}
-            </span>
-            <span className="activity-text">{row.text}</span>
-          </Link>
-        </li>
-      ))}
-    </ul>
   );
 }

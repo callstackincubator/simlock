@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import type { ConsoleEvent } from "./events";
 import { figuresOf } from "./figures";
 import { overviewOf } from "./overview";
 import { statsOf } from "./test-support";
@@ -49,10 +48,6 @@ function worker(
   } as unknown as WorkerView;
 }
 
-function event(seq: number, name: string, at: number): ConsoleEvent {
-  return { event: name, id: `e${seq}`, payload: {}, seq, timestamp: at };
-}
-
 const fleet = [
   worker("mini-1", [
     device("a", "leased", "ios"),
@@ -81,11 +76,6 @@ function unread(id: string): WorkerView {
 describe("the overview", () => {
   it("counts the fleet's headline figures from what the workers, the queue and the daemon's figures say", () => {
     const requests = [{ createdAt: NOW - 74_000, id: "r1" }] as unknown as WaitingRequest[];
-    const events = [
-      event(1, "lease.granted", NOW - 2 * 60 * 60 * 1_000),
-      event(2, "lease.granted", NOW - 10 * 60 * 1_000),
-      event(3, "lease.released", NOW - 5 * 60 * 1_000),
-    ];
     const stats = statsOf({
       bucketMs: 60_000,
       from: NOW - 60 * 60_000,
@@ -95,7 +85,6 @@ describe("the overview", () => {
     });
 
     const { ending, tiles, wait } = overviewOf({
-      events,
       figures: { data: figuresOf(stats, "1h", NOW), kind: "ready" },
       leases: [],
       now: NOW,
@@ -117,14 +106,14 @@ describe("the overview", () => {
     const shown = [{ kind: "loading" }, { kind: "refused", message: "no" }] as const;
 
     const waits = shown.map(
-      (figures) => overviewOf({ events: [], figures, now: NOW, requests: [], workers: fleet }).wait,
+      (figures) => overviewOf({ figures, now: NOW, requests: [], workers: fleet }).wait,
     );
 
     expect(waits).toEqual([undefined, undefined]);
   });
 
   it("lists what needs you in the Inbox's order, each linked to its own page and toned by how bad it is", () => {
-    const { inbox } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
+    const { inbox } = overviewOf({ now: NOW, requests: [], workers: fleet });
 
     expect(inbox.problems).toBe(3);
     expect(inbox.needsYou.map((item) => [item.word, item.tone, item.subject, item.to])).toEqual([
@@ -134,75 +123,8 @@ describe("the overview", () => {
     ]);
   });
 
-  it("shows the newest eight events, newest first, each linked to its page", () => {
-    const events = Array.from({ length: 10 }, (_, index) =>
-      event(
-        index + 1,
-        index === 9 ? "device.quarantined" : "lease.granted",
-        NOW - (10 - index) * 1_000,
-      ),
-    );
-
-    const { activity } = overviewOf({ events, now: NOW, requests: [], workers: fleet });
-
-    expect(activity.map((row) => row.key)).toEqual([
-      "e10",
-      "e9",
-      "e8",
-      "e7",
-      "e6",
-      "e5",
-      "e4",
-      "e3",
-    ]);
-    expect(activity[0]).toMatchObject({
-      name: "device.quarantined",
-      to: "/activity/e10",
-      tone: "error",
-    });
-    expect(activity[1]).not.toHaveProperty("tone");
-  });
-
-  it("lists the eight latest events across a daemon restart, not the eight with the highest seq", () => {
-    // why: the console's first load reads the daemon's event file, which survives a restart, so one
-    // buffer holds the previous run's events beside the restarted counter's own. `seq` restarts with
-    // every daemon, so only `timestamp` then `seq` orders them (the events reference).
-    const previousGeneration = [91, 92, 93, 94, 95, 96].map((seq, index) => ({
-      event: "lease.released",
-      id: `before-${seq}`,
-      payload: {},
-      seq,
-      timestamp: NOW - (20 - index) * 60_000,
-    }));
-    const currentGeneration = [1, 2, 3, 4].map((seq, index) => ({
-      event: "lease.granted",
-      id: `after-${seq}`,
-      payload: {},
-      seq,
-      timestamp: NOW - (4 - index) * 60_000,
-    }));
-
-    const { activity } = overviewOf({
-      events: [...previousGeneration, ...currentGeneration],
-      now: NOW,
-      requests: [],
-      workers: fleet,
-    });
-
-    expect(activity.map((row) => row.key)).toEqual([
-      "after-4",
-      "after-3",
-      "after-2",
-      "after-1",
-      "before-96",
-      "before-95",
-      "before-94",
-      "before-93",
-    ]);
-  });
-
   it("gives each worker its health square, its slots and its load, and a lost worker no load", () => {
-    const { workers } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
+    const { workers } = overviewOf({ now: NOW, requests: [], workers: fleet });
 
     expect(workers.map((row) => [row.name, row.health.tone, row.health.word, row.leases])).toEqual([
       ["mini-1", "ok", "connected", 2],
@@ -214,13 +136,7 @@ describe("the overview", () => {
   });
 
   it("leaves the fleet's lease and device figures unknown, not zero, while a connected worker is starting", () => {
-    const events = [
-      event(1, "lease.granted", NOW - 10 * 60 * 1_000),
-      event(2, "lease.granted", NOW - 9 * 60 * 1_000),
-      event(3, "lease.granted", NOW - 8 * 60 * 1_000),
-    ];
-
-    const alone = overviewOf({ events, now: NOW, requests: [], workers: [unread("mini-3")] });
+    const alone = overviewOf({ now: NOW, requests: [], workers: [unread("mini-3")] });
 
     expect(alone.tiles.map((tile) => [tile.label, tile.value])).toEqual([
       ["Leased", "—"],
@@ -240,7 +156,6 @@ describe("the overview", () => {
 
     const reporting = worker("mini-1", [device("a", "leased", "ios"), device("b", "ready", "ios")]);
     const mixed = overviewOf({
-      events,
       now: NOW,
       requests: [],
       workers: [reporting, unread("mini-3")],
@@ -277,7 +192,7 @@ describe("the overview", () => {
       unread("w4"),
     ];
 
-    const { capacity } = overviewOf({ events: [], now: NOW, requests: [], workers });
+    const { capacity } = overviewOf({ now: NOW, requests: [], workers });
 
     expect(
       capacity.map((platform) => [
