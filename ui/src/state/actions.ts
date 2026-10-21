@@ -71,8 +71,7 @@ export function useActions(): Actions {
           });
         } catch (error: unknown) {
           // why: a 401 has already signed the session out, and that is not a toast.
-          if (!(error instanceof ApiError)) throw error;
-          if (error.status === 401) return;
+          if (error instanceof ApiError && error.status === 401) return;
           notify({
             action: {
               label: "Retry",
@@ -80,7 +79,9 @@ export function useActions(): Actions {
                 void perform();
               },
             },
-            description: error.message,
+            // why: anything but the daemon's own refusal is a write that got no answer (a dropped
+            // connection or the client's timeout).
+            description: error instanceof ApiError ? error.message : "The daemon did not answer.",
             title: action.failure,
             tone: "error",
           });
