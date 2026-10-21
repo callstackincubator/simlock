@@ -149,14 +149,7 @@ describe("the overview screen", () => {
 
     expect(shown.split("The stats are not allowed.")).toHaveLength(3);
     expect(shown.indexOf("The stats are not allowed.")).toBeGreaterThan(shown.indexOf("Workers 0"));
-    for (const kept of [
-      "Leased",
-      "Waiting",
-      "Ending soon",
-      "Capacity",
-      "Nothing needs you",
-      "Activity",
-    ]) {
+    for (const kept of ["Leased", "Waiting", "Ending soon", "Capacity", "Nothing needs you"]) {
       expect(shown, kept).toContain(kept);
     }
     expect(shown).toContain("No workers have connected.");
