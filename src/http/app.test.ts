@@ -777,6 +777,28 @@ describe("POST /v1/lease-requests", () => {
     });
   });
 
+  it("answers a lease request whose ttlMs is at the safe-integer edge: above it 400 BAD_REQUEST, at it the dispatcher's maxTtl message", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = (input) => {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `ttlMs ${String((input as { ttlMs?: number }).ttlMs)} exceeds lease.maxTtlMs (120000)`,
+      );
+    };
+
+    const beyond = await postLeaseRequest(app, { ...defaultBody, ttlMs: 1e16 });
+    expect(beyond.status).toBe(400);
+    const beyondBody = (await beyond.json()) as { error: { code: string; message: string } };
+    expect(beyondBody.error.code).toBe("BAD_REQUEST");
+    expect(beyondBody.error.message).not.toContain("exceeds lease.maxTtlMs");
+
+    const edge = await postLeaseRequest(app, { ...defaultBody, ttlMs: 9_007_199_254_740_991 });
+    expect(edge.status).toBe(400);
+    const edgeBody = (await edge.json()) as { error: { code: string; message: string } };
+    expect(edgeBody.error.code).toBe("BAD_REQUEST");
+    expect(edgeBody.error.message).toContain("exceeds lease.maxTtlMs");
+  });
+
   it.each([
     ["with allowDownload", { allowDownload: true }],
     ["without allowDownload", {}],
