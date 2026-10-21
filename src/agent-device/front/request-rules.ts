@@ -117,6 +117,18 @@ function checkTypes(unit: Unit): void {
   }
 }
 
+// why: the daemon behind the front does not know these two keys, and only the allocate (read before the rules run) is meant to carry them to simlock.
+function ruleLeaseKeys(check: Check, unit: Unit): void {
+  if (isFlat(unit)) return;
+  for (const place of places(unit)) {
+    for (const key of ["osVersion", "imageTag"]) {
+      if (!(key in place)) continue;
+      delete place[key];
+      check.changed = true;
+    }
+  }
+}
+
 function rulePlatform(check: Check, unit: Unit): void {
   for (const place of places(unit, true)) {
     const platform = place["platform"];
@@ -290,6 +302,7 @@ async function applyRules(check: Check, unit: Unit): Promise<void> {
     }
   }
   rulePlatform(check, unit);
+  ruleLeaseKeys(check, unit);
   ruleDeviceSet(unit);
   await ruleSelectors(check, unit);
   await ruleSharding(check, unit);
