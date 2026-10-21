@@ -87,12 +87,20 @@ export async function startDaemon(
   const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
   const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
   const { http: extraHttp, ...extraConfig } = options.config ?? {};
+  // why: a worker that joins a gateway may not enable HTTP (it is reached through the gateway), so it defaults off; a test's explicit `http.enabled` still wins, so an invalid override is not silently repaired.
+  const joined = (extraConfig.gateway as { url?: unknown } | undefined)?.url !== undefined;
+  const httpConfig = {
+    enabled: !joined,
+    host: "127.0.0.1",
+    port,
+    ...(extraHttp as object | undefined),
+  };
   await mkdir(dataDirectory, { recursive: true });
   await writeFile(
     join(dataDirectory, "config.json"),
     JSON.stringify({
       ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      http: { enabled: true, host: "127.0.0.1", port, ...(extraHttp as object | undefined) },
+      http: httpConfig,
       ...extraConfig,
     }),
   );
@@ -124,6 +132,7 @@ export async function startDaemon(
     // the daemon fails to bind its HTTP port and stops (#553). So a clean exit is not yet a start:
     // wait for this start's own "HTTP gateway listening" or `EADDRINUSE` line (the log keeps the
     // earlier starts' lines), and fail on the latter.
+    if (started.code === 0 && !httpConfig.enabled) return;
     if (started.code === 0) {
       await waitFor(
         async () => {
@@ -149,7 +158,8 @@ export async function startDaemon(
     await start();
     const status = await cli([...gatewayFlag, "status", "--json"], env);
     const url = (status.json as { daemon: { consoleUrl?: string } }).daemon.consoleUrl;
-    expect(url).toBe(`http://127.0.0.1:${port}/`);
+    if (httpConfig.enabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
+    else expect(url).toBeUndefined();
     const mint = async (role: string) => {
       const minted = await cli([...gatewayFlag, "token", "create", "--role", role], env);
       expect(minted.code, minted.stderr).toBe(0);
@@ -160,16 +170,18 @@ export async function startDaemon(
       operator: await mint("operator"),
       worker: await mint("worker"),
     };
-    await waitFor(
-      async () => {
-        try {
-          return (await fetch(new URL("/v1/healthz", url))).ok;
-        } catch {
-          return false;
-        }
-      },
-      { label: "HTTP listener accepting connections" },
-    );
+    if (url !== undefined) {
+      await waitFor(
+        async () => {
+          try {
+            return (await fetch(new URL("/v1/healthz", url))).ok;
+          } catch {
+            return false;
+          }
+        },
+        { label: "HTTP listener accepting connections" },
+      );
+    }
     return {
       cli: (args) => cli([...gatewayFlag, ...args], env),
       cliBackground(args) {

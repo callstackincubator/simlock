@@ -65,7 +65,7 @@ export async function connectWithAutoLaunch(
   let lastError: unknown;
   while (options.clock.now() < deadline) {
     try {
-      return await connectToRunningDaemon(options);
+      return await connectStartingDaemon(options);
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
       lastError = error;
@@ -88,11 +88,29 @@ async function connectAfterExit(
 ): Promise<SimlockClient> {
   const output = await launched.readOutput().catch(() => "");
   try {
-    return await connectToRunningDaemon(options);
+    return await connectStartingDaemon(options);
   } catch (error: unknown) {
     if (!isUnavailable(error)) throw error;
   }
   throw new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
+}
+
+async function connectStartingDaemon(
+  options: ConnectToRunningDaemonOptions,
+): Promise<SimlockClient> {
+  try {
+    return await connectToRunningDaemon(options);
+  } catch (error: unknown) {
+    if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
+      throw new SimlockError(
+        "DAEMON_STARTUP_FAILED",
+        "transport",
+        "The daemon closed its connection while starting, before answering hello",
+        {},
+      );
+    }
+    throw error;
+  }
 }
 
 /**

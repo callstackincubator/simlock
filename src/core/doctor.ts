@@ -599,7 +599,7 @@ export class Doctor {
   }
 
   /**
-   * The warm pool's targets that cannot be met as configured: those the last pass found a runtime
+   * why: the warm pool's configured targets (a learned kind is never a finding) that cannot be met: those the last pass found a runtime
    * or a model missing for, and the platforms (or the machine) whose targets add up to more than
    * the running limit leaves once the reserve is held back. Read, never acted on, like
    * `prerequisite-missing`. A target short for RAM, the device limit or a failed boot is no
@@ -610,7 +610,7 @@ export class Doctor {
     const { enabled, targets } = this.options.config.warmPool;
     if (warmPool === undefined || !enabled) return [];
     const limits = warmPool.runningCapacity();
-    const figures = warmPool.figures().targets;
+    const figures = warmPool.figures().targets.filter((target) => target.origin === "configured");
     const catalogs = await this.#catalogsOfMissingRuntimes(figures);
     const findings = figures.flatMap((target) =>
       unreachableTarget(target, catalogs.get(target.platform)),
