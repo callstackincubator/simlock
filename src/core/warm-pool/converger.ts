@@ -533,6 +533,7 @@ export class WarmPool {
           count: report.count,
           mode: report.kind.mode,
           model: report.kind.model,
+          origin: "configured",
           platform: report.kind.platform,
           ready: report.ready,
           reason: report.short,
