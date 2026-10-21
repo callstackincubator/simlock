@@ -95,6 +95,8 @@ export class LearnedKinds {
       .run(at, leaseId);
   }
 
+  closeOpen(_heldLeaseIds: ReadonlySet<string>, _at: number): void {}
+
   forget(spec: VirtualSpec): void {
     this.#state.transaction(() => {
       const database = this.#state.database;

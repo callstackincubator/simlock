@@ -2243,4 +2243,43 @@ describe("warm pool learned kinds", () => {
     granted(physical, "l3", "phone-1");
     expect(kindsOf(state)).toEqual([]);
   });
+
+  it("closes at start() the lease rows the registry no longer holds, and the first pass boots the recorded kinds", async () => {
+    const ipad = {
+      model: "iPad Pro",
+      osVersion: "26.0",
+      physical: false,
+      platform: "ios",
+    } as const;
+    const phone = device("d1", "ready", 0).spec;
+    const state = await openMemoryState([warmPoolOwner]);
+    const previous = new LearnedKinds(state);
+    previous.learn(phone, "orphan", now - 30 * minute);
+    previous.learn(ipad, "lease-held", now - 10 * minute);
+    const held = { ...device("held", "leased", 0), spec: ipad };
+    const rig = harness([device("d1", "ready", 0), held], { state });
+    rig.lease("held");
+
+    rig.pool.start();
+    rig.clock.advance(5 * minute);
+    granted(rig, "again-phone", "d1");
+    granted(rig, "again-ipad", "held");
+
+    const counts = new LearnedKinds(state)
+      .kinds(rig.clock.now())
+      .map((kind) => [kind.spec.model, kind.count]);
+    expect(counts).toEqual([
+      ["iPad Pro", 2],
+      ["iPhone 15", 1],
+    ]);
+
+    const booting = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(booting).learn(phone, "past", now - 2 * 60 * minute);
+    new LearnedKinds(booting).ended("past", now - 60 * minute);
+    const restarted = harness([device("shut", "shutdown", 60 * minute)], { state: booting });
+    restarted.pool.start();
+    await restarted.pool.pass();
+    await restarted.pool.settle();
+    expect(restarted.bootCalls).toEqual(["shut"]);
+  });
 });
