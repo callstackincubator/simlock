@@ -52,11 +52,7 @@
 }
 
 .slot-drained {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--status-ok) 0 3px,
-    var(--field) 3px 6px
-  );
+  background: repeating-linear-gradient(135deg, var(--status-ok) 0 3px, var(--field) 3px 6px);
 }
 
 .slot-shutdown {
@@ -64,11 +60,7 @@
 }
 
 .slot-offline {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--border-strong) 0 3px,
-    var(--field) 3px 6px
-  );
+  background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, var(--field) 3px 6px);
 }
 
 .slot-free {
