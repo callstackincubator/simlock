@@ -67,6 +67,7 @@ interface Envelope {
 
 interface SetUpOptions {
   readonly leaseTtlCapMs?: number;
+  readonly downloads?: "always";
   readonly drivers?: (clock: FakeClock) => FakeDriver[];
   readonly enabled?: boolean | "unset";
   readonly endWaitMs?: number;
@@ -122,6 +123,22 @@ function androidDriver(clock: FakeClock): FakeDriver {
   });
 }
 
+function taggedAndroidDriver(clock: FakeClock): FakeDriver {
+  return new FakeDriver({
+    availableOsVersions: ["33", "34", "35"],
+    clock,
+    defaultModels: { phone: ["Pixel 8"] },
+    images: [
+      { abi: "arm64-v8a", runtime: "33", tag: "google_apis_playstore" },
+      { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+      { abi: "arm64-v8a", runtime: "35", tag: "default" },
+    ],
+    knownModels: ["Pixel 8"],
+    modelClasses: { "Pixel 8": "phone" },
+    platform: "android",
+  });
+}
+
 async function freeLoopbackPort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -168,6 +185,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
               },
             }),
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
+        ...(options.downloads === undefined ? {} : { downloads: { policy: options.downloads } }),
         http: { enabled: true, host: "127.0.0.1", port },
         lease: {
           defaultTtlMs,
@@ -635,6 +653,175 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const refused = await allocate(bare, 2);
     expect((await envelopeOf(refused)).error?.message).toContain("refused by simlock: ");
     expect(bare.driver.calls.map((call) => call.operation)).not.toContain("installComponent");
+  });
+
+  it('allocate with `osVersion` "26.0", ">=18 <27" or, on Android, "34" makes a lease request that carries it as typed', async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["18.4", "26.0", "27.0"],
+          clock,
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+          platform: "ios",
+        }),
+        new FakeDriver({
+          availableOsVersions: ["34", "35"],
+          clock,
+          defaultModels: { phone: ["Pixel 8"] },
+          knownModels: ["Pixel 8"],
+          modelClasses: { "Pixel 8": "phone" },
+          platform: "android",
+        }),
+      ],
+      maxRunning: 8,
+    });
+
+    await granted(rig, 1, { osVersion: "26.0" });
+    await granted(rig, 2, { osVersion: ">=18 <27" });
+    await granted(rig, 3, { osVersion: "34", platform: "android" });
+
+    expect(await requestedSpecs(rig, hex(1))).toEqual([{ osVersion: "26.0", platform: "ios" }]);
+    expect(await requestedSpecs(rig, hex(2))).toEqual([{ osVersion: ">=18 <27", platform: "ios" }]);
+    expect(await requestedSpecs(rig, hex(3))).toEqual([{ osVersion: "34", platform: "android" }]);
+  });
+
+  it('allocate on Android with `imageTag` "google_apis_playstore", with and without `osVersion`, makes a lease request that carries it', async () => {
+    const rig = await setUp({ drivers: (clock) => [taggedAndroidDriver(clock)], maxRunning: 8 });
+    const android = { platform: "android" };
+
+    await granted(rig, 1, { ...android, imageTag: "google_apis_playstore" });
+    await granted(rig, 2, { ...android, imageTag: "google_apis_playstore", osVersion: "33" });
+
+    expect(await requestedSpecs(rig, hex(1))).toEqual([
+      { imageTag: "google_apis_playstore", platform: "android" },
+    ]);
+    expect(await requestedSpecs(rig, hex(2))).toEqual([
+      { imageTag: "google_apis_playstore", osVersion: "33", platform: "android" },
+    ]);
+  });
+
+  it("the allocate the agent-device daemon receives carries neither `osVersion` nor `imageTag`, whether the CLI sent one or both", async () => {
+    const rig = await setUp({ drivers: (clock) => [taggedAndroidDriver(clock)], maxRunning: 8 });
+    const android = { platform: "android" };
+
+    await granted(rig, 1, { ...android, osVersion: "34" });
+    await granted(rig, 2, { ...android, imageTag: "google_apis_playstore" });
+    await granted(rig, 3, { ...android, imageTag: "google_apis_playstore", osVersion: "33" });
+
+    for (const n of [1, 2, 3]) {
+      const received = receivedAllocate(rig, n);
+      expect(received).not.toHaveProperty("osVersion");
+      expect(received).not.toHaveProperty("imageTag");
+    }
+  });
+
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion }` on iOS and on Android without a tag, and `{ model, osVersion, imageTag }` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["18.4", "26.0", "27.0"],
+          clock,
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+          platform: "ios",
+        }),
+        taggedAndroidDriver(clock),
+      ],
+      maxRunning: 8,
+    });
+    const cases = [
+      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0" }],
+      [2, {}, { model: "iPhone 16", osVersion: "27.0" }],
+      [
+        3,
+        { imageTag: "google_apis_playstore", platform: "android" },
+        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34" },
+      ],
+      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35" }],
+    ] as const;
+
+    for (const [n, extra, device] of cases) {
+      rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
+      const result = (await envelopeOf(await allocate(rig, n, extra, {}))).result as {
+        data: { device: unknown; lease: Record<string, unknown> };
+      };
+      expect(result.data.lease["device"]).toEqual(device);
+      expect(result.data.lease["deviceKey"]).toBe(`key-${n}`);
+      expect(result.data.device).toMatchObject({ id: expect.any(String) });
+    }
+  });
+
+  it('allocate with `osVersion` "^18", with `imageTag` on iOS (with a model and without) or with an OS the driver lacks answers `refused by simlock:` with simlock\'s own message and leaves no lease; under `downloads.policy: always` the missing OS is installed for a named model and still refused without one', async () => {
+    const rig = await setUp();
+    const refusals: readonly Record<string, unknown>[] = [
+      { osVersion: "^18" },
+      { device: "iPhone 17 Pro", imageTag: "default" },
+      { imageTag: "default" },
+      { osVersion: "26.1" },
+    ];
+
+    for (const [index, extra] of refusals.entries()) {
+      const expected = await simlockMessage(rig, {
+        leaseId: hex(90 + index),
+        platform: "ios",
+        ...(typeof extra["device"] === "string" ? { model: extra["device"] } : {}),
+        ...(extra["imageTag"] === undefined ? {} : { imageTag: extra["imageTag"] }),
+        ...(extra["osVersion"] === undefined ? {} : { osVersion: extra["osVersion"] }),
+      });
+      const answer = await envelopeOf(await allocate(rig, index + 1, extra));
+      expect(answer.error?.message).toBe(`refused by simlock: ${expected}`);
+    }
+    expect(await leases(rig)).toEqual([]);
+    expect(rig.driver.calls.map((call) => call.operation)).not.toContain("installComponent");
+
+    const always = await setUp({ downloads: "always" });
+    const installs = () =>
+      always.driver.calls.filter((call) => call.operation === "installComponent").length;
+    const bare = await envelopeOf(await allocate(always, 1, { osVersion: "26.1" }));
+    expect(bare.error?.message).toContain("refused by simlock: ");
+    expect(installs()).toBe(0);
+    const named = await envelopeOf(
+      await allocate(always, 2, { device: "iPhone 17 Pro", osVersion: "26.1" }),
+    );
+    expect(named.result).toMatchObject({ ok: true });
+    expect(installs()).toBe(1);
+  });
+
+  it("allocate with `physical: true` answers `refused: physical devices are not available through agent-device` and leaves no lease; `physical: false` and `physical: null` are granted", async () => {
+    const rig = await setUp({ maxRunning: 8 });
+
+    const answer = await envelopeOf(await allocate(rig, 1, { physical: true }));
+
+    expect(answer.error).toMatchObject(
+      refusal("refused: physical devices are not available through agent-device"),
+    );
+    expect(await leases(rig)).toEqual([]);
+    expect(allocatesReceived(rig)).toEqual([]);
+    await granted(rig, 2, { physical: false });
+    await granted(rig, 3, { physical: null });
+    expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2), hex(3)]);
+  });
+
+  it('allocate with an unmapped `target`, "watch" or "", alone or beside `device: "iPhone 17 Pro"`, answers `refused: unknown --target <value>; use mobile, tv or desktop` and leaves no lease', async () => {
+    const rig = await setUp();
+    const cases = [
+      [{ target: "watch" }, "watch"],
+      [{ target: "" }, ""],
+      [{ device: "iPhone 17 Pro", target: "watch" }, "watch"],
+    ] as const;
+
+    for (const [index, [extra, value]] of cases.entries()) {
+      const answer = await envelopeOf(await allocate(rig, index + 1, extra));
+
+      expect(answer.error).toMatchObject(
+        refusal(`refused: unknown --target ${value}; use mobile, tv or desktop`),
+      );
+    }
+    expect(await leases(rig)).toEqual([]);
+    expect(allocatesReceived(rig)).toEqual([]);
   });
 
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
@@ -3113,6 +3300,31 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
+    it("a command with `osVersion` or `imageTag` on `flags`, on `input` or inside a batch step reaches agent-device without them, and a command without them reaches it with its flags as sent", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const keys = { imageTag: "default", osVersion: ">=26" };
+
+      const onFlags = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { flags: { ...keys, platform: "ios" } }),
+      );
+      const onInput = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { input: { ...keys, platform: "ios" } }),
+      );
+      const inStep = await forwarded(rig, () =>
+        batch(rig, 1, [{ command: "snapshot", flags: { ...keys, platform: "ios" } }]),
+      );
+      const plain = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { flags: { platform: "ios" } }),
+      );
+
+      expect(flagsOf(onFlags)).toEqual({ platform: "ios" });
+      expect(onInput["input"]).toEqual({ platform: "ios" });
+      const steps = flagsOf(inStep)["batchSteps"] as { flags: Record<string, unknown> }[];
+      expect(steps[0]?.flags).toEqual({ platform: "ios" });
+      expect(flagsOf(plain)).toEqual({ platform: "ios" });
+    });
+
     it("`--device` with the leased model in `input` is removed from `input` and sent as `flags.udid`", async () => {
       const rig = await setUp();
       await granted(rig, 1, { device: "iPhone 17 Pro" });
@@ -3276,7 +3488,7 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`", async () => {
+    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` and an `imageTag` that is an object with `refused: malformed imageTag`, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       await forwarded(rig, () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } }));
@@ -3291,6 +3503,15 @@ describe("the agent-device front's request rules", () => {
         () => runCommand(rig, "test", 1, { flags: { shardAll: "2" } }),
         "refused: malformed shardAll",
       );
+      await refused(rig, () => allocate(rig, 2, { osVersion: 26 }), "refused: malformed osVersion");
+      await refused(rig, () => allocate(rig, 2, { imageTag: {} }), "refused: malformed imageTag");
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { osVersion: 26 } }),
+        "refused: malformed osVersion",
+      );
+      await granted(rig, 3, { osVersion: null });
+      expect(await requestedSpecs(rig, hex(3))).toEqual([{ platform: "ios" }]);
     });
 
     it("after simlock ended the lease, a command with that lease's udid is forwarded and agent-device's answer reaches the CLI; one TTL later the same command is refused with `refused: simlock picks the device`", async () => {

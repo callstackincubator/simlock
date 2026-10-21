@@ -3,6 +3,7 @@ import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 import starlightLlmsTxt from "starlight-llms-txt";
+import starlightOpenAPI, { createOpenAPISidebarGroup } from "starlight-openapi";
 
 import { brandCss } from "./src/site/brand.ts";
 import { at, BASE, site as meta, noindexPaths } from "./src/site/content.ts";
@@ -13,6 +14,8 @@ const origin = `${site}${BASE}`;
 const repo = meta.repo;
 const description = meta.description;
 const siteDir = "website";
+
+const openAPISidebarGroup = createOpenAPISidebarGroup();
 
 const doc = (name, label) => ({ label, slug: `docs/${name}` });
 
@@ -137,11 +140,21 @@ export default defineConfig({
             doc("reference/configuration", "Configuration keys"),
             doc("reference/events", "Events"),
             doc("reference/errors", "Errors and exit codes"),
+            openAPISidebarGroup,
           ],
         },
         doc("prior-art", "Prior art"),
       ],
-      plugins: [starlightLlmsTxt({ projectName: meta.name, description })],
+      plugins: [
+        starlightLlmsTxt({ projectName: meta.name, description }),
+        starlightOpenAPI([
+          {
+            base: "docs/reference/http-api",
+            schema: "public/openapi.json",
+            sidebar: { label: "HTTP API reference", group: openAPISidebarGroup },
+          },
+        ]),
+      ],
     }),
   ],
 });

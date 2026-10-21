@@ -3,10 +3,26 @@ name: Website
 on:
   push:
     branches: [main]
-    paths: ["website/**", ".github/workflows/website.yml"]
+    paths:
+      [
+        "website/**",
+        "docs/*.md",
+        "src/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        ".github/workflows/website.yml",
+      ]
   # why: a page that breaks the build fails its pull request instead of main; only main deploys.
   pull_request:
-    paths: ["website/**", ".github/workflows/website.yml"]
+    paths:
+      [
+        "website/**",
+        "docs/*.md",
+        "src/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        ".github/workflows/website.yml",
+      ]
   workflow_dispatch:
 
 permissions: {}
@@ -34,10 +50,16 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      # why: the build script runs `pnpm openapi`, which compiles the daemon from the root's dependencies.
+      - name: Install root dependencies
+        working-directory: .
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build
         run: pnpm build
+      - name: Check the HTTP API reference
+        run: node scripts/check-openapi.mjs
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

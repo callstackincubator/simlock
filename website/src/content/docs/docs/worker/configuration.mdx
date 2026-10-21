@@ -113,7 +113,7 @@ The sections below show the common changes. Each needs a restart.
 simlock config set http.enabled true
 ```
 
-This is what remote agents and the [console](/simlock/docs/worker/console) need.
+This is what remote agents and the [console](/simlock/docs/worker/console) need. A worker that has joined a gateway (`gateway.url` is set) refuses it: set `http.enabled` to `false` there and use the gateway instead.
 
 <Aside type="caution">
 Turning on HTTP opens a network listener. It listens on `127.0.0.1` by default, so only this machine can reach it. Setting `http.host` to `0.0.0.0` lets any machine that can reach the port try to connect. Simlock does not do TLS: put a reverse proxy in front of it for HTTPS. See [Remote agents](/simlock/docs/using-devices/remote-agents).

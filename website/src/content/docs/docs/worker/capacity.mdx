@@ -192,13 +192,16 @@ Other settings:
 
 ### Read the warm pool in `simlock status`
 
-Each target gets a line under `warm pool`. Learned kinds are not listed.
+Each target and each learned kind gets a line under `warm pool`. The word after the name says where the line came from: `configured` for a `warmPool.targets` entry, `learned` for a kind the worker leased. A kind that is both is one `configured` line, wanted the larger of the two counts. An Android kind with an image tag shows the tag after the mode. A learned kind the pool forgets leaves the list on the next pass. With the warm pool off, nothing is learned and only the targets are listed.
 
 ```text
 warm pool: enabled, reserve ios 1 android 0
-  iPhone 16 / 26.0 / full   wanted 2  ready 1  booting 1
-  Pixel 8 / 35 / full   wanted 1  ready 0  booting 0  short: runtime-missing
+  iPhone 16 / 26.0 / full   configured   wanted 2  ready 1  booting 1
+  iPhone 15 / 18.4 / full   learned   wanted 1  ready 1  booting 0
+  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 0  booting 0  short: running-limit
 ```
+
+`simlock status --json` carries the same in `warmPool.targets[]`: `origin` (`configured` or `learned`) and, when the kind names one, `imageTag`. `simlock doctor` and the `warm-pool.target-missed` event cover the configured targets only.
 
 `short` says why the last pass could do nothing for a target:
 

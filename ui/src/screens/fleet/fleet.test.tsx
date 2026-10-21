@@ -309,6 +309,7 @@ describe("a worker's host and warm pool tabs", () => {
             count: 2,
             mode: "full",
             model: "iPhone 17",
+            origin: "configured",
             osVersion: "26.0",
             platform: "ios",
             ready: 1,
@@ -318,9 +319,21 @@ describe("a worker's host and warm pool tabs", () => {
             count: 1,
             mode: "full",
             model: "iPhone 17",
+            origin: "learned",
             platform: "ios",
             ready: 0,
             short: "runtime-missing",
+          },
+          {
+            booting: 0,
+            count: 1,
+            imageTag: "google_apis_playstore",
+            mode: "full",
+            model: "Pixel 8",
+            origin: "learned",
+            osVersion: "35",
+            platform: "android",
+            ready: 1,
           },
         ],
       },
@@ -331,8 +344,10 @@ describe("a worker's host and warm pool tabs", () => {
 
     expect(shown).toContain("Pool On");
     expect(shown).toContain("Reserved running slots iOS 1, Android 0");
-    expect(shown).toContain("iPhone 17 26.0 full 2 1 1 —");
-    expect(shown).toContain("iPhone 17 — full 1 0 0 runtime-missing");
+    expect(shown).toContain("Origin");
+    expect(shown).toContain("iPhone 17 26.0 full configured 2 1 1 —");
+    expect(shown).toContain("iPhone 17 — full learned 1 0 0 runtime-missing");
+    expect(shown).toContain("Pixel 8 / google_apis_playstore 35 full learned 1 1 0 —");
     expect(shown).toContain("iOS 19.0 downloading for 7 s , 1 waiter");
     expect(markup).toContain('<td data-label="Wanted" class="num">2</td>');
   });
