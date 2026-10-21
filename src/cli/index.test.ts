@@ -26,6 +26,7 @@ import {
   NodeIpcTransport,
   NoopLogger,
   serviceDefinition,
+  type ServiceState,
   type Filesystem,
   type IdGenerator,
   type IpcConnection,
@@ -8515,71 +8516,129 @@ describe("CLI: daemon install (#830)", () => {
     });
   });
 
-  it("daemon install stops a running daemon first and waits for its socket to go quiet", async () => {
-    async function installWith(options: {
-      readonly argv: readonly string[];
-      readonly running: boolean;
-      readonly stillAnswering: number;
-    }): Promise<{
-      readonly exitCode: number;
-      readonly output: ReturnType<typeof outputCapture>;
-      readonly stops: number;
-      readonly serviceManager: FakeServiceManager;
-      readonly clock: FakeClock;
-    }> {
-      const root = join(home, ".simlock");
-      const clock = new FakeClock(0);
-      const serviceManager = new FakeServiceManager();
-      let stops = 0;
-      let polls = 0;
-      const connectExistingAdmin: CliEnvironment["connectExistingAdmin"] = async (
-        resolveCredential,
-      ) => {
-        await resolveCredential();
-        if (!options.running)
-          throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
-        if (stops > 0) {
-          polls += 1;
-          if (polls > options.stillAnswering) {
-            throw new IpcError("connection-refused", "Connection refused", undefined);
-          }
+  async function runWithService(options: {
+    readonly argv: readonly string[];
+    readonly running: boolean;
+    readonly stillAnswering: number;
+    readonly state?: ServiceState;
+  }): Promise<{
+    readonly exitCode: number;
+    readonly output: ReturnType<typeof outputCapture>;
+    readonly stops: number;
+    readonly serviceManager: FakeServiceManager;
+    readonly clock: FakeClock;
+  }> {
+    const root = join(home, ".simlock");
+    const clock = new FakeClock(0);
+    const serviceManager = new FakeServiceManager(
+      options.state === undefined ? {} : { state: options.state },
+    );
+    let stops = 0;
+    let polls = 0;
+    const connectExistingAdmin: CliEnvironment["connectExistingAdmin"] = async (
+      resolveCredential,
+    ) => {
+      await resolveCredential();
+      if (!options.running)
+        throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
+      if (stops > 0) {
+        polls += 1;
+        if (polls > options.stillAnswering) {
+          throw new IpcError("connection-refused", "Connection refused", undefined);
         }
-        return fakeClient({
-          stopDaemon: async () => {
-            stops += 1;
-            return { stopping: true };
-          },
-        });
-      };
-      const output = outputCapture();
-      const environment = output.environmentWith({
-        clock,
-        daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
-        connectExistingAdmin,
-        readAdminTokenFile: async () => "admin-token",
-        sleep: async (milliseconds) => {
-          clock.advance(milliseconds);
-        },
-        service: {
-          manager: serviceManager,
-          platform: "darwin",
-          definition: async () =>
-            serviceDefinition({
-              role: "worker",
-              root,
-              dataDirectory: root,
-              home,
-              nodePath,
-              mainPath,
-              env: {},
-            }),
+      }
+      return fakeClient({
+        stopDaemon: async () => {
+          stops += 1;
+          return { stopping: true };
         },
       });
-      const exitCode = await runCli(options.argv, environment);
-      return { exitCode, output, stops, serviceManager, clock };
-    }
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      clock,
+      daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      connectExistingAdmin,
+      readAdminTokenFile: async () => "admin-token",
+      sleep: async (milliseconds) => {
+        clock.advance(milliseconds);
+      },
+      service: {
+        manager: serviceManager,
+        platform: "darwin",
+        definition: async () =>
+          serviceDefinition({
+            role: "worker",
+            root,
+            dataDirectory: root,
+            home,
+            nodePath,
+            mainPath,
+            env: {},
+          }),
+      },
+    });
+    const exitCode = await runCli(options.argv, environment);
+    return { exitCode, output, stops, serviceManager, clock };
+  }
 
-    const none = await installWith({
+  it("daemon uninstall removes the service", async () => {
+    const installedState: ServiceState = {
+      state: "installed",
+      path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+    };
+    const name = "com.callstack.simlock.worker";
+    const cases = [
+      {
+        label: "installed",
+        argv: ["daemon", "uninstall"],
+        state: installedState,
+        stdout: `Service removed: ${name} (launchd)\n`,
+        removed: 1,
+      },
+      {
+        label: "installed, --json",
+        argv: ["daemon", "uninstall", "--json"],
+        state: installedState,
+        json: { status: "removed", service: { state: "not-installed", manager: "launchd", name } },
+        removed: 1,
+      },
+      {
+        label: "not installed",
+        argv: ["daemon", "uninstall"],
+        state: { state: "not-installed" } as ServiceState,
+        stdout: `Service not installed: ${name}\n`,
+        removed: 0,
+      },
+      {
+        label: "not installed, --json",
+        argv: ["daemon", "uninstall", "--json"],
+        state: { state: "not-installed" } as ServiceState,
+        json: {
+          status: "not-installed",
+          service: { state: "not-installed", manager: "launchd", name },
+        },
+        removed: 0,
+      },
+    ];
+    for (const testCase of cases) {
+      const result = await runWithService({
+        argv: testCase.argv,
+        running: false,
+        stillAnswering: 0,
+        state: testCase.state,
+      });
+      expect(result.output.stderr, testCase.label).toBe("");
+      expect(result.exitCode, testCase.label).toBe(0);
+      expect(result.serviceManager.uninstalls, testCase.label).toHaveLength(testCase.removed);
+      if (testCase.json === undefined)
+        expect(result.output.stdout, testCase.label).toBe(testCase.stdout);
+      else expect(JSON.parse(result.output.stdout), testCase.label).toEqual(testCase.json);
+    }
+  });
+
+  it("daemon install stops a running daemon first and waits for its socket to go quiet", async () => {
+    const none = await runWithService({
       argv: ["daemon", "install"],
       running: false,
       stillAnswering: 0,
@@ -8588,7 +8647,7 @@ describe("CLI: daemon install (#830)", () => {
     expect(none.stops).toBe(0);
     expect(none.output.stdout).not.toContain("Stopped");
 
-    const running = await installWith({
+    const running = await runWithService({
       argv: ["daemon", "install"],
       running: true,
       stillAnswering: 3,
@@ -8600,14 +8659,14 @@ describe("CLI: daemon install (#830)", () => {
       "Service installed: com.callstack.simlock.worker (launchd)",
     ]);
 
-    const json = await installWith({
+    const json = await runWithService({
       argv: ["daemon", "install", "--json"],
       running: true,
       stillAnswering: 0,
     });
     expect(JSON.parse(json.output.stdout)).toMatchObject({ status: "installed", stopped: true });
 
-    const stubborn = await installWith({
+    const stubborn = await runWithService({
       argv: ["daemon", "install"],
       running: true,
       stillAnswering: Number.POSITIVE_INFINITY,
@@ -8622,5 +8681,18 @@ describe("CLI: daemon install (#830)", () => {
     expect(stubborn.serviceManager.installs).toEqual([]);
     expect(stubborn.clock.now()).toBeGreaterThanOrEqual(300_000);
     expect(stubborn.clock.now()).toBeLessThan(301_000);
+
+    const uninstall = await runWithService({
+      argv: ["daemon", "uninstall"],
+      running: true,
+      stillAnswering: 3,
+      state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+    });
+    expect(uninstall.exitCode).toBe(0);
+    expect(uninstall.stops).toBe(1);
+    expect(uninstall.output.stdout.split("\n").slice(0, 2)).toEqual([
+      "Daemon stopping",
+      "Service removed: com.callstack.simlock.worker (launchd)",
+    ]);
   });
 });
