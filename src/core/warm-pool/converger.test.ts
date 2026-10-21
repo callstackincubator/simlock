@@ -2529,4 +2529,55 @@ describe("warm pool learned kinds", () => {
       expect(new LearnedKinds(real).kinds(rig.clock.now()).map((kind) => kind.count)).toEqual([1]);
     });
   });
+
+  it("forgets a learned kind on its third failed boot or creation in a row with one warning, and a success in between resets the count", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const run = async (outcomes: readonly ("fail" | "ok")[], creation: boolean) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(phone, "l1", now - 2 * minute);
+      new LearnedKinds(state).ended("l1", now - minute);
+      let attempt = 0;
+      const next = (): "fail" | "ok" => outcomes[attempt++] ?? "ok";
+      const rig: ReturnType<typeof harness> = harness(
+        creation ? [] : [device("shut", "shutdown", 60 * minute)],
+        {
+          boot: async (target) => {
+            if (next() === "fail") throw new Error("simulator did not boot");
+            return { ...target, state: "ready" };
+          },
+          provision: async () => {
+            if (next() === "fail") throw new Error("creation failed");
+          },
+          state,
+        },
+      );
+      for (let round = 0; round < outcomes.length; round += 1) {
+        await rig.pool.pass();
+        await rig.pool.settle();
+        rig.clock.advance(10 * minute);
+        rig.state.devices = rig.state.devices
+          .filter((item) => !item.id.startsWith("new-"))
+          .map((item) => ({ ...item, state: "shutdown" as const }));
+      }
+      return {
+        kinds: new LearnedKinds(state).kinds(rig.clock.now()).length,
+        warnings: rig.sink.records.filter(
+          (record) =>
+            record.message ===
+            "a warm pool learned kind failed three times in a row and was forgotten",
+        ),
+      };
+    };
+
+    for (const creation of [false, true]) {
+      const third = await run(["fail", "fail", "fail"], creation);
+      expect(third.kinds, `creation ${creation}`).toBe(0);
+      expect(third.warnings).toHaveLength(1);
+      const reset = await run(["fail", "fail", "ok", "fail", "fail"], creation);
+      expect(reset.kinds, `creation ${creation}`).toBe(1);
+      expect(reset.warnings).toEqual([]);
+      const two = await run(["fail", "fail"], creation);
+      expect(two.kinds, `creation ${creation}`).toBe(1);
+    }
+  });
 });
