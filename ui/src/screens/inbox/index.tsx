@@ -4,6 +4,7 @@ import {
   Button,
   ButtonLink,
   ChoiceChips,
+  ActionBar,
   Drawer,
   Empty,
   Facts,
@@ -35,6 +36,10 @@ export function InboxScreen() {
   const { choose, couldNotCheck, filter, rows, urlId, view } = useInbox();
   const { close, fromList } = useInboxDrawer(urlId);
   const actionsOf = useInboxActions();
+  const drawerActions = (row: InboxRow | undefined) =>
+    row === undefined ? null : (
+      <ActionBar label={`Actions for ${row.subject}`} entries={actionsOf(row).menu} />
+    );
   return (
     <Page
       title="Inbox"
@@ -65,6 +70,7 @@ export function InboxScreen() {
               <Drawer
                 key={urlId}
                 title={typeof page.shown === "object" ? page.shown.title : "Inbox item"}
+                actions={drawerActions(rows(page).find((row) => row.key === urlId))}
                 onClose={close}
                 finalFocus={() =>
                   focusAfterClosing({

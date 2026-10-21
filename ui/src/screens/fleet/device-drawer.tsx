@@ -1,6 +1,7 @@
 import "./fleet.css";
 
-import { Drawer, Facts, Link, Loaded, Status } from "../../ds";
+import { ActionBar, Drawer, Facts, Link, Loaded, Status } from "../../ds";
+import { useLeaseDrawerMenu } from "../../state/leases";
 import { type DeviceRow, useDeviceDrawer, useLeaseUdid } from "../../state/workers";
 
 // why: the drawer opens at once, titled "Device" until the worker's page arrives, and says so when
@@ -13,6 +14,7 @@ export function DeviceDrawer(props: { readonly workerId: string; readonly device
   return (
     <Drawer
       title={device === undefined ? "Device" : `${device.model} ${device.runtime}`}
+      actions={device?.lease === undefined ? null : <LeaseActions leaseId={device.lease.id} />}
       onClose={close}
       finalFocus={() => focusAfterClosing(workerId, deviceId)}
     >
@@ -25,6 +27,11 @@ export function DeviceDrawer(props: { readonly workerId: string; readonly device
       )}
     </Drawer>
   );
+}
+
+function LeaseActions({ leaseId }: { readonly leaseId: string }) {
+  const { entries, label } = useLeaseDrawerMenu(leaseId);
+  return <ActionBar label={label} entries={entries} />;
 }
 
 function DeviceFacts({ device }: { readonly device: DeviceRow }) {

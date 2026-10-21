@@ -60,6 +60,25 @@ export function useLeaseMenu(): (row: LeaseRowView) => readonly MenuEntry[] {
   return (row) => entries(leaseActions(row));
 }
 
+// why: a lease's drawer offers the actions of the same row the list shows, under the same item key,
+// so an action in flight from either disables both.
+export function useLeaseDrawerMenu(id: string): {
+  readonly label: string;
+  readonly entries: readonly MenuEntry[];
+} {
+  const { entries } = useActions();
+  const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
+  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const now = useNow();
+  const row = leaseRows({ leases, now: now.server, tokens, workers }).find(
+    (candidate) => candidate.id === id,
+  );
+  return row === undefined
+    ? { entries: [], label: "" }
+    : { entries: entries(leaseActions(row)), label: `Actions for ${row.holder}` };
+}
+
 export function useLeaseDrawer(urlId: string | undefined): ListDrawerState {
   return useListDrawer("/leases", urlId);
 }

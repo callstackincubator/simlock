@@ -56,6 +56,18 @@ export function useWorkerMenu(): (row: WorkerRow) => readonly MenuEntry[] {
   return (row) => entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
 }
 
+// why: the worker page's header reads the same list of actions as the Fleet row (ADR 0037 §3).
+export function useWorkerPageMenu(page: WorkerPage): readonly MenuEntry[] {
+  const { entries } = useActions();
+  const mode = useDaemonMode();
+  return entries(
+    workerActions(
+      { connection: page.connection, drained: page.drained, id: page.id, name: page.title },
+      mode,
+    ),
+  );
+}
+
 export interface WorkerPageView extends WorkerPage {
   readonly back: string;
   readonly chooseTab: (tab: WorkerTab) => void;

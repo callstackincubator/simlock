@@ -587,6 +587,8 @@ export interface WorkerPage {
   readonly tab: WorkerTab;
   readonly banners: readonly string[];
   readonly title: string;
+  readonly connection: WorkerView["connection"];
+  readonly drained: boolean;
   readonly mono: boolean;
   readonly health: Toned;
   readonly system?: string;
@@ -617,6 +619,8 @@ export function workerPageOf(input: {
   ];
   return {
     banners: bannersOf(worker, now),
+    connection: worker.connection,
+    drained: worker.drained,
     health: workerHealth(worker),
     tab: readWorkerTab(input.search ?? "", tabs),
     host: hostTabOf(worker),

@@ -1,4 +1,5 @@
 import {
+  ActionBar,
   Card,
   type Column,
   DataTable,
@@ -25,6 +26,7 @@ import {
   type PlatformCard,
   useWorkerEvents,
   useWorkerPage,
+  useWorkerPageMenu,
   type WarmRow,
   type WorkerPageView,
 } from "../../state/workers";
@@ -59,8 +61,12 @@ function MissingWorker() {
 }
 
 export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
+  const entries = useWorkerPageMenu(page);
   return (
-    <Page title={page.title}>
+    <Page
+      title={page.title}
+      actions={<ActionBar label={`Actions for ${page.title}`} entries={entries} />}
+    >
       <nav className="crumbs" aria-label="Breadcrumb">
         <span className="crumb">
           <Link to={page.back}>Fleet</Link>

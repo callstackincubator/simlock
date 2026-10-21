@@ -1,8 +1,11 @@
 /* The row menu: a small list under the row's ⋯. Dangerous entries come last, after a line, in the
  * error colour; orange stays for interaction, never for danger. */
 
-.menu {
+.menu-positioner {
   z-index: 60;
+}
+
+.menu {
   min-width: 11rem;
   padding: var(--space-1);
   border: 1px solid var(--border-strong);
@@ -39,4 +42,10 @@
   height: 1px;
   margin: var(--space-1) 0;
   background: var(--border);
+}
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }

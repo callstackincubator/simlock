@@ -3,6 +3,7 @@ import "./queue.css";
 import {
   type Column,
   DataTable,
+  ActionBar,
   Drawer,
   Facts,
   focusAfterClosing,
@@ -42,6 +43,9 @@ export function QueueScreen() {
               <Drawer
                 key={urlId}
                 title={page.chosen?.requester ?? "Request"}
+                actions={
+                  page.chosen === undefined ? null : <QueueDrawerActions row={page.chosen} />
+                }
                 onClose={close}
                 finalFocus={() =>
                   focusAfterClosing({
@@ -115,6 +119,11 @@ function QueueTable({ page }: { readonly page: WaitingPage }) {
       paging={page.paging}
     />
   );
+}
+
+function QueueDrawerActions({ row }: { readonly row: WaitingRow }) {
+  const entries = useQueueMenu()(row);
+  return <ActionBar label={`Actions for ${row.requester}`} entries={entries} />;
 }
 
 export function QueueDrawerBody({ page }: { readonly page: WaitingPage }) {

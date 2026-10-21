@@ -2,7 +2,7 @@ import "./menu.css";
 
 import { Menu } from "@base-ui/react/menu";
 
-import { IconButton } from "./button";
+import { Button, IconButton } from "./button";
 import { Icon } from "./icon";
 
 export interface MenuEntry {
@@ -43,12 +43,33 @@ export function RowMenu(props: { readonly label: string; readonly entries: reado
         }
       />
       <Menu.Portal>
-        <Menu.Positioner align="end" sideOffset={4}>
+        <Menu.Positioner className="menu-positioner" align="end" sideOffset={4}>
           <Menu.Popup className="menu" onClick={(event) => event.stopPropagation()}>
             <MenuItems entries={entries} />
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
+  );
+}
+
+// why: a drawer or a page shows its item's first safe action as a button and every action under
+// its own ⋯, the dangerous ones last.
+export function ActionBar(props: {
+  readonly label: string;
+  readonly entries: readonly MenuEntry[];
+}) {
+  const { entries, label } = props;
+  const first = entries.find((entry) => !entry.danger);
+  if (entries.length === 0) return null;
+  return (
+    <span className="action-bar">
+      {first === undefined ? null : (
+        <Button variant="secondary" disabled={first.disabled} onClick={first.onSelect}>
+          {first.label}
+        </Button>
+      )}
+      <RowMenu label={label} entries={entries} />
+    </span>
   );
 }

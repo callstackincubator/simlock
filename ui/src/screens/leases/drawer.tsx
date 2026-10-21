@@ -1,9 +1,10 @@
 import { type ReactNode, useId } from "react";
 
-import { Drawer, DrawerTabs, Facts, Id, Link, Loaded, Meter, Status } from "../../ds";
+import { ActionBar, Drawer, DrawerTabs, Facts, Id, Link, Loaded, Meter, Status } from "../../ds";
 import {
   type EventRow,
   type LeaseInspection,
+  useLeaseDrawerMenu,
   useLeaseEvents,
   useLeaseInspection,
 } from "../../state/leases";
@@ -19,9 +20,11 @@ export function LeaseDrawer(props: {
   const { finalFocus, id, onClose } = props;
   const view = useLeaseInspection(id);
   const lease = view.kind === "ready" ? view.data : undefined;
+  const menu = useLeaseDrawerMenu(id);
   return (
     <Drawer
       title={lease === undefined ? "Lease" : <LeaseTitle lease={lease} />}
+      actions={<ActionBar label={menu.label} entries={menu.entries} />}
       onClose={onClose}
       finalFocus={finalFocus}
     >
