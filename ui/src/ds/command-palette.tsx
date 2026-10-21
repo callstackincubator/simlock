@@ -18,11 +18,12 @@ export interface PaletteGroup {
 export function CommandPalette(props: {
   readonly groups: readonly PaletteGroup[];
   readonly typed: string;
+  readonly empty: string;
   readonly onType: (typed: string) => void;
   readonly onChoose: (id: string) => void;
   readonly onClose: () => void;
 }) {
-  const { groups, onChoose, onClose, onType, typed } = props;
+  const { empty, groups, onChoose, onClose, onType, typed } = props;
   const items = groups.map((group) => ({ items: group.items, value: group.name }));
   return (
     <Dialog.Root
@@ -50,6 +51,7 @@ export function CommandPalette(props: {
               aria-label="Search pages, items and actions"
               placeholder="Search or jump to…"
             />
+            <Autocomplete.Empty className="palette-empty">{empty}</Autocomplete.Empty>
             <Autocomplete.List className="palette-list">
               {(group: { value: string; items: readonly PaletteItem[] }) => (
                 <Autocomplete.Group key={group.value} items={group.items} className="palette-group">

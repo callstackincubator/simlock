@@ -62,3 +62,13 @@
   background: var(--field);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+
+.palette-empty {
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.palette-empty:empty {
+  display: none;
+}

@@ -26,6 +26,7 @@ export interface SearchSession {
   readonly typed: string;
   readonly type: (typed: string) => void;
   readonly groups: readonly PaletteGroup[];
+  readonly empty: string;
   readonly choose: (id: string) => void;
 }
 
@@ -59,6 +60,7 @@ export function useSearchSession(
       // why: the same runner as the ⋯ menus, so the confirm, the in-flight flag and the toast are theirs.
       else if (chosen !== undefined) void run(chosen.target.action);
     },
+    empty: `No results for ${typed}`,
     groups: searchGroups(results, typed).map((group) => ({
       items: group.results,
       name: group.name,

@@ -134,6 +134,7 @@ function SearchDialog({ hide }: { readonly hide: () => void }) {
     <CommandPalette
       groups={session.groups}
       typed={session.typed}
+      empty={session.empty}
       onType={session.type}
       onChoose={session.choose}
       onClose={hide}
