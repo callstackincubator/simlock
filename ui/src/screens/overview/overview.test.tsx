@@ -20,7 +20,6 @@ const quiet: Overview = {
   capacity: [],
   ending: { label: "Ending soon", value: "0" },
   inbox: { couldNotCheck: [], needsYou: [], problems: 0 },
-  platforms: [],
   tiles: [],
   workers: [],
 };
@@ -39,15 +38,15 @@ describe("the overview screen", () => {
       <OverviewBody
         overview={{
           ...quiet,
-          platforms: [
-            { busyPercent: 0, leasedPercent: 0, name: "iOS", readyPercent: 0 },
+          capacity: [
+            { name: "iOS", notRead: 1, parts: [] },
             {
-              busyPercent: 0,
-              leasedPercent: 50,
-              limit: 4,
               name: "Android",
-              readyPercent: 0,
-              running: 2,
+              notRead: 0,
+              parts: [
+                { count: 2, kind: "leased", percent: 50, word: "leased" },
+                { count: 2, kind: "offline", percent: 50, word: "offline" },
+              ],
             },
           ],
           workers: [
@@ -81,9 +80,9 @@ describe("the overview screen", () => {
     expect(html).toContain('href="/fleet/w1"');
     expect(text(html)).not.toContain("memory 88%");
     expect(html).toContain('<td data-label="Leases" class="num"><span class="muted">—</span></td>');
-    expect(html).toContain('<span class="muted">—</span></span></p>');
-    expect(text(html)).toContain("2 of 4 running");
-    expect(html.match(/class="share-bar"/g)).toHaveLength(1);
+    expect(text(html)).toContain("iOS 1 worker not read yet");
+    expect(html).toContain('role="img" aria-label="Android: 2 leased, 2 offline"');
+    expect(text(html)).toContain("2 leased 2 offline");
   });
 
   it("draws the range picker as a radio group of four with the chosen range checked, three chart panels and the Capacity panel", () => {
@@ -107,7 +106,7 @@ describe("the overview screen", () => {
         "Leases held, last 6 hours",
         "Requests in the queue, last 6 hours",
         "Device slots in use, last 6 hours",
-        "Capacity",
+        "Capacity · all workers",
       ]),
     );
   });

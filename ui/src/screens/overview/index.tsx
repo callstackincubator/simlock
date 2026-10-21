@@ -13,7 +13,6 @@ import {
   Refusal,
   Row,
   ShareBar,
-  SlotLegend,
   Slots,
   StatRow,
   StatTile,
@@ -28,7 +27,7 @@ import {
   type OverviewActivity,
   type OverviewInbox,
   type OverviewWorker,
-  type PlatformUse,
+  type PlatformCapacity,
   useOverview,
 } from "../../state/overview";
 
@@ -99,12 +98,11 @@ export function OverviewBody(props: {
         ) : (
           <FigureChartPanel chart={leases} />
         )}
-        <Panel title="Capacity">
+        <Panel title="Capacity · all workers">
           <div className="capacity">
-            {overview.platforms.map((platform) => (
+            {overview.capacity.map((platform) => (
               <PlatformBar key={platform.name} platform={platform} />
             ))}
-            <SlotLegend />
           </div>
         </Panel>
       </Row>
@@ -134,31 +132,31 @@ export function OverviewBody(props: {
   );
 }
 
-function PlatformBar({ platform }: { readonly platform: PlatformUse }) {
-  const known = platform.running !== undefined && platform.limit !== undefined;
+function PlatformBar({ platform }: { readonly platform: PlatformCapacity }) {
+  const words = platform.parts.map((part) => `${part.count} ${part.word}`).join(", ");
+  const notRead =
+    platform.notRead === 0
+      ? null
+      : platform.notRead === 1
+        ? "1 worker not read yet"
+        : `${platform.notRead} workers not read yet`;
   return (
     <div className="platform">
       <p className="platform-head">
         <span>{platform.name}</span>
-        <span className="mono">
-          {!known ? (
-            <span className="muted">—</span>
-          ) : (
-            <>
-              {platform.running} <span className="muted">of {platform.limit} running</span>
-            </>
-          )}
-        </span>
+        {notRead === null ? null : <span className="muted">{notRead}</span>}
       </p>
-      {known ? (
-        <ShareBar
-          shares={[
-            { kind: "leased", percent: platform.leasedPercent },
-            { kind: "ready", percent: platform.readyPercent },
-            { kind: "busy", percent: platform.busyPercent },
-          ]}
-        />
-      ) : null}
+      <span role="img" aria-label={`${platform.name}: ${words === "" ? "no devices" : words}`}>
+        <ShareBar shares={platform.parts} />
+      </span>
+      <ul className="platform-parts">
+        {platform.parts.map((part) => (
+          <li key={part.kind}>
+            <span className={`slot slot-${part.kind}`} aria-hidden="true" />
+            <span className="mono">{part.count}</span> {part.word}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

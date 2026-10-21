@@ -16,7 +16,7 @@ export type {
   OverviewItem,
   OverviewWorker,
   Gauge,
-  PlatformUse,
+  PlatformCapacity,
 } from "../model/overview";
 
 export function useOverview(range: ConsoleRange): LoadView<Overview> {

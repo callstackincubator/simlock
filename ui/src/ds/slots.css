@@ -51,6 +51,26 @@
   background: var(--status-warn);
 }
 
+.slot-drained {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--status-ok) 0 3px,
+    var(--field) 3px 6px
+  );
+}
+
+.slot-shutdown {
+  background: var(--border-strong);
+}
+
+.slot-offline {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--border-strong) 0 3px,
+    var(--field) 3px 6px
+  );
+}
+
 .slot-free {
   border: 1px dashed var(--border-strong);
 }

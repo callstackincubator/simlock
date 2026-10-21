@@ -19,22 +19,20 @@ import { itemPath } from "./paths";
 import { formatDuration } from "./time";
 import type { Tone, Toned } from "./tones";
 import type { WaitingRequest } from "./waiting";
-import { isUnread, leasesHeld, type WorkerView, workerName, workerPath } from "./workers";
+import {
+  isUnread,
+  leasesHeld,
+  type WorkerDevice,
+  type WorkerView,
+  workerName,
+  workerPath,
+} from "./workers";
 
 export interface OverviewTile {
   readonly label: string;
   readonly value: string;
   readonly unit?: string;
   readonly to?: string;
-}
-
-export interface PlatformUse {
-  readonly name: string;
-  readonly running?: number;
-  readonly limit?: number;
-  readonly leasedPercent: number;
-  readonly readyPercent: number;
-  readonly busyPercent: number;
 }
 
 export interface Gauge {
@@ -81,6 +79,8 @@ export interface OverviewInbox {
 
 export interface CapacityPart {
   readonly count: number;
+  readonly kind: PartKind;
+  readonly percent: number;
   readonly word: string;
 }
 
@@ -96,7 +96,6 @@ export interface Overview {
   readonly wait?: OverviewTile;
   readonly ending: OverviewTile;
   readonly figures: FiguresState;
-  readonly platforms: readonly PlatformUse[];
   readonly workers: readonly OverviewWorker[];
   readonly inbox: OverviewInbox;
   readonly activity: readonly OverviewActivity[];
@@ -109,28 +108,58 @@ function percentOf(part: number, whole: number): number {
   return whole === 0 ? 0 : (part / whole) * 100;
 }
 
-function platformUse(workers: readonly WorkerView[], platform: "ios" | "android"): PlatformUse {
-  const live = workers.filter((worker) => worker.connection === "connected");
-  const name = platform === "ios" ? "iOS" : "Android";
-  if (workers.some(isUnread)) {
-    return { busyPercent: 0, leasedPercent: 0, name, readyPercent: 0 };
+const PARTS = [
+  { kind: "leased", word: "leased" },
+  { kind: "ready", word: "ready" },
+  { kind: "busy", word: "booting" },
+  { kind: "drained", word: "drained" },
+  { kind: "broken", word: "quarantined" },
+  { kind: "absent", word: "absent" },
+  { kind: "shutdown", word: "shut down" },
+  { kind: "offline", word: "offline" },
+] as const;
+
+export type PartKind = (typeof PARTS)[number]["kind"];
+
+const PART_OF_STATE: Readonly<Record<string, PartKind>> = {
+  absent: "absent",
+  leased: "leased",
+  provisioning: "busy",
+  quarantined: "broken",
+  ready: "ready",
+  reclaiming: "busy",
+  shutdown: "shutdown",
+};
+
+// why: where a device is decides before what it is doing: on a worker that is not connected its
+// state is the last one heard, so it counts as offline; on a drained worker a ready device is
+// not available to lease, so it counts as drained.
+function partOf(worker: WorkerView, device: WorkerDevice): PartKind | undefined {
+  if (device.state === "deleted") return undefined;
+  if (worker.connection !== "connected") return "offline";
+  if (device.state === "ready" && worker.drained) return "drained";
+  return PART_OF_STATE[device.state];
+}
+
+function platformCapacity(
+  workers: readonly WorkerView[],
+  platform: "ios" | "android",
+): PlatformCapacity {
+  const counts = new Map<PartKind, number>();
+  for (const worker of workers) {
+    for (const device of worker.devices ?? []) {
+      const part = device.spec.platform === platform ? partOf(worker, device) : undefined;
+      if (part !== undefined) counts.set(part, (counts.get(part) ?? 0) + 1);
+    }
   }
-  const limit = live.reduce((sum, worker) => sum + (worker.capacity?.[platform].limit ?? 0), 0);
-  const devices = live.flatMap((worker) =>
-    (worker.devices ?? []).filter((device) => device.spec.platform === platform),
-  );
-  const count = (...states: readonly string[]) =>
-    devices.filter((device) => states.includes(device.state)).length;
-  const leased = count("leased");
-  const ready = count("ready");
-  const busy = count("provisioning", "reclaiming");
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
   return {
-    busyPercent: percentOf(busy, limit),
-    leasedPercent: percentOf(leased, limit),
-    limit,
-    name,
-    readyPercent: percentOf(ready, limit),
-    running: leased + ready + busy,
+    name: platform === "ios" ? "iOS" : "Android",
+    notRead: workers.filter(isUnread).length,
+    parts: PARTS.flatMap(({ kind, word }) => {
+      const count = counts.get(kind) ?? 0;
+      return count === 0 ? [] : [{ count, kind, percent: percentOf(count, total), word }];
+    }),
   };
 }
 
@@ -250,7 +279,6 @@ export function overviewOf(input: {
     tokens,
     workers,
   } = input;
-  const platforms = [platformUse(workers, "ios"), platformUse(workers, "android")];
   return {
     activity: [...events]
       .sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq)
@@ -266,7 +294,7 @@ export function overviewOf(input: {
           ...(tone === undefined ? {} : { tone }),
         };
       }),
-    capacity: [],
+    capacity: [platformCapacity(workers, "ios"), platformCapacity(workers, "android")],
     ending: endingSoon(leases, now),
     inbox: inboxOf({
       context: { leases, now, requests, tokens },
@@ -274,7 +302,6 @@ export function overviewOf(input: {
       workers,
     }),
     figures,
-    platforms,
     tiles: tiles(workers, requests, now),
     ...(figures.kind === "ready" ? { wait: figures.data.wait } : {}),
     workers: workers.map(overviewWorker),

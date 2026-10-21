@@ -47,8 +47,10 @@ export function SlotLegend() {
   );
 }
 
+export type ShareKind = SlotKind | "drained" | "shutdown" | "offline";
+
 export interface Share {
-  readonly kind: SlotKind;
+  readonly kind: ShareKind;
   readonly percent: number;
 }
 

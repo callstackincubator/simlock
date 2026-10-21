@@ -123,22 +123,6 @@ describe("the overview", () => {
     expect(waits).toEqual([undefined, undefined]);
   });
 
-  it("splits each platform's limit into leased, ready and booting, counting connected workers only", () => {
-    const { platforms } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
-
-    expect(platforms).toEqual([
-      {
-        busyPercent: 0,
-        leasedPercent: 12.5,
-        limit: 8,
-        name: "iOS",
-        readyPercent: 12.5,
-        running: 2,
-      },
-      { busyPercent: 0, leasedPercent: 25, limit: 4, name: "Android", readyPercent: 0, running: 1 },
-    ]);
-  });
-
   it("lists what needs you in the Inbox's order, each linked to its own page and toned by how bad it is", () => {
     const { inbox } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
 
@@ -244,9 +228,9 @@ describe("the overview", () => {
       ["Workers", "1"],
     ]);
 
-    expect(alone.platforms.map((p) => [p.name, p.running, p.limit])).toEqual([
-      ["iOS", undefined, undefined],
-      ["Android", undefined, undefined],
+    expect(alone.capacity.map((p) => [p.name, p.notRead, p.parts.length])).toEqual([
+      ["iOS", 1, 0],
+      ["Android", 1, 0],
     ]);
 
     const row = alone.workers[0];

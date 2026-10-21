@@ -159,3 +159,25 @@
   border-top: 1px solid var(--border);
   font-size: var(--text-sm);
 }
+
+.platform-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.platform-parts li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.platform-parts .slot {
+  width: 8px;
+  height: 8px;
+}
