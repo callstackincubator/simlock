@@ -41,6 +41,16 @@ export function launcherFor(options: LauncherForOptions): DaemonLauncher {
   return {
     launch: async () => {
       const state = await serviceManager.state(definition);
+      if (state.state === "not-loaded") {
+        options.notify(`Service ${definition.name} is not loaded; started the daemon without it.`);
+      }
+      if (state.state === "broken") {
+        const paths = state.missing.join(", ");
+        const verb = state.missing.length === 1 ? "is" : "are";
+        options.notify(
+          `Service ${definition.name} is broken (${paths} ${verb} gone); started the daemon without it. Run simlock daemon install again.`,
+        );
+      }
       if (state.state !== "installed") return spawner.launch();
       await serviceManager.start(definition);
       return { exited: new Promise<DaemonExit>(() => undefined), readOutput: async () => "" };
