@@ -14,6 +14,7 @@ import {
   loadTestRegistry,
   openTestState,
   testComponentWiring,
+  testStateOf,
 } from "../core/testing.js";
 import type { StateDatabase } from "../state/index.js";
 import { FakeClock, FakeSystemStats, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
@@ -214,6 +215,7 @@ async function startEngine(options: EngineOptions = {}): Promise<Harness> {
     ...(options.participants === undefined ? {} : { leaseEndParticipants: options.participants }),
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
   });
   started.push(engine);

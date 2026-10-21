@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadTestRegistry, testComponentWiring } from "./testing.js";
+import { loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats } from "../ports/index.js";
@@ -58,6 +58,7 @@ describe("Nuke", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * 1024 ** 3,
@@ -102,6 +103,7 @@ describe("Nuke", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * 1024 ** 3,

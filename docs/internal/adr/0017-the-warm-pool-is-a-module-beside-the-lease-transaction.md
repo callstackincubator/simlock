@@ -1,6 +1,6 @@
 # 0017. The warm pool is a module beside the lease transaction, not a step in it
 
-- **Status:** Accepted — partly implemented: §3 (the release path still calls into the pool)
+- **Status:** Accepted — partly implemented: §3 (the release path still calls into the pool); §2, §4, §5 and §8 narrowed by 0038
 - **Date:** 2026-10-05
 - **Issue:** [#359](https://github.com/callstackincubator/simlock/issues/359)
 - **Supersedes:** nothing. Replaces the "Warm pool" entry of

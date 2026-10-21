@@ -178,22 +178,23 @@ describe("doctor and drift", () => {
     const fixed = await env.cli(["doctor", "--fix"]);
     expect(fixed.code).toBe(0);
 
-    // Registry-only destruction (safety.md #1/#3): --fix must never call a destructive
-    // or state-changing driver verb. Every correction above is pure registry bookkeeping.
-    // The one call that is not --fix's is the warm pool booting back the device --fix just
-    // marked shut down, which was released a moment ago and has room: a `makeReady`, and only
-    // for that device.
+    // why: registry-only destruction (safety.md #1/#3): --fix must never call a destructive
+    // or state-changing driver verb. Every correction above is pure registry bookkeeping. The calls that are not --fix's are the warm pool's: booting back the device --fix just
+    // marked shut down, and creating and booting one device to refill the leased kind that lost
+    // device C from the registry.
     const calls = await env.driverLog.calls();
-    const destructiveOps = new Set(["destroy", "shutdown", "reclaim", "provision"]);
+    const destructiveOps = new Set(["destroy", "shutdown", "reclaim"]);
     expect(
       calls.filter((call) => destructiveOps.has(call.operation)),
       `--fix must be registry-only; saw: ${JSON.stringify(calls.map((call) => call.operation))}`,
     ).toEqual([]);
     for (const call of calls.filter((entry) => entry.operation === "makeReady")) {
+      const booted = JSON.stringify(call.arguments);
       expect(
-        JSON.stringify(call.arguments),
-        "only the corrected device may be booted by the warm pool",
-      ).toContain(deviceA.device.driverDeviceId);
+        booted.includes(deviceA.device.driverDeviceId) ||
+          ![...distinctUdids].some((udid) => booted.includes(udid)),
+        "the warm pool boots only the corrected device or a device it created",
+      ).toBe(true);
     }
 
     const rowsAfterFix = await deviceRows(env);

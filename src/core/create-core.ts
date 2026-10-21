@@ -1,5 +1,6 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, Logger, SystemStats } from "../ports/index.js";
+import type { StateDatabase } from "../state/index.js";
 import {
   buildCapacityFigures,
   CapacityCoordinator,
@@ -65,6 +66,7 @@ interface CoreOptions {
   /** The checks `doctor` runs per platform this host could run. None if omitted. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[] | undefined;
   readonly registry: Registry;
+  readonly state: StateDatabase;
   readonly systemStats: SystemStats;
 }
 
@@ -244,6 +246,7 @@ export function createCore(options: CoreOptions): Core {
       defaultMode: (platform) => port("warmPoolDemand").defaultMode(platform),
     },
     capacity,
+    catalog: drivers,
     claims,
     clock: options.clock,
     config: options.config.warmPool,
@@ -255,6 +258,7 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     provisioner,
     registry,
+    state: options.state,
   });
   const nuke = new NukeService({
     acquisition: {
@@ -273,6 +277,7 @@ export function createCore(options: CoreOptions): Core {
     leases: leaseMaintenance.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
+    warmPool: { forget: () => warmPool.forget() },
   });
   const doctor = new Doctor({
     // Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
