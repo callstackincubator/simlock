@@ -242,4 +242,49 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("a refused action shows an error toast with the daemon's message and Retry, which sends again, while the dialog stays open as the row leaves", async ({
+    page,
+  }) => {
+    const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(daemon, "refused-agent");
+      const listed = await daemon.cli(["list", "--leases"]);
+      const leaseId = (listed.json as { id: string }[])[0]?.id ?? "";
+      const deletes: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() === "DELETE") deletes.push(new URL(request.url()).pathname);
+      });
+      await openPage(page, daemon, "/leases", "Leases");
+      const row = rowOf(page, "refused-agent");
+      const menuButton = row.getByRole("button", { name: "Actions for refused-agent" });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "Release refused-agent's lease?" });
+      await expect(dialog).toBeVisible();
+
+      expect((await daemon.cli(["release", leaseId])).code).toBe(0);
+      await expect(row).toHaveCount(0);
+      await expect(dialog).toBeVisible();
+      const refusal = await fetch(new URL(`/v1/leases/${leaseId}`, daemon.url), {
+        headers: { Authorization: `Bearer ${daemon.tokens.operator}` },
+        method: "DELETE",
+      });
+      expect(refusal.status).toBe(404);
+      const message = ((await refusal.json()) as { error: { message: string } }).error.message;
+
+      await dialog.getByRole("button", { name: "Release lease" }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText("Couldn't release refused-agent's lease")).toBeVisible();
+      await expect(page.getByText(message, { exact: true })).toBeVisible();
+      expect(deletes).toEqual([`/v1/leases/${leaseId}`]);
+
+      await page.getByRole("button", { name: "Retry" }).click();
+      await expect.poll(() => deletes.length).toBe(2);
+      await expect(page.getByText("Couldn't release refused-agent's lease")).toBeVisible();
+    } finally {
+      await daemon.dispose();
+    }
+  });
 });
