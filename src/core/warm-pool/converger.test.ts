@@ -2470,4 +2470,61 @@ describe("warm pool learned kinds", () => {
       ]);
     });
   });
+
+  describe("when the record fails", () => {
+    const failing = (real: StateDatabase, broken: { value: boolean }): StateDatabase => ({
+      close: () => real.close(),
+      database: {
+        close: () => real.database.close(),
+        exec: (sql) => {
+          if (broken.value) throw new Error("disk I/O error");
+          real.database.exec(sql);
+        },
+        prepare: (sql) => {
+          if (broken.value) throw new Error("disk I/O error");
+          return real.database.prepare(sql);
+        },
+      },
+      transaction: (work) => {
+        if (broken.value) throw new Error("disk I/O error");
+        return real.transaction(work);
+      },
+    });
+    const phone = device("d1", "ready", 0).spec;
+    const recordWarnings = (rig: ReturnType<typeof harness>) =>
+      rig.sink.records.filter((record) => record.message.startsWith("the warm pool's record"));
+
+    it("logs a LearnedKinds throw once and runs the pass with no learned kinds", async () => {
+      const real = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(real).learn(phone, "l1", now - minute);
+      const broken = { value: true };
+      const rig = harness([device("shut", "shutdown", 60 * minute)], {
+        state: failing(real, broken),
+        targets: [{ count: 1, model: "iPhone 15", osVersion: "26.0", platform: "ios" }],
+      });
+
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(rig.bootCalls).toEqual(["shut"]);
+      expect(recordWarnings(rig)).toHaveLength(1);
+      expect(recordWarnings(rig)[0]).toMatchObject({ level: "warn" });
+    });
+
+    it("start() survives a closeOpen throw, and the next pass calls closeOpen again and closes the rows once it succeeds", async () => {
+      const real = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(real).learn(phone, "orphan", now - 30 * minute);
+      const broken = { value: true };
+      const rig = harness([device("d1", "leased", 0)], { state: failing(real, broken) });
+
+      expect(() => rig.pool.start()).not.toThrow();
+      expect(recordWarnings(rig)).toHaveLength(1);
+      broken.value = false;
+      await rig.pool.pass();
+      rig.clock.advance(5 * minute);
+      granted(rig, "again", "d1");
+
+      expect(new LearnedKinds(real).kinds(rig.clock.now()).map((kind) => kind.count)).toEqual([1]);
+    });
+  });
 });
