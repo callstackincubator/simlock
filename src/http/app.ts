@@ -31,6 +31,7 @@ import {
   unknownLease,
   unknownRequest,
 } from "./errors.js";
+import { leaseExecRoute, leaseRenewRoute } from "./lease-declarations.js";
 import { LeaseNoticeBuffer } from "./notices.js";
 import {
   catalogRoute,
@@ -132,16 +133,6 @@ const leaseRequestBodySchema = z
     refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
   );
 
-/** `stdin` and `requesterId` also accept `null` and normalize it to omitted: the documented example sends them as `null`. */
-const execBodySchema = z
-  .object({
-    tool: z.string().min(1),
-    args: z.array(z.string()),
-    stdin: z.string().nullish().transform(nullToUndefined),
-    requesterId: z.string().nullish().transform(nullToUndefined),
-  })
-  .strict();
-
 const componentInstallBodySchema = z
   .object({
     platform: z.string(),
@@ -156,10 +147,6 @@ function jsonBody<Schema extends z.ZodType>(schema: Schema) {
       return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
     }
   });
-}
-
-function nullToUndefined<Value>(value: Value | null | undefined): Value | undefined {
-  return value ?? undefined;
 }
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
@@ -420,15 +407,11 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     });
   });
 
-  app.post("/v1/leases/:id/renew", agentAuth, async (c) => {
+  app.openapi({ ...leaseRenewRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
-    const id = c.req.param("id");
-
-    const ttlMs = await parseRenewBody(c);
-    if (ttlMs !== undefined && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
-      throw badRequest("ttlMs must be a positive number");
-    }
+    const id = c.req.valid("param").id;
+    const { ttlMs } = c.req.valid("json");
 
     // why: Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
     // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
@@ -446,16 +429,19 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       session,
     );
 
-    return c.json({
-      expiresAt: new Date(renewed.ttlDeadline).toISOString(),
-      leaseId: renewed.id,
-      notices: notices.drain(id),
-    });
+    return c.json(
+      {
+        expiresAt: new Date(renewed.ttlDeadline).toISOString(),
+        leaseId: renewed.id,
+        notices: notices.drain(id),
+      },
+      200,
+    );
   });
 
-  app.post("/v1/leases/:id/exec", agentAuth, jsonBody(execBodySchema), async (c) => {
+  app.openapi({ ...leaseExecRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
-    const leaseId = c.req.param("id");
+    const leaseId = c.req.valid("param").id;
     const { requesterId, ...body } = c.req.valid("json");
     // Requester identity is the token's over HTTP, never the body's -- except for an
     // `operator` token, which is the proxying case `device.exec` reads it for. An agent
@@ -869,22 +855,14 @@ function findDevice(
   );
 }
 
-async function parseRenewBody(c: {
-  req: { text(): Promise<string> };
-}): Promise<number | undefined> {
-  const raw = await c.req.text();
-  if (raw.trim() === "") return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    throw badRequest("Invalid JSON body");
+// why: an empty body under a JSON content type is no body: a renew without one keeps the lease's own width.
+async function emptyBodyAsNone(c: Context, next: () => Promise<void>): Promise<void> {
+  if (/^application\/([a-z-.]+\+)?json/i.test(c.req.header("content-type") ?? "")) {
+    // why: `bodyCache.text` is typed as the string but holds the pending read; the JSON validator parses what it holds, so `{}` stands in for the empty text.
+    if ((await c.req.text()).trim() === "")
+      Object.assign(c.req.bodyCache, { text: Promise.resolve("{}") });
   }
-  if (typeof parsed !== "object" || parsed === null) throw badRequest("Body must be a JSON object");
-  const ttlMs = (parsed as Record<string, unknown>).ttlMs;
-  if (ttlMs === undefined) return undefined;
-  if (typeof ttlMs !== "number") throw badRequest("ttlMs must be a number");
-  return ttlMs;
+  await next();
 }
 
 /** HTTP-only sugar translating `?since=5m` into the absolute `sinceTs` `events.replay` takes --

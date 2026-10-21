@@ -20,8 +20,6 @@ const UNDECLARED_ROUTES = [
   "GET /v1/lease-requests/{id}/events",
   "DELETE /v1/lease-requests/{id}",
   "GET /v1/leases/{id}",
-  "POST /v1/leases/{id}/renew",
-  "POST /v1/leases/{id}/exec",
   "POST /v1/components/install",
   "GET /v1/leases/{id}/events",
   "DELETE /v1/leases/{id}",
