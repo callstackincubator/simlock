@@ -13,7 +13,7 @@ type PlistValue = string | number | boolean | PlistValue[] | { [key: string]: Pl
 // why: the test must read the plist the way launchd does, as typed XML, so it does not depend on
 // the order or the spacing the adapter happens to write.
 function parsePlist(xml: string): PlistValue {
-  const tokens = [...xml.matchAll(/<(\/?)([a-z]+)\s*(\/?)>|([^<]+)/g)].filter(
+  const tokens = [...xml.matchAll(/<(\/?)([a-z]+)[^>]*?(\/?)>|([^<]+)/g)].filter(
     (token) => token[4] === undefined || token[4].trim() !== "",
   );
   let index = tokens.findIndex((token) => token[2] === "plist") + 1;
@@ -138,5 +138,18 @@ describe("LaunchdServiceManager (#830)", () => {
         StandardErrorPath: testCase.logPath,
       });
     }
+  });
+
+  it("install creates daemon.log at 0600 when it is missing and keeps one that exists", async () => {
+    const definition = definitionFor("worker");
+    const created = await installed(definition);
+    expect((await created.filesystem.stat(definition.logPath)).mode).toBe(0o600);
+
+    const existing = new MemoryFilesystem();
+    await existing.mkdirp(root);
+    await existing.writeFileAtomic(definition.logPath, "earlier line\n", { mode: 0o640 });
+    await installed(definition, existing);
+    expect(await existing.readFile(definition.logPath)).toBe("earlier line\n");
+    expect((await existing.stat(definition.logPath)).mode).toBe(0o640);
   });
 });

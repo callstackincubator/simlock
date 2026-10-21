@@ -39,6 +39,7 @@ export type { IpcListener } from "./ipc.js";
 export {
   FakeServiceManager,
   LaunchdServiceManager,
+  productionServiceManager,
   type ServiceDefinition,
   type ServiceDefinitionInput,
   type ServiceManager,

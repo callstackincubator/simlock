@@ -91,18 +91,22 @@ function extractGlobalFlags(argv: readonly string[]): {
  * try, where that throw becomes the single structured error line the CLI reference promises instead
  * of a raw stack trace. */
 async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment> {
-  const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }] = await Promise.all([
-    import("node:path"),
-    import("node:url"),
-    import("../ports/index.js"),
-    import("./environment.js"),
-  ]);
+  const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }, { homedir }] =
+    await Promise.all([
+      import("node:path"),
+      import("node:url"),
+      import("../ports/index.js"),
+      import("./environment.js"),
+      import("node:os"),
+    ]);
   const {
     NodeDaemonLauncher,
     NodeFilesystem,
     NodeIpcTransport,
+    NodeProcessRunner,
     NodeSystemStats,
     SystemClock,
+    productionServiceManager,
     resolveDaemonHome,
     resolveSimlockHome,
   } = ports;
@@ -110,6 +114,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
   const filesystem = new NodeFilesystem();
   const daemonHome = await resolveDaemonHome({ root, flag, filesystem });
   const logPath = join(daemonHome.dataDirectory, "daemon.log");
+  const mainPath = join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js");
   return buildCliEnvironment(
     {
       filesystem,
@@ -117,15 +122,24 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
       systemStats: new NodeSystemStats(),
       ipc: new NodeIpcTransport(),
       launcher: new NodeDaemonLauncher({
-        args: [
-          join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
-          ...(daemonHome.role === "gateway" ? ["--gateway"] : []),
-        ],
+        args: [mainPath, ...(daemonHome.role === "gateway" ? ["--gateway"] : [])],
         command: process.execPath,
         logPath,
         simlockHome: root,
       }),
       daemonHome,
+      service: {
+        manager: productionServiceManager(process.platform, {
+          runner: new NodeProcessRunner(),
+          filesystem,
+          uid: process.getuid?.() ?? 0,
+        }),
+        platform: process.platform,
+        home: homedir(),
+        root,
+        nodePath: process.execPath,
+        mainPath,
+      },
     },
     process.env,
   );

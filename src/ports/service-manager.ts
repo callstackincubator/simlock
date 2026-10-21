@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
 import type { DaemonRole } from "./paths.js";
-import type { ProcessRunner } from "./process-runner.js";
+import type { ProcessResult, ProcessRunner } from "./process-runner.js";
 export type ServiceManagerName = "launchd" | "systemd";
 
 export type ServiceState =
@@ -30,11 +30,29 @@ export interface ServiceDefinitionInput {
   readonly env: NodeJS.ProcessEnv;
 }
 
+const SAVED_VARIABLES = [
+  "SIMLOCK_DRIVERS_MODULE",
+  "PATH",
+  "ANDROID_HOME",
+  "ANDROID_SDK_ROOT",
+  "ANDROID_AVD_HOME",
+  "ANDROID_USER_HOME",
+  "ANDROID_PREFS_ROOT",
+  "ANDROID_SDK_HOME",
+  "JAVA_HOME",
+  "DEVELOPER_DIR",
+] as const;
+
 function homeHash(root: string): string {
   return createHash("sha256").update(root).digest("hex").slice(0, 6);
 }
 
 export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinition {
+  const environment: Record<string, string> = { SIMLOCK_HOME: input.root };
+  for (const variable of SAVED_VARIABLES) {
+    const value = input.env[variable];
+    if (value !== undefined) environment[variable] = value;
+  }
   const base = `com.callstack.simlock.${input.role}`;
   const name =
     input.root === join(input.home, ".simlock") ? base : `${base}.${homeHash(input.root)}`;
@@ -44,7 +62,7 @@ export function serviceDefinition(input: ServiceDefinitionInput): ServiceDefinit
     path: join(input.home, "Library", "LaunchAgents", `${name}.plist`),
     command: input.nodePath,
     args: [input.mainPath, ...(input.role === "gateway" ? ["--gateway"] : [])],
-    environment: { SIMLOCK_HOME: input.root },
+    environment,
     logPath: join(input.dataDirectory, "daemon.log"),
   };
 }
@@ -103,18 +121,106 @@ export interface LaunchdServiceManagerOptions {
   readonly uid: number;
 }
 
+const LAUNCHCTL_TIMEOUT_MS = 10_000;
+const STOP_LIMIT_SECONDS = 300;
+
+function xmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function plistFor(definition: ServiceDefinition): string {
+  const strings = (values: readonly string[]): string =>
+    values.map((value) => `    <string>${xmlText(value)}</string>`).join("\n");
+  const variables = Object.entries(definition.environment)
+    .map(([key, value]) => `    <key>${xmlText(key)}</key>\n    <string>${xmlText(value)}</string>`)
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${xmlText(definition.name)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${strings([definition.command, ...definition.args])}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${variables}
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>ExitTimeOut</key>
+  <integer>${String(STOP_LIMIT_SECONDS)}</integer>
+  <key>StandardOutPath</key>
+  <string>${xmlText(definition.logPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlText(definition.logPath)}</string>
+</dict>
+</plist>
+`;
+}
+
+function isExistsError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+export interface LaunchdServiceManagerOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+  readonly uid: number;
+}
+
 export class LaunchdServiceManager implements ServiceManager {
   readonly manager = "launchd";
 
   constructor(private readonly options: LaunchdServiceManagerOptions) {}
 
+  private domain(): string {
+    return `gui/${String(this.options.uid)}`;
+  }
+
+  private launchctl(args: readonly string[]): Promise<ProcessResult> {
+    return this.options.runner.run("launchctl", args, { timeoutMs: LAUNCHCTL_TIMEOUT_MS });
+  }
+
   async state(_definition: ServiceDefinition): Promise<ServiceState> {
     return { state: "not-installed" };
   }
 
-  async install(_definition: ServiceDefinition): Promise<void> {}
+  async install(definition: ServiceDefinition): Promise<void> {
+    const { filesystem } = this.options;
+    await this.launchctl(["bootout", `${this.domain()}/${definition.name}`]);
+    await filesystem.mkdirp(dirname(definition.logPath));
+    try {
+      await filesystem.writeFileExclusive(definition.logPath, "", { mode: 0o600 });
+    } catch (error: unknown) {
+      if (!isExistsError(error)) throw error;
+    }
+    await filesystem.mkdirp(dirname(definition.path));
+    await filesystem.writeFileAtomic(definition.path, plistFor(definition));
+    await this.launchctl(["bootstrap", this.domain(), definition.path]);
+  }
 
   async uninstall(_definition: ServiceDefinition): Promise<void> {}
 
   async start(_definition: ServiceDefinition): Promise<void> {}
+}
+
+export function productionServiceManager(
+  platform: NodeJS.Platform,
+  dependencies: {
+    readonly runner: ProcessRunner;
+    readonly filesystem: Filesystem;
+    readonly uid: number;
+  },
+): ServiceManager | undefined {
+  return platform === "darwin" ? new LaunchdServiceManager(dependencies) : undefined;
 }
