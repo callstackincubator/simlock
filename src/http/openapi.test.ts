@@ -2,6 +2,7 @@ import { validate } from "@readme/openapi-parser";
 import { describe, expect, it } from "vitest";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { streamModule } from "../stream/definition.js";
 import { buildOpenApiDocument } from "./openapi.js";
 
 describe("buildOpenApiDocument", () => {
@@ -337,6 +338,55 @@ describe("buildOpenApiDocument", () => {
     expect(operation("/v1/events/stream", "get")?.description).toContain(
       "/simlock/docs/reference/events",
     );
+  });
+});
+
+describe("buildOpenApiDocument with a module that carries http", () => {
+  it("an integrator reads GET /v1/stream/leases/{id} under stream, with its headers, binary 200, 405 and refusals, and no agent-device or uplink path", () => {
+    const document = buildOpenApiDocument([streamModule as never]);
+    const operation = document.paths?.["/v1/stream/leases/{id}"]?.get;
+    const ok = (operation?.responses ?? {})["200"] as {
+      content?: Record<string, unknown>;
+      headers?: Record<string, unknown>;
+    };
+
+    expect(operation?.tags).toEqual(["stream"]);
+    expect(document.tags?.find((tag) => tag.name === "stream")?.description).toContain(
+      "capabilities.stream.enabled",
+    );
+    expect(Object.keys(ok.content ?? {}).sort()).toEqual([
+      "application/vnd.simlock.stream+h264",
+      "application/vnd.simlock.stream+mjpeg",
+    ]);
+    expect(Object.keys(ok.headers ?? {}).sort()).toEqual([
+      "simlock-stream-codec",
+      "simlock-stream-fps",
+      "simlock-stream-height",
+      "simlock-stream-width",
+      "x-simlock-lease",
+    ]);
+    expect(
+      Object.fromEntries(
+        ["401", "403", "404", "405", "415", "500", "502", "503"].map((status) => [
+          status,
+          errorCodes(operation, status),
+        ]),
+      ),
+    ).toEqual({
+      "401": ["UNAUTHENTICATED"],
+      "403": ["FORBIDDEN"],
+      "404": ["UNKNOWN_LEASE"],
+      "405": ["BAD_REQUEST"],
+      "415": ["STREAM_NOT_SUPPORTED"],
+      "500": ["INTERNAL"],
+      "502": ["STREAM_UNAVAILABLE"],
+      "503": ["STREAM_UNAVAILABLE"],
+    });
+    expect(
+      Object.keys(document.paths ?? {}).filter(
+        (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",
+      ),
+    ).toEqual([]);
   });
 });
 
