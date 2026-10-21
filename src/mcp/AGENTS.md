@@ -43,7 +43,8 @@ Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
      (`connection-refused`, `endpoint-not-found`), retries every 50 ms for
      `startupTimeoutMs` (default `DAEMON_STARTUP_TIMEOUT_MS`), else `DAEMON_STARTUP_FAILED`;
      a launched daemon that exits fails at once with `startErrorFrom`'s text, unless another
-     daemon answers a last connect;
+     daemon answers a last connect; a connection lost during the launched daemon's handshake
+     is `DAEMON_STARTUP_FAILED`, while a pre-existing daemon keeps `DAEMON_CONNECTION_LOST`;
    - the renew timer → `connectToRunningDaemon`: never launches.
      The lease survives either way: the daemon released nothing.
 7. **End** — stdin EOF, `SIGINT`/`SIGTERM` or transport close → `McpSession.close`: stop
