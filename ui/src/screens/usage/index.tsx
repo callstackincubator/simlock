@@ -1,6 +1,7 @@
 import "./usage.css";
 
 import {
+  ChartPanel,
   ChoiceChips,
   type Column,
   DataTable,
@@ -147,6 +148,7 @@ function Figures(props: {
           <StatTile key={tile.label} {...tile} />
         ))}
       </StatRow>
+      {view.slots === undefined ? null : <ChartPanel chart={view.slots} />}
       <div className="usage-stack">
         <div className="usage-panels">
           <Counts

@@ -1,5 +1,12 @@
 import type { UsageOutput } from "../../../src/contract/index";
-import { type FigureTile, formatWait, partialNote, waitTile } from "./figures";
+import {
+  type FigureChart,
+  type FigureTile,
+  figuresOf,
+  formatWait,
+  partialNote,
+  waitTile,
+} from "./figures";
 import { formatBytes } from "./load";
 import { agentIdOf } from "./leases";
 import { formatCount } from "./paging";
@@ -45,6 +52,7 @@ export interface UsageRequesterRow {
 
 export interface UsageView {
   readonly note?: string;
+  readonly slots?: FigureChart;
   readonly tiles: readonly FigureTile[];
   readonly bySource: readonly UsageCount[];
   readonly durations: readonly UsageDuration[];
@@ -123,6 +131,7 @@ export function usageOf(stats: UsageOutput, range: ConsoleRange, now: number): U
   const unit = rangeUnit(range);
   const { bySource } = totals;
   const note = partialNote(stats, now);
+  const slots = figuresOf(stats, range, now).charts.find((chart) => chart.key === "slotsUsed");
   return {
     bySource: [
       ["warm", bySource.warm] as const,
@@ -170,6 +179,7 @@ export function usageOf(stats: UsageOutput, range: ConsoleRange, now: number): U
       { label: "Held p50", unit, value: duration(totals.held.p50) },
     ],
     use: useLines(totals),
+    ...(slots === undefined ? {} : { slots }),
     workers: stats.workers.map((worker) => scopeRow(worker.id, worker.label ?? worker.id, worker)),
     ...(note === undefined ? {} : { note }),
   };

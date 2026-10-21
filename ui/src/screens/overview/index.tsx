@@ -1,13 +1,12 @@
 import "./overview.css";
 
 import {
+  ChartPanel,
   ChoiceChips,
   Empty,
   Link,
   Loaded,
   Meter,
-  MinuteChart,
-  MinuteTable,
   Page,
   Panel,
   Refusal,
@@ -20,7 +19,7 @@ import {
   StatusDot,
   Toolbar,
 } from "../../ds";
-import type { FigureChart, FiguresState } from "../../state/figures";
+import type { FiguresState } from "../../state/figures";
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import {
   type Gauge,
@@ -50,16 +49,6 @@ function FigureNote({ figures }: { readonly figures: FiguresState }) {
   return null;
 }
 
-function FigureChartPanel({ chart }: { readonly chart: FigureChart }) {
-  return (
-    <Panel title={chart.title}>
-      <MinuteChart kind="area" title={chart.title} unit={chart.unit} minutes={chart.points} />
-      <p className="chart-summary">{chart.summary}</p>
-      <MinuteTable minutes={chart.points} heading={chart.heading} bucketMs={chart.bucketMs} />
-    </Panel>
-  );
-}
-
 export function OverviewBody(props: {
   readonly overview: Overview;
   readonly range?: ConsoleRange;
@@ -68,7 +57,10 @@ export function OverviewBody(props: {
   const { overview, range = "1h", onRange = () => undefined } = props;
   const { figures } = overview;
   const ready = figures.kind === "ready" ? figures : undefined;
-  const [leases, ...others] = ready?.data.charts ?? [];
+  // why: Device slots in use is drawn on Usage; the Overview keeps the two charts of load.
+  const [leases, ...others] = (ready?.data.charts ?? []).filter(
+    (chart) => chart.key !== "slotsUsed",
+  );
   return (
     <>
       <Toolbar
@@ -99,7 +91,7 @@ export function OverviewBody(props: {
             <FigureNote figures={figures} />
           </Panel>
         ) : (
-          <FigureChartPanel chart={leases} />
+          <ChartPanel chart={leases} />
         )}
         <Panel title="Capacity · all workers">
           <div className="capacity">
@@ -112,7 +104,7 @@ export function OverviewBody(props: {
       {others.length === 0 ? null : (
         <Row even>
           {others.map((chart) => (
-            <FigureChartPanel key={chart.key} chart={chart} />
+            <ChartPanel key={chart.key} chart={chart} />
           ))}
         </Row>
       )}

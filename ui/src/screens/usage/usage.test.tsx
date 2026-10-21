@@ -59,6 +59,7 @@ describe("the Usage screen", () => {
       ([, id]) => new RegExp(`id="${id}"[^>]*>([^<]*)<`).exec(html)?.[1],
     );
     expect(regions).toEqual([
+      "Device slots in use, last 24 hours",
       "Grants by source",
       "Durations",
       "Rejections by reason",

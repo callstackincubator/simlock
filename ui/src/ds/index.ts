@@ -2,7 +2,7 @@ import "./foundation.css";
 
 export { Button, ButtonLink } from "./button";
 export { Drawer, DrawerTabs } from "./drawer";
-export { MinuteChart, MinuteTable } from "./chart";
+export { ChartPanel, MinuteChart, MinuteTable } from "./chart";
 export { ChoiceChips, Tabs } from "./choice";
 export { Feed } from "./feed";
 export { Facts } from "./facts";

@@ -16,6 +16,8 @@ import {
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
+import { Panel } from "./panel";
+
 export interface MinuteCount {
   readonly at: number;
   readonly label: string;
@@ -134,5 +136,27 @@ export function MinuteTable(props: {
         </tbody>
       </table>
     </details>
+  );
+}
+
+// why: the Overview and Usage draw a minute series the same way: the chart, its one-line summary
+// for a reader who cannot see it, and the table of the same numbers.
+export function ChartPanel(props: {
+  readonly chart: {
+    readonly title: string;
+    readonly unit: string;
+    readonly heading: string;
+    readonly summary: string;
+    readonly bucketMs: number;
+    readonly points: readonly MinuteCount[];
+  };
+}) {
+  const { bucketMs, heading, points, summary, title, unit } = props.chart;
+  return (
+    <Panel title={title}>
+      <MinuteChart kind="area" title={title} unit={unit} minutes={points} />
+      <p className="chart-summary">{summary}</p>
+      <MinuteTable minutes={points} heading={heading} bucketMs={bucketMs} />
+    </Panel>
   );
 }

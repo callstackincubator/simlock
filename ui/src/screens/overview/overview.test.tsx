@@ -85,7 +85,7 @@ describe("the overview screen", () => {
     expect(text(html)).toContain("2 leased 2 offline");
   });
 
-  it("draws the range picker as a radio group of four with the chosen range checked, three chart panels and the Capacity panel", () => {
+  it("draws the range picker as a radio group of four with the chosen range checked, two chart panels and the Capacity panel", () => {
     const shown = renderToStaticMarkup(
       <OverviewBody overview={withFigures({})} range="6h" onRange={() => undefined} />,
     );
@@ -105,10 +105,10 @@ describe("the overview screen", () => {
       expect.arrayContaining([
         "Leases held, last 6 hours",
         "Requests in the queue, last 6 hours",
-        "Device slots in use, last 6 hours",
         "Capacity · all workers",
       ]),
     );
+    expect(headings).not.toContain("Device slots in use, last 6 hours");
   });
 
   it("shows the partial note above the tiles when the figures carry one, and no note otherwise", () => {
