@@ -501,13 +501,19 @@ test.describe("the console acts", () => {
     try {
       await page.clock.install();
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      // why: with time frozen, only the fast-forwards below age a toast, however slow the machine.
+      await page.clock.pauseAt(new Date(Date.now() + 1_000));
       const toasts = page.getByRole("region", { name: "Notifications" });
       const toastOf = (text: string) => toasts.locator(".toast").filter({ hasText: text });
       const act = async (worker: string, item: string) => {
+        // why: the toasts stack over the table's last column, so the keyboard opens the menu.
         await rowOf(page, worker)
           .getByRole("button", { name: `Actions for ${worker}` })
+          .press("Enter");
+        await page
+          .getByRole("menu", { name: `Actions for ${worker}` })
+          .getByRole("menuitem", { name: item, exact: true })
           .click();
-        await page.getByRole("menuitem", { name: item, exact: true }).click();
       };
 
       await act("toast-a", "Drain");
@@ -520,6 +526,7 @@ test.describe("the console acts", () => {
       await expect(drained).toBeVisible();
       await page.mouse.move(0, 0);
       await page.clock.fastForward(6_500);
+      await page.clock.runFor(500);
       await expect(drained).toBeHidden();
 
       await page.route("**/v1/workers/*/drain", (route) => route.abort());
@@ -532,6 +539,7 @@ test.describe("the console acts", () => {
         refused.getByRole("button", { name: "Close", includeHidden: true }),
       ).toBeVisible();
       await refused.getByRole("button", { name: "Close", includeHidden: true }).click();
+      await page.clock.runFor(500);
       await expect(refused).toBeHidden();
       await page.unroute("**/v1/workers/*/drain");
 
@@ -549,6 +557,7 @@ test.describe("the console acts", () => {
       await toastOf("toast-d drained")
         .getByRole("button", { name: "Close", includeHidden: true })
         .click();
+      await page.clock.runFor(500);
       await expect(toastOf("toast-a takes leases again")).toBeVisible();
       await expect(toasts.locator(".toast:visible")).toHaveCount(3);
     } finally {

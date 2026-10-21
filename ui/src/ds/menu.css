@@ -2,7 +2,7 @@
  * error colour; orange stays for interaction, never for danger. */
 
 .menu-positioner {
-  z-index: 60;
+  z-index: 90;
 }
 
 .menu {
