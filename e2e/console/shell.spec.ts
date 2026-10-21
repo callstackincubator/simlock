@@ -9,7 +9,9 @@ import {
   openFromNav,
   settled,
   signIn,
+  startHostWithLease,
   test,
+  withActionSurfaces,
 } from "./fixtures.js";
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
@@ -311,6 +313,32 @@ test.describe("the shell", () => {
       await page.goto("/");
       await expect(page.getByRole("region", { name: "Needs you" })).toBeVisible();
       expect(await audit()).toEqual([]);
+    });
+  }
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`the console passes an automated WCAG AA check with a menu, a dialog and a toast open (${colorScheme})`, async ({
+      page,
+    }) => {
+      const host = await startHostWithLease();
+      try {
+        await page.emulateMedia({ colorScheme });
+        await withActionSurfaces(page, host, async (surface) => {
+          const results = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
+          expect(
+            results.violations.map((violation) => ({
+              id: violation.id,
+              targets: violation.nodes.map((node) => node.target.join(" ")),
+            })),
+            surface,
+          ).toEqual([]);
+        });
+      } finally {
+        await host.dispose();
+      }
     });
   }
 });

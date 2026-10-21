@@ -536,3 +536,61 @@ export async function openFromNav(page: Page, label: string): Promise<void> {
   }
   await nav.getByRole("link", { name: label, exact: true }).click();
 }
+
+// why: a host with one lease held by `surface-agent`, for checks that need the console's menu,
+// dialog and toast open.
+export async function startHostWithLease(): Promise<RunningDaemon> {
+  const host = await startDaemon("worker", {
+    driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+  });
+  const granted = await host.cli([
+    "lease",
+    "--platform",
+    "ios",
+    "--device",
+    "iPhone 16",
+    "--os",
+    "18.4",
+    "--agent-id",
+    "surface-agent",
+    "--detach",
+  ]);
+  expect(granted.code, granted.stderr).toBe(0);
+  return host;
+}
+
+// why: signs in on Leases and opens, in turn, an error toast (a release the daemon never answers),
+// the row's menu over it, and the release dialog over it, calling `check` with each open.
+export async function withActionSurfaces(
+  page: Page,
+  host: RunningDaemon,
+  check: (surface: "toast" | "menu" | "dialog") => Promise<void>,
+): Promise<void> {
+  await page.goto(new URL("/leases", host.url).toString());
+  await signIn(page, host.tokens.operator);
+  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
+  const row = page.locator("main tbody tr").filter({ hasText: "surface-agent" });
+  const menuButton = row.getByRole("button", { name: "Actions for surface-agent" });
+  const dialog = page.getByRole("alertdialog", { name: "Release surface-agent's lease?" });
+  await page.route("**/v1/leases/*", (route) =>
+    route.request().method() === "DELETE" ? route.abort() : route.continue(),
+  );
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Release lease" }).click();
+  await dialog.getByRole("button", { name: "Release lease" }).click();
+  await expect(
+    page.getByRole("region", { name: "Notifications" }).getByText("The daemon did not answer."),
+  ).toBeVisible();
+  await settled(page);
+  await check("toast");
+
+  await menuButton.click();
+  await expect(page.getByRole("menuitem", { name: "Release lease" })).toBeVisible();
+  await settled(page);
+  await check("menu");
+
+  await page.getByRole("menuitem", { name: "Release lease" }).click();
+  await expect(dialog).toBeVisible();
+  await settled(page);
+  await check("dialog");
+}

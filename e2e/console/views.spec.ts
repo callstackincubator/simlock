@@ -10,7 +10,9 @@ import {
   settled,
   signIn,
   startDaemon,
+  startHostWithLease,
   test,
+  withActionSurfaces,
 } from "./fixtures.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -324,6 +326,35 @@ test.describe("every view", () => {
         }));
         expect(found, path).toEqual({ styles: 0, violations: [] });
       }
+      expect(errors).toEqual([]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("no <style> element or Content-Security-Policy violation with a menu, a dialog and a toast open", async ({
+    page,
+  }) => {
+    const host = await startHostWithLease();
+    try {
+      await page.addInitScript(() => {
+        const seen: string[] = [];
+        (window as unknown as { cspViolations: string[] }).cspViolations = seen;
+        document.addEventListener("securitypolicyviolation", (event) => {
+          seen.push(`${event.violatedDirective} ${event.blockedURI}`);
+        });
+      });
+      const errors: string[] = [];
+      page.on("console", (message) => {
+        if (/content.security.policy/i.test(message.text())) errors.push(message.text());
+      });
+      await withActionSurfaces(page, host, async (surface) => {
+        const found = await page.evaluate(() => ({
+          styles: document.querySelectorAll("style").length,
+          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
+        }));
+        expect(found, surface).toEqual({ styles: 0, violations: [] });
+      });
       expect(errors).toEqual([]);
     } finally {
       await host.dispose();
