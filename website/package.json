@@ -4,18 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "pnpm --dir .. openapi website/public/openapi.json && astro dev",
+    "build": "pnpm --dir .. openapi website/public/openapi.json && astro build",
     "preview": "astro preview",
-    "check": "astro check",
+    "check": "pnpm --dir .. openapi website/public/openapi.json && astro check",
     "og": "node scripts/og.mjs"
   },
   "dependencies": {
+    "@astrojs/markdown-satteri": "^0.3.8",
     "@astrojs/sitemap": "^3.7.4",
     "@astrojs/starlight": "^0.42.2",
     "astro": "^7.3.3",
     "sharp": "^0.35.4",
-    "starlight-llms-txt": "^0.12.0"
+    "starlight-llms-txt": "^0.12.0",
+    "starlight-openapi": "0.27.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
