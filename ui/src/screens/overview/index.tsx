@@ -36,9 +36,13 @@ export function OverviewScreen() {
   const view = useOverview(range);
   return (
     <Page title="Overview">
-      <Loaded view={view}>
-        {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
-      </Loaded>
+      {view.kind === "refused" ? (
+        <p className="muted">Could not check: workers</p>
+      ) : (
+        <Loaded view={view}>
+          {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
+        </Loaded>
+      )}
     </Page>
   );
 }
