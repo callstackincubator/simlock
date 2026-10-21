@@ -50,3 +50,18 @@
   background: transparent;
   color: var(--text-muted);
 }
+
+.confirm-typed {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.confirm-input {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  background: var(--field);
+  color: var(--text);
+  font-family: var(--font-mono);
+}

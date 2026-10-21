@@ -1,7 +1,7 @@
 import "./confirm-dialog.css";
 
 import { AlertDialog } from "@base-ui/react/alert-dialog";
-import { useState, useSyncExternalStore } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 
 import { Button } from "./button";
 
@@ -10,6 +10,7 @@ export interface ConfirmSpec {
   readonly body: string;
   readonly confirm: string;
   readonly busy: string;
+  readonly typeToConfirm?: string;
 }
 
 // why: `work` runs while the dialog stays open, its button disabled and worded `busy`, so a second
@@ -61,9 +62,33 @@ export function createConfirmer(): Confirmer {
   };
 }
 
+// why: the typed text belongs to one opening of the dialog, so each item asked about gets a fresh
+// field, and the confirming button waits for the exact name.
+function TypedName(props: {
+  readonly name: string;
+  readonly typed: string;
+  readonly onType: (typed: string) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="confirm-typed">
+      <label htmlFor={id}>{` Type ${props.name} to confirm.`}</label>
+      <input
+        id={id}
+        className="confirm-input"
+        value={props.typed}
+        autoComplete="off"
+        onChange={(event) => props.onType(event.target.value)}
+      />
+    </div>
+  );
+}
+
 export function ConfirmHost({ confirmer }: { readonly confirmer: Confirmer }) {
   const pending = useSyncExternalStore(confirmer.subscribe, confirmer.snapshot);
   const [last, setLast] = useState<Pending | undefined>(undefined);
+  const [typed, setTyped] = useState("");
+  if (pending !== undefined && pending.spec !== last?.spec) setTyped("");
   if (pending !== undefined && pending !== last) setLast(pending);
   const shown = pending ?? last;
   if (shown === undefined) return null;
@@ -80,6 +105,9 @@ export function ConfirmHost({ confirmer }: { readonly confirmer: Confirmer }) {
         <AlertDialog.Popup className="confirm">
           <AlertDialog.Title className="confirm-title">{spec.title}</AlertDialog.Title>
           <AlertDialog.Description className="confirm-body">{spec.body}</AlertDialog.Description>
+          {spec.typeToConfirm === undefined ? null : (
+            <TypedName name={spec.typeToConfirm} typed={typed} onType={setTyped} />
+          )}
           <div className="confirm-actions">
             <Button variant="secondary" disabled={busy} onClick={() => shown.answer(false)}>
               Keep
@@ -87,7 +115,7 @@ export function ConfirmHost({ confirmer }: { readonly confirmer: Confirmer }) {
             <Button
               variant="primary"
               className="confirm-danger"
-              disabled={busy}
+              disabled={busy || (spec.typeToConfirm !== undefined && typed !== spec.typeToConfirm)}
               onClick={() => shown.answer(true)}
             >
               {busy ? spec.busy : spec.confirm}
