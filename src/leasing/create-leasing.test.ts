@@ -1503,6 +1503,7 @@ describe("createLeasing RAM budget by mode", () => {
   it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; a delete brings it back under", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16", "iPhone 16 Pro"],
       availableOsVersions: ["26.4", "26.5"],
       clock,
       platform: "ios",
@@ -3053,6 +3054,7 @@ describe("createLeasing warm pool", () => {
   it("a nuke waits for a warm pool boot already in flight, then deletes the device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock,
       latencyMs: { makeReady: 50 },
@@ -3085,6 +3087,7 @@ describe("createLeasing warm pool", () => {
     async function releasedDeviceBooting(failBoot = false) {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({
+        knownModels: ["iPhone 16"],
         availableOsVersions: ["26.5"],
         clock,
         latencyMs: { makeReady: 50 },
@@ -3295,6 +3298,7 @@ describe("createLeasing warm pool", () => {
 
   it("boots a released iOS device back to ready when the running limit has room", async () => {
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
       platform: "ios",
@@ -4521,6 +4525,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
   it("lists a request that waits for a device the warm pool is booting as waiting-for-device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
+      knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock,
       latencyMs: { makeReady: 50 },
