@@ -68,7 +68,7 @@ Front (`createFront`, prefix `agent-device`):
    set or allowlist; `install` only from an upload; `devices` alone, not streamed.
 5. Allocate → `lease.request` (`front/allocate.ts`), see flow.
 6. Heartbeat → forwarded with `ttlMs` raised to the ceiling; on success `renewLease`
-   (`lease.renew` only if it moves the deadline). agent-device says gone → `lease.release`,
+   (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`,
    reply "ended by simlock".
 7. Release → forwarded; on success `lease.release`; map marks it ended by `agent`.
 8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends,
@@ -88,13 +88,13 @@ under leasing's signal (`lease.endWaitMs`).
 ## Flow: agent on a worker
 
 1. CLI `open` → `POST /v1/agent-device/rpc` `agent_device.lease.allocate` with its lease id.
-2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, or no lease id.
+2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, `physical: true`, or a `--target` it does not map.
 3. `lease.request`: `leaseId` = `requesterId` = the CLI's lease id; `--device` → model,
-   `--target` → class; TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
+   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`; TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`), no
-   `device`/`deviceKey`/`target`, `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
-5. agent-device error → simlock lease released. Success → front map entry; reply relayed.
+   `device`/`deviceKey`/`target`/`osVersion`/`imageTag` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
+5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, imageTag? }` added from the grant.
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
 7. Release → agent-device first, then `lease.release` → reclaim; lease-end finds no scope left.
 

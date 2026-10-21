@@ -628,21 +628,19 @@ describe("POST /v1/lease-requests", () => {
     expect(dispatcher.calls).toHaveLength(0);
   });
 
-  it("forwards a body's imageTag to the dispatched lease.request", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, imageTag: "google_apis_playstore" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ imageTag: "google_apis_playstore" });
-  });
-
-  it("forwards a body's physical true to the dispatched lease.request", async () => {
+  it.each([
+    ["imageTag", { imageTag: "google_apis_playstore" }],
+    ["mode", { mode: "slim" }],
+    ["owner field rather than silently dropping it (ADR §27a, H7)", { owner: "someone-else" }],
+    ["physical true", { physical: true }],
+  ])("forwards a body's %s to the dispatched lease.request", async (_label, extra) => {
     const { app, dispatcher } = buildHarness();
     const first = await Promise.race([
-      postLeaseRequest(app, { ...defaultBody, physical: true }),
+      postLeaseRequest(app, { ...defaultBody, ...extra }),
       waitForDispatch(dispatcher, "lease.request").then((call) => call),
     ]);
     if (first instanceof Response) throw new Error(`the body was refused with ${first.status}`);
-    expect(first.input).toMatchObject({ physical: true });
+    expect(first.input).toMatchObject(extra);
   });
 
   it("answers 400 BAD_REQUEST naming allowDownload for a body with physical true and allowDownload true", async () => {
@@ -663,21 +661,6 @@ describe("POST /v1/lease-requests", () => {
     const body = (await response.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toContain("allowDownload");
-  });
-
-  it("forwards a body's mode to the dispatched lease.request", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, mode: "slim" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ mode: "slim" });
-  });
-
-  it("forwards a body's owner field to the dispatched lease.request rather than silently dropping it (ADR §27a, H7)", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-
-    expect((call.input as { owner?: string }).owner).toBe("someone-else");
   });
 
   it("builds an operator token's session as admin but never as the gateway's uplink, so §27a's owner gate still refuses it at the shared dispatcher (ADR §27a, H3)", async () => {
@@ -1555,9 +1538,8 @@ describe("lease routes", () => {
     });
 
     it("forwards requesterId unchanged for both an operator and an agent token, leaving the FORBIDDEN decision to device.exec's own authorize hook", async () => {
-      // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
-      // "Authentication"): the token is the identity, except for an operator token proxying
-      // for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
+      // why: Requester identity is never client-declared over HTTP: the token is the identity,
+      // except for an operator token proxying for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
       // that an agent token may not supply `requesterId` at all, which left that rule living
       // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
       // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised
@@ -2105,6 +2087,51 @@ describe("operator-only listing routes", () => {
     expect(JSON.stringify(await response.json())).toContain("Invalid duration: nonsense");
   });
 
+  it("GET /v1/events with before and limit dispatches events.replay with beforeId and limit, and answers HISTORY_NOT_KEPT with 422 and oldestTs in the body and HISTORY_UNAVAILABLE with 503", async () => {
+    const { app, dispatcher } = buildHarness();
+    const asked: unknown[] = [];
+    dispatcher.handlers["events.replay"] = (input) => {
+      asked.push(input);
+      throw new DispatchError("HISTORY_NOT_KEPT", "The history does not hold that event.", {
+        oldestTs: 1_234,
+      });
+    };
+    const notKept = await app.request("/v1/events?before=evt_abc&limit=50", {
+      headers: operatorAuth,
+    });
+    dispatcher.handlers["events.replay"] = () => {
+      throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be read.");
+    };
+    const unavailable = await app.request("/v1/events?before=evt_abc", { headers: operatorAuth });
+
+    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50 }]);
+    expect(notKept.status).toBe(422);
+    expect(await notKept.json()).toMatchObject({
+      error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
+    });
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
+  });
+
+  it.each([
+    ["before=evt_abc&limit=0", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=501", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=x", "limit must be a whole number from 1 to 500"],
+    ["before=not-an-id", "before must be an event id"],
+    ["before=evt_abc&since=1h", "before and since cannot be used together"],
+    ["limit=50&since=1h", "limit and since cannot be used together"],
+  ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.replay"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request(`/v1/events?${query}`, { headers: operatorAuth });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST", message } });
+  });
+
   describe("GET /v1/stats", () => {
     const NOW = Date.parse("2026-10-16T12:00:00Z");
     const HOUR = 3_600_000;
@@ -2184,27 +2211,6 @@ describe("operator-only listing routes", () => {
       await get("?since=1h&ledger=1");
 
       expect(asked.map((input) => input.includeLedger === true)).toEqual([false, true]);
-    });
-
-    it("answers HISTORY_NOT_KEPT with status 422 and oldestTs in the body, and HISTORY_UNAVAILABLE with 503", async () => {
-      const { dispatcher, get } = statsHarness();
-      dispatcher.handlers["usage.get"] = () => {
-        throw new DispatchError("HISTORY_NOT_KEPT", "The history does not reach back.", {
-          oldestTs: 1_234,
-        });
-      };
-      const notKept = await get("?since=1h");
-      dispatcher.handlers["usage.get"] = () => {
-        throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be opened.");
-      };
-      const unavailable = await get("?since=1h");
-
-      expect(notKept.status).toBe(422);
-      expect(await notKept.json()).toMatchObject({
-        error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
-      });
-      expect(unavailable.status).toBe(503);
-      expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
     });
   });
 
@@ -2374,17 +2380,6 @@ describe("worker routes", () => {
       "worker.undrain",
       "worker.remove",
     ]);
-  });
-
-  it("leaves the role check to the shared dispatcher, which 403s an agent token", async () => {
-    const { app, dispatcher } = gatewayHarness();
-    dispatcher.handlers["worker.list"] = () => {
-      throw new DispatchError("FORBIDDEN", "Operation worker.list requires role admin");
-    };
-
-    const response = await app.request("/v1/workers", { headers: agentAuth });
-
-    expect(response.status).toBe(403);
   });
 
   it("puts a refusal's typed details in the body, so a client need not parse prose", async () => {

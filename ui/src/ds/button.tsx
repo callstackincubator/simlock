@@ -24,6 +24,19 @@ export function Button(
   );
 }
 
+// why: a button that holds an icon alone has no text, so its name comes from the caller's
+// `aria-label`; Base UI passes its own props and ref through, so it can render as this.
+export function IconButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { className, type = "button", ...rest } = props;
+  return (
+    <button
+      {...rest}
+      type={type}
+      className={className === undefined ? "icon-button" : `icon-button ${className}`}
+    />
+  );
+}
+
 export function ButtonLink(props: {
   readonly to: string;
   readonly variant?: ButtonVariant;

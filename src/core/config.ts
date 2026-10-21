@@ -410,14 +410,14 @@ export interface Config {
   readonly gateway: {
     /** The gateway's uplink endpoint, `ws://host:port/v1/uplink` or `wss://...`. Worker-side. */
     readonly url?: string;
-    /** A join token minted on the gateway with `simlock token create --role worker`.
+    /** why: A join token minted on the gateway with `simlock token create --role worker`.
      * Worker-side. It is a secret, and it sits in the daemon's config file like any other
      * value there: `config.get` is admin-role and returns the config as written, so this key
      * is exactly as sensitive as `config.json`'s file permissions make it. `simlock config
      * set` writes that file owner-only (0600) every time; a file written by hand, or before
      * that, keeps whatever mode it has until the next `config set`. Everywhere else the
      * config is written out -- the startup log line, `daemon.started` -- goes through
-     * `redactConfig`. See docs/CONFIGURATION.md. */
+     * `redactConfig`. */
     readonly token?: string;
     /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
     readonly label?: string;
@@ -771,22 +771,35 @@ function requireGatewayHttp(config: Config): void {
  */
 function validateGatewayMembership(config: Config): void {
   const { token, url } = config.gateway;
-  if (url !== undefined) {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
-    }
-    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
-    }
-  }
+  if (url !== undefined) requireWebSocketUrl(url);
   if (url !== undefined && token === undefined) {
     throw invalidValue("gateway.token", "a join token, since gateway.url is set");
   }
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
+  }
+  requireJoinedWorkerHttpOff(config);
+}
+
+function requireWebSocketUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+  }
+}
+
+// why: a joined worker is reached through the gateway; its own listener would be a second entrance.
+function requireJoinedWorkerHttpOff(config: Config): void {
+  if (config.gateway.url !== undefined && config.http.enabled) {
+    throw invalidValue(
+      "http.enabled",
+      "false when gateway.url is set (joined workers are reached through the gateway)",
+    );
   }
 }
 
@@ -1058,10 +1071,10 @@ function configValidators(
         maxRetryBackoffMs: nonNegativeNumber,
       }),
     }),
-    // The three pre-ADR-0004 keys (`lease.detachedTtlMs`, `lease.heldTtlBackstopMs`,
+    // why: The three pre-ADR-0004 keys (`lease.detachedTtlMs`, `lease.heldTtlBackstopMs`,
     // `lease.heartbeatIntervalMs`) are deliberately absent rather than aliased: `objectValidator`
     // warns about each as an unrecognized key and ignores it, so an old config still boots and
-    // gets the new key's default rather than the value it wrote. See docs/CONFIGURATION.md.
+    // gets the new key's default rather than the value it wrote.
     lease: objectValidator({
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,

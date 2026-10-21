@@ -1,0 +1,40 @@
+---
+title: Prior art
+description: The open source projects Simlock builds on, who made them, their licenses, and what each one does for you in Simlock.
+---
+
+Simlock stands on other people's work. Thank you to the authors of these projects.
+
+## serve-sim
+
+By Evan Bacon. [github.com/EvanBacon/serve-sim](https://github.com/EvanBacon/serve-sim), Apache License 2.0.
+
+Simlock carries a patched copy of serve-sim's screen capture and H.264 encoding pipeline for iOS simulators. It is what lets you watch a leased simulator's screen live in the console.
+
+## scrcpy
+
+By Romain Vimont and Genymobile. [github.com/Genymobile/scrcpy](https://github.com/Genymobile/scrcpy), Apache License 2.0.
+
+Simlock ships the scrcpy server, version 5.0.1, without changes. It pushes the server to a leased Android emulator or phone to stream its screen to the console.
+
+## idevice
+
+By Jackson Coxson. [github.com/jkcoxson/idevice](https://github.com/jkcoxson/idevice), MIT License.
+
+Simlock uses one HEVC video capability string from idevice when it streams the screen of a physical iPhone. With it, the iPhone sends a picture that displays without tearing.
+
+## agent-device
+
+By Callstack. [github.com/callstack/agent-device](https://github.com/callstack/agent-device), MIT License.
+
+Simlock's optional agent-device integration uses the `@agent-device/proxy` package to serve agent-device from a Simlock worker or gateway, with one Simlock lease behind each agent-device device. See [agent-device](/simlock/docs/using-devices/agent-device).
+
+## simslim
+
+[github.com/mobai-app/simslim](https://github.com/mobai-app/simslim), MIT License.
+
+simslim showed how to make an iOS simulator use far less memory by turning off background services it does not need for testing. Simlock's slim simulators (`--mode slim`) follow the same approach, and use simslim's list of which services to turn off.
+
+## Simlock
+
+Simlock is made by [Callstack](https://callstack.com) and released under the MIT License. The source is at [github.com/callstackincubator/simlock](https://github.com/callstackincubator/simlock).

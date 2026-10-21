@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { lastPage, pageKeys, rangeOf, readPage, resized, TABLE_SIZES, writePage } from "./paging";
+import {
+  lastPage,
+  pageKeys,
+  rangeOf,
+  readPage,
+  readQuery,
+  resized,
+  TABLE_SIZES,
+  writePage,
+  writeQuery,
+} from "./paging";
 
 const KEYS = pageKeys();
 
@@ -52,5 +62,14 @@ describe("paging", () => {
   it("the range names the rows shown with thousands marked, and stops at the last row", () => {
     expect(rangeOf({ page: 1, size: 25 }, 1_240)).toBe("1–25 of 1,240");
     expect(rangeOf({ page: 50, size: 25 }, 1_240)).toBe("1,226–1,240 of 1,240");
+  });
+});
+
+describe("the search in the address", () => {
+  it("reads ?q=, and writes it back to page 1 with the other keys kept", () => {
+    expect(readQuery("?q=ci&page=2")).toBe("ci");
+    expect(readQuery("")).toBe("");
+    expect(writeQuery("?page=3&size=50", "ci")).toBe("?size=50&q=ci");
+    expect(writeQuery("?page=3&q=ci", "")).toBe("");
   });
 });

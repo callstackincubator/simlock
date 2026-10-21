@@ -14,7 +14,7 @@ loaded **on demand**: the CLI's own shared files (`main.ts`, `index.ts`, `tree.t
 `contract`, `admin`, `ports` or any command module. The dependency rule
 `cli-router-imports-no-component-values` rejects a value import of any other component into
 those files; `lazy-loading.test.ts` measures what a command loads when it runs.
-Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
+Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — every command and flag; [errors.mdx](../../website/src/content/docs/docs/reference/errors.mdx) — exit codes.
 
 ## Files
 

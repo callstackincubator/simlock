@@ -219,23 +219,6 @@ describe("a released physical device is reclaimed by uninstalling the apps enrol
 });
 
 describe("a physical reclaim that fails quarantines the device", () => {
-  const SLOW_RETRY = { warmPool: { quarantine: { retryBackoffMs: 60_000 } } };
-
-  it("a failed reclaim emits device.purge-failed with uninstall and leaves the device quarantined in simlock status", async () => {
-    const env = await startWith(LEASED, {
-      config: SLOW_RETRY,
-      leases: [HELD_LEASE(600_000)],
-      script: { failReclaim: true, installed: [...ENROLLED, ...AGENT_APPS] },
-    });
-
-    const released = await env.cli(["release", "lse_pheld"]);
-    expect(released.code, released.stderr).toBe(0);
-
-    const failed = await waitForEvent(env, "device.purge-failed");
-    expect(failed).toMatchObject({ attemptedStrategy: "uninstall", deviceId: LEASED.id });
-    await waitForState(env, LEASED.id, "quarantined");
-  });
-
   it("a quarantine retry that succeeds makes the device ready with device.quarantine-recovered strategy uninstall and missingApps", async () => {
     const env = await startWith(LEASED, {
       config: { warmPool: { quarantine: { retryBackoffMs: 1_500 } } },

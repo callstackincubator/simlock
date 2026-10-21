@@ -76,6 +76,8 @@ describe("event history", () => {
     expect(stopped.code).toBe(0);
     expect(grantOf(parseLines(stopped.stdout), leaseId)).toEqual(before);
     expect(existsSync(env.socketPath)).toBe(false);
+    const status = await env.cli(["daemon", "status", "--json"]);
+    expect(status.json).toEqual({ status: "stopped" });
   });
 
   it("simlock events --since 1h after a daemon restart prints each event with the id it had before the restart", async () => {
@@ -139,21 +141,6 @@ describe("event history", () => {
       history.findIndex((entry) => entry.event === "lease.requested"),
     );
     expect(history.find((entry) => entry.event === "queue.changed")?.payload).toEqual({ depth: 0 });
-  });
-
-  it("prints the history with the daemon stopped, and the daemon stays stopped", async () => {
-    const env = await withDaemon();
-    await prepare(env);
-    const leaseId = await leaseDevice(env);
-    await stopDaemon(env);
-
-    const history = await env.cli(["events", "--since", "1h"]);
-
-    expect(history.code).toBe(0);
-    expect(grantOf(parseLines(history.stdout), leaseId)).toBeDefined();
-    expect(existsSync(env.socketPath)).toBe(false);
-    const status = await env.cli(["daemon", "status", "--json"]);
-    expect(status.json).toEqual({ status: "stopped" });
   });
 
   it("writes history.db and no events.jsonl in a fresh data directory, and leaves an events.jsonl placed there before the start byte-identical", async () => {

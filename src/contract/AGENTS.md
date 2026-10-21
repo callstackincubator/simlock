@@ -55,7 +55,7 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 51, max: 51 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 53, max: 53 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
@@ -68,7 +68,7 @@ Three identities:
 
 - `SimlockErrorCode` is a closed union (`ErrorDetailsMap`). `ERROR_TABLE` gives each code
   `kind` (`transport` | `protocol` | `domain`), `cliExitCode` and `httpStatus`.
-- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface.
+- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s and `events.replay`'s with `beforeId`; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface. `events.replay` takes `beforeId` and `limit` (1 to 500), refused with `sinceTs`; `eventsPageQuery` (`events-page.ts`) parses the HTTP query once, with the bounds.
 - `fromWireError` wraps an unknown code as `UNKNOWN_DAEMON_ERROR`. That code and `CANCELLED`
   are built client side only.
 - `CODES_WITH_DECLARED_DETAILS`: codes whose `details` are contract. The compiler keeps it
@@ -130,5 +130,5 @@ Three identities:
 6. Frontends as needed: CLI (`src/cli/commands/`), HTTP (`src/http/app.ts`), MCP only for an
    agent session's need.
 7. A new error code: `ErrorDetailsMap` and `ERROR_TABLE` (`errors.ts`).
-8. Docs: [CLIENT.md](../../docs/CLIENT.md), [CLI.md](../../docs/CLI.md),
-   [HTTP-API.md](../../docs/HTTP-API.md).
+8. Docs: the website pages that describe it, at least
+   [errors.mdx](../../website/src/content/docs/docs/reference/errors.mdx) (documentation rule 9).

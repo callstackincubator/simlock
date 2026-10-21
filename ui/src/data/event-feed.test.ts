@@ -41,23 +41,36 @@ function eventLog(
   };
 }
 
-function openView(first: Replay = []) {
+function openView(first: Replay = [], showsHistory = false) {
   const live = connect();
   const replays: ApiPath[] = [];
+  const olderReads: ApiPath[] = [];
   let replay: Replay = first;
   live.daemon.reads = async (path) => {
     if (!path.startsWith("/v1/events?")) return { body: {}, date: null };
+    if (!path.includes("since=")) {
+      olderReads.push(path);
+      return {
+        body: typeof replay === "function" ? await replay(path) : { events: [] },
+        date: null,
+      };
+    }
     replays.push(path);
     const body = typeof replay === "function" ? await replay(path) : { events: replay };
     return { body, date: null } satisfies ApiResponse<unknown>;
   };
-  const feed = new EventFeed(async (path) => (await live.daemon.get(path)).body, fakeClock);
+  const feed = new EventFeed(
+    async (path) => (await live.daemon.get(path)).body,
+    fakeClock,
+    showsHistory,
+  );
   live.connection.onEvent(feed.streamEvent);
   live.connection.onStreamOpened(feed.streamOpened);
   const stop = feed.start();
   return {
     ...live,
     feed,
+    olderReads,
     replays,
     stop,
     replayWith(next: Replay) {
@@ -473,5 +486,49 @@ describe("the event feed's loads", () => {
 
     expect(view.replays.slice(3)).toEqual(["/v1/events?since=5s"]);
     expect(view.shown()).toEqual([`1@${T0}`]);
+  });
+
+  it("an event the stream brings while an older page loads shows once, at the top, and a second signal before the answer asks for nothing", async () => {
+    const older = envelope(1, T0 - 10_000);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const view = openView((path) =>
+      path.includes("before=")
+        ? gate.then(() => ({ events: [older] }))
+        : Promise.resolve({ events: [envelope(5, T0)] }),
+    );
+    await settle();
+
+    view.feed.loadOlder();
+    view.feed.loadOlder();
+    view.daemon.openStream()?.send(frame(envelope(6, T0 + 1_000)));
+    view.daemon.openStream()?.send(frame(envelope(6, T0 + 1_000)));
+    await settle();
+    release();
+    await settle();
+
+    expect(view.shown()).toEqual([`6@${T0 + 1_000}`, `5@${T0}`, `1@${T0 - 10_000}`]);
+    expect(view.olderReads).toEqual([`/v1/events?before=evt_5_${T0}&limit=100`]);
+  });
+
+  it("asks for the newest page of older events at once when the last hour is empty, only on a feed that shows the history", async () => {
+    const history = openView([], true);
+    const recent = openView([]);
+    await settle();
+
+    expect(history.olderReads).toEqual(["/v1/events?limit=100"]);
+    expect(recent.olderReads).toEqual([]);
+  });
+
+  it("a refused first read on a feed that shows the history asks for the newest page of older events", async () => {
+    const view = openView(
+      () => Promise.reject(new ApiError(500, "INTERNAL", "Internal error")),
+      true,
+    );
+    await settle();
+
+    expect(view.olderReads).toEqual(["/v1/events?limit=100"]);
   });
 });

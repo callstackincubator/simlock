@@ -1,0 +1,92 @@
+---
+title: Fleet console
+description: Open the web console on a gateway and read what it adds for a fleet - every worker's state and load, which worker holds each lease, why a request waits, and usage per worker.
+---
+
+The gateway serves the same web console as a worker, with the whole fleet in it: every worker that joined, every lease made through the gateway, and the fleet queue. This page covers what is different on a gateway. Signing in, finding your way and each page's common parts are in [Web console](/simlock/docs/worker/console).
+
+The console only shows. To drain, undrain or remove a worker, use the CLI; see [Manage workers](/simlock/docs/gateway/managing-workers).
+
+## Open the console
+
+The console is always on with a gateway, because its HTTP API is. Open the gateway's address: `https://gateway.example.com` behind a reverse proxy, or `http://127.0.0.1:4700/` on the gateway machine. `simlock --gateway daemon start` and `simlock --gateway status` print it as `Console:`.
+
+Sign in with an operator token made on the gateway:
+
+```sh
+simlock --gateway token create --role operator --label alex-laptop
+```
+
+A worker's operator token does not work on the gateway. To sign people in through your company's sign-in proxy instead, see [Access control](/simlock/docs/gateway/access-control#sign-in-to-the-console-through-a-sign-in-proxy).
+
+## Overview
+
+On a gateway the overview adds up the fleet:
+
+- The **Workers** tile shows how many workers are connected, of all the workers the gateway knows, for example `3 of 4 up`.
+- **Leases** counts the leases on every worker the gateway knows. The device limit beside it, **Utilisation** and **Capacity** count connected workers only.
+- The **Workers** table has one row per worker: its status square and name, a square per device slot, CPU, memory, and its lease count.
+
+## Workers
+
+**Workers** lists every worker the gateway knows, by label, or by id when it has no label. Each row shows how many devices it runs of its limit. A worker that is not connected shows `—` instead, since the numbers it last reported may no longer be true.
+
+The square takes the worst of the worker's states. On top of the colours a single worker can show:
+
+| Word | Colour | What it means |
+| --- | --- | --- |
+| `disconnected` | Red | The worker's connection to the gateway closed. The gateway shows what it last reported. |
+| `incompatible` | Red | The worker is connected, but its Simlock version cannot talk to the gateway's. It gets no requests. |
+| `drained` | Amber | The worker takes no new leases from the gateway. Its leases keep running. |
+| `starting` | Amber | The worker is starting up. |
+
+**Issues** narrows the list to workers whose square is not green, and **Busy** to workers using three quarters or more of their device slots.
+
+Select a worker to see its tabs. What is different on a gateway:
+
+- A **disconnected** worker shows "No reading while disconnected" instead of its load, and its devices and capacity as it last reported them.
+- An **incompatible** worker shows only **Protocol**, with the version ranges of the gateway and the worker, so you can tell which one to update.
+- **Host** shows the connection, `connected`, `disconnected` or `incompatible`, and `drained` beside it when the worker is drained.
+
+A disconnected worker stays in the list for 24 hours by default (`gateway.disconnectedRetentionMs`), and for as long as it holds a lease made through the gateway. Remove one sooner with `simlock --gateway worker remove`.
+
+## Leases
+
+**Leases** lists the leases on every worker, both those made through the gateway and those agents on a worker machine took directly from it. The lease's **Worker** fact names and links the worker that holds it. A lease made through the gateway has an id made of the worker's id, a dot, and the worker's own lease id, unless the agent chose the id.
+
+## Why a request waits
+
+On **Waiting**, a request's **Queue** says where it waits: `the gateway's queue` while the gateway looks for a worker. Under it, the console names each worker and why that worker did not take the request:
+
+| It says | What it means |
+| --- | --- |
+| Full, or Full: and a limit | The worker has no room under that limit. |
+| Busy with its own queue | Requests wait in the worker's own queue, for example from agents on that machine. |
+| Not chosen this time | The worker could take it, but the gateway gave the worker to another request first. |
+| Drained | The worker is drained. |
+| Not connected | The worker is disconnected. |
+| Protocol mismatch | The worker is incompatible. |
+| Not ready yet | The worker has not finished reporting its devices since it connected. |
+| Not running | The worker's daemon is not healthy. |
+| Model not offered | The worker does not offer the model or device class asked for. |
+| OS not installed | The worker offers the model, but not with a matching OS version installed. |
+| No iOS support, No Android support | The worker does not support the platform. |
+| Missing capability | The worker lacks an optional capability the request needs. |
+
+How the gateway picks a worker is in [How requests are routed](/simlock/docs/gateway/routing).
+
+## Attention
+
+On a gateway, **Attention** also lists workers:
+
+| Item | Colour | What to do |
+| --- | --- | --- |
+| `disconnected` | Red | Check the worker machine and its log with `simlock daemon logs`. When it is gone for good, remove it. |
+| `incompatible` | Red | Update the older of the worker and the gateway. |
+| `drained` | Amber | Undrain the worker when its maintenance is done. |
+
+A worker that is both disconnected and drained shows as two items, since each clears on its own.
+
+## Usage
+
+On a gateway, **Usage** adds a **Per worker** table: for each worker, the requests, grants, rejections and the wait p95 in the range. The figures come from the gateway's own history. To set alerts on fleet events, see [Alerts](/simlock/docs/gateway/alerts).

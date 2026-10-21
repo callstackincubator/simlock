@@ -3,15 +3,17 @@ name: Website
 on:
   push:
     branches: [main]
-    # why: the docs pages are built from docs/*.md, so a docs change redeploys the site.
-    paths: ["website/**", "docs/*.md", ".github/workflows/website.yml"]
+    paths: ["website/**", ".github/workflows/website.yml"]
+  # why: a page that breaks the build fails its pull request instead of main; only main deploys.
+  pull_request:
+    paths: ["website/**", ".github/workflows/website.yml"]
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('website-pr-{0}', github.event.pull_request.number) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -36,11 +38,13 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build
         run: pnpm build
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

@@ -1,0 +1,139 @@
+/* The drawer: a modal panel at the right edge over a dim layer. It slides in once, when it opens,
+ * and slides out when it closes; nothing replays the slide-in. */
+
+.drawer-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  animation: drawer-dim-in var(--duration-move) var(--ease);
+}
+
+@keyframes drawer-dim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  width: 480px;
+  max-width: 100%;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  animation: drawer-in var(--duration-move) var(--ease);
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+.drawer[data-ending-style] {
+  animation: drawer-out var(--duration-move) var(--ease) forwards;
+}
+
+.drawer-dim[data-ending-style] {
+  animation: drawer-dim-out var(--duration-move) var(--ease) forwards;
+}
+
+@keyframes drawer-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes drawer-dim-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer,
+  .drawer-dim,
+  .drawer[data-ending-style],
+  .drawer-dim[data-ending-style] {
+    animation: none;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .drawer {
+    width: 100%;
+    border-left: 0;
+  }
+}
+
+/* The popup takes focus on opening; a ring around the whole panel reads as a stray border. */
+.drawer:focus-visible {
+  outline: none;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.drawer-tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.drawer-tab-list {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-tab {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.drawer-tab[data-active] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.drawer-panel {
+  padding: var(--space-4) var(--space-6);
+}
+
+.drawer-panel[hidden] {
+  display: none;
+}
+
+.drawer-head-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

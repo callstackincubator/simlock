@@ -6,6 +6,7 @@ import type { EventBus } from "../bus/index.js";
 import {
   type ComponentProgress,
   describeSchemaIssues,
+  eventsPageQuery,
   refuseModelWithClass,
   deviceClassSchema,
   leaseIdSchema,
@@ -419,14 +420,14 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       throw badRequest("ttlMs must be a positive number");
     }
 
-    // Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
+    // why: Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
     // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
     // socket transport, rather than the `UNKNOWN_LEASE`/404 a `lease.list` filter would produce
     // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself, and a
     // `ttlMs` above `lease.maxTtlMs` as `BAD_REQUEST`/400 -- the cap lives in the shared
     // dispatcher, and this route awaits it, so there is nothing to restate here. Answering it
     // earlier would answer it *before* `ownsLease` and turn another requester's lease into a
-    // 400 about its TTL where the socket and `docs/HTTP-API.md` both say 403. An omitted
+    // 400 about its TTL where the socket and the HTTP API both say 403. An omitted
     // `ttlMs` re-applies the lease's own stored width (ADR 0004 §4), which is why nothing is
     // recorded here afterwards.
     const renewed = await deps.dispatch(
@@ -694,10 +695,16 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
 
   app.get("/v1/events", agentAuth, async (c) => {
     const since = c.req.query("since");
+    const answer = eventsPageQuery({
+      before: c.req.query("before"),
+      limit: c.req.query("limit"),
+      since,
+    });
+    if ("refused" in answer) throw badRequest(answer.refused);
     const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);
     const events = await deps.dispatch(
       "events.replay",
-      sinceTs === undefined ? {} : { sinceTs },
+      sinceTs === undefined ? answer.page : { ...answer.page, sinceTs },
       buildHttpSession(c.get("identity")),
     );
     return c.json({ events });

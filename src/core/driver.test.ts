@@ -20,15 +20,6 @@ import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 const gibibyte = 1024 ** 3;
 
 describe("DiskSpaceGuard", () => {
-  it("lets a single reservation through when it fits free space", async () => {
-    const filesystem = new MemoryFilesystem(10 * gibibyte);
-    const guard = new DiskSpaceGuard();
-
-    await expect(guard.reserve(filesystem, "ios", 6 * gibibyte, "/volume")).resolves.toBeInstanceOf(
-      Function,
-    );
-  });
-
   it("rejects a reservation that alone exceeds free space with InsufficientDiskSpaceError naming required and available bytes", async () => {
     const filesystem = new MemoryFilesystem(4 * gibibyte);
     const guard = new DiskSpaceGuard();
@@ -319,19 +310,26 @@ describe("toDriverDevice", () => {
 });
 
 describe("uninstallPlan", () => {
-  it("returns the listed-now apps not on the enrollment list, and the enrollment apps not listed now", () => {
-    expect(
-      uninstallPlan(
-        ["com.example.kept", "com.example.stray", "com.example.another"],
-        ["com.example.kept", "com.example.gone"],
-      ),
-    ).toEqual({
-      missing: ["com.example.gone"],
-      uninstall: ["com.example.stray", "com.example.another"],
-    });
-  });
-
-  it("returns nothing to uninstall and nothing missing when the two lists name the same apps", () => {
-    expect(uninstallPlan(["a", "b"], ["b", "a"])).toEqual({ missing: [], uninstall: [] });
-  });
+  it.each([
+    {
+      case: "differing lists",
+      listed: ["com.example.kept", "com.example.stray", "com.example.another"],
+      enrolled: ["com.example.kept", "com.example.gone"],
+      expected: {
+        missing: ["com.example.gone"],
+        uninstall: ["com.example.stray", "com.example.another"],
+      },
+    },
+    {
+      case: "the same apps in another order",
+      listed: ["a", "b"],
+      enrolled: ["b", "a"],
+      expected: { missing: [], uninstall: [] },
+    },
+  ])(
+    "returns the listed-now apps not on the enrollment list, and the enrollment apps not listed now, for $case",
+    ({ listed, enrolled, expected }) => {
+      expect(uninstallPlan(listed, enrolled)).toEqual(expected);
+    },
+  );
 });

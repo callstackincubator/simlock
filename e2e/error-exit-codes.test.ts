@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { withDaemon, type CliResult } from "./helpers/index.js";
 
 /**
- * Asserts the documented failure contract from docs/CLI.md#global-exit-codes: exit
+ * why: Asserts the documented failure contract from the errors reference: exit
  * code, exactly one structured JSON line on stderr, empty stdout.
  */
 function expectStructuredFailure(result: CliResult, exitCode: number, errorCode: string): void {

@@ -1,0 +1,82 @@
+/* The search dialog: a panel near the top of the page over a dim layer, a box and its results. */
+
+.palette-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.palette {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  width: min(36rem, calc(100% - var(--space-8)));
+  max-height: 70vh;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  transform: translateX(-50%);
+}
+
+.palette-input {
+  min-height: 48px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--field);
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.palette-list {
+  overflow-y: auto;
+}
+
+.palette-group {
+  display: block;
+  padding-bottom: var(--space-2);
+}
+
+.palette-group-label {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.palette-item[data-highlighted] {
+  background: var(--field);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.palette-empty {
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.palette-empty:empty {
+  display: none;
+}
+
+.palette-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}

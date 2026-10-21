@@ -182,4 +182,53 @@ test.describe("signing in through a proxy", () => {
     expect(requested.length).toBeGreaterThan(0);
     expect(requested.filter((url) => new URL(url).origin !== origin)).toEqual([]);
   });
+
+  test("signed in through the sign-in proxy, a release from the console succeeds", async ({
+    page,
+  }) => {
+    const leasing = await startProxiedDaemon({
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    try {
+      const granted = await leasing.daemon.cli([
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 16",
+        "--os",
+        "18.4",
+        "--detach",
+        "--agent-id",
+        "proxy-agent",
+      ]);
+      expect(granted.code, granted.stderr).toBe(0);
+      const deletes: { status: number; site: string | undefined }[] = [];
+      page.on("response", async (response) => {
+        const request = response.request();
+        if (request.method() === "DELETE") {
+          deletes.push({
+            site: (await request.allHeaders())["sec-fetch-site"],
+            status: response.status(),
+          });
+        }
+      });
+
+      await page.goto(new URL("/leases", leasing.url).toString());
+      await expect(page.getByText("Signed in as Alice")).toBeVisible();
+      const row = page.locator("main tbody tr").filter({ hasText: "proxy-agent" });
+      await row.getByRole("button", { name: "Actions for proxy-agent" }).click();
+      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      await page
+        .getByRole("alertdialog", { name: "Release proxy-agent's lease?" })
+        .getByRole("button", { name: "Release lease" })
+        .click();
+
+      await expect(page.getByText("Released proxy-agent's lease")).toBeVisible();
+      await expect(row).toHaveCount(0);
+      expect(deletes).toEqual([{ site: "same-origin", status: 202 }]);
+    } finally {
+      await leasing.dispose();
+    }
+  });
 });

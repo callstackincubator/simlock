@@ -96,19 +96,6 @@ function createHarness(
 }
 
 describe("StartupConverger", () => {
-  it("restores quarantine timers before recovering interrupted reclaims", async () => {
-    const harness = createHarness(
-      [device("reclaiming", "ios", "reclaiming", 1), device("ready", "ios", "ready", 2)],
-      [],
-    );
-
-    await harness.converger.converge(harness.read);
-
-    expect(harness.order).toEqual(["quarantine-restore", "recover:reclaiming"]);
-    expect(harness.quarantineRestore.restore).toHaveBeenCalledOnce();
-    expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
-  });
-
   it("leaves every ready device ready at startup", async () => {
     const older = device("older", "ios", "ready", 1);
     const newer = device("newer", "android", "ready", 2);

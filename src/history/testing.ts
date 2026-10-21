@@ -113,6 +113,7 @@ function answeredStatement(rows: Record<string, unknown>[]): SqliteStatement {
 export function fixedEventHistory(status: EventHistoryStatus): EventHistoryHandle {
   return {
     replay: () => Promise.resolve([]),
+    replayPage: () => Promise.resolve({ events: [], kind: "events" }),
     start: () => Promise.resolve(),
     status: () => status,
     stop: () => Promise.resolve(),
@@ -198,6 +199,7 @@ export interface UsageRigOptions {
   readonly at?: number;
   readonly eventRetention?: number;
   readonly directory?: string;
+  readonly projections?: readonly HistoryProjectionDefinition[];
 }
 
 export async function usageRig(options: UsageRigOptions = {}): Promise<UsageRig> {
@@ -218,7 +220,7 @@ export async function usageRig(options: UsageRigOptions = {}): Promise<UsageRig>
     filesystem: new NodeFilesystem(),
     logger: new NoopLogger(),
     projectionOptions: { fleet: options.fleet ?? false, metricsRetentionMs: 90 * DAY },
-    projections: Object.values(HISTORY_PROJECTIONS),
+    projections: options.projections ?? Object.values(HISTORY_PROJECTIONS),
     sqlite: new NodeSqliteOpener(),
   });
   await history.start();

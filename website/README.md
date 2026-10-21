@@ -3,11 +3,11 @@
 The site at https://callstackincubator.github.io/simlock/: the home page, a 404 page and the
 docs, in the Callstack product look. Astro and Starlight, its own package (run everything from
 this folder), deployed to GitHub Pages by `.github/workflows/website.yml` on every push to
-`main` that changes `website/` or `docs/*.md`.
+`main` that changes `website/`; a pull request that changes `website/` builds it without deploying.
 
-The look, the scenes and the words are in [BRAND.md](../docs/internal/BRAND.md). The reference
-docs are the repo's own `docs/*.md`, copied in by `scripts/sync-docs.mjs` before `dev`, `build`
-and `check`; edit them there, not here.
+The look, the scenes and the words are in [BRAND.md](../docs/internal/BRAND.md). The end-user
+docs live only here, in `src/content/docs/docs/`, one `.mdx` page each; the sidebar is in
+`astro.config.mjs`.
 
 ## Commands
 
@@ -34,7 +34,7 @@ pnpm og           # public/og-image.jpg, banner.jpg, favicon.svg, favicon-32.png
 | `src/site/brand.ts`                                                            | The accent; injected as CSS variables everywhere                                                  |
 | `src/site/meta.ts`                                                             | Page titles: `Name: subtitle` on home, `Page                                                      | Name` everywhere else; never write a separator by hand |
 | `src/pages/index.astro`                                                        | Home page layout; reorder sections with `order`                                                   |
-| `src/components/home/Hero.astro`, `hero.ts`, `story.ts`                        | The hero: agents, the gateway table, the workers; the animation and its data                      |
+| `src/components/home/Hero.astro`, `hero.ts`, `story.ts`                        | The hero: copy, then a two-step stage (one machine, then a fleet of them behind a gateway); its animation and data |
 | `src/components/home/ConsoleView.astro`, `console-view.ts`, `console-story.ts` | The drawn console in the Console section                                                          |
 | `src/components/site/dither.ts`                                                | Dithered scenes: `fleet` (the signature), `hollow` (404), `flow`, `mark`                          |
 | `src/components/site/`                                                         | Nav, Lockup, Mark, Window, CodeBlock, CopyCommand, Tabs, Marquee, Faq, PixelIcon, Closing, Footer |
@@ -46,4 +46,3 @@ pnpm og           # public/og-image.jpg, banner.jpg, favicon.svg, favicon-32.png
 | `src/routeData.ts`                                                             | Docs: clean canonicals, descriptions from the first paragraph, breadcrumbs                        |
 | `og/og.html`, `scripts/og.mjs`                                                 | Social card, banner and icons                                                                     |
 | `ec.config.mjs`                                                                | Docs code block colours                                                                           |
-| `scripts/sync-docs.mjs`                                                        | Copies the repo's `docs/*.md` into the docs before every build                                    |

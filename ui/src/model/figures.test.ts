@@ -129,7 +129,7 @@ describe("the figures drawn from a stats answer", () => {
     expect(points.map((point) => point.label).slice(0, 2)).toEqual(["14:20", "14:35"]);
   });
 
-  it("says Now — in a chart summary when the last bucket has no data", () => {
+  it("says Now with the newest bucket that has a figure, when the last one has none yet", () => {
     const from = local(15, 12);
     const stats = statsOf({
       bucketMs: MINUTE,
@@ -145,7 +145,7 @@ describe("the figures drawn from a stats answer", () => {
 
     const { charts } = figuresOf(stats, "1h", NOW);
 
-    expect(charts[0]?.summary).toBe("Now —; highest 4 at 12:01; lowest 2 at 12:00.");
+    expect(charts[0]?.summary).toBe("Now 4; highest 4 at 12:01; lowest 2 at 12:00.");
   });
 
   it("carries the day in a label when the window is 7 days", () => {

@@ -8,7 +8,6 @@ import {
   requestedDevice,
 } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
-import { relayChannelSchema } from "./relay.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
 
@@ -538,6 +537,7 @@ describe("operation input/output round trips", () => {
           count: 2,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "26.0",
           platform: "ios",
           ready: 1,
@@ -547,6 +547,7 @@ describe("operation input/output round trips", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "learned",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -595,7 +596,7 @@ describe("operation input/output round trips", () => {
       ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
     });
 
-    it("rejects a short outside the ten reasons, and a target list longer than 256", () => {
+    it("rejects a short outside the ten reasons, and a target list longer than 320", () => {
       const target = warmPool.targets[0];
       expect(() =>
         OPERATIONS["status.get"].output.parse({
@@ -606,7 +607,7 @@ describe("operation input/output round trips", () => {
       expect(() =>
         OPERATIONS["status.get"].output.parse({
           ...running,
-          warmPool: { ...warmPool, targets: Array.from({ length: 257 }, () => target) },
+          warmPool: { ...warmPool, targets: Array.from({ length: 321 }, () => target) },
         }),
       ).toThrow();
     });
@@ -629,6 +630,7 @@ describe("operation input/output round trips", () => {
       count: 1,
       mode: "full",
       model: "iPhone 17",
+      origin: "configured",
       platform: "ios",
       ready: 0,
       short,
@@ -1587,13 +1589,6 @@ describe("relay.request on a byte channel", () => {
     expect(parse(request)).toBe(false);
   });
 
-  it("relayChannelSchema holds the same bound the operation uses", () => {
-    expect(relayChannelSchema.safeParse("a".repeat(32)).success).toBe(true);
-    expect(relayChannelSchema.safeParse("a".repeat(33)).success).toBe(false);
-    expect(relayChannelSchema.safeParse("").success).toBe(false);
-    expect(relayChannelSchema.safeParse("a b").success).toBe(false);
-  });
-
   it("OPERATIONS has no relay.body and PUSH_SCHEMAS has no relay-chunk", () => {
     expect(Object.keys(OPERATIONS)).not.toContain("relay.body");
     expect(Object.keys(PUSH_SCHEMAS)).not.toContain("relay-chunk");
@@ -1629,5 +1624,20 @@ describe("usage.get input", () => {
     expect(parse({ from: 8.64e15, to: 8.64e15 + 2 }).success).toBe(false);
     expect(parse({ from: "0", to: 10 }).success).toBe(false);
     expect(parse({ from: 0 }).success).toBe(false);
+  });
+});
+
+describe("events.replay input", () => {
+  const parse = (input: unknown) => OPERATIONS["events.replay"].input.safeParse(input);
+
+  it("accepts beforeId and limit in bounds, and refuses limit 0, 501 and 1.5, a beforeId of evt_ or abc, and beforeId or limit with sinceTs", () => {
+    expect(parse({ beforeId: "evt_abc", limit: 1 }).success).toBe(true);
+    expect(parse({ limit: 500 }).success).toBe(true);
+    expect(parse({ sinceTs: 5 }).success).toBe(true);
+
+    for (const limit of [0, 501, 1.5]) expect(parse({ limit }).success).toBe(false);
+    for (const beforeId of ["evt_", "abc"]) expect(parse({ beforeId }).success).toBe(false);
+    expect(parse({ beforeId: "evt_abc", sinceTs: 5 }).success).toBe(false);
+    expect(parse({ limit: 5, sinceTs: 5 }).success).toBe(false);
   });
 });

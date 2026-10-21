@@ -169,7 +169,7 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(
   options: {
-    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly tokenRecords?: readonly { id: string; label?: string }[];
     readonly withoutTokens?: boolean;
@@ -376,6 +376,7 @@ describe("GatewayDispatcher", () => {
           count: 1,
           mode: "full" as const,
           model: "iPhone 17",
+          origin: "configured" as const,
           osVersion: "27.0",
           platform: "ios" as const,
           ready: 0,
@@ -832,6 +833,7 @@ describe("GatewayDispatcher", () => {
           asked.push(input);
           return fromHistory;
         },
+        replayPage: async () => ({ events: [], kind: "events" }),
         status: () => ({ opened: true, writing: true }),
       },
     });
@@ -840,6 +842,45 @@ describe("GatewayDispatcher", () => {
       fromHistory,
     );
     expect(asked).toEqual([{ sinceTs: 10 }]);
+  });
+
+  it("events.replay with beforeId returns a worker's relayed event with payload.workerId", async () => {
+    const rig = await usageRig({ fleet: true });
+    rig.relay("w-1", "daemon.stopping", { reason: "from-worker" });
+    rig.emit("daemon.stopping", { reason: "local" });
+    const newest = rig.bus.replay().at(-1) as { id: string };
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: newest.id, limit: 5 },
+      session(),
+    );
+
+    expect(page).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ workerId: "w-1" }) }),
+    ]);
+  });
+
+  it("events.replay with limit alone returns the newest n events, oldest first, through the gateway dispatcher", async () => {
+    const rig = await usageRig({ fleet: true });
+    for (const reason of ["a", "b", "c"]) rig.emit("daemon.stopping", { reason });
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch("events.replay", { limit: 2 }, session());
+
+    expect(page.map((event) => (event.payload as { reason: string }).reason)).toEqual(["b", "c"]);
+  });
+
+  it("events.replay with beforeId and no limit returns at most 100 events through the gateway dispatcher", async () => {
+    const rig = await usageRig({ fleet: true });
+    for (let n = 0; n < 130; n += 1) rig.emit("daemon.stopping", { reason: `r${n}` });
+    const newest = rig.bus.replay().at(-1) as { id: string };
+    const { dispatcher } = harness({ eventHistory: rig.history });
+
+    const page = await dispatcher.dispatch("events.replay", { beforeId: newest.id }, session());
+
+    expect(page).toHaveLength(100);
   });
 
   it.each([
@@ -1616,72 +1657,35 @@ describe("GatewayDispatcher", () => {
       expect(started).toBe(true);
     });
 
-    it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
-      const { directory, dispatcher, workers } = harness();
-      const client = new ScriptedWorkerClient();
-      directory.add("wrk_1", client);
-      workers.connected("wrk_1", undefined, "0.3.0");
-      workers.refresh("wrk_1", {
-        capacity: statusFixture().capacity,
-        health: "running",
-        queueDepth: 0,
-        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
-          .platforms,
-        downloads: { policy: "on-request" },
-      });
-      // Round 6 review: this harness used to connect `wrk_1` to the registry without adding a
-      // client for it, so removing the gate under test made the request route to an unreachable
-      // target, get re-queued by `#staleView`, and fail the test by *timing out* -- an outcome a
-      // gateway with no gate at all produces just as well. Its H3 sibling below already had the
-      // fix and said why; this one had been left behind. A worker able and willing to grant,
-      // plus `noWait`, means an ungated `owner` is caught by the lease actually being issued
-      // (testing rule 2: fail on a named assertion, not a schedule).
-      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    it.each([
+      { owner: "someone-else", principal: "agent-1", role: "agent" as const },
+      { owner: "agent-7", principal: "operator-1", role: "admin" as const },
+    ])(
+      "lease.request: rejects a $role session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H3, H7)",
+      async ({ owner, principal, role }) => {
+        const { directory, dispatcher, workers } = harness();
+        const client = new ScriptedWorkerClient();
+        directory.add("wrk_1", client);
+        workers.connected("wrk_1", undefined, "0.3.0");
+        workers.refresh("wrk_1", {
+          capacity: statusFixture().capacity,
+          health: "running",
+          queueDepth: 0,
+          catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+            .platforms,
+          downloads: { policy: "on-request" },
+        });
+        client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-      await expect(
-        dispatcher.dispatch(
-          "lease.request",
-          { model: "iPhone 17", noWait: true, owner: "someone-else", platform: "ios" },
-          session({ principal: "agent-1", role: "agent" }),
-        ),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    });
-
-    // H3 (round 3 review): §27a's gate here used to be `role !== "admin"`, admitting any HTTP
-    // `operator` bearer token connected directly to this gateway -- the same over-wide check
-    // `daemon/dispatcher.ts`'s own `#leaseRequest` shared. `isGatewayUplink` is narrower: it is
-    // stamped only on a *worker's* connection to its own configured gateway
-    // (`DaemonServer#acceptUplink`), and nothing forwards into a gateway's own front door the
-    // way a gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005. So
-    // no session this handler is ever called with can carry it, and `owner` is unconditionally
-    // `FORBIDDEN` here now, admin included: this test pins that a plain admin session (still
-    // `role: "admin"`, still what an operator token maps to) is refused exactly like an agent's.
-    it("lease.request: rejects a plain admin session (not the gateway's uplink) naming owner with FORBIDDEN -- no session ever reaching this handler is (ADR §27a, H3)", async () => {
-      const { directory, dispatcher, workers } = harness();
-      const client = new ScriptedWorkerClient();
-      directory.add("wrk_1", client);
-      workers.connected("wrk_1", undefined, "0.3.0");
-      workers.refresh("wrk_1", {
-        capacity: statusFixture().capacity,
-        health: "running",
-        queueDepth: 0,
-        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
-          .platforms,
-        downloads: { policy: "on-request" },
-      });
-      // A worker able and willing to grant it -- so a gate that let this session's `owner`
-      // through would be caught by the lease actually being issued, not by an unrelated
-      // `NO_CAPACITY`/timeout that would pass just as well with no gate at all.
-      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-
-      await expect(
-        dispatcher.dispatch(
-          "lease.request",
-          { model: "iPhone 17", noWait: true, owner: "agent-7", platform: "ios" },
-          session({ principal: "operator-1", role: "admin" }),
-        ),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    });
+        await expect(
+          dispatcher.dispatch(
+            "lease.request",
+            { model: "iPhone 17", noWait: true, owner, platform: "ios" },
+            session({ principal, role }),
+          ),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      },
+    );
 
     it("lease.request: forwards owner as `ownerId` end to end when the session is the gateway's own uplink (ADR §27a, H3) -- exercising the same field the worker's own dispatcher gates, on this dispatcher's shared handler shape", async () => {
       const { directory, dispatcher, leaseIndex, workers } = harness();
@@ -1976,6 +1980,8 @@ describe("GatewayDispatcher: usage.get", () => {
     const gate = { open: true };
     const eventHistory = {
       replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      replayPage: (input: { readonly beforeId?: string; readonly limit: number }) =>
+        rig.history.replayPage(input),
       status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
     };
     return { eventHistory, gate, rig };
