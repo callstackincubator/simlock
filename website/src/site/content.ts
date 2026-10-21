@@ -256,9 +256,9 @@ export const home = {
       },
       {
         icon: "flag",
-        title: "Attention",
-        body: "Disconnected and drained workers, RAM over budget, and quarantined or stalled devices.",
-        href: `${docs.console}#attention`,
+        title: "Inbox",
+        body: "Disconnected and drained workers, RAM over budget, quarantined, stalled and absent devices, long waits and leases about to end.",
+        href: `${docs.console}#inbox`,
       },
     ] as { icon: IconName; title: string; body: string; href: string }[],
   },

@@ -100,7 +100,7 @@ worst of what is wrong with it: red for a lost or failed worker, amber for a
 drained or starting one, one over its RAM budget, or a load figure past its
 threshold, green otherwise (`workerHealth` in `ui/src/model/fleet.ts`). A word
 the console does not know, from a newer daemon, shows as itself in
-`--status-idle`. A count, such as the one on the Attention link, is a number,
+`--status-idle`. A count, such as the one on the Inbox link, is a number,
 not a status: it has neither a status colour nor the accent.
 
 Every pair of text and background colour in both themes meets WCAG AA: 4.5:1
@@ -133,12 +133,12 @@ put together from them and draws nothing of its own that one of them already dra
 
 - **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
   wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
-  Attention, then the **Operate** group: Fleet, Leases, Queue; then the **Observe** group:
+  Inbox, then the **Operate** group: Fleet, Leases, Queue; then the **Observe** group:
   Activity, Usage; each group under its small label, hidden when collapsed), then at the bottom the connection as a status,
   "Signed in as <name>" (hidden when collapsed, where the Sign out tooltip reads "Sign out (<name>)"),
   **Sign out** (absent for a proxy person with no sign-out address) and the collapse button. A link is an icon and its label in `--text-muted`; the
   current one is `--text` on `--field` with a 2px `--accent` bar on its left and
-  `aria-current="page"`. Attention carries its count in a small bordered box, and none at zero.
+  `aria-current="page"`. Inbox carries its count of problems (not heads-ups) in a small bordered box, and none at zero.
   Collapsed, the sidebar is 64px wide: the labels go, every icon sits on its centre line, each
   link keeps its name (and a tooltip), the wordmark becomes "S" and the connection its square.
   Only the operator collapses or widens it, with the button at its bottom; the browser keeps the
@@ -147,14 +147,13 @@ put together from them and draws nothing of its own that one of them already dra
   opens the links and the bottom block under it.
 - **Page.** A page that is not a list, as the overview: its title (`h1`) and its actions on the
   right, then its content. No subtitle: the title and what is under it say what the page is.
-- **List and inspector.** Attention (attention items) is a list on the left, 260–360px wide, and
-  the chosen thing in an inspector filling the rest. The list has a header (the page's title as `h1`, a short count
-  in mono beside it, then its filters), its rows, and the pager under them. A row is one or two
-  short lines: a status square, a title, one figure on the right, and at most one muted line or
-  bar under them; the chosen row is `--surface` with a 2px `--accent` bar on its left and
-  `aria-current="page"`. The address names the chosen thing (`/attention/<id>`). The inspector
-  has a breadcrumb, the thing's title (`h2`), one muted line under it, actions on the right, and
-  then cards, facts, tabs and panels.
+- **Grouped list and drawer.** Inbox is a page of panels, one per group (Broken, Needs a look,
+  Heads-up, in that order; a group with no item is left out), under a toolbar of filter chips (All,
+  then each group). A row is a status square, the condition's word and a muted mono line saying what
+  it is about; the row is a link to `/inbox/<key>`, which opens a drawer. The drawer has a box
+  saying what happened, then the facts, one button to the page of what the item is about, and the
+  last hour's events about it. The address of a key holding a `.` ends in `/`, so a reload finds the
+  console's page.
 - **Table and drawer.** Leases, Fleet and Queue are each a table (Leases and Fleet under a toolbar: the filter
   chips on the left, a search box on the right, at the page title's padding). Activity has the same toolbar over
   an event feed that scrolls inside itself; Queue has no toolbar, only the Wait p95 tile above its table. Leases' filters are its own; Fleet's are

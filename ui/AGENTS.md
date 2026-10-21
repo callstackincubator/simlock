@@ -29,8 +29,8 @@ Each layer imports only the layers below it. `.dependency-cruiser.mjs` enforces 
 
 1. Model: a pure builder in `src/model/<page>.ts` turns route data into the page's view model
    (`overviewOf` in `overview.ts`). Shared rules live once: `workerHealth`, `workerSlots`
-   (`fleet.ts`), `eventSummary`, `eventTone` (`activity.ts`), `attentionTone`
-   (`attention.ts`), the word → tone tables (`tones.ts`), page paths (`paths.ts`).
+   (`fleet.ts`), `eventSummary`, `eventTone` (`activity.ts`), `inboxTone`
+   (`inbox.ts`), the word → tone tables (`tones.ts`), page paths (`paths.ts`).
 2. State: a hook in `src/state/<page>.ts` reads routes with `useLiveResource`, turns each into a
    `LoadView` (`resource.ts`: `loadView`, `mapView`, `bothViews`), and maps it through the
    builder. It re-exports the view-model types the screen needs.
@@ -54,21 +54,20 @@ fails leaves none. `useDaemonMode` (`state/live.tsx`) gives it to state (ADR 003
 
 ## Pages
 
-| Path                         | Screen    | Layout                                                                                                                                         |
-| ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                          | Overview  | stat tiles, range picker, three charts, capacity, workers table, attention, activity                                                           |
-| `/fleet[/<id>[/<deviceId>]]` | Fleet     | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` |
-| `/leases[/<id>]`             | Leases    | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events)                                                     |
-| `/queue[/<id>]`              | Queue     | Wait p95 tile + table; a request opens in a `Drawer`                                                                                           |
-| `/attention[/<id>]`          | Attention | list + inspector                                                                                                                               |
-| `/activity[/<id>]`           | Activity  | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload          |
-| `/usage`                     | Usage     | range picker, stat tiles, panels of tables (workers, requesters page in the URL)                                                               |
+| Path                         | Screen   | Layout                                                                                                                                         |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                          | Overview | range chips in the toolbar, five stat tiles, Needs you, capacity, two charts, workers table                                                    |
+| `/fleet[/<id>[/<deviceId>]]` | Fleet    | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` |
+| `/leases[/<id>]`             | Leases   | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events)                                                     |
+| `/queue[/<id>]`              | Queue    | Wait p95 tile + table; a request opens in a `Drawer`                                                                                           |
+| `/inbox[/<key>]`             | Inbox    | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                          |
+| `/activity[/<id>]`           | Activity | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload          |
+| `/usage`                     | Usage    | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                  |
 
-The sidebar groups the pages: Overview and Attention, then Operate (Fleet, Leases, Queue), then
+The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue), then
 Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
-On a list page (Attention) the URL names the chosen item; with none, the first item shows on a wide screen
-and the list alone on a phone. Leases, Queue and Activity show the list alone, and the chosen item opens in a drawer over it
+Leases, Queue, Inbox and Activity show the list alone, and the chosen item opens in a drawer over it
 (`state/drawer.ts`: closing steps back when the drawer was opened from the list).
 
 Activity's `EventFeed` (`data/event-feed.ts`) holds the events: the stream, the last hour and the gap after a reconnect add
@@ -82,7 +81,7 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 `src/ds/index.ts` exports every component. Tokens and base elements: `foundation.css`.
 
 - Frame: `AppFrame`, `Sidebar` (collapsible; width kept per browser by `data/preferences.ts`),
-  `Page`, `MasterDetail`, `ListPane`, `List`, `ListRow`, `Inspector`, `Drawer`, `DrawerTabs`
+  `Page`, `List`, `ListRow`, `Drawer`, `DrawerTabs`
   (a modal panel over the page, closed by an `IconButton` from `button.tsx`; Base UI), `Toolbar` (filters left, search right), `DesignProvider`
   (Base UI's `CSPProvider`, so no `<style>` element).
 - Content: `Panel`, `Card`, `Row`, `Grid`, `StatRow`, `StatTile`, `Facts`, `DataTable`, `Pager`,
