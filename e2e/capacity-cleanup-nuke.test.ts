@@ -134,7 +134,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await waitForLeaseCount(env, 0);
   });
 
-  it("keeps an idle device of a leased kind, previews cleanup without executing on --dry-run, and nuke touches only registry devices", async () => {
+  it("keeps an idle device of a leased kind out of cleanup and its --dry-run preview, and nuke touches only registry devices", async () => {
     const env = await withDaemon({
       configOverrides: {
         // Tight on purpose: by the nuke phase this forces a real queued waiter
@@ -167,7 +167,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
         ?.state,
     ).toBe("ready");
 
-    // cleanup --dry-run must report proposals without acting on them.
+    // why: a dry run lists what a real run would do, and the device the pool keeps is not in it. That it executes nothing is the reaper unit test's: no device here is one a rule acts on.
     await env.driverScript.merge({ ios: { latencyMs: { reclaim: 5_000 } } });
     const dryRunDeviceId = await releaseAndForget(env, "dryrun-z");
     await waitForDeviceState(env, dryRunDeviceId, "ready");
@@ -183,15 +183,6 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
         (proposal) => proposal.target === readyDevice?.id,
       ),
       "the kept device of a leased kind is not proposed",
-    ).toEqual([]);
-
-    await env.driverLog.clear();
-    const dryRun = await env.cli(["cleanup", "--dry-run"]);
-    expect(dryRun.code).toBe(0);
-    const dryRunCalls = await env.driverLog.calls();
-    expect(
-      dryRunCalls.filter((call) => call.operation === "shutdown" || call.operation === "destroy"),
-      "--dry-run must never call a destructive/state-changing driver verb",
     ).toEqual([]);
 
     // nuke: force-releases every lease, clears the queue, destroys registry devices,
