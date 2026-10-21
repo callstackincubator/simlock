@@ -17,6 +17,7 @@ import {
   FakeClock,
   FakeDaemonLauncher,
   FakeParentWatch,
+  FakeServiceManager,
   IpcError,
   MemoryFilesystem,
   MemoryIpcTransport,
@@ -8398,6 +8399,63 @@ describe("CLI: stats", () => {
     expect(connected).toBe(false);
     expect(output.stdout).toBe(
       "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]\n",
+    );
+  });
+});
+
+describe("CLI: daemon install (#830)", () => {
+  const home = "/Users/me";
+
+  it("an operator runs daemon install on macOS: the service is installed, the daemon answers, install prints the name, Daemon running and the hint", async () => {
+    const root = join(home, ".simlock");
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    const serviceManager = new FakeServiceManager({
+      onInstall: async () => {
+        await startInMemoryDaemon({
+          adminTokenPath: join(root, "admin.token"),
+          filesystem,
+          ipcTransport,
+          socketPath: join(root, "daemon.sock"),
+        });
+      },
+    });
+    const ports: CliEnvironmentPorts = {
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc: ipcTransport,
+      launcher: new FakeDaemonLauncher(),
+      daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      service: {
+        manager: serviceManager,
+        platform: "darwin",
+        home,
+        root,
+        nodePath: "/opt/node/bin/node",
+        mainPath: "/opt/simlock/dist/daemon/main.js",
+      },
+    };
+    const output = outputCapture(ports);
+
+    const exitCode = await runCli(["daemon", "install"], output.environmentWith());
+
+    expect(output.stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(serviceManager.installs).toHaveLength(1);
+    expect(serviceManager.installs[0]).toMatchObject({
+      name: "com.callstack.simlock.worker",
+      path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+      command: "/opt/node/bin/node",
+      args: ["/opt/simlock/dist/daemon/main.js"],
+      logPath: "/Users/me/.simlock/daemon.log",
+    });
+    expect(output.stdout.split("\n").slice(0, 2)).toEqual([
+      "Service installed: com.callstack.simlock.worker (launchd)",
+      "Daemon running",
+    ]);
+    expect(output.stdout.trimEnd().split("\n").at(-1)).toBe(
+      "To start after a reboot, turn on automatic login for this user.",
     );
   });
 });

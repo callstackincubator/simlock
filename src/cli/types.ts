@@ -11,6 +11,8 @@ import type {
   Filesystem,
   IpcConnector,
   ParentWatch,
+  ServiceDefinition,
+  ServiceManager,
   SystemStats,
 } from "../ports/index.js";
 
@@ -27,6 +29,21 @@ export interface Output {
  * `src/mcp/main.ts` has a runner of the same job under the same name and a different shape, so
  * this one is named for what the CLI holds rather than shared, which would couple the two. */
 export type McpStdioLauncher = (options: { readonly daemonFlag: DaemonFlag }) => Promise<void>;
+
+export interface ServiceSetup {
+  readonly manager: ServiceManager | undefined;
+  readonly platform: NodeJS.Platform;
+  readonly home: string;
+  readonly root: string;
+  readonly nodePath: string;
+  readonly mainPath: string;
+}
+
+export interface CliServiceAccess {
+  readonly manager: ServiceManager | undefined;
+  readonly platform: NodeJS.Platform;
+  readonly definition: () => Promise<ServiceDefinition>;
+}
 
 export interface CliEnvironment {
   readonly clock: Clock;
@@ -45,6 +62,7 @@ export interface CliEnvironment {
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
   readonly validateConfig: (merged: Record<string, unknown>) => Promise<void>;
+  readonly service?: CliServiceAccess;
   readonly readLogFile?: () => Promise<string>;
   readonly followLogFile?: () => Promise<void>;
   readonly readEventHistory: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
@@ -67,6 +85,7 @@ export interface CliEnvironmentPorts {
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
   readonly daemonHome: DaemonHome;
+  readonly service?: ServiceSetup;
   readonly parentWatch?: ParentWatch;
   readonly signals?: Signals;
   readonly stderr?: Output;

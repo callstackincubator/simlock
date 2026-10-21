@@ -36,6 +36,15 @@ export {
 export type { IpcErrorCode } from "./ipc.js";
 // fallow-ignore-next-line unused-type -- public listener lifecycle contract.
 export type { IpcListener } from "./ipc.js";
+export {
+  FakeServiceManager,
+  type ServiceDefinition,
+  type ServiceDefinitionInput,
+  type ServiceManager,
+  type ServiceManagerName,
+  serviceDefinition,
+  type ServiceState,
+} from "./service-manager.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
  * ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
