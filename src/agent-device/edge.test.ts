@@ -805,6 +805,25 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2), hex(3)]);
   });
 
+  it('allocate with an unmapped `target`, "watch" or "", alone or beside `device: "iPhone 17 Pro"`, answers `refused: unknown --target <value>; use mobile, tv or desktop` and leaves no lease', async () => {
+    const rig = await setUp();
+    const cases = [
+      [{ target: "watch" }, "watch"],
+      [{ target: "" }, ""],
+      [{ device: "iPhone 17 Pro", target: "watch" }, "watch"],
+    ] as const;
+
+    for (const [index, [extra, value]] of cases.entries()) {
+      const answer = await envelopeOf(await allocate(rig, index + 1, extra));
+
+      expect(answer.error).toMatchObject(
+        refusal(`refused: unknown --target ${value}; use mobile, tv or desktop`),
+      );
+    }
+    expect(await leases(rig)).toEqual([]);
+    expect(allocatesReceived(rig)).toEqual([]);
+  });
+
   it("the simlock lease's TTL is the CLI's `ttlMs`, 5 s when the CLI sent less, and `lease.defaultTtlMs` when it sent none; the allocate the agent-device daemon receives carries `ttlMs` equal to the ceiling in each case", async () => {
     const rig = await setUp();
 
