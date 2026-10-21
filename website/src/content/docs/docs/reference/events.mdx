@@ -124,7 +124,7 @@ release and records nothing.
 | --- | --- | --- | --- |
 | `capacity.changed` | The worker's running figures changed, and once at start. | `ios`, `android`, `global`, each with `running`, `maxRunning`, `reserved`, `warm`; `ramBudget` (`usedBytes`, `limitBytes`) under the `resource` strategy | Relayed |
 | `queue.changed` | A request joined or left the queue, and once at start. | `depth` (requests waiting in that line), `physical: true` when the physical line changed | Own and relayed |
-| `warm-pool.target-missed` | A `warmPool.targets` entry went short and the pool could do nothing about it. Once per time it goes short. | `platform`, `model`, `osVersion`, `mode`, `count`, `ready`, `reason` (`no-driver`, `runtime-missing`, `unknown-model`, `unresolvable`, `boot-failed`, `device-limit`, `running-limit`, `reserve`, `ram-budget`) | Relayed |
+| `warm-pool.target-missed` | A `warmPool.targets` entry went short and the pool could do nothing about it. Once per time it goes short. | `platform`, `model`, `osVersion`, `mode`, `origin` (always `configured`), `count`, `ready`, `reason` (`no-driver`, `runtime-missing`, `unknown-model`, `unresolvable`, `boot-failed`, `device-limit`, `running-limit`, `reserve`, `ram-budget`) | Relayed |
 
 ## Devices
 

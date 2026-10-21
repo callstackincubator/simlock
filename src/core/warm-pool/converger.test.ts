@@ -1823,6 +1823,7 @@ describe("warm pool targets", () => {
     const wanted = {
       mode: "full",
       model: "iPhone 17",
+      origin: "configured",
       osVersion: "26.0",
       platform: "ios",
     } as const;
@@ -1976,6 +1977,7 @@ describe("warm pool targets", () => {
         count: 1,
         mode: "full",
         model: "iPhone 17",
+        origin: "configured",
         platform: "ios",
         ready: 0,
         short: "no-driver",
@@ -2006,6 +2008,7 @@ describe("warm pool targets", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -2048,6 +2051,7 @@ describe("warm pool targets", () => {
             count: 1,
             mode: "full",
             model: "iPhone 17",
+            origin: "configured",
             platform: "ios",
             ready: 0,
             reason: "no-driver",
@@ -2546,43 +2550,72 @@ describe("warm pool learned kinds", () => {
       ).toEqual([{ deviceId: "d1", reason: "displaced" }]);
     });
 
-    it("lists configured targets only in figures() and the short log, with a learned kind short in the same pass", async () => {
-      const short = harness([], { limit: 0, state: await withLearned([1]), targets: [phone] });
-      await short.pool.pass();
-      await short.pool.settle();
-      const met = harness([device("d1", "ready", 0)], {
-        limit: 1,
-        state: await withLearned([1, 2]),
+    it("lists a learned kind in figures() with its origin, count, image tag and short, a merged kind once with the larger count, and drops a forgotten kind on the next pass", async () => {
+      const pixel = { ...device("d2", "ready", 0, "android").spec, imageTag: "google_apis" };
+      const state = await openMemoryState([warmPoolOwner]);
+      const learned = new LearnedKinds(state);
+      learned.learn(ipad, "pad", now - minute);
+      learned.learn(pixel, "pixel", now - 3 * minute);
+      learned.learn(device("d1", "ready", 0).spec, "phone-0", now - 2 * minute);
+      learned.learn(device("d1", "ready", 0).spec, "phone-1", now - 2 * minute);
+      const androidListing: PlatformCatalog = {
+        ...iosListing,
+        images: [{ abi: "arm64", runtime: "35", tag: "google_apis" }],
+        modelRuntimes: { "Pixel 8": ["35"] },
+        models: ["Pixel 8"],
+        platform: "android",
+        runtimes: ["35"],
+      };
+      const rig = harness([], {
+        catalog: async () => [iosListing, androidListing],
+        limit: 0,
+        state,
         targets: [phone],
       });
-      await met.pool.pass();
-      await met.pool.settle();
+      const summary = () =>
+        rig.pool.figures().targets.map((target) => ({
+          count: target.count,
+          imageTag: target.imageTag,
+          model: target.model,
+          origin: target.origin,
+          short: target.short,
+        }));
 
-      expect(short.pool.figures().targets).toEqual([
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(summary()).toEqual([
+        { count: 2, model: "iPhone 15", origin: "configured", short: "running-limit" },
+        { count: 1, model: "iPad Pro", origin: "learned", short: "running-limit" },
         {
-          booting: 0,
           count: 1,
-          mode: "full",
-          model: "iPhone 15",
-          osVersion: "26.0",
-          platform: "ios",
-          ready: 0,
+          imageTag: "google_apis",
+          model: "Pixel 8",
+          origin: "learned",
           short: "running-limit",
         },
       ]);
-      const shortLogs = short.sink.records.filter(
+      const shortLogs = rig.sink.records.filter(
         (record) => record.message === "a warm pool target is short",
       );
       expect(shortLogs.map((record) => record.fields?.target)).toEqual(["ios iPhone 15 26.0"]);
-      expect(
-        met.pool.figures().targets.map((target) => [target.model, target.ready, target.short]),
-      ).toEqual([["iPhone 15", 1, undefined]]);
-      expect(
-        met.sink.records.filter((record) => record.message === "a warm pool target is short"),
-      ).toEqual([]);
+
+      learned.forget(ipad);
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(summary().map((entry) => entry.model)).toEqual(["iPhone 15", "Pixel 8"]);
+      const off = harness([], { enabled: false, state, targets: [phone] });
+      expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
+        ["iPhone 15", "configured"],
+      ]);
+      const fresh = harness([], { state, targets: [phone] });
+      expect(fresh.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
+        ["iPhone 15", "configured"],
+      ]);
     });
 
-    it("emits warm-pool.target-missed for a merged entry by its configured count", async () => {
+    it("emits warm-pool.target-missed with origin configured and the configured count, and for no learned kind however short it is", async () => {
       const payloads = (rig: ReturnType<typeof harness>): unknown[] => {
         const seen: unknown[] = [];
         rig.eventBus.subscribe("warm-pool.target-missed", (envelope) =>
@@ -2598,17 +2631,29 @@ describe("warm pool learned kinds", () => {
       const metPayloads = payloads(met);
       await met.pool.pass();
       await met.pool.settle();
-      const empty = harness([], { limit: 0, state: await withLearned([1, 2]), targets: [phone] });
+      const empty = harness([], {
+        catalog: async () => [iosListing],
+        limit: 0,
+        state: await withLearned([1, 2]),
+        targets: [phone],
+      });
       const emptyPayloads = payloads(empty);
       await empty.pool.pass();
       await empty.pool.settle();
 
+      expect(
+        empty.pool
+          .figures()
+          .targets.filter((target) => target.origin === "learned")
+          .map((target) => [target.model, target.short]),
+      ).toEqual([["iPad Pro", "running-limit"]]);
       expect(metPayloads).toEqual([]);
       expect(emptyPayloads).toEqual([
         {
           count: 1,
           mode: "full",
           model: "iPhone 15",
+          origin: "configured",
           osVersion: "26.0",
           platform: "ios",
           ready: 0,

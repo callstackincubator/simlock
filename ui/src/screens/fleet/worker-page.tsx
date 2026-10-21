@@ -374,6 +374,7 @@ const WARM_COLUMNS: readonly Column<WarmRow>[] = [
   { cell: (target) => target.model, header: "Model" },
   { cell: (target) => target.runtime, header: "Runtime", mono: true },
   { cell: (target) => target.mode, header: "Mode" },
+  { cell: (target) => target.origin, header: "Origin" },
   { cell: (target) => target.wanted, header: "Wanted", numeric: true },
   { cell: (target) => target.ready, header: "Ready", numeric: true },
   { cell: (target) => target.booting, header: "Booting", numeric: true },

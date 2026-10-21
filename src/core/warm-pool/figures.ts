@@ -2,6 +2,8 @@ import type { TargetKind, TargetShort } from "./policy.js";
 
 /** One warm target as `status` reports it: its kind, how many it wants, and how it stands. */
 export interface WarmTargetFigures extends TargetKind {
+  readonly origin: "configured" | "learned";
+  readonly imageTag?: string;
   readonly count: number;
   readonly ready: number;
   readonly booting: number;

@@ -35,7 +35,7 @@ class AutoLaunchAdminConnector {
 
   async connect(resolveCredential: () => Promise<string | undefined>): Promise<SimlockAdminClient> {
     try {
-      return await this.finishConnection(await this.connectClient(resolveCredential));
+      return await this.finishConnection(this.connectClient(resolveCredential));
     } catch (error: unknown) {
       if (!(await isUnavailable(error))) throw error;
     }
@@ -52,7 +52,7 @@ class AutoLaunchAdminConnector {
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
-        return await this.finishConnection(await this.connectClient(resolveCredential));
+        return await this.finishConnection(this.connectClient(resolveCredential));
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
@@ -77,7 +77,7 @@ class AutoLaunchAdminConnector {
   ): Promise<SimlockAdminClient> {
     const output = await launched.readOutput().catch(() => "");
     try {
-      return await this.finishConnection(await this.connectClient(resolveCredential));
+      return await this.finishConnection(this.connectClient(resolveCredential));
     } catch (error: unknown) {
       if (!(await isUnavailable(error))) throw error;
     }
@@ -86,35 +86,43 @@ class AutoLaunchAdminConnector {
     throw new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
   }
 
-  private async finishConnection(client: SimlockAdminClient): Promise<SimlockAdminClient> {
-    if (this.startupDeadline === undefined) return client;
+  private async finishConnection(
+    connecting: Promise<SimlockAdminClient>,
+  ): Promise<SimlockAdminClient> {
     const { isSimlockError, SimlockError } = await import("../contract/index.js");
-    const remainingMs = Math.max(0, this.startupDeadline - this.clock.now());
+    let client: SimlockAdminClient | undefined;
     let timer: ReturnType<Clock["setTimer"]> | undefined;
     let timedOut = false;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = this.clock.setTimer(remainingMs, () => {
-        timedOut = true;
-        reject(
-          new SimlockError(
-            "DAEMON_STARTUP_FAILED",
-            "transport",
-            "Timed out starting simlock daemon: the startup status probe was not answered",
-            {},
-          ),
-        );
-      });
-    });
     try {
+      client = await connecting;
+      if (this.startupDeadline === undefined) return client;
+      const remainingMs = Math.max(0, this.startupDeadline - this.clock.now());
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = this.clock.setTimer(remainingMs, () => {
+          timedOut = true;
+          reject(
+            new SimlockError(
+              "DAEMON_STARTUP_FAILED",
+              "transport",
+              "Timed out starting simlock daemon: the startup status probe was not answered",
+              {},
+            ),
+          );
+        });
+      });
       await Promise.race([client.getStatus(), timeout]);
       this.startupDeadline = undefined;
       return client;
     } catch (error: unknown) {
       // why: a daemon that went silent after `hello` never ends its side, so awaiting the close
       // would hang the start this deadline bounds; other failures close against a live peer.
-      if (timedOut) void client.close().catch(() => undefined);
-      else await client.close();
-      if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
+      if (timedOut) void client?.close().catch(() => undefined);
+      else await client?.close();
+      if (
+        this.startupDeadline !== undefined &&
+        isSimlockError(error) &&
+        error.code === "DAEMON_CONNECTION_LOST"
+      ) {
         throw new SimlockError(
           "DAEMON_STARTUP_FAILED",
           "transport",
