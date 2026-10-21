@@ -331,7 +331,7 @@ export interface ProxiedDaemon {
 }
 
 export async function startProxiedDaemon(
-  options: { readonly signOutUrl?: boolean } = {},
+  options: { readonly signOutUrl?: boolean; readonly driverScript?: FakeDriverScript } = {},
 ): Promise<ProxiedDaemon> {
   const { privateKey, publicKey } = await generateKeyPair("ES256");
   const jwk = { ...(await exportJWK(publicKey)), alg: "ES256", kid: "test-key", use: "sig" };
@@ -407,6 +407,7 @@ export async function startProxiedDaemon(
   let daemon: RunningDaemon;
   try {
     daemon = await startDaemon("worker", {
+      ...(options.driverScript === undefined ? {} : { driverScript: options.driverScript }),
       config: {
         http: {
           proxyAuth: {
