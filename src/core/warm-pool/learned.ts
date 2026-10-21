@@ -135,7 +135,7 @@ export class LearnedKinds {
           .prepare("SELECT granted_at, ended_at FROM warm_kind_leases WHERE kind_id = ?")
           .all(Number(row.id))
           .map((lease) => ({
-            end: lease.ended_at === null ? now : Number(lease.ended_at),
+            end: lease.ended_at === null ? undefined : Number(lease.ended_at),
             start: Math.max(Number(lease.granted_at), windowStart),
           }));
         return {
@@ -147,15 +147,16 @@ export class LearnedKinds {
   }
 }
 
+// why: a lease still held has no end, so one granted this instant counts beside the others instead of closing as it opens.
 function peakOverlap(
-  intervals: readonly { readonly start: number; readonly end: number }[],
+  intervals: readonly { readonly start: number; readonly end: number | undefined }[],
   floor: number,
 ): number {
   const edges = intervals
-    .filter((interval) => interval.end > floor)
+    .filter((interval) => interval.end === undefined || interval.end > floor)
     .flatMap((interval) => [
       { at: interval.start, delta: 1 },
-      { at: interval.end, delta: -1 },
+      ...(interval.end === undefined ? [] : [{ at: interval.end, delta: -1 }]),
     ])
     .sort((left, right) => left.at - right.at || left.delta - right.delta);
   let open = 0;

@@ -159,6 +159,7 @@ export class WarmPool {
     const { clock, eventBus, registry } = this.options;
     this.#unsubscribe.push(
       eventBus.subscribe("lease.granted", ({ payload }) => {
+        if (!this.options.config.enabled) return;
         const device = registry.snapshot.virtualDevices.find(
           (candidate) => candidate.id === payload.deviceId,
         );
