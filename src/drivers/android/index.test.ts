@@ -799,7 +799,7 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("boots a shutdown device from its persisted clean baseline after a driver restart", async () => {
+  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown or recovery boots at 70 s", async () => {
     const harness = await provisionedHarness();
     const booted = await harness.driver.makeReady(harness.device);
 
@@ -835,6 +835,19 @@ describe("AndroidDriver", () => {
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    // why: Proposed per-device estimate input for #778: the current operation-only input
+    // cannot distinguish this persisted baseline from a cold boot of the same spec.
+    const prepareEstimate = { device: booted, operation: "boot", purpose: "prepare" } as const;
+    const recoveryEstimate = { ...prepareEstimate, purpose: "recover" } as const;
+    expect(await restartedDriver.estimate({ operation: "boot" }, spec)).toBe(70_000);
+    expect(await restartedDriver.estimate(recoveryEstimate, spec)).toBe(70_000);
+    const estimatedBootMs = await restartedDriver.estimate(prepareEstimate, spec);
 
     await expect(restartedDriver.makeReady(booted)).resolves.toMatchObject({
       address: "emulator-5586",
@@ -851,6 +864,7 @@ describe("AndroidDriver", () => {
       ],
       command: binaries.emulator,
     });
+    expect(estimatedBootMs).toBe(4_000);
   });
 
   describe("android.emulator launch options", () => {
