@@ -2,7 +2,7 @@ import { asDaemonRefusal, UsageError } from "../errors.js";
 import { connectDaemonClient } from "../connect.js";
 import { stopRunningDaemon } from "../daemon-service.js";
 import { commandArgs, isHelp, subcommand, writeResult } from "../args.js";
-import { consoleLines, formatStatus } from "../format.js";
+import { consoleLines, formatStatus, serviceLine, type ServiceReport } from "../format.js";
 import type { StatusGetOutput } from "../../admin/index.js";
 import type { ServiceDefinition, ServiceManager } from "../../ports/index.js";
 import type { CommandContext } from "../tree.js";
@@ -19,6 +19,65 @@ function serviceAccess(
     throw new UsageError(`daemon ${command} is supported on macOS only`);
   }
   return { manager: service.manager, definition: service.definition };
+}
+
+async function serviceReport(
+  environment: CommandContext["environment"],
+): Promise<ServiceReport | undefined> {
+  const { service } = environment;
+  if (service?.manager === undefined) return undefined;
+  const definition = await service.definition();
+  const state = await service.manager.state(definition);
+  return { ...state, manager: service.manager.manager, name: definition.name };
+}
+
+/** why: the service lookup sits outside the connect `try`, so a failed manager call is not read as a stopped daemon. */
+async function daemonStatus(context: CommandContext, json: boolean): Promise<number> {
+  const { environment, token } = context;
+  const write = (value: string): void => {
+    environment.stdout.write(value);
+  };
+  let status: StatusGetOutput | undefined;
+  try {
+    const client = await connectDaemonClient(environment, token, { launch: false });
+    try {
+      status = await client.getStatus();
+    } finally {
+      await client.close();
+    }
+  } catch (error: unknown) {
+    const refusal = (await asDaemonRefusal(error)) as
+      | { readonly code: string; readonly message: string }
+      | undefined;
+    if (refusal === undefined) {
+      status = undefined;
+    } else {
+      if (json) {
+        writeResult(write, {
+          status: "handshake-refused",
+          error: { code: refusal.code, message: refusal.message },
+        });
+      } else {
+        write(`Daemon handshake refused: ${refusal.code}: ${refusal.message}\n`);
+      }
+      return 1;
+    }
+  }
+  const service = await serviceReport(environment);
+  if (json) {
+    writeResult(write, {
+      ...(status ?? { status: "stopped" }),
+      ...(service === undefined ? {} : { service }),
+    });
+    return 0;
+  }
+  write(
+    status === undefined
+      ? "Daemon stopped\n"
+      : `${formatStatus(status, environment.clock.now())}\n`,
+  );
+  if (service !== undefined) write(`${serviceLine(service)}\n`);
+  return 0;
 }
 
 async function startDaemon(context: CommandContext): Promise<StatusGetOutput> {
@@ -123,40 +182,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     else environment.stdout.write("Daemon stopping\n");
     return 0;
   }
-  if (command === "status") {
-    try {
-      const client = await connectDaemonClient(environment, token, { launch: false });
-      try {
-        const status = await client.getStatus();
-        if (values.json) writeResult((value) => environment.stdout.write(value), status);
-        else environment.stdout.write(`${formatStatus(status, environment.clock.now())}\n`);
-      } finally {
-        await client.close();
-      }
-      return 0;
-    } catch (error: unknown) {
-      const refusal = (await asDaemonRefusal(error)) as
-        | { readonly code: string; readonly message: string }
-        | undefined;
-      if (refusal !== undefined) {
-        if (values.json) {
-          writeResult((value) => environment.stdout.write(value), {
-            status: "handshake-refused",
-            error: { code: refusal.code, message: refusal.message },
-          });
-        } else {
-          environment.stdout.write(
-            `Daemon handshake refused: ${refusal.code}: ${refusal.message}\n`,
-          );
-        }
-        return 1;
-      }
-      if (values.json)
-        writeResult((value) => environment.stdout.write(value), { status: "stopped" });
-      else environment.stdout.write("Daemon stopped\n");
-      return 0;
-    }
-  }
+  if (command === "status") return daemonStatus(context, values.json === true);
   if (command === "logs" && values.follow) {
     if (values.json) throw new UsageError("--follow cannot be combined with --json");
     if (environment.followLogFile === undefined) {

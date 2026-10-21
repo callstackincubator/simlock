@@ -46,6 +46,7 @@ export {
   type ServiceDefinition,
   type ServiceManager,
   serviceDefinition,
+  type ServiceManagerName,
   type ServiceState,
 } from "./service-manager.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
