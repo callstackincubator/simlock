@@ -79,6 +79,9 @@ export interface WarmPoolOptions {
   };
 }
 
+/** why: how many failed boots or creations in a row make the pool give a learned kind up. */
+const LEARNED_FAILURES_LIMIT = 3;
+
 /** The tick that re-runs a pass when no event does, so a slot freed silently is still used. */
 export const WARM_POOL_TICK_MS = 30_000;
 
@@ -765,6 +768,16 @@ export class WarmPool {
   /** Remembers the failure; the pass the ended flight asks for arms the timer for the retry. */
   #failed(target: VirtualSpec): void {
     this.#schedule.failed(target, this.options.clock.now());
+    if (this.#schedule.failures(target) < LEARNED_FAILURES_LIMIT) return;
+    if (this.#resolved.some((configured) => sameSpec(configured.spec, target))) return;
+    if (!this.#learnedKinds().some((kind) => sameSpec(kind.spec, target))) return;
+    this.#recording("forget a kind", () => this.#learned.forget(target));
+    this.#schedule.succeeded(target);
+    this.#logger.warn("a warm pool learned kind failed three times in a row and was forgotten", {
+      model: target.model,
+      osVersion: target.osVersion,
+      platform: target.platform,
+    });
   }
 
   /** The device, when it is still in `state`, has no lease and no operation claim on it. */
