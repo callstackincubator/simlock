@@ -132,7 +132,13 @@ and at least 20% lower median total cost with no increase in median review
 wall time. Unknown cost/quality data cannot establish promotion. High-risk
 work stays Opus. Roll back the routine downgrade on any critical escape or
 a weekly increase in weighted misses/false positives versus the baseline.
-No pilot has been completed by adding this protocol.
+No pilot has been completed by adding this protocol. The replay harness
+runs it: `replay-freeze.mjs` pins a round's head and base and the ledger
+as `refs/replay/<PR>/...` on origin, `review-replay.sh` builds the blind
+inputs for that snapshot and prints the reviewer's prompt (tagged
+`stage=replay`, or one lens with `--lens`), and `review-score.mjs` scores
+the findings against the ledger and appends to `.agents/replay/results.jsonl`.
+`PROCESS-REVIEW-2026-10-21.md` section 4 says how a change is judged.
 
 The design follows [Anthropic's review convergence findings](https://claude.dev/blog/solving-code-review-at-anthropic/),
 [Addy Osmani's risk-focused review](https://addyosmani.com/blog/agentic-code-review/),

@@ -16,7 +16,15 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
 
 1. **Inputs.** Run `.agents/scripts/review-inputs.sh <PR> [<previous SHA>]`
    and record its base, merge-base and commit; a failed build is
-   incomplete. For later checks write the complete prior ledger to
+   incomplete. A `replay: true` argument comes with an inputs directory
+   already built by `.agents/scripts/review-replay.sh`: use it, do not run
+   `review-inputs.sh`, ignore the PR's state on GitHub (it may be merged),
+   post nothing anywhere, never open `.agents/replay/`, and write the
+   findings file where the argument `findings:` says. Nothing else changes:
+   step 2 spawns the lenses exactly as for a live PR, and every lens prompt's
+   ledger tag says `stage=replay`, as yours does, so the replay's runs stay
+   out of the PR's real numbers. A replay is never a self-check; a replay
+   report without lens runs is discarded. For later checks write the complete prior ledger to
    `previous-fixes.md` (findings, responses, dispositions, unresolved
    objections, actual fix impacts), never author narration, the PR body or
    commit messages.

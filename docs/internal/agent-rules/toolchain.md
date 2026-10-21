@@ -208,4 +208,5 @@ ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> ro
 machine and prints their models, seconds, tokens and cost, and with
 `--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
 what goes in the findings file and where the result is posted. It reports,
-it checks nothing.
+it checks nothing. Runs tagged `stage=replay` (a frozen snapshot reviewed
+again by `review-replay.sh`) are left out unless `--replay` is given.

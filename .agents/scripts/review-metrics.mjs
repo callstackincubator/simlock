@@ -11,6 +11,9 @@
 // with the same id). Cost comes from the price table below; a model it does not list makes the
 // cost unknown, never zero.
 //
+// --replay reports the runs tagged stage=replay instead (review-replay.sh); without it they are
+// left out, so a replay never counts as the PR's delivery work.
+//
 // --findings validates the coordinator's findings file (`{"findings": [...]}`, each with id,
 // role, class, outcome, path) and adds the outcome and class counts. --json prints the ledger
 // (runs, totals, findings) instead of the summary lines.
@@ -37,7 +40,7 @@ const issue = option("--issue");
 const findingsFile = option("--findings");
 if (pr === null || !/^\d+$/.test(pr) || (issue !== null && !/^\d+$/.test(issue))) {
   console.error(
-    "usage: review-metrics.mjs --pr <M> [--issue <N>] [--findings <file.json>] [--json]",
+    "usage: review-metrics.mjs --pr <M> [--issue <N>] [--findings <file.json>] [--json] [--replay]",
   );
   process.exit(64);
 }
@@ -46,6 +49,9 @@ const root = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "
 const runs = transcripts(root)
   .map((file) => ({ file, tag: tagOf(file) }))
   .filter(({ tag }) => tag !== null && (tag.pr === pr || (issue !== null && tag.issue === issue)))
+  // why: a replay (stage=replay, review-replay.sh) re-reviews a frozen snapshot of a merged PR;
+  // it must never count as that PR's delivery work. --replay reports the replays alone.
+  .filter(({ tag }) => (tag.stage === "replay") === args.includes("--replay"))
   .map(({ file, tag }) => run(file, tag))
   .sort((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
 const findings =

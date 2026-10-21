@@ -35,7 +35,8 @@
 #   assumptions.md         the PR body's `Assumption:` lines (coding rule 2)
 #
 # Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules, ADRs
-# and briefs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
+# and briefs come from the base branch, so a PR cannot rewrite what it is judged by. REVIEW_HEAD,
+# REVIEW_BASE and REVIEW_RULES (below) replay a frozen snapshot. Whatever it looks
 # for and cannot find, it says on stderr, with one summary line at the end. The repo is GH_REPO,
 # else the origin remote's owner/name.
 set -eu
@@ -64,11 +65,41 @@ pr_body=$(api "pulls/$pr" -q '.body // ""' | tr -d '\r')
 
 # The PR head through GitHub's pull ref, which outlives a deleted branch. The temporary ref is
 # per PR, so two reviews running at once do not overwrite each other's.
-git fetch -q origin "+refs/heads/$base_ref:refs/remotes/origin/$base_ref"
-git fetch -q origin "+refs/pull/$pr/head:refs/review-inputs/$pr"
-head=$(git rev-parse "refs/review-inputs/$pr")
-git update-ref -d "refs/review-inputs/$pr"
-base=$(git rev-parse "origin/$base_ref")
+
+# why: a replay (REVIEW_HEAD and REVIEW_BASE, full SHAs, both or neither) reviews a frozen
+# snapshot of a PR that may be merged and whose branches may be gone, so the SHAs must already be
+# local (review-replay.sh fetches refs/replay/<pr>/...). REVIEW_RULES names the commit rules,
+# briefs and the protocol come from instead of the base, so an old snapshot can be reviewed with
+# new instructions; the ADRs and the spec still come from the base, as the PR was judged then.
+if [ -n "${REVIEW_HEAD:-}${REVIEW_BASE:-}" ]; then
+  if [ -z "${REVIEW_HEAD:-}" ] || [ -z "${REVIEW_BASE:-}" ]; then
+    say "REVIEW_HEAD and REVIEW_BASE go together"
+    exit 64
+  fi
+  head=$(git rev-parse --verify "$REVIEW_HEAD^{commit}" 2>/dev/null) || {
+    say "REVIEW_HEAD $REVIEW_HEAD is not a local commit"
+    exit 65
+  }
+  base=$(git rev-parse --verify "$REVIEW_BASE^{commit}" 2>/dev/null) || {
+    say "REVIEW_BASE $REVIEW_BASE is not a local commit"
+    exit 65
+  }
+  say "replay: head $head, base $base"
+else
+  git fetch -q origin "+refs/heads/$base_ref:refs/remotes/origin/$base_ref"
+  git fetch -q origin "+refs/pull/$pr/head:refs/review-inputs/$pr"
+  head=$(git rev-parse "refs/review-inputs/$pr")
+  git update-ref -d "refs/review-inputs/$pr"
+  base=$(git rev-parse "origin/$base_ref")
+fi
+rules_ref=${REVIEW_RULES:-$base}
+if [ -n "${REVIEW_RULES:-}" ]; then
+  rules_ref=$(git rev-parse --verify "$REVIEW_RULES^{commit}" 2>/dev/null) || {
+    say "REVIEW_RULES $REVIEW_RULES is not a local commit"
+    exit 65
+  }
+  say "rules, briefs and the protocol from $rules_ref"
+fi
 fork=$(git merge-base "$base" "$head")
 if [ -n "$previous" ]; then
   previous=$(git rev-parse --verify "$previous^{commit}" 2>/dev/null) || {
@@ -90,8 +121,8 @@ echo "$head" >"$out/commit"
 echo "$base" >"$out/base"
 echo "$fork" >"$out/merge-base"
 [ -z "$previous" ] || echo "$previous" >"$out/previous"
-if git cat-file -e "$base:docs/internal/REVIEW.md" 2>/dev/null; then
-  git show "$base:docs/internal/REVIEW.md" >"$out/review-protocol.md"
+if git cat-file -e "$rules_ref:docs/internal/REVIEW.md" 2>/dev/null; then
+  git show "$rules_ref:docs/internal/REVIEW.md" >"$out/review-protocol.md"
 fi
 node "$(dirname "$0")/diff-kind.mjs" "$fork" "$head" >"$out/kind"
 if [ -n "$previous" ]; then
@@ -101,14 +132,14 @@ fi
 # Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
 [ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
 mkdir "$out/briefs"
-for f in $(git ls-tree --name-only "$base" .agents/briefs/); do
-  git show "$base:$f" >"$out/briefs/$(basename "$f")"
+for f in $(git ls-tree --name-only "$rules_ref" .agents/briefs/); do
+  git show "$rules_ref:$f" >"$out/briefs/$(basename "$f")"
 done
 
-for f in $(git ls-tree --name-only "$base" docs/internal/agent-rules/); do
-  git show "$base:$f" >"$out/rules/$(basename "$f")"
+for f in $(git ls-tree --name-only "$rules_ref" docs/internal/agent-rules/); do
+  git show "$rules_ref:$f" >"$out/rules/$(basename "$f")"
 done
-git show "$base:docs/internal/adr/README.md" >"$out/rules/adr-index.md"
+git show "$rules_ref:docs/internal/adr/README.md" >"$out/rules/adr-index.md"
 
 issue=
 case $head_ref in
