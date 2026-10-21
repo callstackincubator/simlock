@@ -273,7 +273,9 @@ function defineSuite(target: Target): void {
     async () => {
       const listed = await gateway.cli(["worker", "list"], { timeout: 60_000 });
       expect(listed.code, listed.stderr).toBe(0);
-      expect(listed.stdout).toMatch(/^\S+ \(worker\): connected .* -- agent-device available$/m);
+      expect(listed.stdout).toMatch(
+        /^\S+ \(worker\): connected .* -- agent-device available( -- |$)/m,
+      );
     },
   );
 
