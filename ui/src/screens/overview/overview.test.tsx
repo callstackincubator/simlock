@@ -32,6 +32,60 @@ describe("the overview screen", () => {
     expect(shown).not.toContain("Activity");
   });
 
+  it("shows the Needs you panel with its rows and the Inbox link, and no Nothing needs you", () => {
+    const shown = renderToStaticMarkup(
+      <OverviewBody
+        overview={{
+          ...quiet,
+          inbox: {
+            couldNotCheck: [],
+            needsYou: [
+              {
+                key: "w1/disconnected",
+                subject: "mac-1",
+                to: "/inbox/w1%2Fdisconnected",
+                tone: "error",
+                word: "disconnected",
+              },
+            ],
+            problems: 5,
+          },
+        }}
+      />,
+    );
+
+    expect(shown).toContain('href="/inbox/w1%2Fdisconnected"');
+    expect(shown).toContain('href="/inbox">All in Inbox (5)</a>');
+    expect(text(shown)).toContain("Needs you");
+    expect(text(shown)).not.toContain("Nothing needs you");
+  });
+
+  it("says Could not check, and not Nothing needs you, when a read failed and no problem is known", () => {
+    const shown = text(
+      renderToStaticMarkup(
+        <OverviewBody
+          overview={{
+            ...quiet,
+            inbox: { couldNotCheck: ["waiting requests", "leases"], needsYou: [], problems: 0 },
+          }}
+        />,
+      ),
+    );
+
+    expect(shown).toContain("Could not check: waiting requests, leases");
+    expect(shown).not.toContain("Nothing needs you");
+  });
+
+  it("links the workers table to Fleet and says 2 workers not read yet in the plural", () => {
+    const shown = renderToStaticMarkup(
+      <OverviewBody overview={{ ...quiet, capacity: [{ name: "iOS", notRead: 2, parts: [] }] }} />,
+    );
+
+    expect(shown).toContain('href="/fleet">Open Fleet</a>');
+    expect(text(shown)).toContain("iOS 2 workers not read yet");
+    expect(shown).toContain('aria-label="iOS: no devices"');
+  });
+
   it("names each worker's health in its square, its devices in words beside the slots, and a muted dash where a count is not known", () => {
     const html = renderToStaticMarkup(
       <OverviewBody

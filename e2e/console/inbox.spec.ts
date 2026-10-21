@@ -718,6 +718,9 @@ test.describe("the Inbox view", () => {
 
       await expect(rows(page)).toHaveCount(1);
       expect(await hasHorizontalScroll(page)).toBe(false);
+      // why: a panel clips what overflows it, so the page never scrolls; the row itself must fit.
+      const box = await rows(page).boundingBox();
+      expect(box?.width ?? Infinity).toBeLessThanOrEqual(360);
       await rows(page).click();
       await expect(page.getByRole("heading", { level: 2, name: /^aworkerwith/ })).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);

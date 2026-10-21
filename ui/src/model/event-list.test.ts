@@ -230,6 +230,21 @@ describe("what an event links to", () => {
     ).toEqual({ label: "Open Inbox item", to: "/inbox/wrk_1%2Fdev_1%2Fquarantined" });
   });
 
+  it("ends the Inbox address in a slash when the worker's id holds a dot", () => {
+    const quarantined = worker("wrk.local", "mac-1", {
+      devices: [
+        { id: "dev_1", spec: { model: "iPhone 16", osVersion: "18.4" }, state: "quarantined" },
+      ],
+    });
+
+    expect(
+      eventAction(
+        event("device.quarantined", { deviceId: "dev_1", workerId: "wrk.local" }),
+        places({ workers: [quarantined] }),
+      )?.to,
+    ).toBe("/inbox/wrk.local%2Fdev_1%2Fquarantined/");
+  });
+
   it("is the worker the console lists, and none for one it does not", () => {
     const connected = event("worker.connected", { workerId: "wrk_1" });
 

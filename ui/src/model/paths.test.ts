@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { devicePath, fleetAddress, itemIdFrom, itemPath } from "./paths";
+import { devicePath, fleetAddress, inboxPath, itemIdFrom, itemPath } from "./paths";
 
 describe("an item's page path", () => {
   it("carries any id, a slash or a space included, and reads it back whole", () => {
     for (const id of ["wrk_1", "wrk 1/dev_2/quarantined", "a%b"]) {
       expect(itemIdFrom("/inbox", itemPath("/inbox", id)), id).toBe(id);
     }
+  });
+
+  it("ends an Inbox address in a slash when the key holds a dot, and not otherwise", () => {
+    expect(inboxPath("lease/lse_1.gw/ending")).toBe("/inbox/lease%2Flse_1.gw%2Fending/");
+    expect(inboxPath("wrk_1/drained")).toBe("/inbox/wrk_1%2Fdrained");
+    expect(itemIdFrom("/inbox", inboxPath("lease/lse_1.gw/ending"))).toBe("lease/lse_1.gw/ending");
   });
 
   it("round-trips an id with a slash for /fleet, /queue and /activity", () => {
