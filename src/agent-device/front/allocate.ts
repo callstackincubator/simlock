@@ -50,6 +50,7 @@ interface Plan {
   readonly platform: "ios" | "android";
   readonly model?: string;
   readonly class?: "phone" | "tv" | "desktop";
+  readonly imageTag?: string;
   readonly osVersion?: string;
   readonly ttlMs?: number;
 }
@@ -110,11 +111,13 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
     typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
   const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
   const ttlMs = chosenTtl(fields.ttlMs, cap);
+  const imageTag = typeof fields.imageTag === "string" ? fields.imageTag : undefined;
   const osVersion = typeof fields.osVersion === "string" ? fields.osVersion : undefined;
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
     ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
+    ...(imageTag === undefined ? {} : { imageTag }),
     ...(osVersion === undefined ? {} : { osVersion }),
     ...(ttlMs === undefined ? {} : { ttlMs }),
   };
@@ -210,6 +213,7 @@ async function requestLease(
         timeoutMs: QUEUE_WAIT_MS,
         ...(plan.model === undefined ? {} : { model: plan.model }),
         ...(plan.class === undefined ? {} : { class: plan.class }),
+        ...(plan.imageTag === undefined ? {} : { imageTag: plan.imageTag }),
         ...(plan.osVersion === undefined ? {} : { osVersion: plan.osVersion }),
         ...(plan.ttlMs === undefined ? {} : { ttlMs: plan.ttlMs }),
         ...requiresOf(context),
