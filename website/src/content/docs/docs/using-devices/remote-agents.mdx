@@ -109,7 +109,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
    {"expiresAt":"2026-10-21T09:52:10.000Z","leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","notices":[]}
    ```
 
-   A renew sets the deadline to now plus the lease's TTL. Send `{"ttlMs": 3600000}` as the body to change the TTL. `notices` lists device problems since the last renew, such as `{"event":"device_unhealthy"}` and `{"event":"device_recovered","attempts":1}`.
+   A renew sets the deadline to now plus the lease's TTL. Send `{"ttlMs": 3600000}` as the body, with `Content-Type: application/json`, to change the TTL. `notices` lists device problems since the last renew, such as `{"event":"device_unhealthy"}` and `{"event":"device_recovered","attempts":1}`.
 
    Losing your connection does nothing to the lease. A lease nobody renews expires at `expiresAt`, and the device is wiped. A renew of a lease that has ended answers `404 UNKNOWN_LEASE`: request a new one.
 

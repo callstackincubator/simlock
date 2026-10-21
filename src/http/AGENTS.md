@@ -9,21 +9,22 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
 
 ## Files
 
-| File                    | Role                                                                            |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| `app.ts`                | Every `/v1` route, error boundary, request log line                             |
-| `routes.ts`             | `declareRoute`: a route declaration plus its base error codes; `validationHook` |
-| `route-declarations.ts` | The declared routes (`DECLARED_ROUTES`): System and Devices                     |
-| `openapi.ts`            | `buildOpenApiDocument(modules)`: the OpenAPI 3.1 document                       |
-| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403                      |
-| `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession`                |
-| `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources                              |
-| `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls                       |
-| `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response                       |
-| `sse.ts`                | `pipeSse`: ordered writes, keepalive                                            |
-| `errors.ts`             | `HttpApiError`, `mapError`: error → status and body                             |
-| `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`                    |
-| `test-fakes.ts`         | Fakes for this module's tests                                                   |
+| File                    | Role                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------- |
+| `app.ts`                | Every `/v1` route, error boundary, request log line                                               |
+| `routes.ts`             | `declareRoute`: a route declaration plus its base error codes; `validationHook`                   |
+| `route-declarations.ts` | The declared routes (`DECLARED_ROUTES`): System and Devices                                       |
+| `lease-declarations.ts` | The declared lease and lease-request routes (`LEASE_ROUTES`), their reply and SSE message schemas |
+| `openapi.ts`            | `buildOpenApiDocument(modules)`: the OpenAPI 3.1 document                                         |
+| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403                                        |
+| `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession`                                  |
+| `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources                                                |
+| `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls                                         |
+| `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response                                         |
+| `sse.ts`                | `pipeSse`: ordered writes, keepalive                                                              |
+| `errors.ts`             | `HttpApiError`, `mapError`: error → status and body                                               |
+| `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`                                      |
+| `test-fakes.ts`         | Fakes for this module's tests                                                                     |
 
 ## How a request runs
 
@@ -40,7 +41,9 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
 4. Input — a declared route's query, path and JSON body schemas run before the handler;
    a failure is 400 `BAD_REQUEST` (`validationHook`). A JSON body without a JSON content type is
    415 `UNSUPPORTED_MEDIA_TYPE`, malformed JSON 400 `Invalid JSON body` (`mapError` reads the
-   library's `HTTPException`). The other routes still take `jsonBody`, a strict zod schema.
+   library's `HTTPException`). Renew's body is optional: an empty body is read as none, whatever
+   the content type, and `emptyBodyAsNone` says so before the validator. The other routes still take
+   `jsonBody`, a strict zod schema.
 5. `buildHttpSession` — principal = the identity's (a token's id, or `proxy:<iss>#<sub>`); `operator` → `admin`, `agent` → `agent`.
 6. `deps.dispatch` — the daemon's own dispatcher, in process: `DaemonServer.dispatch`.
    Role check, `authorize` and readiness parking run there.
@@ -55,7 +58,7 @@ codes: `UNAUTHENTICATED` and `FORBIDDEN` (not on `/v1/healthz`), `DAEMON_STOPPIN
 `DAEMON_STARTUP_FAILED` and `INTERNAL` on every route, `BAD_REQUEST` on a route with any input,
 `UNSUPPORTED_MEDIA_TYPE` on a route with a JSON body. The code lists are documentation: nothing
 enforces them. `app.openapi` registers the declaration, and a handler's JSON reply is type-checked
-against it (never at run time). `route-declarations.ts` holds them, `buildOpenApiDocument` writes
+against it (never at run time; a stream, which declares `stream: sseMessage({...})`, or a bodiless 204 returns any `Response`). `route-declarations.ts` holds them, `buildOpenApiDocument` writes
 the document from the same list, and `pnpm openapi <file>` saves it. The route-coverage test in
 `core-routes.test.ts` lists the routes not declared yet; a declared route leaves that list.
 
