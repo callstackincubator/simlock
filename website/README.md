@@ -34,7 +34,7 @@ pnpm og           # public/og-image.jpg, banner.jpg, favicon.svg, favicon-32.png
 | `src/site/brand.ts`                                                            | The accent; injected as CSS variables everywhere                                                  |
 | `src/site/meta.ts`                                                             | Page titles: `Name: subtitle` on home, `Page                                                      | Name` everywhere else; never write a separator by hand |
 | `src/pages/index.astro`                                                        | Home page layout; reorder sections with `order`                                                   |
-| `src/components/home/Hero.astro`, `hero.ts`, `story.ts`                        | The hero: agents, the gateway table, the workers; the animation and its data                      |
+| `src/components/home/Hero.astro`, `hero.ts`, `story.ts`                        | The hero: copy, then a two-step stage (one machine, then a fleet of them behind a gateway); its animation and data |
 | `src/components/home/ConsoleView.astro`, `console-view.ts`, `console-story.ts` | The drawn console in the Console section                                                          |
 | `src/components/site/dither.ts`                                                | Dithered scenes: `fleet` (the signature), `hollow` (404), `flow`, `mark`                          |
 | `src/components/site/`                                                         | Nav, Lockup, Mark, Window, CodeBlock, CopyCommand, Tabs, Marquee, Faq, PixelIcon, Closing, Footer |
