@@ -164,7 +164,7 @@ export function searchGroups(
     const status = statuses[name];
     if (status !== undefined) {
       const note = status === "loading" ? "Loading…" : `Could not load ${name.toLowerCase()}.`;
-      return [{ name, note, results: found }];
+      return [{ name, note, results: status === "loading" ? [] : found }];
     }
     return found.length === 0 ? [] : [{ name, results: found }];
   });
@@ -172,7 +172,8 @@ export function searchGroups(
 
 export type ReadKind = "loading" | "failed" | "ready";
 
-// why: a group shows "Loading…" until the reads it comes from have settled: Leases wait for the
+// why: a loading group lists no results, so a group already shown never changes when a read
+// settles. A group shows "Loading…" until the reads it comes from have settled: Leases wait for the
 // tokens and workers that name them, and the Actions for every read they are made from; a read
 // that failed is a fallback there, but a failure of the group's own read is the group's note.
 export function groupStatuses(reads: {

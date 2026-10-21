@@ -35,9 +35,9 @@ export function useSearchPalette(): SearchPalette {
   const hide = useCallback(() => setOpen(false), []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!isSearchChord(event) || document.querySelector(MODAL_DIALOG) !== null) return;
+      if (!isSearchChord(event)) return;
       event.preventDefault();
-      show();
+      if (document.querySelector(MODAL_DIALOG) === null) show();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

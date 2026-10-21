@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { leaseRows, type LeaseRecord } from "./leases";
-import { buildResults, searchGroups } from "./search";
+import { buildResults, groupStatuses, searchGroups } from "./search";
 import { type WaitingRequest, waitingTable } from "./waiting";
 import type { WorkerView } from "./workers";
 
@@ -103,6 +103,53 @@ describe("the search results", () => {
     expect(search("drain mac-studio-2", { workers: both })).toEqual([
       "Actions: Drain — mac-studio-2",
       "Actions: Drain — mac-studio-20",
+    ]);
+  });
+});
+
+describe("a group that is still loading", () => {
+  it("lists no results, so Actions and Leases appear only once every read has settled", () => {
+    const workers = [worker("wrk_2", "mac-studio-2", { devices: [PHONE] })];
+    const results = buildResults({
+      leases: leaseRows({ leases: [LEASE], now: NOW, tokens: [], workers }),
+      mode: "gateway",
+      pages: PAGES,
+      requests: waitingTable([REQUEST], workers, NOW).rows,
+      workers,
+    });
+    const groups = searchGroups(
+      results,
+      "mac-studio-2",
+      groupStatuses({
+        leases: "ready",
+        requests: "loading",
+        tokens: "loading",
+        workers: "ready",
+      }),
+    );
+    expect(groups.map((group) => [group.name, group.note, group.results.length])).toEqual([
+      ["Workers", undefined, 1],
+      ["Devices", undefined, 1],
+      ["Leases", "Loading…", 0],
+      ["Requests", "Loading…", 0],
+      ["Actions", "Loading…", 0],
+    ]);
+  });
+});
+
+describe("the order inside a group", () => {
+  it("lists results whose typed words are whole label words first, then the rest, each by label", () => {
+    const workers = [
+      worker("wrk_a", "mac-zed"),
+      worker("wrk_b", "zeta mac"),
+      worker("wrk_c", "mac-b"),
+      worker("wrk_d", "mac-a"),
+    ];
+    expect(search("mac", { workers }).filter((line) => line.startsWith("Workers:"))).toEqual([
+      "Workers: zeta mac",
+      "Workers: mac-a",
+      "Workers: mac-b",
+      "Workers: mac-zed",
     ]);
   });
 });

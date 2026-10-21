@@ -225,7 +225,7 @@ put together from them and draws nothing of its own that one of them already dra
   an ellipsis. The whole id is in the element's `title`, in the text a copy or
   a screen reader reads, and on the details page.
 - **Search.** A dialog near the top of the page over a dim layer (`--bg`, 1px `--border-strong`),
-  36rem wide at most: a box, then the results in groups, each group a mono uppercase label in
+  36rem wide at most: a box, then the results in groups, each group an uppercase label in
   `--text-muted` over its rows. The highlighted row is `--field` with the same 2px `--accent`
   inset edge as the current page in the sidebar; orange marks interaction only. A group still
   loading, or one that failed, shows one `--text-muted` line in place of rows. The box is a
