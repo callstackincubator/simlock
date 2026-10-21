@@ -1,7 +1,7 @@
 import "./foundation.css";
 
 export { Button, ButtonLink } from "./button";
-export { ConfirmHost, createConfirmer, type ConfirmSpec, type Confirmer } from "./confirm-dialog";
+export { ConfirmHost, createConfirmer, type ConfirmSpec } from "./confirm-dialog";
 export { Drawer, DrawerTabs } from "./drawer";
 export { ChartPanel, MinuteChart, MinuteTable } from "./chart";
 export { ChoiceChips, Tabs } from "./choice";
@@ -11,7 +11,7 @@ export { Icon, type IconName } from "./icon";
 export { Link, NavigationProvider } from "./link";
 export { Loaded, type LoadView, Refusal } from "./loaded";
 export { ListRow } from "./master-detail";
-export { ActionBar, type MenuEntry, MenuRow, RowMenu } from "./menu";
+export { ActionBar, type MenuEntry, RowMenu } from "./menu";
 export { Meter } from "./meter";
 export type { Paging } from "./pager";
 export { DesignProvider } from "./provider";
@@ -22,6 +22,6 @@ export { ShareBar, SlotLegend, Slots } from "./slots";
 export { StatRow, StatTile } from "./stat";
 export { Status, StatusDot } from "./status";
 export { type Column, DataTable } from "./table";
-export { createToaster, ToastHost, type Toaster, type ToastSpec } from "./toast";
+export { createToaster, ToastHost, type ToastSpec } from "./toast";
 export { Toolbar } from "./toolbar";
 export { focusAfterClosing } from "./focus-after-drawer";

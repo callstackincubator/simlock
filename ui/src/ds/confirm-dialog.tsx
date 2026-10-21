@@ -84,6 +84,27 @@ function TypedName(props: {
   );
 }
 
+function ConfirmActions(props: { readonly shown: Pending; readonly typed: string }) {
+  const { shown, typed } = props;
+  const { busy, spec } = shown;
+  const waitingForName = spec.typeToConfirm !== undefined && typed !== spec.typeToConfirm;
+  return (
+    <div className="confirm-actions">
+      <Button variant="secondary" disabled={busy} onClick={() => shown.answer(false)}>
+        Keep
+      </Button>
+      <Button
+        variant="primary"
+        className="confirm-danger"
+        disabled={busy || waitingForName}
+        onClick={() => shown.answer(true)}
+      >
+        {busy ? spec.busy : spec.confirm}
+      </Button>
+    </div>
+  );
+}
+
 export function ConfirmHost({ confirmer }: { readonly confirmer: Confirmer }) {
   const pending = useSyncExternalStore(confirmer.subscribe, confirmer.snapshot);
   const [last, setLast] = useState<Pending | undefined>(undefined);
@@ -108,19 +129,7 @@ export function ConfirmHost({ confirmer }: { readonly confirmer: Confirmer }) {
           {spec.typeToConfirm === undefined ? null : (
             <TypedName name={spec.typeToConfirm} typed={typed} onType={setTyped} />
           )}
-          <div className="confirm-actions">
-            <Button variant="secondary" disabled={busy} onClick={() => shown.answer(false)}>
-              Keep
-            </Button>
-            <Button
-              variant="primary"
-              className="confirm-danger"
-              disabled={busy || (spec.typeToConfirm !== undefined && typed !== spec.typeToConfirm)}
-              onClick={() => shown.answer(true)}
-            >
-              {busy ? spec.busy : spec.confirm}
-            </Button>
-          </div>
+          <ConfirmActions shown={shown} typed={typed} />
         </AlertDialog.Popup>
       </AlertDialog.Portal>
     </AlertDialog.Root>
