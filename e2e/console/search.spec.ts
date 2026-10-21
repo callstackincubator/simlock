@@ -88,6 +88,53 @@ test.describe("the search list", () => {
   });
 });
 
+test.describe("the search while data loads", () => {
+  test("opened before the data loads, each group says Loading… and fills in while the highlight stays, and a failed read says it could not load", async ({
+    page,
+  }) => {
+    const host = await startHostWithQueue();
+    try {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route(/\/v1\/leases$/, async (route) => {
+        await gate;
+        await route.continue();
+      });
+      await openConsole(page, host.tokens.operator, new URL("/", host.url).toString());
+      await page.keyboard.press("Control+k");
+      const dialog = page.getByRole("dialog", { name: "Search" });
+      await dialog.getByRole("combobox").fill("nav");
+      const highlighted = dialog.locator("[data-highlighted]");
+      await expect(highlighted).toContainText("nav-waiter");
+      await expect(dialog.getByText("Loading…")).toHaveCount(2);
+      await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(0);
+
+      release();
+      await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(2);
+      await expect(dialog.getByText("Loading…")).toHaveCount(0);
+      await expect(highlighted).toContainText("nav-waiter");
+      await expect(highlighted).toHaveCount(1);
+
+      await page.keyboard.press("Escape");
+      await page.unroute(/\/v1\/leases$/);
+      await page.route(/\/v1\/workers$/, (route) =>
+        route.fulfill({ body: "{}", contentType: "application/json", status: 500 }),
+      );
+      await page.reload();
+      await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeVisible();
+      await page.keyboard.press("Control+k");
+      await dialog.getByRole("combobox").fill("nav");
+      await expect(dialog.getByText("Could not load workers.")).toBeVisible();
+      await expect(dialog.getByText("Could not load devices.")).toBeVisible();
+      await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(2);
+    } finally {
+      await host.dispose();
+    }
+  });
+});
+
 test.describe("the search shortcut", () => {
   test("⌘K does nothing while a drawer is open", async ({ page }) => {
     const host = await startHostWithQueue();
