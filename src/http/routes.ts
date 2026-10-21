@@ -5,7 +5,15 @@ import { describeSchemaIssues } from "../contract/index.js";
 import { badRequest, errorResponse } from "./errors.js";
 
 export type RouteRole = "public" | "agent" | "admin";
-type RouteTag = "System" | "Devices" | "Lease requests" | "Leases" | "Components";
+type RouteTag =
+  | "System"
+  | "Devices"
+  | "Lease requests"
+  | "Leases"
+  | "Workers"
+  | "Components"
+  | "Tokens"
+  | "Events";
 type SuccessStatus = 200 | 201 | 202 | 204;
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 415 | 422 | 500 | 501 | 503 | 504;
 type JsonContent<Schema extends z.ZodType> = { "application/json": { schema: Schema } };
@@ -232,3 +240,11 @@ export function validationHook(
   if (result.success) return undefined;
   return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
 }
+
+export const platformQuerySchema = z
+  .object({ platform: firstValue(z.string().openapi({ enum: ["ios", "android"] })).optional() })
+  .superRefine((query, context) => {
+    if (query.platform !== undefined && query.platform !== "ios" && query.platform !== "android") {
+      context.addIssue({ code: "custom", message: "platform must be ios or android", path: [] });
+    }
+  });

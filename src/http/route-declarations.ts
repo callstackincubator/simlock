@@ -3,7 +3,7 @@ import { z } from "@hono/zod-openapi";
 import { deviceRecordSchema, OPERATIONS, statusDeviceSchema } from "../contract/index.js";
 import { ADMIN_ROUTES } from "./admin-declarations.js";
 import { LEASE_ROUTES } from "./lease-declarations.js";
-import { declareRoute, firstValue } from "./routes.js";
+import { declareRoute, firstValue, platformQuerySchema } from "./routes.js";
 
 export const healthzRoute = declareRoute({
   method: "get",
@@ -40,21 +40,13 @@ export const deviceAddRoute = declareRoute({
   },
 });
 
-const catalogQuerySchema = z
-  .object({ platform: firstValue(z.string().openapi({ enum: ["ios", "android"] })).optional() })
-  .superRefine((query, context) => {
-    if (query.platform !== undefined && query.platform !== "ios" && query.platform !== "android") {
-      context.addIssue({ code: "custom", message: "platform must be ios or android", path: [] });
-    }
-  });
-
 export const catalogRoute = declareRoute({
   method: "get",
   path: "/v1/catalog",
   tag: "System",
   summary: "The platforms, runtimes and models a lease can ask for",
   role: "agent",
-  request: { query: catalogQuerySchema },
+  request: { query: platformQuerySchema },
   reply: OPERATIONS["catalog.get"].output,
 });
 

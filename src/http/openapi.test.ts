@@ -234,8 +234,8 @@ describe("buildOpenApiDocument", () => {
       const found = operation(path, method);
       return {
         codes501: errorCodes(found, "501"),
-        gatewayOnly: found?.description?.includes("gateway only"),
-        workerOnly: found?.description?.includes("worker only"),
+        gatewayOnly: found?.description?.toLowerCase().includes("gateway only"),
+        workerOnly: found?.description?.toLowerCase().includes("worker only"),
       };
     };
     expect({
@@ -261,7 +261,9 @@ describe("buildOpenApiDocument", () => {
         workerOnly: true,
       },
     });
-    expect(operation("/v1/components/install", "post")?.description).toContain("without `workers`");
+    expect(operation("/v1/components/install", "post")?.description?.toLowerCase()).toContain(
+      "without `workers`",
+    );
 
     expect(
       Object.fromEntries(

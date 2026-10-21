@@ -10,7 +10,7 @@ import { buildOpenApiDocument } from "./openapi.js";
 import { DECLARED_ROUTES } from "./route-declarations.js";
 import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from "./test-fakes.js";
 
-// why: a task that declares a route deletes its line, so the list shrinks to nothing.
+// why: every route is declared, so nothing is undeclared; a route added without a declaration goes on this list until it has one.
 const UNDECLARED_ROUTES: readonly string[] = [];
 
 function coverageProblems(

@@ -16,7 +16,18 @@ import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
 import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
-import { componentInstallRoute } from "./admin-declarations.js";
+import {
+  componentInstallRoute,
+  componentListRoute,
+  componentRemoveRoute,
+  eventsRoute,
+  eventsStreamRoute,
+  tokenListRoute,
+  workerDrainRoute,
+  workerListRoute,
+  workerRemoveRoute,
+  workerUndrainRoute,
+} from "./admin-declarations.js";
 import {
   badRequest,
   errorResponse,
@@ -215,34 +226,29 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     ),
   );
 
-  app.get("/v1/components", agentAuth, async (c) => {
-    const platform = c.req.query("platform");
-    if (platform !== undefined && platform !== "ios" && platform !== "android") {
-      throw badRequest("platform must be ios or android");
-    }
-    const result = await deps.dispatch(
-      "component.list",
-      platform === undefined ? {} : { platform },
-      buildHttpSession(c.get("identity")),
+  app.openapi({ ...componentListRoute, middleware: [agentAuth] }, async (c) => {
+    const { platform } = c.req.valid("query");
+    return c.json(
+      await deps.dispatch(
+        "component.list",
+        platform === undefined ? {} : { platform },
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
     );
-    return c.json(result);
   });
 
-  app.delete("/v1/components/:platform/:version", agentAuth, async (c) => {
-    const dryRun = c.req.query("dryRun");
-    if (dryRun !== undefined && dryRun !== "true" && dryRun !== "false") {
-      throw badRequest("dryRun must be true or false");
-    }
-    const result = await deps.dispatch(
-      "component.remove",
-      {
-        platform: c.req.param("platform"),
-        version: c.req.param("version"),
-        ...(dryRun === undefined ? {} : { dryRun: dryRun === "true" }),
-      },
-      buildHttpSession(c.get("identity")),
+  app.openapi({ ...componentRemoveRoute, middleware: [agentAuth] }, async (c) => {
+    const { dryRun } = c.req.valid("query");
+    const { platform, version } = c.req.valid("param");
+    return c.json(
+      await deps.dispatch(
+        "component.remove",
+        { platform, version, ...(dryRun === undefined ? {} : { dryRun: dryRun === "true" }) },
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
     );
-    return c.json(result);
   });
 
   app.openapi({ ...deviceAddRoute, middleware: [agentAuth] }, async (c) =>
@@ -602,8 +608,8 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   // The token records, for a console to name a lease's holder by its token's label. `token.list`
   // is an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher, and
   // its output schema has no secret and no hash, so neither can reach the body.
-  app.get("/v1/tokens", agentAuth, async (c) =>
-    c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity")))),
+  app.openapi({ ...tokenListRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
   app.openapi({ ...identityRoute, middleware: [agentAuth] }, async (c) =>
@@ -625,47 +631,46 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   //
   // Operator-role in effect: `worker.*` are admin operations, so an agent token gets
   // `FORBIDDEN`/403 from the shared dispatcher rather than from a second check here.
-  app.get("/v1/workers", agentAuth, async (c) =>
-    c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity")))),
+  app.openapi({ ...workerListRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
-  app.post("/v1/workers/:id/drain", agentAuth, async (c) =>
+  app.openapi({ ...workerDrainRoute, middleware: [agentAuth] }, async (c) =>
     c.json(
       await deps.dispatch(
         "worker.drain",
-        { workerId: c.req.param("id") },
+        { workerId: c.req.valid("param").id },
         buildHttpSession(c.get("identity")),
       ),
+      200,
     ),
   );
 
-  app.delete("/v1/workers/:id/drain", agentAuth, async (c) =>
+  app.openapi({ ...workerUndrainRoute, middleware: [agentAuth] }, async (c) =>
     c.json(
       await deps.dispatch(
         "worker.undrain",
-        { workerId: c.req.param("id") },
+        { workerId: c.req.valid("param").id },
         buildHttpSession(c.get("identity")),
       ),
+      200,
     ),
   );
 
-  app.delete("/v1/workers/:id", agentAuth, async (c) =>
+  app.openapi({ ...workerRemoveRoute, middleware: [agentAuth] }, async (c) =>
     c.json(
       await deps.dispatch(
         "worker.remove",
-        { workerId: c.req.param("id") },
+        { workerId: c.req.valid("param").id },
         buildHttpSession(c.get("identity")),
       ),
+      200,
     ),
   );
 
-  app.get("/v1/events", agentAuth, async (c) => {
-    const since = c.req.query("since");
-    const answer = eventsPageQuery({
-      before: c.req.query("before"),
-      limit: c.req.query("limit"),
-      since,
-    });
+  app.openapi({ ...eventsRoute, middleware: [agentAuth] }, async (c) => {
+    const { before, limit, since } = c.req.valid("query");
+    const answer = eventsPageQuery({ before, limit, since });
     if ("refused" in answer) throw badRequest(answer.refused);
     const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);
     const events = await deps.dispatch(
@@ -673,7 +678,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       sinceTs === undefined ? answer.page : { ...answer.page, sinceTs },
       buildHttpSession(c.get("identity")),
     );
-    return c.json({ events });
+    return c.json({ events }, 200);
   });
 
   app.openapi({ ...statsRoute, middleware: [agentAuth] }, async (c) => {
@@ -697,7 +702,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     );
   });
 
-  app.get("/v1/events/stream", agentAuth, async (c) => {
+  app.openapi({ ...eventsStreamRoute, middleware: [agentAuth] }, async (c) => {
     const identity = c.get("identity");
     let unsubscribeBus: (() => void) | undefined;
     const session = buildHttpSession(identity, {
