@@ -97,6 +97,15 @@
   min-width: 0;
 }
 
+/* A worker named by its id is a long UUID; one line, cut, with the whole id in its title. */
+.worker-name a {
+  display: block;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .worker-system {
   color: var(--text-muted);
   font-size: var(--text-xs);

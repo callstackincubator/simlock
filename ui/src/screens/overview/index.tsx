@@ -84,13 +84,7 @@ export function OverviewBody(props: {
         <StatTile {...overview.ending} />
       </StatRow>
       <Row>
-        {leases === undefined ? (
-          <Panel title="Figures">
-            <FigureNote figures={figures} />
-          </Panel>
-        ) : (
-          <ChartPanel chart={leases} />
-        )}
+        <NeedsYou inbox={overview.inbox} />
         <Panel title="Capacity · all workers">
           <div className="capacity">
             {overview.capacity.map((platform) => (
@@ -99,21 +93,21 @@ export function OverviewBody(props: {
           </div>
         </Panel>
       </Row>
-      {others.length === 0 ? null : (
-        <Row even>
-          {others.map((chart) => (
-            <ChartPanel key={chart.key} chart={chart} />
-          ))}
-        </Row>
-      )}
-      <Row>
-        <Panel title="Workers" flush actions={<Link to="/fleet">Open Fleet</Link>}>
-          <WorkersTable rows={overview.workers} empty="No workers have connected." />
-        </Panel>
-        <div className="overview-side">
-          <NeedsYou inbox={overview.inbox} />
-        </div>
+      <Row even>
+        {leases === undefined ? (
+          <Panel title="Figures">
+            <FigureNote figures={figures} />
+          </Panel>
+        ) : (
+          <ChartPanel chart={leases} />
+        )}
+        {others.map((chart) => (
+          <ChartPanel key={chart.key} chart={chart} />
+        ))}
       </Row>
+      <Panel title="Workers" flush actions={<Link to="/fleet">Open Fleet</Link>}>
+        <WorkersTable rows={overview.workers} empty="No workers have connected." />
+      </Panel>
     </>
   );
 }
@@ -153,10 +147,14 @@ function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
       <p className="muted">{`Could not check: ${inbox.couldNotCheck.join(", ")}`}</p>
     );
   if (inbox.problems === 0) {
-    return unchecked ?? <p className="muted">Nothing needs you</p>;
+    return (
+      <Panel title="Needs you">
+        {unchecked ?? <p className="muted needs-you-none">Nothing needs you</p>}
+      </Panel>
+    );
   }
   return (
-    <>
+    <div className="overview-side">
       <Panel title="Needs you" flush>
         <ul className="overview-list">
           {inbox.needsYou.map((item) => (
@@ -173,6 +171,6 @@ function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
         </p>
       </Panel>
       {unchecked}
-    </>
+    </div>
   );
 }

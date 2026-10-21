@@ -11,7 +11,7 @@ const PATHS = {
   menu: "M2 4h12M2 8h12M2 12h12",
   close: "M3 3l10 10M13 3L3 13",
   signOut: "M6 2.5H2.5v11H6M10 5l3 3-3 3M13 8H6",
-  more: "M3 8h.01M8 8h.01M13 8h.01",
+  more: "M3.5 8h.01M8 8h.01M12.5 8h.01",
   device: "M5 1.5h6v13H5zM7.5 12.5h1",
   search: "M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5",
 } as const;
@@ -28,6 +28,7 @@ export function Icon({ name }: { readonly name: IconName }) {
       fill="none"
       stroke="currentColor"
       strokeWidth="1.5"
+      strokeLinecap="square"
       aria-hidden="true"
       focusable="false"
     >

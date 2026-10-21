@@ -98,12 +98,6 @@ function columnOf(bucketMs: number): string {
   return bucketMs <= 60_000 ? "Minute" : "Time";
 }
 
-function disclosureOf(bucketMs: number): string {
-  if (bucketMs >= 3_600_000) return "Hour by hour";
-  if (bucketMs <= 60_000) return "Minute by minute";
-  return `Every ${bucketMs / 60_000} minutes`;
-}
-
 export function MinuteTable(props: {
   readonly minutes: readonly MinuteCount[];
   readonly heading: string;
@@ -111,36 +105,34 @@ export function MinuteTable(props: {
 }) {
   const { bucketMs = 60_000, heading, minutes } = props;
   return (
-    <details className="chart-data">
-      <summary>{disclosureOf(bucketMs)}</summary>
-      <table className="table">
-        <thead>
-          <tr>
-            <th scope="col">{columnOf(bucketMs)}</th>
-            <th scope="col" className="num">
-              {heading}
-            </th>
+    <table className="chart-data visually-hidden">
+      <caption>{heading}</caption>
+      <thead>
+        <tr>
+          <th scope="col">{columnOf(bucketMs)}</th>
+          <th scope="col" className="num">
+            {heading}
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {[...minutes].reverse().map((minute) => (
+          <tr key={minute.at}>
+            <td data-label={columnOf(bucketMs)} className="mono">
+              {minute.label}
+            </td>
+            <td data-label={heading} className="num">
+              {minute.count ?? "—"}
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {[...minutes].reverse().map((minute) => (
-            <tr key={minute.at}>
-              <td data-label={columnOf(bucketMs)} className="mono">
-                {minute.label}
-              </td>
-              <td data-label={heading} className="num">
-                {minute.count ?? "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </details>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
 // why: the Overview and Usage draw a minute series the same way: the chart, its one-line summary
-// for a reader who cannot see it, and the table of the same numbers.
+// and the table of the same numbers, both for a reader who cannot see it; the table is not drawn.
 export function ChartPanel(props: {
   readonly chart: {
     readonly title: string;

@@ -231,7 +231,7 @@ test.describe("the Usage page", () => {
       await expect(
         page.getByRole("heading", { name: "Device slots in use, last 6 hours", exact: true }),
       ).toBeVisible();
-      await expect(page.locator("#main details.chart-data")).toHaveCount(1);
+      await expect(page.locator("#main table.chart-data")).toHaveCount(1);
     } finally {
       await host.dispose();
     }

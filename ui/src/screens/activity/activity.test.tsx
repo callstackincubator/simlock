@@ -126,7 +126,7 @@ describe("the events page", () => {
     expect(text(html)).toContain(
       "3 events in the last hour; the busiest minute was 11:30, with 3.",
     );
-    expect(html).toContain("<summary>Minute by minute</summary>");
+    expect(html).toContain('<table class="chart-data visually-hidden">');
   });
 
   it("offers the subjects as a radio group with the chosen one checked", () => {

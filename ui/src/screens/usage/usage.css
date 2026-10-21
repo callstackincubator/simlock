@@ -17,3 +17,9 @@
 .usage-id {
   margin-left: var(--space-2);
 }
+
+/* Tables too wide for a small cell take a whole row each, after the small panels. */
+.usage-span {
+  grid-column: 1 / -1;
+  order: 1;
+}

@@ -244,7 +244,7 @@ put together from them and draws nothing of its own that one of them already dra
   `--accent`, an area with a faint fill of it (8%), horizontal grid lines in
   `--border`, axis labels in Geist Mono `--text-muted`. Every colour comes from
   the stylesheet by class. Nothing moves: animation is off. Every chart has a
-  title saying what it counts, its numbers as a line of text under it, and every bucket as a table behind a disclosure named by the bucket width ("Minute by minute", "Every 5 minutes", "Hour by hour"), so
+  title saying what it counts, its numbers as a line of text under it, and every bucket in a table only a screen reader reads, so
   nothing is visible only in the picture. A chart can be focused, and the
   arrow keys step through it. Its focus ring goes round the whole chart, for
   keyboard focus only: a click on a chart draws none.

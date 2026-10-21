@@ -157,7 +157,7 @@ function Figures(props: {
             rows={view.bySource}
             empty="No grants in this range."
           />
-          <Panel title="Durations">
+          <Panel title="Durations" className="usage-span">
             <DataTable
               label="Durations"
               rows={view.durations}
@@ -165,7 +165,6 @@ function Figures(props: {
               rowId={(row) => row.name}
               empty="No durations."
               paging={wholePage(view.durations.length)}
-              wide
             />
           </Panel>
           <Counts
@@ -174,7 +173,7 @@ function Figures(props: {
             rows={view.rejections}
             empty="No requests were rejected."
           />
-          <Panel title="Use over the range">
+          <Panel title="Use over the range" className="usage-span">
             <DataTable
               label="Use over the range"
               rows={view.use}

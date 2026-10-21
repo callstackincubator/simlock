@@ -6,6 +6,13 @@
   inset: 0;
   z-index: 40;
   background: color-mix(in srgb, var(--bg) 70%, transparent);
+  animation: drawer-dim-in var(--duration-move) var(--ease);
+}
+
+@keyframes drawer-dim-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .drawer {
@@ -19,20 +26,21 @@
   width: 480px;
   max-width: 100%;
   overflow-y: auto;
-  border-left: 1px solid var(--border-strong);
+  border-left: 1px solid var(--border);
   background: var(--bg);
+  box-shadow: -16px 0 32px color-mix(in srgb, #000 30%, transparent);
   animation: drawer-in var(--duration-move) var(--ease);
 }
 
 @keyframes drawer-in {
   from {
-    transform: translateX(24px);
-    opacity: 0;
+    transform: translateX(100%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .drawer {
+  .drawer,
+  .drawer-dim {
     animation: none;
   }
 }
@@ -42,6 +50,11 @@
     width: 100%;
     border-left: 0;
   }
+}
+
+/* The popup takes focus on opening; a ring around the whole panel reads as a stray border. */
+.drawer:focus-visible {
+  outline: none;
 }
 
 .drawer-head {

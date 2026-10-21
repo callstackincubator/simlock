@@ -111,10 +111,6 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
-        // why: a drawer makes the page behind it inert, so its disclosures cannot be opened.
-        if (!opensDrawer(path)) {
-          for (const summary of await page.locator("#main summary").all()) await summary.click();
-        }
         expect(await hasHorizontalScroll(page), path).toBe(false);
       }
     } finally {
@@ -170,9 +166,8 @@ test.describe("every view", () => {
       await chart.focus();
       await page.keyboard.press("ArrowLeft");
       await expect(page.locator(".chart-tip")).toContainText("leases held");
-      await page.locator("#main summary").first().focus();
-      await page.keyboard.press("Enter");
-      await expect(page.getByRole("columnheader", { name: "Leases held" })).toBeVisible();
+      // why: the chart's numbers are a table only a screen reader reads; it holds no stop for the keyboard.
+      await expect(page.getByRole("table", { name: "Leases held" })).toBeAttached();
       await visit(page, host, "/activity");
       await page.getByRole("radio", { name: "All" }).focus();
       await page.keyboard.press("ArrowRight");
@@ -281,7 +276,6 @@ test.describe("every view", () => {
         if (!opensDrawer(path) && (await chart.count()) > 0) {
           await chart.hover();
           await expect(page.locator(".chart-tip")).toBeVisible();
-          await page.locator("#main summary").first().click();
         }
         const found = await page.evaluate(() => ({
           styles: document.querySelectorAll("style").length,

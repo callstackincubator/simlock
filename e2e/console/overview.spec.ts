@@ -101,7 +101,7 @@ async function tileText(page: Page, label: string): Promise<string> {
 }
 
 async function tablesOf(page: Page): Promise<readonly (readonly string[])[]> {
-  const tables = page.locator("#main details.chart-data");
+  const tables = page.locator("#main table.chart-data");
   const count = await tables.count();
   return Promise.all(
     Array.from({ length: count }, (_, index) =>
@@ -248,7 +248,7 @@ test.describe("the Overview's figures", () => {
       await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 0 | under 5 min");
       await expect(page.getByRole("region", { name: "Leases held" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Requests in the queue" })).toBeVisible();
-      await expect(page.locator("#main details.chart-data")).toHaveCount(2);
+      await expect(page.locator("#main table.chart-data")).toHaveCount(2);
       await expect(page.getByRole("region", { name: "Activity" })).toHaveCount(0);
     } finally {
       await host.dispose();
@@ -308,7 +308,7 @@ async function workerConnection(host: RunningDaemon, label: string): Promise<str
 }
 
 test.describe("the Overview's Inbox lines", () => {
-  test("an empty Inbox shows Nothing needs you and no Needs you panel; a disconnected worker shows the panel with that item first, and All in Inbox (1)", async ({
+  test("an empty Inbox shows Nothing needs you in the Needs you panel; a disconnected worker shows the panel with that item first, and All in Inbox (1)", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -317,8 +317,9 @@ test.describe("the Overview's Inbox lines", () => {
     ]);
     try {
       await openOverview(page, fleet.gateway);
-      await expect(page.getByText("Nothing needs you")).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Needs you" })).toHaveCount(0);
+      await expect(
+        page.getByRole("region", { name: "Needs you" }).getByText("Nothing needs you"),
+      ).toBeVisible();
 
       await (fleet.workers[1] as RunningDaemon).stop();
       await waitFor(

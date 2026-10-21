@@ -105,7 +105,9 @@ const COLUMNS: readonly Column<WorkerRow>[] = [
   {
     cell: (row) => (
       <span className="worker-name">
-        <Link to={row.to}>{row.name}</Link>
+        <Link to={row.to} title={row.name}>
+          {row.name}
+        </Link>
         {row.system === undefined ? null : <span className="worker-system">{row.system}</span>}
       </span>
     ),

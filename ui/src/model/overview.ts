@@ -6,6 +6,7 @@ import {
   inboxSubject,
   inboxTone,
 } from "./inbox";
+import { platformSlots } from "./fleet";
 import { isExpiring, type LeaseRecord, type TokenRecord } from "./leases";
 import type { FiguresState } from "./figures";
 import { formatCount } from "./paging";
@@ -76,6 +77,7 @@ const PARTS = [
   { kind: "absent", word: "absent" },
   { kind: "shutdown", word: "shut down" },
   { kind: "offline", word: "offline" },
+  { kind: "free", word: "free" },
 ] as const;
 
 export type PartKind = (typeof PARTS)[number]["kind"];
@@ -110,6 +112,9 @@ function platformCapacity(
       const part = device.spec.platform === platform ? partOf(worker, device) : undefined;
       if (part !== undefined) counts.set(part, (counts.get(part) ?? 0) + 1);
     }
+    // why: the bar is the room every worker may run, so a full bar means no room left.
+    const free = platformSlots(worker, platform).filter((slot) => slot.kind === "free").length;
+    if (free > 0) counts.set("free", (counts.get("free") ?? 0) + free);
   }
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
   return {

@@ -203,7 +203,7 @@ describe("the overview", () => {
     ]);
   });
 
-  it("counts every read device per platform by part: a drained worker's ready device is drained, a disconnected worker's devices are offline, a shutdown device is shut down, a deleted one is not counted, and a worker not read yet adds nothing", () => {
+  it("counts every read device per platform by part: a drained worker's ready device is drained, a disconnected worker's devices are offline, a shutdown device is shut down, a deleted one is not counted, and a worker not read yet adds nothing; the room left under connected workers' limits is free", () => {
     const workers = [
       worker("w1", [
         device("a", "leased", "ios"),
@@ -238,28 +238,30 @@ describe("the overview", () => {
       capacity.map((platform) => [
         platform.name,
         platform.notRead,
-        platform.parts.map((part) => [part.count, part.word, part.percent]),
+        platform.parts.map((part) => [part.count, part.word, Math.round(part.percent)]),
       ]),
     ).toEqual([
       [
         "iOS",
         1,
         [
-          [2, "leased", 20],
-          [1, "ready", 10],
-          [2, "booting", 20],
-          [2, "drained", 20],
-          [1, "absent", 10],
-          [1, "shut down", 10],
-          [1, "offline", 10],
+          [2, "leased", 18],
+          [1, "ready", 9],
+          [2, "booting", 18],
+          [2, "drained", 18],
+          [1, "absent", 9],
+          [1, "shut down", 9],
+          [1, "offline", 9],
+          [1, "free", 9],
         ],
       ],
       [
         "Android",
         1,
         [
-          [1, "quarantined", 50],
-          [1, "offline", 50],
+          [1, "quarantined", 20],
+          [1, "offline", 20],
+          [3, "free", 60],
         ],
       ],
     ]);

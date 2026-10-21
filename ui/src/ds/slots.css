@@ -91,12 +91,20 @@
 
 .share-bar {
   display: flex;
+  gap: 2px;
   height: 10px;
   background: var(--field);
 }
 
 .share {
   display: block;
+  flex: none;
   width: var(--share, 0%);
   transition: width var(--duration-move) var(--ease);
+}
+
+/* Free room is the bar's own field showing through, not a dashed box. */
+.share.slot-free {
+  border: 0;
+  background: transparent;
 }
