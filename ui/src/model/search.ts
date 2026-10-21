@@ -1,3 +1,4 @@
+import type { DaemonModeName } from "./actions";
 import type { LeaseRowView } from "./leases";
 import { devicePath } from "./paths";
 import type { WaitingRow } from "./waiting";
@@ -30,6 +31,7 @@ export interface SearchInput {
   readonly workers: readonly WorkerView[];
   readonly leases: readonly LeaseRowView[];
   readonly requests: readonly WaitingRow[];
+  readonly mode: DaemonModeName | undefined;
 }
 
 export function buildResults(input: SearchInput): readonly SearchResult[] {

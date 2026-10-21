@@ -5,7 +5,7 @@ import { leaseRows, type LeaseList, type TokenList } from "../model/leases";
 import { buildResults, searchGroups } from "../model/search";
 import { type WaitingList, waitingTable } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
-import { useLiveResource, useNow } from "./live";
+import { useDaemonMode, useLiveResource, useNow } from "./live";
 import { navigate } from "./router";
 
 export interface SearchPalette {
@@ -38,9 +38,11 @@ export function useSearchSession(
   const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
   const requests = useLiveResource<WaitingList>("/v1/lease-requests").data?.requests ?? [];
   const now = useNow();
+  const mode = useDaemonMode();
   const [results] = useState(() =>
     buildResults({
       leases: leaseRows({ leases, now: now.server, tokens, workers }),
+      mode,
       pages,
       requests: waitingTable(requests, workers, now.server).rows,
       workers,
