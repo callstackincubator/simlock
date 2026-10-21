@@ -1573,11 +1573,21 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (role === undefined) {
     logFatalStart(undefined, "Unknown daemon arguments", { argv });
   } else {
-    void startDaemon({ role }).catch((error: unknown) => {
-      logFatalStart(role, error instanceof Error ? error.message : String(error), {
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+    let running: DaemonServer | undefined;
+    // why: a service manager stops the daemon with SIGTERM; one that arrives before startup has finished has nothing to stop, and exits 0 so the manager does not restart it.
+    process.once("SIGTERM", () => {
+      if (running === undefined) process.exit(0);
+      void running.stop("signal").finally(() => process.exit(0));
     });
+    void startDaemon({ role })
+      .then((daemon) => {
+        running = daemon;
+      })
+      .catch((error: unknown) => {
+        logFatalStart(role, error instanceof Error ? error.message : String(error), {
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      });
   }
 }
 
