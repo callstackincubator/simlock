@@ -2711,7 +2711,8 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
         gateway: { url: "ws://127.0.0.1:1", token: "join-secret" },
         http: { enabled: true },
       });
-      const launcher = new FakeDaemonLauncher();
+      // why: a launcher that exits at once, so a start that wrongly launches fails the launches assertion instead of waiting out the test.
+      const launcher = new FakeDaemonLauncher(undefined, { exit: { code: 1, signal: null } });
       const output = outputCapture({
         ...realCliEnvironmentPorts(filesystem),
         daemonHome: homeWithGateway,

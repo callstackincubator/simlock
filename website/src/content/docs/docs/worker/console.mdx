@@ -13,7 +13,7 @@ On a gateway the same console shows every worker in the fleet. See [Fleet consol
 
 ## Turn on the console
 
-The console comes with the HTTP API. It is on whenever HTTP is on, and there is no separate switch. On a worker, HTTP is off by default.
+The console comes with the HTTP API. It is on whenever HTTP is on, and there is no separate switch. On a worker, HTTP is off by default. A worker that has joined a gateway cannot turn it on: use the gateway's console instead.
 
 <Aside type="caution">
 Turning on HTTP opens a network listener. By default it listens on `127.0.0.1:4701`, so only this machine can reach it. If you set `http.host` to `0.0.0.0` or another address, anyone who can reach that port can load the sign-in page and call the HTTP API with a token. Simlock does not do TLS: to reach the console from another machine, put a reverse proxy or a tunnel in front of it.
