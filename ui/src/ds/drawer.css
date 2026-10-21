@@ -28,7 +28,6 @@
   overflow-y: auto;
   border-left: 1px solid var(--border);
   background: var(--bg);
-  box-shadow: -16px 0 32px color-mix(in srgb, #000 30%, transparent);
   animation: drawer-in var(--duration-move) var(--ease);
 }
 
