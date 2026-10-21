@@ -578,7 +578,9 @@ test.describe("the Inbox view", () => {
     }
   });
 
-  test("the Inbox count shows in the shell from every view", async ({ page }) => {
+  test("the sidebar's Inbox count equals the problem items and is hidden at 0", async ({
+    page,
+  }) => {
     const gateway = await startDaemon("gateway");
     const hangUps: (() => void)[] = [];
     try {
@@ -587,6 +589,56 @@ test.describe("the Inbox view", () => {
       await untilTheDaemonSays(
         gateway,
         (views) => views.filter((view) => view.connection === "incompatible").length === 2,
+      );
+      // why: a request that has waited two minutes is a problem item and counts; a lease about to end
+      // is a heads-up and does not. Neither can be had quickly from a real daemon, so both are stubbed,
+      // the waiting list by `waiters` so that it can empty.
+      let waiters = ["long-waiter"];
+      await page.route(
+        (url) => url.pathname === "/v1/lease-requests",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          await route.fulfill({
+            json: {
+              requests: waiters.map((id) => ({
+                createdAt: now - 125_000,
+                id,
+                platform: "ios",
+                queuePosition: 1,
+                requesterId: id,
+                spec: { platform: "ios" },
+                stage: "queued",
+              })),
+            },
+            response,
+          });
+        },
+      );
+      await page.route(
+        (url) => url.pathname === "/v1/leases",
+        async (route: Route) => {
+          const response = await route.fetch();
+          const now = new Date(response.headers().date ?? "").getTime();
+          await route.fulfill({
+            json: {
+              leases: [
+                {
+                  deviceId: "dev_stub",
+                  grantedAt: now - 60_000,
+                  id: "lease-soon",
+                  idChosenByRequester: false,
+                  lastRenewedAt: now - 30_000,
+                  ownerId: "tok_stub",
+                  requesterId: "tok_stub",
+                  ttlDeadline: now + 60_000,
+                  ttlMs: 900_000,
+                },
+              ],
+            },
+            response,
+          });
+        },
       );
       await page.goto(gateway.url);
       await signIn(page, gateway.tokens.operator);
@@ -600,7 +652,7 @@ test.describe("the Inbox view", () => {
           .getByRole("link", { name: label })
           .click();
         await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
-        await expect(inboxLink).toHaveAccessibleName("Inbox 2 items");
+        await expect(inboxLink).toHaveAccessibleName("Inbox 3 items");
       }
 
       // why: One worker hangs up and is removed: its item goes, and one from the count.
@@ -611,7 +663,18 @@ test.describe("the Inbox view", () => {
       const removed = await gateway.cli(["worker", "remove", "wrk_old_1"]);
       expect(removed.code, removed.stderr).toBe(0);
       await untilTheDaemonSays(gateway, (views) => views.length === 1);
+      await expect(inboxLink).toHaveAccessibleName("Inbox 2 items");
+
+      waiters = [];
       await expect(inboxLink).toHaveAccessibleName("Inbox 1 item");
+
+      hangUps.shift()?.();
+      await untilTheDaemonSays(gateway, (views) =>
+        views.some((view) => view.id === "wrk_old_2" && view.connection === "disconnected"),
+      );
+      const removedLast = await gateway.cli(["worker", "remove", "wrk_old_2"]);
+      expect(removedLast.code, removedLast.stderr).toBe(0);
+      await expect(inboxLink).toHaveAccessibleName("Inbox");
     } finally {
       for (const hangUp of hangUps) hangUp();
       await gateway.dispose();
