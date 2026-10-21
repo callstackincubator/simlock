@@ -131,8 +131,12 @@ Two transitions stay manual on purpose, one click each: `bug:new` →
 last five: blocking findings per review raised and fixed, notes, PRs
 needing a second round, median hours to merge, rounds and tokens,
 handoffs. `--since <date>` lists PRs; `--calibration` prints the recent
-incorrect findings every reviewer reads. Change one thing in the pipeline
-at a time and compare the rows before and after.
+incorrect findings every reviewer reads. `delivery-counters.mjs --since
+<date>` prints the per-PR counters the process review judges delivery
+changes by (CI lines sent to fix runs, stack syncs, empty builds, fix runs
+that changed nothing, tests per Tests line), and `instruction-reads.mjs`
+how often each role opens each rule, brief and manual. Change one thing in
+the pipeline at a time and compare the rows before and after.
 
 Weekly routines keep the suite and the reviews in shape: `harden-tests`,
 `audit-tests`, `garden-comments` and `calibrate-reviews`

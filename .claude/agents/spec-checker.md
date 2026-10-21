@@ -91,8 +91,9 @@ _note_:
 - **Note**: anything else, above all a gap the implementer may close as an
   `Assumption:` line (`coding.md` rule 2): a wording, an order, a bound
   the spec implies. A test for a case the spec does not name, defensive
-  handling, a needless Depends on, a task slightly over size. At most five
-  notes, the ones most likely to matter; drop the rest.
+  handling, a needless Depends on, a task slightly over size. A note only
+  when the implementer would act on it; none is the usual count, and a
+  report never pads to a number.
 
 1. **contradiction.** A line that breaks an agent rule or an accepted ADR,
    or two lines that cannot both hold. A Done when line the task's own

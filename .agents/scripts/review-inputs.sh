@@ -2,7 +2,12 @@
 # Builds the blind inputs for the pre-merge reviews of a PR (delivery rule 14) and prints the
 # directory's path as the last line on stdout.
 #
-#   .agents/scripts/review-inputs.sh <pr> [<previous commit>]
+#   .agents/scripts/review-inputs.sh <pr> [<previous commit> [<previous base>]]
+#
+# A previous commit that is no ancestor of the head (the branch was rebased or the stack synced)
+# is mapped to its rebased equivalent when its base is given: the same number of commits from
+# the new base, each with the same patch-id as its old counterpart. Any difference (a conflict
+# resolved, a commit dropped) stays incomplete, as a rebased history nobody can map is.
 #
 # The directory holds, when each exists:
 #
@@ -10,6 +15,7 @@
 #   commit                 the PR head the directory was built from
 #   base, merge-base       immutable actual PR base tip and fork
 #   previous               validated ancestor for targeted checks
+#   previous-mapped-from   the previous commit as given, when it was mapped across a rebase
 #   review-protocol.md     review policy from the pinned base, when present
 #   kind                   what .agents/scripts/diff-kind.mjs calls the diff: adr-only,
 #                          docs-only, comments-only, tests-only, full or large; it sets which
@@ -43,9 +49,10 @@ set -eu
 
 pr=${1:-}
 previous=${2:-}
+previous_base=${3:-}
 case $pr in
   '' | *[!0-9]*)
-    echo "usage: review-inputs.sh <pr number> [<previous commit>]" >&2
+    echo "usage: review-inputs.sh <pr number> [<previous commit> [<previous base>]]" >&2
     exit 64
     ;;
 esac
@@ -106,10 +113,28 @@ if [ -n "$previous" ]; then
     say "previous commit is unavailable; assessment incomplete"
     exit 65
   }
-  git merge-base --is-ancestor "$previous" "$head" || {
-    say "previous commit is not an ancestor of head; assessment incomplete"
-    exit 65
-  }
+  mapped_from=
+  if ! git merge-base --is-ancestor "$previous" "$head"; then
+    if [ -z "$previous_base" ]; then
+      say "previous commit is not an ancestor of head (rebased?); pass its base to map it, else assessment incomplete"
+      exit 65
+    fi
+    previous_base=$(git rev-parse --verify "$previous_base^{commit}" 2>/dev/null) || {
+      say "previous base is unavailable; assessment incomplete"
+      exit 65
+    }
+    n=$(git rev-list --count --no-merges "$previous_base..$previous")
+    old_ids=$(git rev-list --reverse --no-merges "$previous_base..$previous" | while read -r c; do git show "$c" | git patch-id --stable | cut -d' ' -f1; done)
+    new_ids=$(git rev-list --reverse --no-merges "$base..$head" | head -n "$n" | while read -r c; do git show "$c" | git patch-id --stable | cut -d' ' -f1; done)
+    if [ "$n" -gt 0 ] && [ "$old_ids" = "$new_ids" ]; then
+      mapped_from=$previous
+      previous=$(git rev-list --reverse --no-merges "$base..$head" | sed -n "${n}p")
+      say "previous $mapped_from mapped across the rebase to $previous ($n commits, same patch-ids)"
+    else
+      say "previous commit is not an ancestor of head and its $n commits do not match the rebased history by patch-id; assessment incomplete"
+      exit 65
+    fi
+  fi
 fi
 
 tmp=${TMPDIR:-/tmp}
@@ -121,6 +146,7 @@ echo "$head" >"$out/commit"
 echo "$base" >"$out/base"
 echo "$fork" >"$out/merge-base"
 [ -z "$previous" ] || echo "$previous" >"$out/previous"
+[ -z "${mapped_from:-}" ] || echo "$mapped_from" >"$out/previous-mapped-from"
 if git cat-file -e "$rules_ref:docs/internal/REVIEW.md" 2>/dev/null; then
   git show "$rules_ref:docs/internal/REVIEW.md" >"$out/review-protocol.md"
 fi

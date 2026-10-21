@@ -18,12 +18,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { option } from "./cli-args.mjs";
 
-const args = process.argv.slice(2);
-const option = (name) => {
-  const at = args.indexOf(name);
-  return at === -1 ? null : args[at + 1];
-};
 const pr = option("--pr");
 const round = option("--round");
 const head = option("--head");
@@ -69,10 +65,23 @@ const comments = JSON.parse(
   gh("api", "-X", "GET", `repos/${nwo}/issues/${pr}/comments`, "-f", "per_page=100"),
 );
 let findings = null;
+const recordedRounds = {};
 for (const c of comments) {
   if (!/^## Review ledger/m.test(c.body ?? "")) continue;
   const m = c.body.match(/```json\s*(\{[\s\S]*?\})\s*```/);
   if (m) findings = JSON.parse(m[1]).findings;
+  for (const [, r, sha] of c.body.matchAll(/^Round (\S+): ([0-9a-f]{7,40})/gm))
+    recordedRounds[r] = sha;
+}
+if (
+  recordedRounds[round] &&
+  !recordedRounds[round].startsWith(head.slice(0, 7)) &&
+  !head.startsWith(recordedRounds[round].slice(0, 7))
+) {
+  console.error(
+    `the ledger comment says round ${round} reviewed ${recordedRounds[round]}, not ${head}`,
+  );
+  process.exit(65);
 }
 if (findings === null)
   console.error(

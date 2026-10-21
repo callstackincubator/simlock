@@ -159,7 +159,10 @@ they name; never build again or restart review at round 1.
      is neither a defect nor a pass.
    - Fix lines with `Rerun: round 2` or `fix-check`: one consolidated fix
      run with the immutable base/merge-base, `previous <Commit>`, ledger
-     and findings, then `reviewer` with the round `Rerun` names.
+     and findings, then `reviewer` with the round `Rerun` names. After a
+     rebase or stack sync, the review also gets `previous-base: <the
+base-sha the previous check used>`, so the inputs script can map the
+     previous commit across the rebase.
    - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
      at the cap: park. Mechanical changes get a coordinator diff check.
    - Commits after reviews passed, including conflict resolutions and CI
@@ -206,7 +209,9 @@ they name; never build again or restart review at round 1.
    the counts for a review the diff's kind left out (for an ADR-only diff:
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
    legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
-   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included. Add
+   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included:
+   one `Round <r>: <full commit>` line per check first, and `round` on
+   every finding. Add
    `Assessment: complete` only when coverage is complete and no finding is
    open; otherwise `Assessment: incomplete` and park. `<t>` is
    `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so

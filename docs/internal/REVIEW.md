@@ -4,9 +4,12 @@ Delivery rule 14 delegates its review procedure to this document. Review
 one immutable PR snapshot. Use `.agents/scripts/review-inputs.sh <PR>` for
 round 1, and add the previous report's full commit SHA for later checks.
 The inputs record `base` (base tip), `merge-base`, `commit` and `previous`.
-Never substitute `origin/main` for a stacked PR's base. Missing or
-non-ancestor previous commits make assessment incomplete: reconcile the
-history and rebuild inputs, do not silently perform a full review.
+Never substitute `origin/main` for a stacked PR's base. A missing previous
+commit makes assessment incomplete. After a rebase or stack sync the
+previous commit is no ancestor of the head: give the script that round's
+base as well, and it maps the commit to its rebased equivalent when every
+commit's patch-id matches; otherwise assessment is incomplete, and nobody
+silently performs a full review in its place.
 Rules, briefs and this protocol come from the pinned PR base, not a moving
 `main`. No reviewer sees author narration (PR body, commit messages) or
 another lens's findings before synthesis.
@@ -107,9 +110,13 @@ transcripts. Unknown values print as unknown, never zero.
 The coordinator keeps one findings file per PR, `{"findings": [...]}`, one
 entry per canonical finding: `id`, `role`, `class` (the `[class]` the lens
 gave, a rule like `testing 2` or at most 8 words), `outcome`, `path`,
-`fix` (the fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate, post one PR comment headed
-`## Review ledger`: the output of `review-metrics.mjs --pr <M> --issue <N>
---findings <file>`, then the findings file in a `json` code block. The
+`round` (the check that raised it: `1`, `2` or `fix-check`), `fix` (the
+fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate,
+post one PR comment headed `## Review ledger`: one line `Round <r>:
+<full commit>` per check in order, the output of `review-metrics.mjs --pr
+<M> --issue <N> --findings <file>`, then the findings file in a `json`
+code block. The round lines are what lets a check be frozen and replayed
+later (`replay-freeze.mjs`). The
 weekly `recurring-findings` routine reads these comments. Record escaped
 defects after merge. Do not call raised-minus-fixed a false-positive rate.
 

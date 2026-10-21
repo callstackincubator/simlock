@@ -16,12 +16,8 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { option } from "./cli-args.mjs";
 
-const args = process.argv.slice(2);
-const option = (name) => {
-  const at = args.indexOf(name);
-  return at === -1 ? null : args[at + 1];
-};
 const pr = option("--pr");
 const round = option("--round");
 const file = option("--findings");
@@ -140,8 +136,15 @@ for (const r of replay) {
     matches.push({ replay: r.id, truth: hit.id, truthOutcome: hit.outcome });
   } else unmatched.push(r);
 }
-// why: a single lens is judged on the findings its role owned in the real review.
-const defects = truth.filter((t) => t.defect && (role === null || t.role === role));
+// why: a single lens is judged on the findings its role owned in the real review, and a later
+// round on the findings that round raised, when the ledger says which round that was.
+const rounded = truth.some((t) => t.round !== undefined);
+const defects = truth.filter(
+  (t) =>
+    t.defect &&
+    (role === null || t.role === role) &&
+    (!rounded || String(t.round) === String(round)),
+);
 const found = defects.filter((t) => taken.has(t.id));
 const missed = defects.filter((t) => !taken.has(t.id));
 const nonDefectHits = matches.filter((m) => !["fixed", "open"].includes(m.truthOutcome));

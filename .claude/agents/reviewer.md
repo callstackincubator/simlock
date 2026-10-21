@@ -14,9 +14,11 @@ impacts, the round cap and metrics. This file adds only how you run it.
 Edit no code. Arguments: PR, round (`1`, `2`, `fix-check`), previous full
 SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
 
-1. **Inputs.** Run `.agents/scripts/review-inputs.sh <PR> [<previous SHA>]`
-   and record its base, merge-base and commit; a failed build is
-   incomplete. A `replay: true` argument comes with an inputs directory
+1. **Inputs.** Run `.agents/scripts/review-inputs.sh <PR> [<previous SHA>
+[<previous base>]]` and record its base, merge-base and commit; a
+   failed build is incomplete. A `previous-base:` argument comes with a
+   rebased branch: pass it, and report the mapping the script prints;
+   never check a rebase by hand. A `replay: true` argument comes with an inputs directory
    already built by `.agents/scripts/review-replay.sh`: use it, do not run
    `review-inputs.sh`, ignore the PR's state on GitHub (it may be merged),
    post nothing anywhere, never open `.agents/replay/`, and write the

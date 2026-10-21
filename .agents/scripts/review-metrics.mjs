@@ -15,11 +15,11 @@
 // left out, so a replay never counts as the PR's delivery work.
 //
 // --findings validates the coordinator's findings file (`{"findings": [...]}`, each with id,
-// role, class, outcome, path) and adds the outcome and class counts. --json prints the ledger
+// role, class, outcome, path and, when present, round) and adds the outcome and class counts. --json prints the ledger
 // (runs, totals, findings) instead of the summary lines.
-import { existsSync, openSync, readFileSync, readSync, closeSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { parsed, projectsRoot, tagOf, transcripts } from "./transcripts.mjs";
+import { option } from "./cli-args.mjs";
 
 // $ per million tokens: input, output, cache read, 5-minute cache write, 1-hour cache write.
 // https://platform.claude.com/docs/en/about-claude/pricing, read 2026-10-19.
@@ -29,12 +29,9 @@ const PRICES = {
   "claude-haiku-5-5": [0.1, 0.5, 0.01, 0.125, 0.2],
 };
 const OUTCOMES = ["open", "fixed", "duplicate", "incorrect", "intentional", "nonblocking"];
+const ROUNDS = ["1", "2", "fix-check"];
 
 const args = process.argv.slice(2);
-const option = (name) => {
-  const at = args.indexOf(name);
-  return at === -1 ? null : args[at + 1];
-};
 const pr = option("--pr");
 const issue = option("--issue");
 const findingsFile = option("--findings");
@@ -45,7 +42,7 @@ if (pr === null || !/^\d+$/.test(pr) || (issue !== null && !/^\d+$/.test(issue))
   process.exit(64);
 }
 
-const root = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
+const root = projectsRoot();
 const runs = transcripts(root)
   .map((file) => ({ file, tag: tagOf(file) }))
   .filter(({ tag }) => tag !== null && (tag.pr === pr || (issue !== null && tag.issue === issue)))
@@ -98,36 +95,6 @@ if (findings !== null) {
       ),
     );
   console.log(`Finding outcomes: ${count("outcome")}. Classes: ${count("class")}.`);
-}
-
-function transcripts(dir) {
-  if (!existsSync(dir)) return [];
-  const files = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...transcripts(path));
-    else if (entry.name.endsWith(".jsonl")) files.push(path);
-  }
-  return files;
-}
-
-// why: transcripts run to hundreds of megabytes; the tag is in the first user record, near the top.
-function tagOf(file) {
-  const fd = openSync(file, "r");
-  const head = Buffer.alloc(256 * 1024);
-  const read = readSync(fd, head, 0, head.length, 0);
-  closeSync(fd);
-  for (const line of head.subarray(0, read).toString("utf8").split("\n")) {
-    const rec = parsed(line);
-    if (rec?.type !== "user") continue;
-    const first = promptOf(rec).split("\n")[0].trim();
-    if (!first.startsWith("ledger:")) return null;
-    const tag = { pr: "-", issue: "-", stage: "-", round: "-", role: "-", lens: "-" };
-    for (const [, key, value] of first.matchAll(/(\w+)=(\S+)/g))
-      if (key in tag) tag[key] = value.replace(/^#/, "");
-    return tag;
-  }
-  return null;
 }
 
 function run(file, tag) {
@@ -202,23 +169,11 @@ function checkFinding(f, list) {
   const missing = ["role", "class", "path"].find((k) => typeof f[k] !== "string" || f[k] === "");
   if (missing !== undefined) throw new Error(`finding ${f.id} has no ${missing}`);
   if (!OUTCOMES.includes(f.outcome)) throw new Error(`finding ${f.id} has an invalid outcome`);
+  if (f.round !== undefined && !ROUNDS.includes(String(f.round))) {
+    throw new Error(`finding ${f.id} has an invalid round (1, 2 or fix-check)`);
+  }
   const canonical = list.some((x) => x.id === f.canonicalId && x.outcome !== "duplicate");
   if (f.outcome === "duplicate" && !canonical) {
     throw new Error(`duplicate ${f.id} must name a canonical finding`);
-  }
-}
-
-function promptOf(rec) {
-  const content = rec.message?.content;
-  if (typeof content === "string") return content;
-  return Array.isArray(content) ? (content.find((b) => b.type === "text")?.text ?? "") : "";
-}
-
-function parsed(line) {
-  if (line === "") return null;
-  try {
-    return JSON.parse(line);
-  } catch {
-    return null;
   }
 }

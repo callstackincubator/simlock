@@ -9,10 +9,10 @@
 // while the computer sleeps (mach_absolute_time on macOS, CLOCK_MONOTONIC on Linux), Date.now()
 // does not. A gap under a minute is noise and counts as none. State lives in
 // $TMPDIR/claude-clock-<session>.json. Sub-agents get nothing: they print no status lines.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { awakeMs } from "./awake.mjs";
 
 const NOISE_MS = 60_000;
 
@@ -53,18 +53,6 @@ console.log(
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: context },
   }),
 );
-
-function awakeMs() {
-  try {
-    const out = execFileSync("python3", ["-I", "-c", "import time; print(time.monotonic())"], {
-      encoding: "utf8",
-      timeout: 2_000,
-    });
-    return Number(out) * 1000;
-  } catch {
-    return null;
-  }
-}
 
 function minutes(ms) {
   return Math.round(ms / 60_000);
