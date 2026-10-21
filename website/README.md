@@ -3,11 +3,11 @@
 The site at https://callstackincubator.github.io/simlock/: the home page, a 404 page and the
 docs, in the Callstack product look. Astro and Starlight, its own package (run everything from
 this folder), deployed to GitHub Pages by `.github/workflows/website.yml` on every push to
-`main` that changes `website/` or `docs/*.md`.
+`main` that changes `website/`; a pull request that changes `website/` builds it without deploying.
 
-The look, the scenes and the words are in [BRAND.md](../docs/internal/BRAND.md). The reference
-docs are the repo's own `docs/*.md`, copied in by `scripts/sync-docs.mjs` before `dev`, `build`
-and `check`; edit them there, not here.
+The look, the scenes and the words are in [BRAND.md](../docs/internal/BRAND.md). The end-user
+docs live only here, in `src/content/docs/docs/`, one `.mdx` page each; the sidebar is in
+`astro.config.mjs`.
 
 ## Commands
 
@@ -46,4 +46,3 @@ pnpm og           # public/og-image.jpg, banner.jpg, favicon.svg, favicon-32.png
 | `src/routeData.ts`                                                             | Docs: clean canonicals, descriptions from the first paragraph, breadcrumbs                        |
 | `og/og.html`, `scripts/og.mjs`                                                 | Social card, banner and icons                                                                     |
 | `ec.config.mjs`                                                                | Docs code block colours                                                                           |
-| `scripts/sync-docs.mjs`                                                        | Copies the repo's `docs/*.md` into the docs before every build                                    |

@@ -3,7 +3,7 @@
   "$schema": "./node_modules/fallow/schema.json",
   // e2e/*.test.ts files are vitest entry points (not reached by static import from any
   // other source file), and e2e/fake-driver/index.ts is loaded dynamically by the
-  // daemon via SIMLOCK_DRIVERS_MODULE (see docs/CLI.md) -- neither is visible to
+  // daemon via SIMLOCK_DRIVERS_MODULE (see the CLI reference) -- neither is visible to
   // fallow's static reachability graph without being declared explicitly.
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
   // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.

@@ -5,7 +5,7 @@ Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGat
 (`server.ts`).
 Uses: auth, contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
 bus, core (types), ports. Never imports: drivers, gateway.
-Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.md).
+Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/remote-agents.mdx), [console.mdx](../../website/src/content/docs/docs/worker/console.mdx).
 
 ## Files
 

@@ -1,0 +1,174 @@
+---
+title: Runtimes and images
+description: Install, list and remove iOS simulator runtimes and Android system images on a worker, decide when Simlock may download them, and see what can be leased.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A device needs an iOS simulator runtime or an Android system image on the machine. Simlock calls either one a component. You can install components ahead of time so the first lease does not wait for a download of several gigabytes, and remove them when you need the disk back.
+
+`simlock component install` and `simlock component remove` need an admin session; an agent session gets `FORBIDDEN`. `simlock component list` and `simlock catalog` work from any session.
+
+## See what can be leased
+
+`simlock catalog` lists, per platform, the installed runtimes, the device models, and which runtimes each model pairs with. Use it to pick a valid `--device` and `--os` for `simlock lease`.
+
+```sh
+simlock catalog --platform ios
+```
+
+```text
+Platform: ios
+  Runtimes: 18.4, 26.0 (default: 26.0)
+  Models:
+    phone (default: iPhone 16):
+      iPhone 16: 18.4, 26.0
+      iPhone 17 Pro: 26.0
+    tablet (default: iPad Pro 11-inch (M4)):
+      iPad Pro 11-inch (M4): 18.4, 26.0
+```
+
+- The default runtime is the newest one installed.
+- Models are grouped by class, and each class line shows the model a lease for that class gets.
+- A model and a runtime can both be listed and still not pair. Pick a pair from the model's line. `(no paired runtime)` means nothing installed pairs with that model.
+- For Android, the output also lists each installed system image with its API level, tag and ABI. A tag listed there is what `simlock lease --image-tag` accepts. Models made in Android Studio are marked `(custom)`.
+- A platform whose tools are missing is left out. Run `simlock doctor` to see why.
+
+`simlock catalog` never downloads anything and lists only what is installed. Add `--json` for the structured form.
+
+## Install a runtime or image
+
+```sh
+simlock component install ios 26.0
+simlock component install android 35
+```
+
+The version is what `simlock catalog` shows under `Runtimes` once it is installed: an iOS version, or an Android API level. On Android, Simlock installs the `google_apis` image for the machine's own CPU architecture.
+
+Progress prints as JSON lines on stderr and the result as one JSON line on stdout:
+
+```text
+{"stage":"waiting"}
+{"stage":"downloading","fraction":0.41}
+{"stage":"downloading","fraction":1}
+{"platform":"android","component":"35","outcome":"installed","version":"35"}
+```
+
+`outcome` is `installed`, or `already-installed` if the component was there. Running the command again is safe. The new runtime shows in `simlock catalog` at once.
+
+Limits:
+
+- **One download per platform at a time.** A second install on the same platform prints `{"stage":"waiting"}` and waits its turn. An install or lease that asks for the component already downloading joins that download.
+- **Time.** Each install has `downloads.timeoutMs` (20 minutes by default), counting the time spent waiting. Running out fails with `DOWNLOAD_TIMEOUT`.
+- **Disk.** Simlock checks free disk before it starts: about 8 GiB for an iOS runtime and 2 GiB for an Android image. Too little fails with `INSUFFICIENT_DISK_SPACE` and downloads nothing.
+- **iOS 16.0 is the oldest runtime Simlock can install.** Install older ones from Xcode.
+- **Stopping the daemon ends an install.** Nothing resumes it. Run the command again.
+
+To install on workers behind a gateway, see [Managing workers](/simlock/docs/gateway/managing-workers).
+
+## Decide when Simlock may download
+
+A runtime is downloaded only with consent. There are two ways to give it: run `simlock component install`, or pass `--allow-download` to `simlock lease`. `downloads.policy` decides which of them may start a download:
+
+| `downloads.policy` | Lease without `--allow-download` | Lease with `--allow-download` | `simlock component install` |
+| --- | --- | --- | --- |
+| `never` | refused | refused | refused with `DOWNLOADS_DISABLED` |
+| `on-request` (default) | refused | allowed | allowed |
+| `always` | allowed | allowed | allowed |
+
+```sh
+simlock config set downloads.policy never
+```
+
+The setting takes effect on the next daemon restart. `never` has no override. Use it on machines where only you install runtimes.
+
+When a lease needs a runtime that is not installed and may not download it, it fails with `RUNTIME_MISSING`. The message says what is missing, for example:
+
+```text
+iOS 26.0 is not installed; pass --allow-download (or set downloads.policy) to download it
+```
+
+The warm pool never downloads, under any policy. An Android lease that names an image tag with `--image-tag` uses only an installed image of that tag; install it with `sdkmanager`.
+
+## Accept the Android SDK licences
+
+Installing an Android system image needs its SDK licence accepted. Downloading permission does not imply it: `downloads.acceptAndroidLicenses` is a separate switch, and it is `false` by default.
+
+While a licence is not accepted, an install fails with `LICENSE_NOT_ACCEPTED`:
+
+```text
+sdkmanager refused to install system-images;android-35;google_apis;arm64-v8a: an Android SDK license is not accepted. Set "downloads.acceptAndroidLicenses": true in config to accept automatically, or run `sdkmanager --licenses` manually.
+```
+
+Fix it one of two ways:
+
+- Accept the licences yourself once, then run the install again:
+
+  ```sh
+  sdkmanager --licenses
+  ```
+
+- Let Simlock accept them for you whenever `sdkmanager` asks:
+
+  ```sh
+  simlock config set downloads.acceptAndroidLicenses true
+  simlock daemon stop
+  simlock daemon start
+  ```
+
+<Aside type="caution">
+Setting `acceptAndroidLicenses` to `true` accepts every Android SDK licence on your behalf. Read them with `sdkmanager --licenses` first if you need to.
+</Aside>
+
+## List installed components
+
+```sh
+simlock component list --platform android
+```
+
+```json
+{"components":[{"platform":"android","version":"35","variant":"google_apis/arm64-v8a","sizeBytes":4201234567,"installedBySimlock":true,"installedAt":1790864071200,"devices":2,"foreignDevices":0}]}
+```
+
+This lists every runtime and image on the machine, whoever installed it.
+
+| Field | Meaning |
+| --- | --- |
+| `version` | The version as `simlock catalog` lists it. |
+| `variant` | Tells two components of one version apart: an iOS runtime's build, or an Android image's tag and ABI. |
+| `sizeBytes` | Disk it takes. Left out when it cannot be read. |
+| `installedBySimlock` | `true` only if Simlock installed it and it is still the same one on disk. Only these can be removed with Simlock. |
+| `devices` | Simlock's own devices of this platform and version. |
+| `foreignDevices` | Devices outside Simlock that use it: simulators in Xcode's default device set that have been booted at least once, or AVDs in your own AVD folder. |
+
+## Remove a runtime or image
+
+<Aside type="caution">
+Removing a component deletes it from the machine. Run with `--dry-run` first to see what would go.
+</Aside>
+
+```sh
+simlock component remove ios 26.0 --dry-run
+simlock component remove ios 26.0
+```
+
+The command asks for confirmation. Without a terminal, pass `--yes`. The result is one JSON line:
+
+```text
+{"platform":"ios","version":"26.0","outcome":"removed","sizeBytes":9103456789}
+```
+
+Simlock removes a component only when all of these are true. A dry run checks each one and answers `would-remove`.
+
+| Condition | Error when it is not true | What to do |
+| --- | --- | --- |
+| Simlock installed it, and it has not changed since. | `COMPONENT_NOT_OWNED` | Remove it with Xcode or `sdkmanager`. There is no flag to force it. |
+| No device uses it, Simlock's own or yours. | `COMPONENT_IN_USE` (the message counts each kind) | Delete those devices first. |
+| No other install or removal runs on that platform. | `COMPONENT_BUSY` | Try again when it has finished. |
+
+Nothing removes a component on its own: no cleanup rule, idle timer or low-disk reaction does.
+
+On iOS, two things can stay on disk after a removal. The result's `residue` field names each one:
+
+- Never-booted simulators of that runtime in Xcode's default device set become unavailable. Clear them with `xcrun simctl delete unavailable`.
+- macOS keeps its own copy of the runtime download, often more than 8 GiB. Remove the platform in Xcode's Settings, under Platforms, to get that space back. Simlock never deletes it.

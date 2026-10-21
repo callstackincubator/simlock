@@ -1,0 +1,134 @@
+---
+title: agent-device
+description: Let agents drive app UIs with agent-device on devices Simlock leases, on one worker or through a gateway.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+[agent-device](https://github.com/callstack/agent-device) is Callstack's command-line tool for driving mobile apps: it opens an app, reads the screen as a tree of elements, taps, types and takes screenshots. With Simlock, `agent-device open` leases a simulator or emulator from Simlock, and every later command goes to that device. Each agent gets its own device, and a device is wiped when the agent closes it.
+
+Simlock runs one agent-device daemon on each worker and watches it. Agents reach it over HTTP, on the worker or through a gateway, with a Simlock agent token.
+
+## Before you start
+
+On each worker:
+
+- agent-device 0.21.28 or later, installed so the daemon's user can run `agent-device`. Simlock never installs or updates it.
+- HTTP turned on, since agents reach agent-device over HTTP.
+
+On each agent's machine:
+
+- agent-device 0.21.28 or later. An older CLI is refused with `refused: this agent-device is too old for simlock; upgrade it`.
+- Its own Simlock agent token. Simlock tells agents apart by token: two agents that share a token share one agent-device session and see each other's devices.
+
+agent-device through Simlock drives simulators and emulators. It does not lease physical devices.
+
+## Turn it on
+
+<Steps>
+
+1. On the worker, turn on agent-device and HTTP:
+
+   ```sh
+   simlock config set capabilities.agent-device.enabled true
+   simlock config set http.enabled true
+   ```
+
+   HTTP listens on `127.0.0.1:4701` by default. For agents on other machines, set `http.host` and put a reverse proxy with TLS in front; Simlock does not do HTTPS itself (see [Configuration reference](/simlock/docs/reference/configuration)). If `agent-device` is not on the daemon's `PATH`, set `capabilities.agent-device.command` to its full path.
+
+2. With a gateway, turn agent-device on there too. The gateway runs no agent-device of its own; it sends each agent to a worker where agent-device is available:
+
+   ```sh
+   simlock --gateway config set capabilities.agent-device.enabled true
+   ```
+
+3. Restart each daemon you changed:
+
+   ```sh
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+4. Check it. `simlock worker list` ends each worker's line with `agent-device available`, `agent-device off`, or `agent-device unavailable:` and the reason. `simlock doctor` reports the same problem with how to fix it:
+
+   ```text
+   agent-device  fail  found 0.20.3, need 0.21.28 or later; install agent-device 0.21.28 or later, then restart the daemon (`simlock daemon stop`, then `simlock daemon start`)
+   ```
+
+5. Create one agent token per agent, on the worker, or on the gateway for a fleet:
+
+   ```sh
+   simlock token create --role agent --label ui-agent-1
+   ```
+
+   ```json
+   {"secret":"slk_Qm9yZWFsaXMtNzEzMi1kZXZpY2UtdG9rZW4tZXhhbXBsZQ","token":{"id":"tok_5e0a9c3d-2f7b-4d1e-8c6a-3b9f1e7d2a50","role":"agent","label":"ui-agent-1","createdAt":1792834812000}}
+   ```
+
+   The secret is shown once. Give it to the agent.
+
+</Steps>
+
+If agent-device is missing or too old, Simlock runs on without it, and every agent-device request answers `agent-device is not available on this simlock:` with the reason. After you fix it, restart the daemon.
+
+## Drive an app
+
+On the agent's machine, connect agent-device to Simlock once, then use it as usual:
+
+```sh
+export AGENT_DEVICE_DAEMON_AUTH_TOKEN=slk_Qm9yZWFsaXMtNzEzMi1kZXZpY2UtdG9rZW4tZXhhbXBsZQ
+agent-device connect proxy --daemon-base-url https://mac-studio-2.example.com/v1/agent-device
+
+agent-device open --platform ios --device "iPhone 16"
+agent-device install MyApp ./build/Debug-iphonesimulator/MyApp.app
+agent-device open com.example.myapp
+agent-device snapshot
+agent-device screenshot home.png
+agent-device close
+```
+
+The URL is the worker's HTTP address, or the gateway's (port 4700 by default), followed by `/v1/agent-device`.
+
+- **`open` takes a lease.** `--platform ios` or `android` is required. `--device "iPhone 16"` asks for that model. `--target mobile`, `tv` or `desktop` asks for a phone, TV or desktop device. With neither, Simlock leases a phone. If every match is taken, `open` waits in Simlock's queue for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
+- **The lease is an ordinary Simlock lease.** `simlock status` and the console show it, held by the token. Its id is the one agent-device chose.
+- **Commands keep the lease alive.** agent-device renews it before each command and while a command runs. An agent that stops sending commands loses the device one TTL later. The TTL is the one agent-device asks for, or the worker's default (15 minutes) when it asks for none. An admin can cap it with `capabilities.agent-device.leaseTtlCapMs`.
+- **`close` gives the device back.** Simlock ends the lease and wipes the device for the next agent.
+- **`install` sends the app from your machine.** The path is on the agent's machine, and agent-device uploads it. A path on the worker is refused with `refused: send the app from your machine as an upload`.
+- **`devices` lists only your devices**, and an empty list before `open`.
+
+## Through a gateway
+
+Point `connect proxy` at the gateway and use a token created on the gateway. `open` lands on a worker whose agent-device is available, and every later command for that device goes to the same worker. You never name a worker.
+
+If that worker disconnects, requests for your device answer `agent-device is not available on this simlock: the worker holding this device is not connected to the gateway; try again`. Nothing is released. Once the worker is back, before the lease runs out, the next request works on the same device.
+
+## When Simlock ends the lease
+
+If the lease ends for any reason other than your `close` (it expired, an admin released it, the device was lost, or the worker's daemon or agent-device restarted), the next command answers:
+
+```text
+lease ended by simlock; run disconnect, then open
+```
+
+Run `agent-device disconnect`, then `open` again. You get a new, clean device; anything on the old one is gone.
+
+<Aside type="caution">
+Restarting a worker's daemon ends every agent-device lease on that worker, even though ordinary Simlock leases survive a restart.
+</Aside>
+
+## Messages you may see
+
+| Message | Meaning |
+| --- | --- |
+| `refused: agent-device through simlock needs an agent token` | You used an operator token. Create an agent token. |
+| `refused: name --platform ios or android` | `open` needs `--platform`. |
+| `refused: simlock picks the device` | A `--udid`, `--serial` or `--device` names a device that is not the one Simlock leased to you. |
+| `refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set` | Simlock decides which devices agent-device sees. |
+| `refused by simlock: <message>` | Simlock refused the lease, for example a model it does not know. |
+| `refused: this agent-device is too old to use through a gateway; update it` | Upgrade the agent's agent-device. |
+| `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. |
+
+## Related
+
+- Remote access and tokens: [Remote agents](/simlock/docs/using-devices/remote-agents).
+- Every `capabilities.agent-device.*` key: [Configuration reference](/simlock/docs/reference/configuration).

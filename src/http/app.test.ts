@@ -1555,9 +1555,8 @@ describe("lease routes", () => {
     });
 
     it("forwards requesterId unchanged for both an operator and an agent token, leaving the FORBIDDEN decision to device.exec's own authorize hook", async () => {
-      // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
-      // "Authentication"): the token is the identity, except for an operator token proxying
-      // for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
+      // why: Requester identity is never client-declared over HTTP: the token is the identity,
+      // except for an operator token proxying for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
       // that an agent token may not supply `requesterId` at all, which left that rule living
       // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
       // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised

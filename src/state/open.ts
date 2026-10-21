@@ -67,7 +67,7 @@ export async function openStateDatabase(options: OpenStateDatabaseOptions): Prom
     const oldFile = join(dataDirectory, name);
     if (await filesystem.exists(oldFile)) {
       throw new StateRefusal(
-        `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${options.upgradeStep.replaceAll("<path>", oldFile)} See "Breaking: state moves to state.db" in docs/CLI.md.`,
+        `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${options.upgradeStep.replaceAll("<path>", oldFile)} See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.`,
       );
     }
   }

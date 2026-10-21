@@ -53,7 +53,7 @@ its credential). A value over 8 KiB is `malformed` and nothing is fetched. Other
 person (`sub` non-empty and at most 120 characters, `email` non-empty) is `identified`:
 `proxy:<iss>#<sub>`, role `operator`, `via` `proxy`, `expiresAt` = `exp`×1000 + 60 s, `ambient`.
 A verified JWT with no person claims is `not-mine`. Anything else is `rejected` "Sign-in proxy
-identity refused: <reason>" with `details.reason` (the nine reasons are in `docs/HTTP-API.md`),
+identity refused: <reason>" with `details.reason` (the reasons are in `strategies/proxy-jwt/`),
 and one `warn` log line with the reason and jose's message, never the JWT.
 
 `KeyCache` is ours, not jose's remote set, so it runs on the `Clock`: keys are kept 10 minutes

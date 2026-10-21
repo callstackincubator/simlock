@@ -1,0 +1,79 @@
+---
+title: How requests are routed
+description: How the gateway picks a worker for a lease request, how requests wait in the fleet queue, and what an agent sees when no worker can serve a request.
+---
+
+When an agent asks the gateway for a device, the gateway first checks whether any worker could ever serve the request. If one could, it picks a worker now or puts the request in the fleet queue until one can.
+
+## How the gateway picks a worker
+
+The gateway only considers a worker that:
+
+- is connected, not drained, and has finished reporting its devices and catalog;
+- has every optional capability the request needs (for example, a lease asked for through the agent-device integration needs workers with that integration turned on);
+- offers the model or device class asked for, with a matching OS version already installed;
+- is healthy;
+- has no requests waiting in its own queue, for example from agents on that machine (this does not apply to physical devices).
+
+Among those, it prefers, in this order:
+
+1. **A warm device.** A worker with a booted, unleased device that matches the request, including its slim or full mode, wins at once. The agent gets that device without waiting for a boot.
+2. **Room to boot one.** Otherwise the worker must have a free running slot, or a warm device it can shut down to make room. Workers under their RAM budget come first, then the worker with the most free device slots.
+
+When two workers are equal, the gateway picks the one whose id sorts first.
+
+A request for a physical device goes only to a worker with a matching enrolled device that is free now. If none is free, the request waits.
+
+The gateway reads each worker's state over its connection and refreshes it as devices and leases change. A worker can still turn a request down, for example because an agent on that machine took the last free slot a moment earlier. The gateway then tries another worker, or puts the request back in the queue. It never makes a request wait in a worker's own queue.
+
+## The fleet queue
+
+When no worker can take a request now, it waits at the gateway. Requests wait oldest first. Requests for virtual devices and for physical devices wait in two separate lines. A request that one worker can serve is not held up by an older one that needs a different worker.
+
+The gateway looks at the queue again whenever a worker reports a change, such as a released lease or a booted device.
+
+A queued request waits until a worker can take it. To give up after a while, pass `--timeout`:
+
+```sh
+simlock --gateway lease --platform ios --device "iPhone 16" --timeout 10m
+```
+
+When the time runs out, the request fails with `QUEUE_TIMEOUT` (exit 10). To fail at once instead of waiting, pass `--no-wait`; the request then fails with `NO_CAPACITY` (exit 11) if no worker can take it now.
+
+`simlock --gateway status` prints how many requests wait, as `Queue depth`. The console's **Waiting** page lists them and names, for each worker, why it did not take the request. See [Fleet console](/simlock/docs/gateway/fleet-console#why-a-request-waits).
+
+## When no worker can serve a request
+
+The gateway does not queue a request that no worker could serve. It fails at once, with the same code a single worker would give:
+
+| Code | Exit | HTTP | Why | What to do |
+| --- | --- | --- | --- | --- |
+| `NO_CAPACITY` | 11 | 503 | Workers could serve it, but none of them is connected and taking requests: they are all disconnected, drained or incompatible. | Bring a worker back, or undrain one. |
+| `NO_DRIVER` | 12 | 422 | No worker supports the platform, for example no worker has Android tools. | Add a worker that has the platform. |
+| `UNKNOWN_MODEL` | 12 | 422 | No worker offers that model or device class, or, for a physical device, no worker has one enrolled. | Check the name with `simlock --gateway catalog`. |
+| `RUNTIME_MISSING` | 12 | 422 | Workers offer the model, but none has a matching OS version installed. The gateway never downloads one. | Install it on the workers. See [Managing workers](/simlock/docs/gateway/managing-workers#install-runtimes-and-images-on-workers). |
+| `CAPABILITY_MISSING` | 12 | 422 | No worker that could serve the request has the optional capability it needs turned on. | Turn the capability on for a worker. |
+
+This check runs again while a request waits. If the last worker that could serve a queued request disconnects or is drained, even for a moment, the request fails with `NO_CAPACITY` instead of waiting for it to come back.
+
+If a worker starts to boot a device for the request and then fails, the request fails with that worker's error. If every worker that could serve a request fails to create the device, the request fails with `PROVISION_FAILED` (exit 1).
+
+A requester holds at most `lease.maxPerRequester` leases through the gateway (1 by default), counted across the whole fleet. Another request fails with `REQUESTER_ALREADY_LEASED` (exit 13).
+
+All codes are listed in [Error reference](/simlock/docs/reference/errors).
+
+## Drained workers
+
+A drained worker gets no new requests from the gateway. Its leases keep running, and agents can renew and release them as usual. Agents on the worker machine itself can still lease its devices. See [Managing workers](/simlock/docs/gateway/managing-workers#take-a-worker-out-of-service).
+
+## When the gateway restarts
+
+The gateway keeps waiting requests in memory only. When it stops or restarts:
+
+- **Waiting requests are lost.** An agent waiting with `simlock --gateway lease` gets `DAEMON_CONNECTION_LOST`. Over HTTP, the request's id answers `404`, and sending the same `Idempotency-Key` again starts a new request. Ask again.
+- **Granted leases survive.** They live on the workers, and the devices stay booted. While the gateway is down, nothing can renew, release or run commands on them, so a lease whose time to live runs out meanwhile expires. When the gateway is back, it learns each lease again from its worker.
+- **Drained workers stay drained.**
+
+Because of the lease limit, a request sent again after a restart may get `REQUESTER_ALREADY_LEASED` naming the lease the requester already holds. Use that lease or release it.
+
+If a worker's connection drops while it is granting a lease, the agent gets `WORKER_UNREACHABLE`, but the worker may have granted the lease anyway. That lease runs on the worker until its time to live runs out.

@@ -1,0 +1,335 @@
+---
+title: Configuration
+description: Every configuration key a worker or a gateway reads, with its type, default and meaning.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Where the file lives
+
+| Daemon  | File                                                                  |
+| ------- | --------------------------------------------------------------------- |
+| Worker  | `~/.simlock/config.json`                                              |
+| Gateway | `~/.simlock/gateway/config.json`                                      |
+
+With `SIMLOCK_HOME` set, the worker's file is `$SIMLOCK_HOME/config.json` and the gateway's is
+`$SIMLOCK_HOME/gateway/config.json`. A missing file means every key has its default.
+
+## Read and change it
+
+```sh
+simlock config                          # the worker's effective config, as JSON
+simlock config get lease.maxTtlMs       # one key
+simlock config set lease.maxTtlMs 7200000
+```
+
+```text
+Updated lease.maxTtlMs in /Users/alex/.simlock/config.json; takes effect on daemon restart.
+```
+
+Add `--gateway` to work on the gateway's file: `simlock --gateway config set gateway.routing warm-then-free`.
+
+- **Changes take effect on the next daemon restart.** Run `simlock daemon stop`, then
+  `simlock daemon start` (or `simlock --gateway daemon stop` and `simlock --gateway daemon start`).
+- `config set` parses the value as JSON when it can (`true`, `4`, `["iPhone 16"]`, an object) and
+  stores it as a string otherwise.
+- `config set` checks the whole file with the new value in it. A bad value, or any unknown key
+  anywhere in the file, is refused and nothing is written:
+
+  ```text
+  Invalid config after setting lease.defaultTtlMs: Invalid config value for "lease.defaultTtlMs": expected at most lease.maxTtlMs
+  ```
+
+- `config set` writes the file readable and writable by your user only (mode `0600`), because it
+  can hold `gateway.token` and alert secrets. A file you write by hand keeps the mode you give it
+  until the next `config set`.
+- You can edit the file by hand. When the daemon starts, an unknown key is logged as a warning in
+  `daemon.log` and ignored. A bad value stops the daemon from starting; the CLI command that tried
+  to start it prints the error, which names the key.
+
+Durations are in milliseconds and sizes in bytes unless a row says otherwise.
+
+The **Applies to** column says which daemon reads the key. A gateway warns about a worker-only key
+in its file (`Ignoring "idle": it configures a worker, and this daemon runs in gateway mode.`) and
+ignores it, so you can copy one file between a worker and a gateway.
+
+## Leases
+
+| Key                        | Type                                   | Default            | Meaning                                                                                                                                                             | Applies to |
+| -------------------------- | -------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `lease.defaultTtlMs`       | positive number, at most `lease.maxTtlMs` | `900000` (15 min) | Lease length for a request that names no TTL. A renew with no TTL reuses the lease's own length, not this.                                                         | Both       |
+| `lease.maxTtlMs`           | positive number                        | `14400000` (4 h)   | Longest TTL a request or renew may ask for. More is refused with `BAD_REQUEST`, never shortened. Lowering it does not shorten leases that already exist.           | Both       |
+| `lease.maxPerRequester`    | positive integer                       | `1`                | Leases one agent identity may hold at once. At the limit, or with a request already waiting, a new request fails with `REQUESTER_ALREADY_LEASED`. On a gateway it counts leases across the fleet. Above `1`, agents that lease one device after another can block each other. | Both       |
+| `lease.identity.ios`       | `reusable` or `fresh`                  | `reusable`         | `reusable` wipes a released simulator and keeps it for the next lease. `fresh` creates a simulator for each lease and deletes it when the lease ends. A device keeps the value it was created with. | Worker     |
+| `lease.identity.android`   | `reusable` or `fresh`                  | `reusable`         | The same for Android emulators.                                                                                                                                     | Worker     |
+| `lease.requestRetentionMs` | positive number                        | `600000` (10 min)  | How long a finished lease request is kept, so a client that repeats it with the same idempotency key gets the same answer.                                           | Both       |
+| `lease.maxRequestRecords`  | positive integer                       | `10000`            | Most lease-request records kept. Over it, the oldest finished record is dropped; a waiting request never is.                                                        | Both       |
+| `lease.endWaitMs`          | positive number, at most `2147483647`  | `600000` (10 min)  | How long the wipe after a lease waits for add-ons (such as agent-device) to finish with the device. Stopping the daemon and `simlock nuke` do not wait.             | Worker     |
+
+On a fleet lease the gateway's `lease.defaultTtlMs` and `lease.maxTtlMs` decide the length, and the
+worker's own cap still applies. Keep the gateway's `lease.maxTtlMs` at or below every worker's; the
+gateway logs a warning when a worker's cap is lower.
+
+## Capacity
+
+`capacity.strategy` picks how Simlock decides how many devices may exist and run. The keys under
+`capacity.config` depend on the strategy.
+
+| Key                 | Type                    | Default    | Meaning                                                                                       | Applies to |
+| ------------------- | ----------------------- | ---------- | --------------------------------------------------------------------------------------------- | ---------- |
+| `capacity.strategy` | `resource` or `fixed`   | `resource` | `resource` derives limits from the machine and adds a RAM budget. `fixed` uses the numbers you write. | Worker     |
+
+### `resource` strategy
+
+| Key                                                   | Type                 | Default                                    | Meaning                                                                                   | Applies to |
+| ----------------------------------------------------- | -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------- | ---------- |
+| `capacity.config.limits.maxRunning`                   | positive integer     | iOS default plus Android default below     | Devices running at once, both platforms together.                                         | Worker     |
+| `capacity.config.limits.ios.maxDevices`               | positive integer     | CPU count ÷ 2, rounded down, at least 1    | iOS simulators that may exist at once.                                                    | Worker     |
+| `capacity.config.limits.ios.maxRunning`               | positive integer     | same number as the `ios.maxDevices` default | iOS simulators running at once.                                                          | Worker     |
+| `capacity.config.limits.android.maxDevices`           | positive integer     | the smaller of CPU count ÷ 4 and RAM in GiB ÷ 8, rounded down, at least 1 | Android emulators that may exist at once.                  | Worker     |
+| `capacity.config.limits.android.maxRunning`           | positive integer     | same number as the `android.maxDevices` default | Android emulators running at once.                                                  | Worker     |
+| `capacity.config.ramBudget.iosBytesPerDevice`         | non-negative number  | `1610612736` (1.5 GiB)                     | RAM counted for each full iOS simulator.                                                  | Worker     |
+| `capacity.config.ramBudget.iosSlimBytesPerDevice`     | non-negative number  | not set (uses `iosBytesPerDevice`)         | RAM counted for each slim iOS simulator once it has booted.                               | Worker     |
+| `capacity.config.ramBudget.androidBytesPerDevice`     | non-negative number  | `4294967296` (4 GiB)                       | RAM counted for each Android emulator.                                                    | Worker     |
+| `capacity.config.ramBudget.androidSlimBytesPerDevice` | non-negative number  | not set (uses `androidBytesPerDevice`)     | Accepted, but has no effect: Android devices are always full.                             | Worker     |
+
+The RAM budget is the machine's total RAM minus 4 GiB. A device is created only if its RAM still
+fits under it.
+
+A `maxRunning` you leave out keeps its machine-derived default; it does not follow a `maxDevices`
+you set. If you raise `ios.maxDevices`, raise `ios.maxRunning` and `limits.maxRunning` with it.
+
+### `fixed` strategy
+
+| Key                                   | Type             | Default                                | Meaning                                         | Applies to |
+| ------------------------------------- | ---------------- | -------------------------------------- | ----------------------------------------------- | ---------- |
+| `capacity.config.maxRunning`          | positive integer | `2`                                    | Devices running at once, both platforms together. | Worker     |
+| `capacity.config.ios.maxRunning`      | positive integer | `capacity.config.maxRunning`           | iOS simulators running at once.                 | Worker     |
+| `capacity.config.ios.maxDevices`      | positive integer | `capacity.config.ios.maxRunning`       | iOS simulators that may exist at once.          | Worker     |
+| `capacity.config.android.maxRunning`  | positive integer | `capacity.config.maxRunning`           | Android emulators running at once.              | Worker     |
+| `capacity.config.android.maxDevices`  | positive integer | `capacity.config.android.maxRunning`   | Android emulators that may exist at once.       | Worker     |
+
+`fixed` has no RAM budget.
+
+## Warm pool
+
+| Key                                          | Type                    | Default                                  | Meaning                                                                                                                       | Applies to |
+| -------------------------------------------- | ----------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `warmPool.enabled`                           | boolean                 | `true`                                   | Keep released devices booted, and keep ready as many of each kind leased in the last 24 hours as were leased at once. `false` keeps nothing warm and shuts every idle running device down. | Worker     |
+| `warmPool.targets`                           | list of targets (below) | `[]`                                     | Kinds of device kept booted, clean and unleased ahead of demand. At most 256 entries.                                          | Worker     |
+| `warmPool.reserveRunning.ios`                | non-negative integer    | `0`                                      | iOS running slots idle warm devices may not fill, so an unexpected request boots at once.                                    | Worker     |
+| `warmPool.reserveRunning.android`            | non-negative integer    | `0`                                      | The same for Android.                                                                                                         | Worker     |
+| `warmPool.maxConcurrentBoots`                | positive integer        | CPU count ÷ 4, rounded down, at least 1  | Most device boots and creations in flight at once, for queued requests and targets together.                                 | Worker     |
+| `warmPool.quarantine.maxRetries`             | positive integer        | `3`                                      | Cleanup retries for a quarantined device before Simlock gives up: it deletes a simulator or emulator, and unenrols a physical device. | Worker     |
+| `warmPool.quarantine.retryBackoffMs`         | non-negative number     | `30000` (30 s)                           | Wait before the first retry.                                                                                                  | Worker     |
+| `warmPool.quarantine.retryBackoffMultiplier` | number, at least 1      | `2`                                      | Factor the wait grows by after each failed retry.                                                                             | Worker     |
+| `warmPool.quarantine.maxRetryBackoffMs`      | non-negative number     | `300000` (5 min)                         | Longest wait between retries.                                                                                                 | Worker     |
+
+Each entry in `warmPool.targets`:
+
+| Field       | Required | Type                                   | Meaning                                                              |
+| ----------- | -------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `platform`  | yes      | `ios` or `android`                     | The platform.                                                        |
+| `model`     | yes      | string, at most 256 characters         | An exact model name, such as `iPhone 16`. A class is not accepted.   |
+| `count`     | yes      | positive integer                       | How many to keep ready.                                              |
+| `osVersion` | no       | version or range, at most 256 characters | Such as `18.4` or `>=18`. Left out, the newest installed runtime.  |
+| `mode`      | no       | `slim` or `full`                       | Left out, the worker's default mode.                                 |
+
+Any other field in a target stops the daemon from starting. A target never downloads a runtime.
+
+```json title="~/.simlock/config.json"
+{
+  "warmPool": {
+    "targets": [
+      { "platform": "ios", "model": "iPhone 16", "osVersion": ">=18", "count": 2 },
+      { "platform": "android", "model": "Pixel 8", "count": 1 }
+    ]
+  }
+}
+```
+
+## Cleanup and health
+
+| Key                                     | Type                | Default            | Meaning                                                                                                    | Applies to |
+| --------------------------------------- | ------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------- | ---------- |
+| `idle.shutdownAfterMs`                  | non-negative number | `600000` (10 min)  | How long an unused running device stays up before it is shut down. Devices the warm pool keeps are exempt.  | Worker     |
+| `idle.deleteAfterMs`                    | non-negative number | `3600000` (1 h)    | How long a shut-down device stays on disk before it is deleted.                                             | Worker     |
+| `diskPressure.freeBytesThreshold`       | non-negative number | `10737418240` (10 GiB) | Free disk space below which the machine is under disk pressure: idle devices are deleted sooner.      | Worker     |
+| `health.enabled`                        | boolean             | `true`             | Watch leased simulators and emulators for crashes and reboot them under their lease. Physical devices are watched either way. | Worker     |
+| `health.probeIntervalMs`                | positive number     | `30000` (30 s)     | How often leased devices are checked, and how often enrolled physical devices are checked for presence.     | Worker     |
+| `health.stableObservations`             | positive integer    | `2`                | Bad readings in a row before a device counts as crashed, or a physical device as absent.                    | Worker     |
+| `health.maxRecoveryAttempts`            | positive integer    | `3`                | Reboot attempts for one lease before the lease is ended as `device-lost`.                                   | Worker     |
+| `health.recoveryBackoffMs`              | positive number     | `5000` (5 s)       | Base wait between reboot attempts; it grows with each attempt.                                              | Worker     |
+| `health.maxConcurrentRecoveries`        | positive integer    | `1`                | Most crash reboots at once.                                                                                | Worker     |
+| `stalledTransition.thresholdMultiplier` | number, at least 1  | `3`                | A device creating or cleaning up for longer than this times the expected time counts as stalled; `simlock doctor` reports it. | Worker     |
+| `stalledTransition.minimumThresholdMs`  | non-negative number | `60000` (1 min)    | The stall threshold is never shorter than this.                                                             | Worker     |
+
+## Downloads
+
+| Key                               | Type                                | Default              | Meaning                                                                                                             | Applies to |
+| --------------------------------- | ----------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `downloads.policy`                | `never`, `on-request` or `always`   | `on-request`         | Who may start a download of a missing iOS runtime or Android system image (table below).                            | Worker     |
+| `downloads.acceptAndroidLicenses` | boolean                             | `false`              | Accept the Android SDK licences an image install asks for. While `false`, an Android image install fails with `LICENSE_NOT_ACCEPTED`. | Worker     |
+| `downloads.timeoutMs`             | positive number                     | `1200000` (20 min)   | Time one request for a missing component has, counted from when it arrives, waiting behind another download included. Past it the request fails with `DOWNLOAD_TIMEOUT`. | Worker     |
+
+| `downloads.policy` | Lease without `--allow-download` | Lease with `--allow-download` | `simlock component install` |
+| ------------------ | -------------------------------- | ----------------------------- | --------------------------- |
+| `never`            | refused                          | refused                       | refused (`DOWNLOADS_DISABLED`) |
+| `on-request`       | refused                          | allowed                       | allowed                     |
+| `always`           | allowed                          | allowed                       | allowed                     |
+
+The warm pool never downloads. A gateway never asks a worker to download for a lease, so
+`--allow-download` has no effect through a gateway.
+
+## Devices and drivers
+
+| Key                                | Type                               | Default                          | Meaning                                                                                                   | Applies to |
+| ---------------------------------- | ---------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------- |
+| `ios.defaultMode`                  | `slim` or `full`                   | `full`                           | Device mode for an iOS request that names none. The worker makes both kinds either way.                   | Worker     |
+| `ios.slim.categories`              | list of strings                    | every category                   | Which groups of simulator services a slim device has turned off: `widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `other`. | Worker     |
+| `ios.slim.bootTimeoutMs`           | positive number                    | `600000` (10 min)                | Boot deadline for a slim iOS device, which boots twice.                                                   | Worker     |
+| `ios.defaultModels.<class>`        | model name, or non-empty list      | not set                          | iOS models to try first for a class (`phone`, `tablet`, `watch`, `tv`, `vision`, `auto`, `desktop`), most preferred first, before Simlock's own list. A key that is not a class stops the daemon from starting. | Worker     |
+| `android.defaultModels.<class>`    | model name, or non-empty list      | not set                          | The same for Android models.                                                                              | Worker     |
+| `android.emulator.headless`        | boolean                            | `false`                          | Start emulators without a window. Needed on a machine with no display.                                    | Worker     |
+| `android.emulator.gpu`             | non-empty string                   | `auto`                           | Emulator GPU mode, such as `host` or `swiftshader_indirect`. `auto` leaves the emulator's own choice. A mode the emulator rejects fails the next boot, not the config load. | Worker     |
+| `android.emulator.audio`           | boolean                            | `true`                           | `false` starts emulators without audio.                                                                   | Worker     |
+| `android.emulator.bootAnimation`   | boolean                            | `true`                           | `false` skips the boot animation.                                                                         | Worker     |
+| `drivers.ios.deviceRoot`           | absolute path                      | `~/.simlock/devices/ios`         | Folder that holds Simlock's simulators. A relative path turns iOS off; `simlock doctor` says why.          | Worker     |
+| `drivers.ios.screenCaptureCommand` | path                               | the program installed with Simlock | Program that captures a simulator's screen for streaming.                                              | Worker     |
+| `drivers.ios.deviceCaptureCommand` | path                               | the program installed with Simlock | Program that captures a physical iPhone's screen for streaming.                                        | Worker     |
+| `drivers.android.deviceRoot`       | absolute path                      | `~/.simlock/devices/android`     | Folder that holds Simlock's emulators. A relative path turns Android off; `simlock doctor` says why.       | Worker     |
+| `drivers.android.adbServerPort`    | TCP port number                    | `5038`                           | Port of Simlock's own adb server. Not `5037`, the shared server's port. If something else holds it, Android does not start. | Worker     |
+| `exec.timeoutMs`                   | positive number                    | `600000` (10 min)                | How long one command run on a device through `simlock simctl` or `simlock adb` from a gateway or over HTTP may take before it is stopped with `EXEC_TIMEOUT`. | Worker     |
+
+`android.emulator.*` changes apply at each emulator's next boot. Changing `headless` or `gpu`
+makes the next boot wipe the device once to take a new clean snapshot.
+
+## HTTP and sign-in
+
+| Key                          | Type                     | Default                               | Meaning                                                                                                    | Applies to |
+| ---------------------------- | ------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------- |
+| `http.enabled`               | boolean                  | `false` on a worker, `true` on a gateway | Serve the HTTP API and the web console. A gateway with `false` does not start.                          | Both       |
+| `http.host`                  | string                   | `127.0.0.1`                           | Address to listen on. Simlock does no TLS: put a reverse proxy in front for HTTPS.                          | Both       |
+| `http.port`                  | integer `1`–`65535`      | `4701` on a worker, `4700` on a gateway | Port to listen on.                                                                                       | Both       |
+| `http.proxyAuth`             | object                   | not set (proxy sign-in off)           | Treat a person your sign-in proxy (Cloudflare Access, for example) has signed in as an operator, with no Simlock token. Set `header`, `jwksUrl`, `issuer` and `audience` together, as one object. | Both       |
+| `http.proxyAuth.header`      | 1–64 letters, digits or `-` | —                                   | Request header carrying the proxy's signed token, such as `cf-access-jwt-assertion`. Case does not matter. | Both       |
+| `http.proxyAuth.jwksUrl`     | URL                      | —                                     | Where the proxy publishes its public keys. `https://`, or `http://` on `localhost`, `127.0.0.1` or `::1`.  | Both       |
+| `http.proxyAuth.issuer`      | string, 1–128 characters | —                                     | The `iss` the token must carry.                                                                            | Both       |
+| `http.proxyAuth.audience`    | string, 1–512 characters | —                                     | The `aud` the token must carry.                                                                            | Both       |
+| `http.proxyAuth.signOutUrl`  | `http://` or `https://` URL | not set                            | Where the console sends a person to sign out.                                                              | Both       |
+
+```sh
+simlock --gateway config set http.proxyAuth '{"header":"cf-access-jwt-assertion","jwksUrl":"https://acme.cloudflareaccess.com/cdn-cgi/access/certs","issuer":"https://acme.cloudflareaccess.com","audience":"4f1c9a7e2b"}'
+```
+
+Setting one `http.proxyAuth` key on its own is refused with
+`expected set with the other http.proxyAuth keys`.
+
+## Joining a gateway
+
+These keys go in a **worker's** file. A gateway ignores them with a warning.
+
+| Key             | Type                         | Default                  | Meaning                                                                                                    | Applies to |
+| --------------- | ---------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------- | ---------- |
+| `gateway.url`   | `ws://` or `wss://` URL      | not set (no gateway)     | The gateway's base URL, such as `wss://simlock-gw.example.com`. Set it together with `gateway.token`.       | Worker     |
+| `gateway.token` | string                       | not set                  | Join token made on the gateway with `simlock --gateway token create --role worker`. Set it together with `gateway.url`. | Worker     |
+| `gateway.label` | string                       | not set (the worker's id is shown) | Name shown for this worker in the gateway's lists and console. Display only.                      | Worker     |
+
+<Aside type="caution">
+Joining a gateway gives that gateway admin rights on this worker. The token travels on the
+connection, so use `wss://`, or `ws://` only on loopback or inside your own tunnel.
+</Aside>
+
+Setting only one of `gateway.url` and `gateway.token` stops the worker from starting, naming the
+missing key. An `http://` or `https://` URL is refused too.
+
+## Gateway
+
+These keys go in a **gateway's** file.
+
+| Key                               | Type                          | Default            | Meaning                                                                                                     | Applies to |
+| --------------------------------- | ----------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- | ---------- |
+| `gateway.routing`                 | `warm-then-free`              | `warm-then-free`   | How a request is placed on a worker: a worker with a ready matching device first, then the one with the most free running room. | Gateway    |
+| `gateway.disconnectedRetentionMs` | positive number               | `86400000` (24 h)  | How long a disconnected worker stays listed before the gateway forgets it. The clock waits while leases on it are still live. | Gateway    |
+| `gateway.execTimeoutMs`           | positive number               | `660000` (11 min)  | How long the gateway waits on a device command it passed to a worker. Keep it above the worker's `exec.timeoutMs`. | Gateway    |
+| `gateway.leaseRequestTimeoutMs`   | positive number               | `300000` (5 min)   | How long the gateway waits on one worker for a lease before it fails the request with `WORKER_UNREACHABLE`. | Gateway    |
+
+## Alerts
+
+| Key                           | Type                              | Default | Meaning                                                                                                              | Applies to |
+| ----------------------------- | --------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `gateway.alerts.destinations` | list of at most 16 destinations   | `[]`    | Webhooks the gateway posts chosen fleet events to. A bad entry stops the daemon from starting, on a worker as well; a worker sends nothing. | Gateway    |
+
+Each destination:
+
+| Field    | Required                          | Rule                                                                                                          |
+| -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `name`   | yes                               | Lowercase letters, digits and dashes, starting with a letter, at most 32 characters. Unique.                  |
+| `format` | yes                               | `generic` (signed JSON) or `slack` (a message for a Slack incoming webhook).                                  |
+| `url`    | yes                               | `https://`, or `http://` to `localhost`, `127.0.0.1` or `[::1]`. No user name or password in it.              |
+| `events` | yes                               | Non-empty list, each event once, from: `worker.connected`, `worker.disconnected`, `worker.rejected`, `worker.drain-started`, `worker.drain-ended`, `device.quarantine-abandoned`, `device.quarantine-stranded`, `device.recovery-failed`, `device.stalled-transition-detected`, `disk.pressure-detected`, `component.install-failed`. |
+| `secret` | `generic`: yes; `slack`: not allowed | The key the gateway signs each `generic` message with.                                                     |
+
+```json title="~/.simlock/gateway/config.json"
+{
+  "gateway": {
+    "alerts": {
+      "destinations": [
+        {
+          "name": "on-call",
+          "format": "slack",
+          "url": "https://hooks.slack.com/services/YOUR/WEBHOOK/PATH",
+          "events": ["worker.disconnected", "device.quarantine-stranded", "disk.pressure-detected"]
+        }
+      ]
+    }
+  }
+}
+```
+
+`simlock config` shows alert URLs and secrets as written. The daemon log and the `daemon.started`
+event show them as `[redacted]`. See [Alerts](/simlock/docs/gateway/alerts) for the message format
+and delivery.
+
+## Optional modules
+
+Each optional module has a block under `capabilities.<name>`. A module is off until you turn it on.
+A name Simlock does not know is warned about and ignored.
+
+| Key                                         | Type                                 | Default          | Meaning                                                                                                     | Applies to |
+| ------------------------------------------- | ------------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------- | ---------- |
+| `capabilities.agent-device.enabled`         | boolean                              | `false`          | On a worker: run an agent-device daemon that sees Simlock's devices. On a gateway: serve agent-device and send each agent to a worker that has it. | Both       |
+| `capabilities.agent-device.command`         | non-empty string                     | `agent-device`   | The agent-device program: a name looked up on `PATH`, or a path.                                             | Worker     |
+| `capabilities.agent-device.leaseTtlCapMs`   | integer from `5000` to `lease.maxTtlMs` | not set (no cap) | Longest TTL for leases agent-device takes through Simlock. A longer TTL is lowered to it; a lease with none gets it. | Both       |
+| `capabilities.stream.enabled`               | boolean                              | `false`          | Let people watch a leased device's screen. On a gateway: pass each stream through from the worker.           | Both       |
+| `capabilities.stream.fps`                   | integer `1`–`60`                     | `30`             | Highest frame rate. A still screen sends far fewer frames.                                                   | Worker     |
+| `capabilities.stream.maxDimension`          | integer `96`–`4096`                  | `720`            | Longest side of the picture, in pixels. The setting that changes bandwidth most.                             | Worker     |
+| `capabilities.stream.bitrateKbps`           | integer `100`–`40000`                | `1500`           | Average bitrate in kilobits per second.                                                                      | Worker     |
+
+## Logging and history
+
+| Key                  | Type             | Default                                         | Meaning                                                                                                                     | Applies to |
+| -------------------- | ---------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `log.level`          | `debug`, `info`, `warn` or `error` | `info`                        | Lowest level written to `daemon.log`. `debug` adds every read-only request and every device command Simlock runs.          | Both       |
+| `log.rotateBytes`    | positive integer | `5242880` (5 MiB)                               | Size at which `daemon.log` is rotated.                                                                                      | Both       |
+| `eventBuffer.capacity` | positive integer | `1000`                                        | Recent events kept in memory, which `simlock events` without `--since` shows.                                               | Both       |
+| `eventLog.retention` | positive integer | `604800000` (7 days)                            | How long events are kept in `history.db`, which `simlock events --since` reads.                                             | Both       |
+| `eventLog.maxBytes`  | positive integer, at least 16 MiB | `268435456` (256 MiB)          | Cap on the stored size of events in `history.db`. Over it, the oldest events go first.                                      | Both       |
+| `metrics.retention`  | positive integer, at least `eventLog.retention` | the larger of `7776000000` (90 days) and `eventLog.retention` | How long the usage figures behind `simlock stats` are kept.                                  | Both       |
+
+`daemon.log` and `history.db` sit next to `config.json`.
+
+## Retired keys
+
+| Key                                               | What happens                                                                                              | Use instead                                                                     |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `mode`                                            | The daemon does not start: `"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.` | Remove it. Run a gateway with `simlock --gateway daemon start`; it lives in `~/.simlock/gateway`. |
+| `lease.detachedTtlMs`                             | Warned about and ignored; the value is not carried over.                                                  | `lease.defaultTtlMs`. Copy the value across yourself.                           |
+| `lease.heldTtlBackstopMs`                         | Warned about and ignored.                                                                                 | Nothing. A lease's TTL is its deadline.                                         |
+| `lease.heartbeatIntervalMs`                       | Warned about and ignored.                                                                                 | Nothing. Clients renew on their own.                                            |
+| `ios.slim.enabled`                                | Warned about and ignored; the default mode is `full`.                                                     | `ios.defaultMode: "slim"`.                                                      |
+| `eventLog.rotateBytes`                            | Warned about and ignored. The next `config set` removes it from the file.                                 | `eventLog.retention` and `eventLog.maxBytes`.                                   |
+| Top-level `limits` and `ramBudget`                | Still work, read as `capacity.config.limits` and `capacity.config.ramBudget`. With `capacity.strategy` `fixed` they are warned about and ignored. | `capacity.config.limits` and `capacity.config.ramBudget`.     |
+
+A warned-about key blocks `simlock config set` until you remove it from the file, because
+`config set` refuses a file with an unknown key.

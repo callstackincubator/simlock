@@ -1,4 +1,4 @@
-// why: routing reasons follow gateway.routing in docs/CONFIGURATION.md (warm device first, then
+// why: routing reasons follow gateway.routing on the docs' routing page (warm device first, then
 // the most free capacity), so the story never claims a placement Simlock would not make.
 
 export const gatewayUrl = "https://gw.example";

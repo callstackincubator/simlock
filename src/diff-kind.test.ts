@@ -40,9 +40,12 @@ function kindOf(after: Record<string, string>, before: Record<string, string> = 
 describe("diff-kind.mjs", () => {
   it("calls a diff that only touches ADRs adr-only, and one that adds any other doc docs-only", () => {
     expect(kindOf({ "docs/internal/adr/0099-x.md": "# ADR\n" })).toBe("adr-only");
-    expect(kindOf({ "docs/internal/adr/0099-x.md": "# ADR\n", "docs/CLI.md": "# CLI\n" })).toBe(
-      "docs-only",
-    );
+    expect(
+      kindOf({ "docs/internal/adr/0099-x.md": "# ADR\n", "docs/internal/FLOW.md": "# Flow\n" }),
+    ).toBe("docs-only");
+    expect(
+      kindOf({ "website/src/content/docs/docs/reference/cli.mdx": "---\ntitle: CLI\n---\n" }),
+    ).toBe("docs-only");
   });
 
   it("calls a diff that only deletes or edits comments comments-only, and one that changes a #private line not", () => {
