@@ -8,10 +8,10 @@ import {
   tableFeatures,
   useTable,
 } from "@tanstack/react-table";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { useNavigateTo } from "./link";
-import { type MenuEntry, RowMenu } from "./menu";
+import { type MenuEntry, MenuRow, RowMenu } from "./menu";
 import { Pager, type Paging } from "./pager";
 
 export interface Column<T> {
@@ -100,39 +100,55 @@ export function DataTable<T extends RowData>(props: {
           </tr>
         </thead>
         <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr
-              key={row.id}
-              className={rowTo === undefined ? undefined : "table-row-link"}
-              onClick={
-                rowTo === undefined
-                  ? undefined
-                  : (event) => {
-                      if ((event.target as HTMLElement).closest("a, button") === null) {
-                        navigate?.(rowTo(row.original));
-                      }
+          {table.getRowModel().rows.map((row) => {
+            const className = rowTo === undefined ? undefined : "table-row-link";
+            const onClick =
+              rowTo === undefined
+                ? undefined
+                : (event: MouseEvent<HTMLTableRowElement>) => {
+                    if ((event.target as HTMLElement).closest("a, button") === null) {
+                      navigate?.(rowTo(row.original));
                     }
-              }
-            >
-              {row.getAllCells().map((cell) => {
-                const column = columns[Number(cell.column.id)];
-                return (
-                  <td
-                    key={cell.id}
-                    data-label={column?.header}
-                    className={cellClass(column?.numeric, column?.mono)}
-                  >
-                    {column?.cell(row.original)}
+                  };
+            const cells = (
+              <>
+                {row.getAllCells().map((cell) => {
+                  const column = columns[Number(cell.column.id)];
+                  return (
+                    <td
+                      key={cell.id}
+                      data-label={column?.header}
+                      className={cellClass(column?.numeric, column?.mono)}
+                    >
+                      {column?.cell(row.original)}
+                    </td>
+                  );
+                })}
+                {menu === undefined ? null : (
+                  <td className="table-menu">
+                    <RowMenu
+                      label={menu.label(row.original)}
+                      entries={menu.entries(row.original)}
+                    />
                   </td>
-                );
-              })}
-              {menu === undefined ? null : (
-                <td className="table-menu">
-                  <RowMenu label={menu.label(row.original)} entries={menu.entries(row.original)} />
-                </td>
-              )}
-            </tr>
-          ))}
+                )}
+              </>
+            );
+            return menu === undefined ? (
+              <tr key={row.id} className={className} onClick={onClick}>
+                {cells}
+              </tr>
+            ) : (
+              <MenuRow
+                key={row.id}
+                className={className}
+                onClick={onClick}
+                entries={menu.entries(row.original)}
+              >
+                {cells}
+              </MenuRow>
+            );
+          })}
         </tbody>
       </table>
       {paging === undefined ? null : <Pager label={label} paging={paging} />}

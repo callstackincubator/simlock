@@ -1,6 +1,8 @@
 import "./menu.css";
 
+import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
+import type { MouseEventHandler, ReactNode } from "react";
 
 import { Button, IconButton } from "./button";
 import { Icon } from "./icon";
@@ -29,6 +31,30 @@ function MenuItems({ entries }: { readonly entries: readonly MenuEntry[] }) {
       </Menu.Item>
     </div>
   ));
+}
+
+// why: a right-click on a table row opens the same entries as its ⋯.
+export function MenuRow(props: {
+  readonly entries: readonly MenuEntry[];
+  readonly className?: string | undefined;
+  readonly onClick?: MouseEventHandler<HTMLTableRowElement> | undefined;
+  readonly children: ReactNode;
+}) {
+  const { children, className, entries, onClick } = props;
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger render={<tr className={className} onClick={onClick} />}>
+        {children}
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner className="menu-positioner">
+          <ContextMenu.Popup className="menu" onClick={(event) => event.stopPropagation()}>
+            <MenuItems entries={entries} />
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  );
 }
 
 export function RowMenu(props: { readonly label: string; readonly entries: readonly MenuEntry[] }) {

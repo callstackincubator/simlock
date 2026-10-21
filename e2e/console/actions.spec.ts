@@ -458,21 +458,32 @@ test.describe("the console acts", () => {
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       const row = rowOf(page, "ctx-a");
       await row.getByRole("button", { name: "Actions for ctx-a" }).click();
+      await expect(page.getByRole("menu")).toBeVisible();
       const viaButton = await page.getByRole("menuitem").allInnerTexts();
       await page.keyboard.press("Escape");
       await expect(page.getByRole("menu")).toHaveCount(0);
 
       await row.click({ button: "right" });
       await expect(page.getByRole("menu")).toBeVisible();
-      expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(viaButton);
+      await expect(page.getByRole("menu")).toBeFocused();
+      await expect(page.getByRole("menuitem")).toHaveText(viaButton);
       expect(viaButton).toEqual(["Drain", "Remove worker"]);
 
       await page.keyboard.press("ArrowDown");
-      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toBeFocused();
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toHaveAttribute(
+        "data-highlighted",
+        "",
+      );
       await page.keyboard.press("ArrowDown");
-      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toBeFocused();
+      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveAttribute(
+        "data-highlighted",
+        "",
+      );
       await page.keyboard.press("ArrowUp");
-      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toBeFocused();
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toHaveAttribute(
+        "data-highlighted",
+        "",
+      );
 
       await page.keyboard.press("Escape");
       await expect(page.getByRole("menu")).toHaveCount(0);
