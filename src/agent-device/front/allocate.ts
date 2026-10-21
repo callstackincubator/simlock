@@ -92,6 +92,9 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
     return refusal("refused: this agent-device is too old for simlock; upgrade it");
   }
   if (notPlain(params)) return refusal("refused: simlock leases only plain devices");
+  if (params["physical"] === true) {
+    return refusal("refused: physical devices are not available through agent-device");
+  }
   const device = deviceRefusal(fields);
   if (device !== undefined) return device;
   if (present(ttl) && !(typeof ttl === "number" && Number.isFinite(ttl) && ttl > 0)) {
