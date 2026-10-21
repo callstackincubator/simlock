@@ -1,6 +1,7 @@
 import { z } from "@hono/zod-openapi";
 
 import { deviceRecordSchema, OPERATIONS, statusDeviceSchema } from "../contract/index.js";
+import { ADMIN_ROUTES } from "./admin-declarations.js";
 import { LEASE_ROUTES } from "./lease-declarations.js";
 import { declareRoute, firstValue } from "./routes.js";
 
@@ -128,4 +129,5 @@ export const DECLARED_ROUTES = [
   devicesRoute,
   statsRoute,
   ...LEASE_ROUTES,
+  ...ADMIN_ROUTES,
 ] as const;

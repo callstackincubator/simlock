@@ -1,4 +1,3 @@
-import { zValidator } from "@hono/zod-validator";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { z } from "zod";
@@ -6,7 +5,6 @@ import { z } from "zod";
 import type { EventBus } from "../bus/index.js";
 import {
   type ComponentProgress,
-  describeSchemaIssues,
   eventsPageQuery,
   OPERATIONS,
   parseDurationMs,
@@ -18,6 +16,7 @@ import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
 import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
+import { componentInstallRoute } from "./admin-declarations.js";
 import {
   badRequest,
   errorResponse,
@@ -121,22 +120,6 @@ type Env = AuthEnv;
 
 /** Upper bound on `?wait=` long-polls; bounds how long an abandoned poll can pin resources. */
 const MAX_LONG_POLL_SECONDS = 60;
-
-const componentInstallBodySchema = z
-  .object({
-    platform: z.string(),
-    version: z.string(),
-    workers: z.union([z.string(), z.array(z.string())]).optional(),
-  })
-  .strict();
-
-function jsonBody<Schema extends z.ZodType>(schema: Schema) {
-  return zValidator("json", schema, (result, c) => {
-    if (!result.success) {
-      return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
-    }
-  });
-}
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
   return {
@@ -499,7 +482,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     });
   });
 
-  app.post("/v1/components/install", agentAuth, jsonBody(componentInstallBodySchema), async (c) => {
+  app.openapi({ ...componentInstallRoute, middleware: [agentAuth] }, async (c) => {
     const { workers, ...component } = c.req.valid("json");
     // Progress that arrives before the stream opens is held in order and flushed when it
     // does. After the client is gone, a write is a no-op (`pipeSse`); the install itself

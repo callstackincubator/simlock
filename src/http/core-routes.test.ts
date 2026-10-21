@@ -14,7 +14,6 @@ import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from ".
 const UNDECLARED_ROUTES = [
   "GET /v1/components",
   "DELETE /v1/components/{platform}/{version}",
-  "POST /v1/components/install",
   "GET /v1/tokens",
   "GET /v1/workers",
   "POST /v1/workers/{id}/drain",

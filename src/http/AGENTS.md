@@ -42,8 +42,7 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
    a failure is 400 `BAD_REQUEST` (`validationHook`). A JSON body without a JSON content type is
    415 `UNSUPPORTED_MEDIA_TYPE`, malformed JSON 400 `Invalid JSON body` (`mapError` reads the
    library's `HTTPException`). Renew's body is optional: an empty body is read as none, whatever
-   the content type, and `emptyBodyAsNone` says so before the validator. The other routes still take
-   `jsonBody`, a strict zod schema.
+   the content type, and `emptyBodyAsNone` says so before the validator.
 5. `buildHttpSession` — principal = the identity's (a token's id, or `proxy:<iss>#<sub>`); `operator` → `admin`, `agent` → `agent`.
 6. `deps.dispatch` — the daemon's own dispatcher, in process: `DaemonServer.dispatch`.
    Role check, `authorize` and readiness parking run there.
