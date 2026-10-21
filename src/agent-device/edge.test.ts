@@ -3277,6 +3277,31 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
+    it("a command with `osVersion` or `imageTag` on `flags`, on `input` or inside a batch step reaches agent-device without them, and a command without them reaches it with its flags as sent", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const keys = { imageTag: "default", osVersion: ">=26" };
+
+      const onFlags = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { flags: { ...keys, platform: "ios" } }),
+      );
+      const onInput = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { input: { ...keys, platform: "ios" } }),
+      );
+      const inStep = await forwarded(rig, () =>
+        batch(rig, 1, [{ command: "snapshot", flags: { ...keys, platform: "ios" } }]),
+      );
+      const plain = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { flags: { platform: "ios" } }),
+      );
+
+      expect(flagsOf(onFlags)).toEqual({ platform: "ios" });
+      expect(onInput["input"]).toEqual({ platform: "ios" });
+      const steps = flagsOf(inStep)["batchSteps"] as { flags: Record<string, unknown> }[];
+      expect(steps[0]?.flags).toEqual({ platform: "ios" });
+      expect(flagsOf(plain)).toEqual({ platform: "ios" });
+    });
+
     it("`--device` with the leased model in `input` is removed from `input` and sent as `flags.udid`", async () => {
       const rig = await setUp();
       await granted(rig, 1, { device: "iPhone 17 Pro" });
