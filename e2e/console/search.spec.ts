@@ -1,7 +1,15 @@
 import type { Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, signIn, startDaemon, test } from "./fixtures.js";
+import {
+  disposeFleet,
+  expect,
+  type RunningDaemon,
+  signIn,
+  startDaemon,
+  startFleet,
+  test,
+} from "./fixtures.js";
 
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -93,6 +101,67 @@ test.describe("the search results", () => {
       await goTo("nav-waiter", new RegExp(`/queue/${encoded(request.id)}$`));
     } finally {
       await host.dispose();
+    }
+  });
+});
+
+test.describe("the search actions", () => {
+  test("an action runs as from its menu: drain with its toast and Undo, release and cancel after their confirms, remove after the name is typed", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "gone-a" },
+      { driverScript: { ios: IOS }, label: "live-b" },
+    ]);
+    const host = await startHostWithQueue();
+    try {
+      const [stopped] = fleet.workers as [RunningDaemon];
+      await stopped.stop();
+      await waitFor(
+        async () =>
+          (
+            await readJson<{ workers: { connection: string }[] }>(fleet.gateway, "/v1/workers")
+          ).workers.some((view) => view.connection === "disconnected"),
+        { label: "the gateway sees the stopped worker disconnected" },
+      );
+      const run = async (typed: string) => {
+        await page.keyboard.press("Control+k");
+        await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill(typed);
+        await page.keyboard.press("Enter");
+        await expect(page.getByRole("dialog", { name: "Search" })).toBeHidden();
+      };
+
+      await openConsole(page, fleet.gateway.tokens.operator, fleet.gateway.url);
+      await run("drain live-b");
+      await expect(page.getByText("live-b drained", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Undo" }).click();
+      await expect(page.getByText("live-b takes leases again")).toBeVisible();
+
+      await run("remove gone-a");
+      const removal = page.getByRole("alertdialog", { name: "Remove gone-a?" });
+      const remove = removal.getByRole("button", { name: "Remove worker" });
+      await expect(remove).toBeDisabled();
+      await removal.getByRole("textbox").fill("gone-");
+      await expect(remove).toBeDisabled();
+      await removal.getByRole("textbox").fill("gone-a");
+      await expect(remove).toBeEnabled();
+      await removal.getByRole("button", { name: "Keep" }).click();
+
+      await page.goto(host.url);
+      await signIn(page, host.tokens.operator);
+      await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeVisible();
+      await run("release nav-holder");
+      await expect(
+        page.getByRole("alertdialog", { name: "Release nav-holder's lease?" }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "Keep" }).click();
+      await run("cancel nav-waiter");
+      await expect(
+        page.getByRole("alertdialog", { name: "Cancel nav-waiter's request?" }),
+      ).toBeVisible();
+    } finally {
+      await host.dispose();
+      await disposeFleet(fleet);
     }
   });
 });
