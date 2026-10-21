@@ -353,20 +353,17 @@ describe("buildOpenApiDocument with a module that carries http", () => {
   it("an integrator reads GET /v1/stream/leases/{id} under stream, with its headers, binary 200, 405 and refusals, and no agent-device or uplink path", () => {
     const document = buildOpenApiDocument(optionalModules);
     const operation = document.paths?.["/v1/stream/leases/{id}"]?.get;
-    const ok = (operation?.responses ?? {})["200"] as {
-      content?: Record<string, unknown>;
-      headers?: Record<string, unknown>;
-    };
+    const ok = (operation?.responses ?? {})["200"] as OkResponse;
 
     expect(operation?.tags).toEqual(["stream"]);
     expect(document.tags?.find((tag) => tag.name === "stream")?.description).toContain(
       "capabilities.stream.enabled",
     );
-    expect(Object.keys(ok.content ?? {}).sort()).toEqual([
+    expect(sortedKeys(ok.content)).toEqual([
       "application/vnd.simlock.stream+h264",
       "application/vnd.simlock.stream+mjpeg",
     ]);
-    expect(Object.keys(ok.headers ?? {}).sort()).toEqual([
+    expect(sortedKeys(ok.headers)).toEqual([
       "simlock-stream-codec",
       "simlock-stream-fps",
       "simlock-stream-height",
@@ -391,13 +388,19 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "503": ["STREAM_UNAVAILABLE", "WORKER_UNREACHABLE"],
     });
     expect(
-      Object.keys(document.paths ?? {}).filter(
+      sortedKeys(document.paths).filter(
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",
       ),
     ).toEqual([]);
     expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["stream"]);
   });
 });
+
+type OkResponse = { content?: Record<string, unknown>; headers?: Record<string, unknown> };
+
+function sortedKeys(record: object | undefined): string[] {
+  return Object.keys(record ?? {}).sort();
+}
 
 function summarize(
   operation: { tags?: string[]; description?: string; responses?: object } | undefined,
