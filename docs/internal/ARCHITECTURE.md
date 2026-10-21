@@ -27,7 +27,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 - A gateway is a second set of handlers for the same contract. Every frontend
   works against either mode unchanged.
 - State lives on the worker (`state.db`, its registry tables written only by core's
-  `Registry`). A gateway keeps only its tokens, its instance id and its drained-worker set on
+  `Registry`; the warm pool's learned kinds in its own tables). A gateway keeps only its tokens, its instance id and its drained-worker set on
   disk (`state.db`); everything else is rebuilt from the workers that reconnect.
 
 ## Modules

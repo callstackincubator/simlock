@@ -32,6 +32,22 @@ describe("retry schedule", () => {
     expect(new RetrySchedule().mayAttempt(spec, 0)).toBe(true);
   });
 
+  it("answers the failures in a row of a spec, and 0 after a success", () => {
+    const schedule = new RetrySchedule();
+    expect(schedule.failures(spec)).toBe(0);
+
+    failTimes(schedule, spec, 2);
+    schedule.failed(other, 0);
+
+    expect(schedule.failures(spec)).toBe(2);
+    expect(schedule.failures(other)).toBe(1);
+
+    schedule.succeeded(spec);
+
+    expect(schedule.failures(spec)).toBe(0);
+    expect(schedule.failures(other)).toBe(1);
+  });
+
   it("after one failure allows a try one minute later and not a moment before", () => {
     const schedule = new RetrySchedule();
 

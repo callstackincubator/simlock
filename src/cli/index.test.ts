@@ -6,7 +6,7 @@ import { createServer, type Socket } from "node:net";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "../core/testing.js";
+import { testComponentWiring, testStateOf } from "../core/testing.js";
 
 import { EventBus } from "../bus/index.js";
 import { ringEventHistory, seedHistory } from "../history/testing.js";
@@ -7291,6 +7291,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     eventBus,
     idGenerator: sequence(),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({
       cpuCount: 8,
       totalRamBytes: 32 * gibibyte,
@@ -7403,6 +7404,7 @@ async function startInMemoryDaemon(options: {
     eventBus,
     idGenerator: sequence(),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({
       cpuCount: 8,
       totalRamBytes: 32 * gibibyte,
