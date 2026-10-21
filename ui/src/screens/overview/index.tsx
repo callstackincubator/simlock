@@ -114,11 +114,7 @@ export function OverviewBody(props: {
         </Row>
       )}
       <Row>
-        <Panel
-          title="Workers"
-          flush
-          actions={<Link to="/fleet">All {overview.workers.length}</Link>}
-        >
+        <Panel title="Workers" flush actions={<Link to="/fleet">Open Fleet</Link>}>
           <WorkerTable workers={overview.workers} />
         </Panel>
         <div className="overview-side">
