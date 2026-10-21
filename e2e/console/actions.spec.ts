@@ -276,13 +276,14 @@ test.describe("the console acts", () => {
 
       await dialog.getByRole("button", { name: "Release lease" }).click();
       await expect(dialog).toBeHidden();
-      await expect(page.getByText("Couldn't release refused-agent's lease")).toBeVisible();
-      await expect(page.getByText(message, { exact: true })).toBeVisible();
+      const toasts = page.getByRole("region", { name: "Notifications" });
+      await expect(toasts.getByText("Couldn't release refused-agent's lease")).toBeVisible();
+      await expect(toasts.getByText(message, { exact: true })).toBeVisible();
       expect(deletes).toEqual([`/v1/leases/${leaseId}`]);
 
-      await page.getByRole("button", { name: "Retry" }).click();
+      await toasts.getByText("Retry", { exact: true }).click();
       await expect.poll(() => deletes.length).toBe(2);
-      await expect(page.getByText("Couldn't release refused-agent's lease")).toBeVisible();
+      await expect(toasts.getByText("Couldn't release refused-agent's lease")).toBeVisible();
     } finally {
       await daemon.dispose();
     }

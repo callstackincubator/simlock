@@ -53,3 +53,11 @@
   justify-self: start;
   margin-top: var(--space-2);
 }
+
+.toast[data-type="error"] {
+  border-color: var(--status-error);
+}
+
+.toast[data-type="error"] .toast-title {
+  color: var(--status-error);
+}

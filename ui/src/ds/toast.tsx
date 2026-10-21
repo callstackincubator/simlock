@@ -3,6 +3,7 @@ import "./toast.css";
 import { Toast } from "@base-ui/react/toast";
 
 export interface ToastSpec {
+  readonly tone?: "error";
   readonly title: string;
   readonly description?: string;
   readonly action?: { readonly label: string; readonly onClick: () => void };
@@ -21,6 +22,8 @@ export function createToaster(): Toaster {
     notify(spec) {
       const id = manager.add({
         title: spec.title,
+        // why: an error toast stays until it is closed and is announced at once.
+        ...(spec.tone === "error" ? { priority: "high" as const, timeout: 0, type: "error" } : {}),
         ...(spec.description === undefined ? {} : { description: spec.description }),
         ...(spec.action === undefined
           ? {}

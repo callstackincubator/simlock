@@ -30,6 +30,8 @@ export interface ItemAction {
   readonly path: `/v1/${string}`;
   readonly confirm?: ActionConfirm;
   readonly success: ActionToast;
+  // why: the title of the error toast when the daemon refuses, word for word from the spec.
+  readonly failure: string;
   // why: an action that asks nothing can be undone from its toast, by running this one.
   readonly undo?: ItemAction;
 }
@@ -59,6 +61,7 @@ export function leaseActions(lease: LeaseActionInput): readonly ItemAction[] {
       label: "Release lease",
       method: "DELETE",
       path: `/v1/leases/${encodeURIComponent(lease.id)}`,
+      failure: `Couldn't release ${lease.holder}'s lease`,
       success: {
         description: `${device} goes back to the pool.`,
         title: `Released ${lease.holder}'s lease`,
@@ -92,6 +95,7 @@ export function requestActions(request: RequestActionInput): readonly ItemAction
       label: "Cancel request",
       method: "DELETE",
       path: `/v1/lease-requests/${encodeURIComponent(request.id)}`,
+      failure: `Couldn't cancel ${request.requester}'s request`,
       success: { title: `Cancelled ${request.requester}'s request` },
     },
   ];
@@ -120,6 +124,7 @@ export function workerActions(
     label: "Undrain",
     method: "DELETE",
     path: `${path}/drain`,
+    failure: `Couldn't undrain ${worker.name}`,
     success: { title: `${worker.name} takes leases again` },
   };
   const drain: ItemAction = {
@@ -129,6 +134,7 @@ export function workerActions(
     label: "Drain",
     method: "POST",
     path: `${path}/drain`,
+    failure: `Couldn't drain ${worker.name}`,
     success: {
       description: "Its leases keep running. New leases go to other workers.",
       title: `${worker.name} drained`,
@@ -151,6 +157,7 @@ export function workerActions(
       label: "Remove worker",
       method: "DELETE",
       path,
+      failure: `Couldn't remove ${worker.name}`,
       success: { title: `${worker.name} removed` },
     });
   }

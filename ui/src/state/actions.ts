@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
+import { ApiError } from "../data/api";
 import type { MenuEntry } from "../ds";
 import type { ItemAction } from "../model/actions";
 import { navigate } from "./router";
@@ -44,7 +45,8 @@ export function useActions(): Actions {
   const run = useCallback(
     async (action: ItemAction): Promise<void> => {
       if (inFlight.has(action.itemKey)) return;
-      const perform = async () => {
+      const perform = async (): Promise<void> => {
+        if (inFlight.has(action.itemKey)) return;
         setInFlight(action.itemKey, true);
         try {
           await api.write(action.method, action.path);
@@ -66,6 +68,21 @@ export function useActions(): Actions {
                     },
                   },
                 }),
+          });
+        } catch (error: unknown) {
+          // why: a 401 has already signed the session out, and that is not a toast.
+          if (!(error instanceof ApiError)) throw error;
+          if (error.status === 401) return;
+          notify({
+            action: {
+              label: "Retry",
+              onClick: () => {
+                void perform();
+              },
+            },
+            description: error.message,
+            title: action.failure,
+            tone: "error",
           });
         } finally {
           setInFlight(action.itemKey, false);
