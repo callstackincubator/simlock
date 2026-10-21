@@ -44,9 +44,7 @@ export {
   productionServiceManager,
   ServiceFailedError,
   type ServiceDefinition,
-  type ServiceDefinitionInput,
   type ServiceManager,
-  type ServiceManagerName,
   serviceDefinition,
   type ServiceState,
 } from "./service-manager.js";

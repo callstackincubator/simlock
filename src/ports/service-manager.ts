@@ -94,21 +94,25 @@ export class FakeServiceManager implements ServiceManager {
     this.current = options.state ?? { state: "not-installed" };
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the `ServiceManager` port.
   async state(): Promise<ServiceState> {
     return this.current;
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the `ServiceManager` port.
   async install(definition: ServiceDefinition): Promise<void> {
     this.installs.push(definition);
     this.current = { state: "installed", path: definition.path };
     await this.options.onInstall?.(definition);
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the `ServiceManager` port.
   async uninstall(definition: ServiceDefinition): Promise<void> {
     this.uninstalls.push(definition);
     this.current = { state: "not-installed" };
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the `ServiceManager` port.
   async start(definition: ServiceDefinition): Promise<void> {
     this.starts.push(definition);
     await this.options.onStart?.(definition);
@@ -189,12 +193,6 @@ function failure(command: string, args: readonly string[], result: ProcessResult
 
 function isExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
-}
-
-export interface LaunchdServiceManagerOptions {
-  readonly runner: ProcessRunner;
-  readonly filesystem: Filesystem;
-  readonly uid: number;
 }
 
 export class LaunchdServiceManager implements ServiceManager {
