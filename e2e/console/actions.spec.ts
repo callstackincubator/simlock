@@ -192,4 +192,54 @@ test.describe("the console acts", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("a stopped worker is removed once its name is typed exactly, and a connected worker offers no Remove", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "gone-a" },
+      { driverScript: { ios: IOS }, label: "live-b" },
+    ]);
+    try {
+      const [stopped] = fleet.workers as [RunningDaemon];
+      await stopped.stop();
+      await waitFor(
+        async () => {
+          const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+          return (listed.json as { workers: { connection: string }[] }).workers.some(
+            (view) => view.connection === "disconnected",
+          );
+        },
+        { label: "the gateway sees the stopped worker disconnected" },
+      );
+      await openPage(page, fleet.gateway, "/fleet", "Fleet");
+
+      const live = rowOf(page, "live-b");
+      await live.getByRole("button", { name: "Actions for live-b" }).click();
+      await expect(page.getByRole("menuitem", { name: "Drain", exact: true })).toBeVisible();
+      await expect(page.getByRole("menuitem", { name: "Remove worker" })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+
+      const row = rowOf(page, "gone-a");
+      await row.getByRole("button", { name: "Actions for gone-a" }).click();
+      await page.getByRole("menuitem", { name: "Remove worker" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "Remove gone-a?" });
+      await expect(dialog).toContainText(
+        "It leaves the fleet and its devices are forgotten. It can join again with a worker token. Type gone-a to confirm.",
+      );
+      const remove = dialog.getByRole("button", { name: "Remove worker" });
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("gone-");
+      await expect(remove).toBeDisabled();
+      await dialog.getByRole("textbox").fill("gone-a");
+      await expect(remove).toBeEnabled();
+
+      await remove.click();
+      await expect(page.getByText("gone-a removed")).toBeVisible();
+      await expect(row).toHaveCount(0);
+      await expect(live).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
