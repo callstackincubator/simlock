@@ -319,4 +319,43 @@ test.describe("the console acts", () => {
       await daemon.dispose();
     }
   });
+
+  test("while a release is in flight its button reads Releasing… and is disabled, and a second click sends no second DELETE", async ({
+    page,
+  }) => {
+    const daemon = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(daemon, "slow-agent");
+      await openPage(page, daemon, "/leases", "Leases");
+      const deletes: string[] = [];
+      let answer: (() => Promise<void>) | undefined;
+      await page.route("**/v1/leases/*", async (route) => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        deletes.push(route.request().url());
+        answer = () => route.continue();
+        return undefined;
+      });
+      const row = rowOf(page, "slow-agent");
+      const menuButton = row.getByRole("button", { name: "Actions for slow-agent" });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      await page.getByRole("menuitem", { name: "Release lease" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "Release slow-agent's lease?" });
+      await dialog.getByRole("button", { name: "Release lease" }).click();
+
+      const busy = dialog.getByRole("button", { name: "Releasing…" });
+      await expect(busy).toBeDisabled();
+      await busy.click({ force: true });
+      await expect.poll(() => deletes.length).toBe(1);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeVisible();
+
+      await answer?.();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText("Released slow-agent's lease")).toBeVisible();
+      expect(deletes).toHaveLength(1);
+    } finally {
+      await daemon.dispose();
+    }
+  });
 });
