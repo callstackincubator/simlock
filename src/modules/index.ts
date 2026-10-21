@@ -12,7 +12,6 @@ export type {
   ModuleEndedLease,
   ModuleFinding,
   ModuleHttpResponse,
-  ModuleHttpRoute,
   ModuleLeaseEndParticipant,
   ModuleMount,
   ModuleRelayTarget,
