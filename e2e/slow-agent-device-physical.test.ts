@@ -23,7 +23,7 @@ type Platform = "android" | "ios";
 
 const ANDROID_SERIAL = process.env["SIMLOCK_PHYSICAL_ANDROID"];
 const IOS_UDID = process.env["SIMLOCK_PHYSICAL_IOS"];
-// why: teamId and bundleId let Xcode sign the runner automatically; a provisioning profile or signing identity switches agent-device to manual signing, so each goes in only when set.
+// why: teamId and bundleId let Xcode sign the runner automatically; only a provisioning profile switches agent-device to manual signing (a signing identity alone does not), so each goes in only when set.
 const IOS_SIGNING = {
   teamId: process.env["SIMLOCK_E2E_IOS_TEAM_ID"],
   bundleId: process.env["SIMLOCK_E2E_IOS_BUNDLE_ID"],
@@ -149,12 +149,25 @@ function defineSuite(platform: Platform, id: string): void {
           }[];
           expect(devices.find((device) => device.id === lease?.deviceId)?.driverDeviceId).toBe(id);
 
+          // why: like the CLI, a command carries the scope the lease was allocated under plus the device key agent-device's reply named; without all of them agent-device refuses the lease's owner.
+          const granted = allocated.result?.data?.["lease"] as { deviceKey?: string } | undefined;
           const dir = await mkdtemp(join(tmpdir(), "simlock-ad-phone-"));
           onTestFinished(() => rm(dir, { force: true, recursive: true }));
           const png = join(dir, "shot.png");
+          // why: the CLI addresses the leased phone by its serial or udid on each command; with 26 devices known to agent-device none is picked for it.
+          const flags = { platform, [platform === "android" ? "serial" : "udid"]: id };
+          const meta = { ...scope, deviceKey: granted?.deviceKey, leaseId };
+          const opened = await call("agent_device.command", {
+            command: "open",
+            flags,
+            meta,
+            positionals: [],
+          });
+          expect(opened.error, JSON.stringify(opened)).toBeUndefined();
           const shot = await call("agent_device.command", {
             command: "screenshot",
-            meta: { leaseId },
+            flags,
+            meta,
             positionals: [png],
           });
           expect(shot.error, JSON.stringify(shot)).toBeUndefined();
@@ -162,7 +175,11 @@ function defineSuite(platform: Platform, id: string): void {
           const written = existsSync(png) ? png : typeof named === "string" ? named : png;
           expect((await readFile(written)).subarray(0, 8).toString("hex")).toBe(PNG_MAGIC);
 
-          const released = await call("agent_device.lease.release", { ...scope, leaseId });
+          const released = await call("agent_device.lease.release", {
+            ...scope,
+            deviceKey: granted?.deviceKey,
+            leaseId,
+          });
           expect(released.error, JSON.stringify(released)).toBeUndefined();
           await waitForFree(env);
         },
