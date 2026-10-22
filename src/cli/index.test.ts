@@ -9923,3 +9923,145 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
     });
   });
 });
+
+describe("simlock worker update", () => {
+  type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateWorker"]>>;
+  type View = Awaited<ReturnType<SimlockAdminClient["listWorkers"]>>["workers"][number];
+  const view = (overrides: Partial<View> = {}): View => ({
+    connection: "connected",
+    drained: false,
+    id: "3f81a2c4",
+    label: "mac-studio-2",
+    lastSeenAt: 1_000,
+    version: "0.3.0",
+    ...overrides,
+  });
+  const run = { forced: false, from: "0.3.0", startedAt: 1_000, to: "0.4.0" } as const;
+  const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
+    health: "running",
+    lastUpdateFailure: null,
+    latestVersion: "0.4.0",
+    resolved: "0.4.0",
+    started: true,
+    update: { ...run, stage: "installing" },
+    upToDate: false,
+    version: "0.3.0",
+    workerId: "3f81a2c4",
+    ...overrides,
+  });
+
+  it("follows the update to is running, reports a failure with exit 1, says when the worker is on the latest, detaches, and refuses on a worker daemon", async () => {
+    const failure = {
+      at: 2_000,
+      from: "0.3.0",
+      message: "npm exited 1",
+      stage: "installing",
+      to: "0.4.0",
+    } as const;
+    const cases: readonly {
+      readonly name: string;
+      readonly argv: readonly string[];
+      readonly answer: UpdateAnswer | SimlockError;
+      readonly lists?: readonly View[];
+      readonly code: number;
+      readonly stdout?: string;
+      readonly stderr?: string;
+      readonly polls?: number;
+    }[] = [
+      {
+        name: "follows to running",
+        argv: ["worker", "update", "3f81a2c4", "--version", "0.4.0", "--force"],
+        answer: answer(),
+        lists: [
+          view({ update: { ...run, leases: 2, stage: "waiting" } }),
+          view({ update: { ...run, stage: "installing" } }),
+          view({ connection: "disconnected", update: { ...run, stage: "restarting" } }),
+          view({ update: null, version: "0.4.0" }),
+        ],
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is running 0.4.0\n",
+        polls: 4,
+      },
+      {
+        name: "fails with the stage and message",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer(),
+        lists: [view({ lastUpdateFailure: failure, update: null })],
+        code: 1,
+        stdout: "Update failed (installing): npm exited 1\n",
+        polls: 1,
+      },
+      {
+        name: "already on the latest",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)\n",
+        polls: 1,
+      },
+      {
+        name: "detach",
+        argv: ["worker", "update", "3f81a2c4", "--detach"],
+        answer: answer(),
+        code: 0,
+        stdout:
+          "Updating mac-studio-2 (3f81a2c4) 0.3.0 → 0.4.0. Follow it with simlock worker list.\n",
+        polls: 1,
+      },
+      {
+        name: "worker daemon",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: new SimlockError(
+          "UNSUPPORTED_IN_WORKER_MODE",
+          "domain",
+          "worker.update is a gateway operation",
+          { operation: "worker.update" },
+        ),
+        code: 1,
+        stderr: "worker.update is a gateway operation",
+        polls: 0,
+      },
+    ];
+    for (const spec of cases) {
+      const output = outputCapture();
+      const clock = new FakeClock(0);
+      const sent: unknown[] = [];
+      const lists = [...(spec.lists ?? [view()])];
+      let polls = 0;
+      const environment = output.environmentWith({
+        clock,
+        connectAdmin: async () =>
+          fakeClient({
+            listWorkers: async () => {
+              polls += 1;
+              const next = lists.length > 1 ? lists.shift() : lists[0];
+              return { workers: next === undefined ? [] : [next] };
+            },
+            updateWorker: async (input) => {
+              sent.push(input);
+              if (spec.answer instanceof Error) throw spec.answer;
+              return spec.answer;
+            },
+          }),
+        sleep: async (milliseconds) => clock.advance(milliseconds),
+      });
+
+      const code = await runCli(spec.argv, environment);
+
+      expect({ code, name: spec.name, stdout: output.stdout }).toEqual({
+        code: spec.code,
+        name: spec.name,
+        stdout: spec.stdout ?? "",
+      });
+      if (spec.stderr !== undefined) expect(output.stderr).toContain(spec.stderr);
+      expect({ name: spec.name, polls }).toEqual({ name: spec.name, polls: spec.polls ?? 0 });
+      expect(sent).toEqual([
+        {
+          workerId: "3f81a2c4",
+          ...(spec.argv.includes("--version") ? { version: "0.4.0" } : {}),
+          ...(spec.argv.includes("--force") ? { force: true } : {}),
+        },
+      ]);
+    }
+  });
+});
