@@ -22,7 +22,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | Exit | Error codes | Meaning |
 | --- | --- | --- |
 | 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
-| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
 | 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `GATEWAY_NOT_PRESENT`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
@@ -38,6 +38,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
 | `NO_CAPACITY` | 11 | 503 | No device can start now, and the request was told not to wait (`--no-wait`). Through a gateway: no worker that takes requests can serve it. | Try again later, or drop `--no-wait` to queue. Over HTTP the answer carries `Retry-After: 5`. |
+| `DAEMON_UPDATING` | 1 | 503 | The daemon is updating (`simlock update`) and takes no new leases. A request that was waiting when the update began gets it too. A lease you already hold renews and releases as usual. | Run the command again once the daemon is back, or lease from another worker. |
 | `QUEUE_TIMEOUT` | 10 | 500 | The request waited in the queue for its whole `--timeout` and got no device. | Raise `--timeout`, or check `simlock list --requests` for why requests wait. |
 | `REQUESTER_ALREADY_LEASED` | 13 | 409 | Your requester identity already holds its limit of leases (`lease.maxPerRequester`, 1 by default) or has a request waiting. The message names your lease. | Release that lease first, or give each agent session its own identity. |
 | `LEASE_ID_TAKEN` | 13 | 409 | `--lease-id` names an ID that an active lease or a waiting request already holds. | Use a new ID. Never reuse a lease ID. |

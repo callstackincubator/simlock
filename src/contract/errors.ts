@@ -104,6 +104,7 @@ export interface ErrorDetailsMap {
   HISTORY_NOT_KEPT: { readonly oldestTs: number };
   HISTORY_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
+  DAEMON_UPDATING: Record<string, never>;
   INTERNAL: Record<string, never>;
   GATEWAY_NOT_PRESENT: Record<string, never>;
   SERVICE_FAILED: Record<string, never>;
@@ -371,6 +372,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 503,
   },
   NUKE_UNAVAILABLE: { code: "NUKE_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
+  DAEMON_UPDATING: { code: "DAEMON_UPDATING", kind: "domain", cliExitCode: 1, httpStatus: 503 },
   HISTORY_NOT_KEPT: { code: "HISTORY_NOT_KEPT", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   HISTORY_UNAVAILABLE: {
     code: "HISTORY_UNAVAILABLE",

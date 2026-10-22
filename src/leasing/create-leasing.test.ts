@@ -2641,6 +2641,16 @@ describe("createLeasing: lease.rejected names its request", () => {
       await harness.engine.nuke(false);
       return { harness, requestId: await admittedId(harness, "next"), requester: "next" };
     },
+    updating: async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, holder);
+      void harness.engine
+        .request(request, { ownerId: "next", requesterId: "next" })
+        .catch(() => undefined);
+      await flush();
+      await harness.engine.leasing.holdForUpdate();
+      return { harness, requestId: await admittedId(harness, "next"), requester: "next" };
+    },
     cancelled: async () => {
       const harness = await createHarness();
       await harness.engine.request(request, holder);

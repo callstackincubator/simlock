@@ -103,6 +103,7 @@ class Coordinator implements UpdateCoordinator {
     const leases = this.#leaseCount();
     const run: Run = { from, to, startedAt: clock.now(), forced, stage: "waiting", leases };
     this.#run = run;
+    await this.options.leasing.holdForUpdate();
     eventBus.emit("daemon.update-started", { from, to, forced }, "update-coordinator");
     if (forced || leases === 0) await this.#install(run);
   }

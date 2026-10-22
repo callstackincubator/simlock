@@ -76,6 +76,7 @@ export interface EventMap {
       | "lease-id-taken"
       | "boot-timeout"
       | "killed"
+      | "updating"
       | "cancelled"
       /** A request still open when the daemon stopped, settled as failed at the next start. */
       | "daemon-restarted"

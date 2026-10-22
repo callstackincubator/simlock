@@ -2666,6 +2666,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
     },
     "boot-timeout": "worker",
     killed: "worker",
+    updating: "worker",
     "daemon-restarted": "worker",
   };
 
