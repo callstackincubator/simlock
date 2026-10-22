@@ -134,6 +134,8 @@ export class WorkerLink {
    * (inside `#rebuildView`) rather than only once a whole refresh completes -- see
    * `MAX_CONSECUTIVE_REFRESH_TIMEOUTS`'s comment for why liveness is judged on that one call. */
   #consecutiveRefreshTimeouts = 0;
+  // why: an incompatible worker is asked only the frozen `daemon.update` (ADR 0005 §31, ADR 0042 §1), so its refresh is that query.
+  #incompatible = false;
 
   constructor(private readonly options: WorkerLinkOptions) {
     this.workerId = options.uplink.workerId;
@@ -210,6 +212,7 @@ export class WorkerLink {
       await this.#withTimeout(client.getStatus(), "status.get");
     } catch (error: unknown) {
       if (isSimlockError(error) && error.code === "PROTOCOL_VERSION_UNSUPPORTED") {
+        this.#incompatible = true;
         // ADR 0005 §31: marked `incompatible`, with both ranges, and never asked anything else.
         // The uplink stays open on purpose -- the worker is running and will reconnect on its
         // own schedule after an upgrade; closing it here would just make it redial.
@@ -306,6 +309,7 @@ export class WorkerLink {
   async refresh(options: RefreshOptions = {}): Promise<void> {
     const client = this.#client;
     if (client === undefined || this.#closed) return;
+    if (this.#incompatible) return this.#queryUpdate(client);
     if (this.#refreshing) {
       this.#queuedRefresh = queueRefresh(this.#queuedRefresh, options);
       return this.#queuedRefresh.done;
@@ -354,6 +358,24 @@ export class WorkerLink {
         if (this.#closed) queued.resolve();
         else void this.refresh(queued.options).then(queued.resolve);
       }
+    }
+  }
+
+  // why: a failed query keeps the last view (ADR 0042 §2), so its error is dropped.
+  async #queryUpdate(client: GatewayWorkerClient): Promise<void> {
+    try {
+      const answer = await this.#withTimeout(client.updateDaemon({ query: true }), "daemon.update");
+      if (this.#superseded()) return;
+      this.options.registry.refresh(this.workerId, {
+        lastUpdateFailure: answer.lastUpdateFailure,
+        latestVersion: answer.latestVersion,
+        update: answer.update,
+      });
+    } catch (error: unknown) {
+      this.#logger.debug("Incompatible worker's update query failed", {
+        workerId: this.workerId,
+        message: errorMessage(error),
+      });
     }
   }
 
