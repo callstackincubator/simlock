@@ -148,6 +148,20 @@ async function captureCleanupError(
   }
 }
 
+async function stopBackgroundProcesses(handles: readonly CliBackgroundHandle[]): Promise<void> {
+  await Promise.all(
+    handles.map(async (handle) => {
+      handle.kill("SIGTERM");
+      try {
+        await handle.waitForExit(10_000);
+      } catch {
+        handle.kill("SIGKILL");
+        await handle.waitForExit(10_000);
+      }
+    }),
+  );
+}
+
 async function waitForDaemonPidsToExit(pids: ReadonlySet<number>): Promise<void> {
   const alive = async () =>
     (await Promise.all([...pids].map((pid) => isProcessAlive(pid)))).some(Boolean);
@@ -311,14 +325,25 @@ export async function startDaemon(
   const dispose = async (options: { readonly preservePages?: readonly Page[] } = {}) => {
     const preserved = new Set(options.preservePages ?? []);
     let cleanupError = await closeActivePages(preserved);
-    for (const handle of background) handle.kill("SIGTERM");
     cleanupError = await captureCleanupError(cleanupError, () =>
-      Promise.all([...background].map((handle) => handle.waitForExit(10_000))),
+      stopBackgroundProcesses([...background]),
     );
-    cleanupError = await captureCleanupError(cleanupError, stop);
+    let stopError: unknown;
+    try {
+      await stop();
+    } catch (error: unknown) {
+      stopError = error;
+    }
     await waitForDaemonPidsToExit(daemonPids);
     if (daemonPidDiscoveryFailed) {
       throw cleanupError ?? new Error(`cannot verify daemon exit for ${socketPath}`);
+    }
+    if (stopError !== undefined && daemonPids.size === 0) throw stopError;
+    // why: disposal can remove the home after a forced stop only once every discovered daemon PID
+    // has exited; explicit stop() callers still receive the graceful-stop error above.
+    if (daemonPids.size > 0) {
+      daemonStarted = false;
+      daemonMayBeRunning = false;
     }
     await rm(home, { force: true, recursive: true });
     if (cleanupError !== undefined) throw cleanupError;
