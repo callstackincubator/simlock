@@ -564,7 +564,7 @@ describe("startDaemon", () => {
     expect(runs).toEqual({ android: 2, ios: 2 });
   });
 
-  it("a worker's doctor reports service-broken for each service whose paths are gone, and doctor.reconciled does not carry it", async () => {
+  it("a worker's doctor reports service-broken for each service whose paths are gone", async () => {
     const gone = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
     const mainGone = "/Users/me/simlock/dist/daemon/main.js";
     const name = "com.callstack.simlock.worker";
