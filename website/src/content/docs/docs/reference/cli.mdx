@@ -207,6 +207,8 @@ Takes no flags other than the [global flags](#global-flags). Stdout carries only
 
 Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. See [Monitoring](/simlock/docs/worker/monitoring).
 
+When the daemon has seen a newer Simlock version on npm, the `Simlock:` line says so: `Simlock: 0.3.0 (0.4.0 available)`. A daemon learns the newest version at start and every 24 hours after, unless `update.check` is `false`.
+
 While an update runs, the second line below `Daemon:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
 
 ```text

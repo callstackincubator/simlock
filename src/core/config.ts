@@ -658,6 +658,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "metrics",
   "gateway",
   "capabilities",
+  "update",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
