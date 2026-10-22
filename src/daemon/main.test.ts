@@ -3016,6 +3016,69 @@ describe("startDaemon with the agent-device edge", () => {
     ]);
   });
 
+  it("stops both agent-device daemons when the worker stops, the phone daemon and the simulator daemon each by its own pid", async () => {
+    const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
+    const health = new FakeAgentDeviceHealth();
+    health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+    const tcpProbe = new FakeTcpProbe();
+    const processSupervisor = new KillingSupervisor();
+    const version = {
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout: "0.21.28\n" },
+    };
+    const daemonAt = (stateDirName: string, pid: number, port: number, marker: string[]) => ({
+      hangs: true,
+      match: {
+        args: [entry, `--simlock-home=${setup.directory}`, ...marker],
+        command: process.execPath,
+      },
+      onSpawn: async () => {
+        processSupervisor.markAlive(pid);
+        await setup.filesystem.writeFileAtomic(
+          join(setup.directory, stateDirName, "daemon.json"),
+          JSON.stringify({ httpPort: port, pid, token: "t" }),
+        );
+        tcpProbe.startListening(port);
+      },
+    });
+    const runner = new ScriptedProcessRunner([
+      version,
+      daemonAt("agent-device", 2, 4310, []),
+      version,
+      daemonAt("agent-device-phones", 4, 4311, ["--simlock-role=phones"]),
+    ]);
+    const spawn = runner.spawn.bind(runner);
+    vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
+      const handle = spawn(spawned, args, options);
+      if (args[0] === entry) processSupervisor.kills.set(handle.pid, () => handle.kill());
+      return handle;
+    });
+    const { clock, daemon } = await startEdge(setup, {
+      agentDevice: agentDeviceModuleWith({ health }),
+      clock: new FakeClock(1_000),
+      processRunner: runner,
+      processSupervisor,
+      tcpProbe,
+    });
+    for (let tick = 0; tick < 400 && runner.calls.length < 4; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+    for (let tick = 0; tick < 20; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+
+    const stopping = daemon.stop("test");
+    for (let tick = 0; tick < 100; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+    await stopping;
+
+    expect(processSupervisor.signals.map((signal) => signal.pid).sort()).toEqual([2, 4]);
+  });
+
   it("resolves and grants a lease to an ordinary client while agent-device's /health never answers", async () => {
     const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const processSupervisor = new KillingSupervisor();
