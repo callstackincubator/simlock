@@ -15,7 +15,9 @@ import { FakeAgentDeviceHealth } from "../testing.js";
 import {
   AgentDeviceSupervisor,
   type AgentDeviceAvailability,
+  type AgentDeviceIosSigning,
   type AgentDevicePlatform,
+  type AgentDeviceRole,
 } from "./agent-device-supervisor.js";
 
 const home = "/home/simlock/.simlock";
@@ -68,12 +70,14 @@ interface Options {
   readonly expectations?: readonly ScriptedProcessExpectation[];
   readonly filesystem?: MemoryFilesystem;
   readonly home?: string;
+  readonly ios?: AgentDeviceIosSigning;
   readonly layout?: (filesystem: MemoryFilesystem) => Promise<void>;
   readonly leaseMaxTtlMs?: number;
   readonly listening?: boolean;
   readonly livePids?: readonly number[];
   readonly nodeVersion?: string;
   readonly platforms?: readonly AgentDevicePlatform[];
+  readonly role?: AgentDeviceRole;
   readonly record?: { readonly pid: number; readonly entry: string; readonly startedAt: number };
   readonly spawnThrows?: Error;
   readonly stateDirContents?: (filesystem: MemoryFilesystem) => Promise<void>;
@@ -82,6 +86,7 @@ interface Options {
 
 async function arrange(options: Options = {}) {
   const clock = new FakeClock(1_000_000);
+  const stem = options.role === "phones" ? "agent-device-phones" : "agent-device";
   const filesystem = options.filesystem ?? new MemoryFilesystem();
   const simlockHome = options.home ?? home;
   const sink = new MemoryLogSink();
@@ -133,7 +138,7 @@ async function arrange(options: Options = {}) {
     const mode = options.daemonJson?.(startIndex) ?? "ready";
     if (mode !== "none") {
       void filesystem.writeFileAtomic(
-        `${simlockHome}/agent-device/daemon.json`,
+        `${simlockHome}/${stem}/daemon.json`,
         JSON.stringify({
           httpPort,
           pid: mode === "ready" ? pid : pid + 1_000,
@@ -168,6 +173,7 @@ async function arrange(options: Options = {}) {
     filesystem,
     healthProbe: health,
     home: simlockHome,
+    ...(options.ios === undefined ? {} : { ios: options.ios }),
     leaseMaxTtlMs: options.leaseMaxTtlMs ?? 4 * 60 * 60_000,
     logger,
     nodePath,
@@ -175,7 +181,7 @@ async function arrange(options: Options = {}) {
     platforms: options.platforms ?? ["ios", "android"],
     processRunner: runner,
     processSupervisor: processes,
-    role: "simulators",
+    role: options.role ?? "simulators",
     tcpProbe: probe,
   });
   const harness = {
@@ -244,12 +250,17 @@ function daemonSpawn(
   entry = internalEntry,
   extra: Partial<ScriptedProcessExpectation> = {},
   simlockHome = home,
+  marker: readonly string[] = [],
 ): ScriptedProcessExpectation {
   return {
     hangs: true,
-    match: { args: [entry, `--simlock-home=${simlockHome}`], command: nodePath },
+    match: { args: [entry, `--simlock-home=${simlockHome}`, ...marker], command: nodePath },
     ...extra,
   };
+}
+
+function phoneSpawn(simlockHome = home): ScriptedProcessExpectation {
+  return daemonSpawn(internalEntry, {}, simlockHome, ["--simlock-role=phones"]);
 }
 
 function psRun(pid: number, line: string, code = 0): ScriptedProcessExpectation {
@@ -667,6 +678,76 @@ describe("AgentDeviceSupervisor spawning", () => {
     expect(atSpawn).toEqual([expected]);
     await expect(harness.filesystem.readFile(policyPath)).resolves.toBe(expected);
   });
+});
+
+describe("AgentDeviceSupervisor in the phones role", () => {
+  const phonesStateDir = `${home}/agent-device-phones`;
+  const signing = {
+    bundleId: "com.example.runner",
+    provisioningProfile: "Simlock Runner Profile",
+    signingIdentity: "Apple Development: Ada (XYZ)",
+    teamId: "ABCDE12345",
+  };
+  const signingEnvironment = {
+    AGENT_DEVICE_IOS_BUNDLE_ID: "com.example.runner",
+    AGENT_DEVICE_IOS_PROVISIONING_PROFILE: "Simlock Runner Profile",
+    AGENT_DEVICE_IOS_SIGNING_IDENTITY: "Apple Development: Ada (XYZ)",
+    AGENT_DEVICE_IOS_TEAM_ID: "ABCDE12345",
+  };
+
+  it.each([
+    ["iOS and Android on, keys set", ["ios", "android"], signing, signingEnvironment],
+    ["iOS and Android on, keys unset", ["ios", "android"], undefined, {}],
+    ["iOS off", ["android"], signing, signingEnvironment],
+    ["Android off", ["ios"], undefined, {}],
+  ] as const)(
+    "spawns the phone daemon with its own state directory, policy file, pid record and marker suffix, no simulator set and no driver lease key, adb on 5037 and the configured AGENT_DEVICE_IOS_ keys: %s",
+    async (_case, platforms, ios, signingKeys) => {
+      const harness = await run({
+        baseEnvironment: {
+          ANDROID_ADB_SERVER_ADDRESS: "operator-host",
+          ANDROID_ADB_SERVER_PORT: "5038",
+          ANDROID_SERIAL: "emulator-5554",
+          HOME: "/home/operator",
+          PATH: "/usr/local/bin:/usr/bin",
+        },
+        driverEnvironment: {
+          ANDROID_ADB_SERVER_PORT: "5038",
+          SIMLOCK_IOS_DEVICE_SET: "/devices/ios",
+        },
+        expectations: [versionRun(), phoneSpawn()],
+        ...(ios === undefined ? {} : { ios }),
+        platforms,
+        role: "phones",
+      });
+
+      expect(daemonSpawns(harness)).toEqual([
+        [nodePath, internalEntry, `--simlock-home=${home}`, "--simlock-role=phones"],
+      ]);
+      expect(harness.runner.calls[1]?.options.env).toEqual({
+        AGENT_DEVICE_CLAIMS_DIR: `${phonesStateDir}/device-claims`,
+        AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS: "0",
+        AGENT_DEVICE_DAEMON_POLICY: `${phonesStateDir}/policy.json`,
+        AGENT_DEVICE_DAEMON_SERVER_MODE: "http",
+        AGENT_DEVICE_LEASE_MAX_TTL_MS: String(24 * 60 * 60_000),
+        AGENT_DEVICE_STATE_DIR: phonesStateDir,
+        ANDROID_ADB_SERVER_PORT: "5037",
+        HOME: "/home/operator",
+        PATH: "/usr/local/bin:/usr/bin",
+        ...signingKeys,
+      });
+      await expect(harness.filesystem.readFile(`${phonesStateDir}/policy.json`)).resolves.toContain(
+        "device-shutdown",
+      );
+      expect(
+        JSON.parse(await harness.filesystem.readFile(`${home}/agent-device-phones-daemon.json`)),
+      ).toMatchObject({
+        entry: internalEntry,
+      });
+      expect(await harness.filesystem.exists(`${stateDir}/policy.json`)).toBe(false);
+      expect(await harness.filesystem.exists(recordPath)).toBe(false);
+    },
+  );
 });
 
 describe("AgentDeviceSupervisor state directory", () => {
