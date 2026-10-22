@@ -114,20 +114,29 @@ flowchart LR
    reinstalls the old version and starts that. That daemon reads the
    file and reports the failure (stage `restarting`) and emits
    `daemon.update-failed`. A new daemon that answers but is not `running` with the new version
-   after those 2 minutes counts as not started: the updater stops it
-   (`daemon.stop`, SIGKILL after 10 minutes) before the rollback. Once the
-   old daemon has stopped and before the new one starts, the updater
-   copies that daemon's `state.db`, `history.db` and their `-wal` and
-   `-shm` files to `<data dir>/update-backup/`. A rollback restores them
-   before it starts the old version, so a migration the new version ran
-   never blocks it (ADR 0036 §5); they are deleted once the new daemon is
-   ready. The updater never unloads the service under a service manager
-   (ADR 0041), so the manager may restart a failing new daemon while the
-   updater rolls back. The rollback installs the old version, runs
-   `simlock daemon start`, and ends once a daemon answers `query` with
-   the old version, whether the service or the updater started it (an
-   already-running daemon counts as started). If the rollback fails too,
-   the machine stays down and the updater logs it to `daemon.log`.
+   after those 2 minutes counts as not started: the updater sends it
+   `daemon.stop` before the rollback and waits up to 10 minutes. It does not
+   kill it (it has no pid for it), so a daemon that ignores the stop ends the
+   update with no rollback (see the 10-minute rule below). Once the old daemon has stopped and before the new
+   one starts, the updater copies that daemon's `state.db`, `history.db` and
+   their `-wal` and `-shm` files to `<data dir>/update-backup/`; they are
+   deleted once the new daemon is ready. The updater never unloads the
+   service under a service manager (ADR 0041), so the manager may restart a
+   failing new daemon while the updater rolls back. The rollback runs in this
+   order: it installs the old version with npm; it sends `daemon.stop` to any
+   daemon the service restarted meanwhile and waits until its socket
+   refuses connections (or the file is gone) (a
+   daemon that took `daemon.stop` still holds the socket and `state.db`
+   while it closes, so a silent `query` is not stopped);
+   it restores the database copy, so a migration the new version ran never
+   blocks the old version (ADR 0036 §5); it runs `simlock daemon start` and
+   ends once a daemon answers `query` with the old version. Before the
+   restore, an old daemon the service starts refuses the newer schema and
+   exits; after it, every service restart runs the old version on the
+   restored files. A daemon that does not stop within 10 minutes: no
+   restore (the backup stays), no second start, and the updater exits 1 and
+   logs it to `daemon.log`. If the rollback fails any other way, the machine
+   stays down and the updater logs it to `daemon.log`.
 9. **npm only.** A Simlock not installed by global npm (a source
    checkout, a pnpm global) refuses the update before anything changes,
    naming how it was installed and the command to run by hand.
