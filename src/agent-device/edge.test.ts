@@ -857,6 +857,46 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
+  it("allocate with `physical: true` that simlock refuses (an `imageTag`, a model no enrolled phone has, an OS range none fits) answers `refused by simlock: <message>` and leaves no lease", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["35"],
+          clock,
+          knownModels: ["Pixel 8"],
+          physicalDevices: [
+            { class: "phone", ids: ["R58Y61A60HN"], model: "Pixel 8", osVersion: "15" },
+          ],
+          platform: "android",
+        }),
+      ],
+    });
+    await rig.daemon.dispatch(
+      "device.add",
+      { id: "R58Y61A60HN", platform: "android" },
+      adminSession,
+    );
+    rig.driver.setPhysicalPresence("R58Y61A60HN", true);
+    const cases = [
+      [{ imageTag: "default" }, "imageTag: `imageTag` has no meaning for a physical device"],
+      [{ device: "Pixel 9" }, "no enrolled physical device can match android model Pixel 9"],
+      [
+        { osVersion: ">=16" },
+        "no enrolled physical device can match android class phone os in the requested range",
+      ],
+    ] as const;
+
+    for (const [index, [extra, message]] of cases.entries()) {
+      const answer = await envelopeOf(
+        await allocate(rig, index + 1, { platform: "android", ...extra, physical: true }),
+      );
+
+      expect(answer.error).toMatchObject(refusal(`refused by simlock: ${message}`));
+    }
+    expect(await leases(rig)).toEqual([]);
+    expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toEqual([]);
+  });
+
   it("allocate with `physical: false` and `physical: null` are granted", async () => {
     const rig = await setUp({ maxRunning: 8 });
 
