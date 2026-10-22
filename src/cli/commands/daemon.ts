@@ -13,12 +13,13 @@ function serviceAccess(
 ): {
   readonly manager: ServiceManager;
   readonly definition: () => Promise<ServiceDefinition>;
+  readonly user: string;
 } {
   const { service } = environment;
   if (service?.manager === undefined) {
-    throw new UsageError(`daemon ${command} is supported on macOS only`);
+    throw new UsageError(`daemon ${command} is supported on macOS and Linux only`);
   }
-  return { manager: service.manager, definition: service.definition };
+  return { manager: service.manager, definition: service.definition, user: service.user };
 }
 
 async function serviceReport(
@@ -118,7 +119,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (command === "install") {
-    const { manager, definition } = serviceAccess(environment, "install");
+    const { manager, definition, user } = serviceAccess(environment, "install");
     const service = await definition();
     const stopped = await stopRunningDaemon(environment, token);
     await manager.install(service);
@@ -138,7 +139,11 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
       if (stopped) environment.stdout.write("Stopped the running daemon; leases are kept.\n");
       environment.stdout.write(`Service installed: ${service.name} (${manager.manager})\n`);
       environment.stdout.write(runningLines(status));
-      environment.stdout.write("To start after a reboot, turn on automatic login for this user.\n");
+      environment.stdout.write(
+        manager.manager === "systemd"
+          ? `To start after a reboot without logging in, run: loginctl enable-linger ${user}\n`
+          : "To start after a reboot, turn on automatic login for this user.\n",
+      );
     }
     return 0;
   }
