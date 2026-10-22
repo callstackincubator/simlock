@@ -617,7 +617,7 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ removed: true, workerId: "wrk_1" });
   });
 
-  it("Operator calls worker.update on the gateway: the worker gets daemon.update and its view shows the update", async () => {
+  it("Operator calls worker.update on the gateway: connected, disconnected and unknown workers", async () => {
     const { dispatcher, directory, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
     const client = new ScriptedWorkerClient();
@@ -641,6 +641,17 @@ describe("GatewayDispatcher", () => {
     expect(client.updateInputs).toEqual([{ version: "0.4.0" }]);
     expect(answer).toMatchObject({ started: true, update, workerId: "wrk_1" });
     expect(workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
+
+    workers.connected("wrk_2", "mac-mini-2", "0.3.0");
+    workers.disconnected("wrk_2");
+    for (const { code, message, workerId } of [
+      { code: "WORKER_NOT_CONNECTED", message: "worker wrk_2 is not connected", workerId: "wrk_2" },
+      { code: "UNKNOWN_WORKER", message: "Unknown worker: wrk_ghost", workerId: "wrk_ghost" },
+    ]) {
+      await expect(
+        dispatcher.dispatch("worker.update", { workerId }, session()),
+      ).rejects.toMatchObject({ code, details: { workerId }, message });
+    }
   });
 
   it("refuses to remove a connected worker with WORKER_CONNECTED, naming it", async () => {

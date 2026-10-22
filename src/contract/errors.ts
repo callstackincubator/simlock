@@ -126,6 +126,8 @@ export interface ErrorDetailsMap {
    * answers `{removed: false}` instead: forgetting something already forgotten is done, not an
    * error.) */
   UNKNOWN_WORKER: { readonly workerId: string };
+  // why: ADR 0042 §2: `worker.update` names a worker the gateway knows but has no open uplink to.
+  WORKER_NOT_CONNECTED: { readonly workerId: string };
   /**
    * ADR 0005 §28: the worker that owns this lease (or would serve this request) has no open
    * uplink. `kind: "transport"`, because it says the same thing `DAEMON_CONNECTION_LOST` says
@@ -200,6 +202,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNSUPPORTED_IN_WORKER_MODE: true,
   WORKER_CONNECTED: true,
   UNKNOWN_WORKER: true,
+  WORKER_NOT_CONNECTED: true,
   WORKER_UNREACHABLE: true,
   ALERT_SEND_FAILED: true,
   UNKNOWN_ALERT_DESTINATION: true,
@@ -436,6 +439,12 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // Exit 12, beside `UNKNOWN_MODEL`: the "what you named does not exist" class, which a script
   // branches on differently from "the fleet is busy" or "that cannot apply here".
   UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 12, httpStatus: 404 },
+  WORKER_NOT_CONNECTED: {
+    code: "WORKER_NOT_CONNECTED",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 409,
+  },
   WORKER_UNREACHABLE: {
     code: "WORKER_UNREACHABLE",
     kind: "transport",
