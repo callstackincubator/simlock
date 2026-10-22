@@ -601,6 +601,7 @@ export interface WorkerPage {
   readonly mono: boolean;
   readonly health: Toned;
   readonly system?: string;
+  readonly version?: string;
   readonly updateFacts: UpdateFacts;
   readonly tabs: readonly { readonly value: WorkerTab; readonly label: string }[];
   readonly overview: OverviewTab;
@@ -616,6 +617,8 @@ export function workerPageOf(input: {
   readonly leaseIds?: readonly string[];
 }): WorkerPage {
   const { now, tokens, worker } = input;
+  const updateFacts = updateFactsOf(worker);
+  const version = versionLine(updateFacts);
   const leaseIds = new Set(input.leaseIds ?? []);
   const starting = worker.health === "starting";
   const incompatible = worker.connection === "incompatible";
@@ -654,7 +657,8 @@ export function workerPageOf(input: {
     },
     tabs,
     title: workerName(worker),
-    updateFacts: updateFactsOf(worker),
+    updateFacts,
+    ...(version === undefined ? {} : { version }),
     ...(host === undefined ? {} : { system: `${host.os} ${host.osVersion}` }),
     ...(starting ? {} : { warm: warmTabOf(worker, now) }),
   };

@@ -168,14 +168,24 @@ function NavGroup(props: NavListProps & { readonly label: string }) {
 
 export function Page(props: {
   readonly title: string;
+  // why: a muted line of plain text that sits beside the title, as a worker's version does.
+  readonly note?: string;
   readonly actions?: ReactNode;
   readonly children: ReactNode;
 }) {
-  const { actions, children, title } = props;
+  const { actions, children, note, title } = props;
+  const heading = <h1 tabIndex={-1}>{title}</h1>;
   return (
     <div className="page">
       <header className="page-head">
-        <h1 tabIndex={-1}>{title}</h1>
+        {note === undefined ? (
+          heading
+        ) : (
+          <div className="page-title">
+            {heading}
+            <span className="page-note">{note}</span>
+          </div>
+        )}
         {actions === undefined ? null : <div className="page-actions">{actions}</div>}
       </header>
       {children}

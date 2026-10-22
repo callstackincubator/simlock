@@ -142,6 +142,39 @@ describe("a worker's row in the list", () => {
   });
 });
 
+describe("a worker's version line", () => {
+  it("shows the version and the latest when newer, on the row and beside the page title, and nothing without a version", () => {
+    const cases: readonly [
+      string,
+      string | undefined,
+      string | null | undefined,
+      string | undefined,
+    ][] = [
+      ["newer", "0.3.0", "0.4.0", "simlock 0.3.0 · 0.4.0 available"],
+      ["equal", "0.4.0", "0.4.0", "simlock 0.4.0"],
+      ["older", "0.5.0", "0.4.0", "simlock 0.5.0"],
+      ["no latest known", "0.3.0", null, "simlock 0.3.0"],
+      ["latest not reported", "0.3.0", undefined, "simlock 0.3.0"],
+      ["no version", undefined, "0.4.0", undefined],
+      [
+        "prerelease is behind its release",
+        "0.4.0-rc.1",
+        "0.4.0",
+        "simlock 0.4.0-rc.1 · 0.4.0 available",
+      ],
+      ["release is not behind its prerelease", "0.4.0", "0.4.0-rc.1", "simlock 0.4.0"],
+    ];
+    for (const [name, version, latestVersion, line] of cases) {
+      const view = worker({
+        ...(version === undefined ? {} : { version }),
+        ...(latestVersion === undefined ? {} : { latestVersion }),
+      });
+      expect(workerRow(view).version, `${name}, row`).toBe(line);
+      expect(inspect(view).version, `${name}, page`).toBe(line);
+    }
+  });
+});
+
 describe("the list's filters and header", () => {
   const busy = worker({
     id: "wrk_busy",

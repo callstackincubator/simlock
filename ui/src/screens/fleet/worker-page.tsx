@@ -65,6 +65,7 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
   return (
     <Page
       title={page.title}
+      {...(page.version === undefined ? {} : { note: page.version })}
       actions={<ActionBar label={`Actions for ${page.title}`} entries={entries} />}
     >
       <nav className="crumbs" aria-label="Breadcrumb">
