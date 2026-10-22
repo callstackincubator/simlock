@@ -1853,7 +1853,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
   });
 
-  it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header or another token's lease, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
+  it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header, and a header naming a lease routes by the lease id whichever token sends it, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
     const rig = await setUpWithPhone();
     await granted(rig, 1, { physical: true, platform: "android" });
     await granted(rig, 2, { platform: "android" });
