@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { type Alerts, createAlerts } from "../alerts/index.js";
 import { EventBus, type EventBusLogger } from "../bus/index.js";
-import { fitHostFacts, fitHostLoad } from "../contract/index.js";
+import { fitHostFacts, fitHostLoad, type ProtocolRange } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
 import {
   createEventHistory,
@@ -175,6 +175,8 @@ export interface StartDaemonOptions {
   /** why: test-only, replaces the npm CLI the version check and the update coordinator run. */
   readonly npm?: NpmCli;
   readonly processRunner?: ProcessRunner;
+  /** why: test-only, the protocol range the worker daemon announces. */
+  readonly protocolVersion?: number | ProtocolRange;
   readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
   readonly systemStats?: SystemStats;
@@ -605,6 +607,7 @@ async function composeDaemon(
     }),
     leases: leasing,
     logger: logger.child("server"),
+    ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
     processRunner,
     execEnv: process.env,

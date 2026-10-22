@@ -30,11 +30,13 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ProtocolRange } from "../contract/index.js";
 import type { AlertDestination, PassthroughCommand } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import type { Filesystem, IpcConnector, IpcListenerFactory } from "../ports/index.js";
+import type { Filesystem, IpcConnector, IpcListenerFactory, NpmCli } from "../ports/index.js";
 import {
   FakeHostInfo,
+  FakeNpmCli,
   MemoryFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -207,6 +209,9 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     readonly ipc?: IpcConnector & IpcListenerFactory;
     readonly alerts?: { destinations: readonly AlertDestination[]; poster: FakeWebhookPoster };
     readonly onDriver?: (driver: FakeDriver) => void;
+    /** why: a worker on another protocol range is the gateway's `incompatible` worker. */
+    readonly protocolVersion?: ProtocolRange;
+    readonly npm?: NpmCli;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
@@ -245,12 +250,54 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       filesystem,
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
       logger: new NoopLogger(),
+      ...(options.npm === undefined ? {} : { npm: options.npm }),
+      ...(options.protocolVersion === undefined
+        ? {}
+        : { protocolVersion: options.protocolVersion }),
       version: "1.0.0-e2e",
       ...(options.alerts === undefined ? {} : { webhookPoster: options.alerts.poster }),
     });
     daemons.push(daemon);
     return { daemon, directory, filesystem };
   }
+
+  it("worker.update reaches an incompatible worker with the frozen daemon.update and shows its answer", async () => {
+    const gateway = await startGateway();
+    const { secret: token } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label: "old-worker" },
+      adminSession(),
+    );
+    await startWorker({
+      label: "old-worker",
+      model: "Pixel-A",
+      // why: a version already on npm's latest answers `upToDate`, so no install runs in this test.
+      npm: new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] }),
+      protocolVersion: { max: 55, min: 55 },
+      stdout: "old",
+      token,
+    });
+    const incompatible = await vi.waitFor(async () => {
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      const found = workers.find((worker) => worker.connection === "incompatible");
+      if (found === undefined) throw new Error("the old worker never showed incompatible");
+      return found;
+    });
+
+    const answer = await gateway.dispatch(
+      "worker.update",
+      { workerId: incompatible.id },
+      adminSession(),
+    );
+
+    expect(answer).toMatchObject({ started: false, upToDate: true, workerId: incompatible.id });
+    const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+    expect(workers.find((worker) => worker.id === incompatible.id)).toMatchObject({
+      connection: "incompatible",
+      latestVersion: "0.4.0",
+      update: null,
+    });
+  });
 
   it("emits queue.changed once when the gateway has started, with depth 0, and no capacity.changed of its own", async () => {
     const gateway = await startGateway();
