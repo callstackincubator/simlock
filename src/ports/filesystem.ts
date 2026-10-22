@@ -111,6 +111,7 @@ export class NodeFilesystem implements Filesystem {
     return readFile(path, "utf8");
   }
 
+  // fallow-ignore-next-line unused-class-member -- the updater reaches it through the Filesystem port.
   async copyFile(from: string, to: string): Promise<void> {
     await copyFile(from, to);
   }

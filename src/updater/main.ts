@@ -12,7 +12,7 @@ import {
   resolveSimlockHome,
   SystemClock,
 } from "../ports/index.js";
-import { parseUpdaterArgs, runUpdater, type DaemonProbe } from "./index.js";
+import { parseUpdaterArgs, runUpdater, type DaemonProbe, type UpdaterArguments } from "./index.js";
 
 // why: every import above is static, so the whole updater is in memory before the install replaces its files on disk.
 function createProbe(dataDirectory: string, filesystem: NodeFilesystem): DaemonProbe {
@@ -47,34 +47,33 @@ function createProbe(dataDirectory: string, filesystem: NodeFilesystem): DaemonP
   };
 }
 
-async function main(): Promise<number> {
-  let args;
-  try {
-    args = parseUpdaterArgs(process.argv.slice(2));
-  } catch (error: unknown) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 2;
-  }
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function update(args: UpdaterArguments): Promise<number> {
   const filesystem = new NodeFilesystem();
   const dataDirectory = daemonDataDirectory(resolveSimlockHome(process.env), args.role);
+  return runUpdater({
+    ...args,
+    npm: new NodeNpmCli({ runner: new NodeProcessRunner(), filesystem, dataDirectory }),
+    probe: createProbe(dataDirectory, filesystem),
+    processes: new NodeProcessRunner(),
+    supervisor: new NodeProcessSupervisor(),
+    filesystem,
+    clock: new SystemClock(),
+    packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
+    dataDirectory,
+    stdout: process.stdout,
+    stderr: process.stderr,
+  });
+}
+
+async function main(): Promise<number> {
   try {
-    return await runUpdater({
-      ...args,
-      npm: new NodeNpmCli({ runner: new NodeProcessRunner(), filesystem, dataDirectory }),
-      probe: createProbe(dataDirectory, filesystem),
-      processes: new NodeProcessRunner(),
-      supervisor: new NodeProcessSupervisor(),
-      filesystem,
-      clock: new SystemClock(),
-      packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
-      dataDirectory,
-      stdout: process.stdout,
-      stderr: process.stderr,
-    });
+    return await update(parseUpdaterArgs(process.argv.slice(2)));
   } catch (error: unknown) {
-    process.stderr.write(
-      `updater failed: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    process.stderr.write(`updater failed: ${describe(error)}\n`);
     return 1;
   }
 }

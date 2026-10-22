@@ -63,6 +63,7 @@ export class NodeUpdaterLauncher implements UpdaterLauncher {
   }
 }
 
+// fallow-ignore-next-line unused-export -- the daemon's update call (#836) tests against it.
 export class FakeUpdaterLauncher implements UpdaterLauncher {
   readonly launches: UpdaterLaunch[] = [];
   readonly #lines: string[] = [];

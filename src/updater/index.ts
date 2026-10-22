@@ -140,7 +140,6 @@ async function restoreDatabases(options: RunUpdaterOptions): Promise<void> {
 }
 
 async function startDaemon(options: RunUpdaterOptions): Promise<string | undefined> {
-  const { clock, probe, to } = options;
   const started = await options.processes.run(process.execPath, [
     join(options.packageRoot, "dist", "cli", "main.js"),
     "daemon",
@@ -148,6 +147,10 @@ async function startDaemon(options: RunUpdaterOptions): Promise<string | undefin
     ...(options.role === "gateway" ? ["--gateway"] : []),
   ]);
   if (started.code !== 0) return `daemon start: ${started.stderr.trim()}`;
+  return awaitRunning(options);
+}
+
+async function awaitRunning({ clock, probe, to }: RunUpdaterOptions): Promise<string | undefined> {
   const deadline = clock.now() + START_LIMIT_MS;
   for (;;) {
     const state = await probe.state();
