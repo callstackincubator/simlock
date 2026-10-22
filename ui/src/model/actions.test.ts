@@ -257,6 +257,69 @@ describe("the update actions a worker offers", () => {
   });
 });
 
+describe("the Update… dialog", () => {
+  it("words its title and body for leases, none, an incompatible worker, no version and no latest, and sends {} to the worker's update route", () => {
+    const update = (connection: WorkerView["connection"], updateFacts: UpdateFacts) =>
+      workerActions(
+        { connection, drained: false, id: "wrk/1", name: "mac-mini-1", updateFacts },
+        "gateway",
+      ).find((action) => action.id === "update-worker");
+    const cases: readonly [string, WorkerView["connection"], UpdateFacts, string, string][] = [
+      [
+        "2 leased devices",
+        "connected",
+        facts({ leased: 2 }),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "It takes no new leases and waits for its 2 leases to end. It restarts by itself.",
+      ],
+      [
+        "1 leased device",
+        "connected",
+        facts({ leased: 1 }),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "It takes no new leases and waits for its 1 lease to end. It restarts by itself.",
+      ],
+      [
+        "no leases",
+        "connected",
+        facts(),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "It has no leases, so it installs at once. It restarts by itself.",
+      ],
+      [
+        "incompatible",
+        "incompatible",
+        facts({ leased: 2 }),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "The gateway can't talk to it until then. It finishes its leases first.",
+      ],
+      [
+        "incompatible, no version",
+        "incompatible",
+        { latestVersion: "0.4.0", leased: 0, update: null },
+        "Update mac-mini-1 to 0.4.0?",
+        "The gateway can't talk to it until then. It finishes its leases first.",
+      ],
+      [
+        "incompatible, no latest",
+        "incompatible",
+        facts({ latestVersion: null }),
+        "Update mac-mini-1 from 0.3.0 to the latest version?",
+        "The gateway can't talk to it until then. It finishes its leases first.",
+      ],
+    ];
+    for (const [name, connection, given, title, body] of cases) {
+      const action = update(connection, given);
+      expect(action?.confirm, name).toEqual({ body, busy: "Starting…", confirm: "Update", title });
+      expect([action?.method, action?.path, action?.body], name).toEqual([
+        "POST",
+        "/v1/workers/wrk%2F1/update",
+        {},
+      ]);
+    }
+  });
+});
+
 describe("the actions each kind of item offers", () => {
   it("offers exactly the table's actions: dangerous ones last and marked, worker actions only on a gateway, and the Inbox's one fix", () => {
     checksLease();
