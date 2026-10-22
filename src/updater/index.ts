@@ -10,6 +10,8 @@ import type {
   ProcessSupervisor,
 } from "../ports/index.js";
 
+export { createDaemonProbe } from "./probe.js";
+
 export interface DaemonProbe {
   stop(): Promise<void>;
   answers(): Promise<boolean>;

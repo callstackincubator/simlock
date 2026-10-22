@@ -8,12 +8,20 @@ import {
   FakeNpmCli,
   FakeProcessSupervisor,
   MemoryFilesystem,
+  MemoryIpcTransport,
+  resolveDaemonSocketPath,
   NodeFilesystem,
   ScriptedProcessRunner,
   type DaemonRole,
   type NpmOutcome,
 } from "../ports/index.js";
-import { checkInstall, parseUpdaterArgs, runUpdater, type DaemonProbe } from "./index.js";
+import {
+  checkInstall,
+  createDaemonProbe,
+  parseUpdaterArgs,
+  runUpdater,
+  type DaemonProbe,
+} from "./index.js";
 
 const PACKAGE_ROOT = "/global/node_modules/simlock";
 const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
@@ -38,12 +46,16 @@ class FakeProbe implements DaemonProbe {
   newDaemon: { health: string; version: string } | "hangs" | undefined;
   onStop: (() => Promise<void>) | undefined;
 
-  constructor(private readonly staysUp = false) {}
+  constructor(
+    private readonly staysUp = false,
+    private readonly stopNeverReturns = false,
+  ) {}
 
   async stop(): Promise<void> {
     this.stops += 1;
     await this.onStop?.();
     if (!this.staysUp) this.oldDaemonAnswers = false;
+    if (this.stopNeverReturns) await new Promise(() => undefined);
   }
 
   async answers(): Promise<boolean> {
@@ -67,6 +79,7 @@ interface Scenario {
   readonly role?: DaemonRole;
   readonly install?: readonly NpmOutcome[];
   readonly oldDaemonStaysUp?: boolean;
+  readonly daemonStopNeverReturns?: boolean;
   readonly serviceRestartsDaemonDuringRollbackInstall?: boolean;
   readonly starts?: readonly StartSpec[];
   readonly expected: {
@@ -85,6 +98,7 @@ interface Scenario {
       readonly restoredBeforeRollbackStart?: string;
       readonly liveDuringRollbackInstall?: string;
       readonly liveWhenRestartedDaemonStopped?: string;
+      readonly liveAtEnd?: string;
       readonly filesRestored?: boolean;
       readonly backupLeft: boolean;
     };
@@ -135,6 +149,20 @@ const SCENARIOS: readonly Scenario[] = [
       startArgs: [started()],
       signals: [`${PID}:SIGKILL`],
       waitedAtLeastMs: 600_000,
+    },
+  },
+  {
+    name: "daemon.stop never returns",
+    daemonStopNeverReturns: true,
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 0,
+      installs: ["simlock@0.4.0"],
+      stops: 1,
+      startArgs: [started()],
+      signals: [],
+      waitedAtLeastMs: 30_000,
+      waitedAtMostMs: 40_000,
     },
   },
   {
@@ -294,6 +322,7 @@ const SCENARIOS: readonly Scenario[] = [
       startArgs: [started()],
       signals: [`${PID}:SIGKILL`],
       waitedAtLeastMs: 1_920_000,
+      database: { copiedBeforeStart: "original", liveAtEnd: "migrated", backupLeft: true },
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
@@ -410,6 +439,9 @@ async function expectDatabase(
       "history.db-shm": "history shm",
     });
   }
+  if (database.liveAtEnd !== undefined) {
+    expect(await seen.filesystem.readFile(seen.statePath)).toBe(database.liveAtEnd);
+  }
   if (database.liveDuringRollbackInstall !== undefined) {
     expect(seen.liveAtInstall[1]).toBe(database.liveDuringRollbackInstall);
   }
@@ -453,6 +485,7 @@ describe("runUpdater", () => {
       role = "worker",
       install,
       oldDaemonStaysUp,
+      daemonStopNeverReturns,
       serviceRestartsDaemonDuringRollbackInstall,
       starts = [],
       expected,
@@ -475,7 +508,7 @@ describe("runUpdater", () => {
       const liveAtInstall: string[] = [];
       const liveAtStop: string[] = [];
       const npm = new StopRecordingNpm(install === undefined ? {} : { install });
-      const probe = new FakeProbe(oldDaemonStaysUp);
+      const probe = new FakeProbe(oldDaemonStaysUp, daemonStopNeverReturns);
       npm.probe = probe;
       probe.onStop = async () => {
         liveAtStop.push(await filesystem.readFile(statePath));
@@ -586,6 +619,20 @@ describe("runUpdater", () => {
       await expectResultFile(expected, { filesystem, resultPath, clock, fileAtRollbackStart });
     },
   );
+});
+
+describe("createDaemonProbe", () => {
+  it("counts a daemon as answering only when a connection completes: a socket file with nothing behind it is not an answer", async () => {
+    const dataDirectory = "/home/.simlock";
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataDirectory);
+    await filesystem.writeFileAtomic(`${dataDirectory}/admin.token`, "token\n");
+    await filesystem.writeFileAtomic(resolveDaemonSocketPath(dataDirectory), "");
+    const probe = createDaemonProbe({ dataDirectory, filesystem, ipc: new MemoryIpcTransport() });
+
+    expect(await probe.answers()).toBe(false);
+    expect(await probe.state()).toBeUndefined();
+  });
 });
 
 describe("checkInstall", () => {
