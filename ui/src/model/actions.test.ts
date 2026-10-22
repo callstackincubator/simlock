@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { inboxActions, leaseActions, requestActions, workerActions } from "./actions";
 import { inboxItems } from "./inbox";
 import type { LeaseRecord } from "./leases";
+import type { UpdateFacts } from "./versions";
 import type { WaitingRequest } from "./waiting";
 import type { WorkerView } from "./workers";
 
@@ -175,6 +176,86 @@ function checksInbox(): void {
   if (drainedItem === undefined) throw new Error("no drained item");
   expect(inboxActions(drainedItem, { ...context, mode: undefined })).toEqual({ menu: [] });
 }
+
+function facts(overrides: Partial<UpdateFacts> = {}): UpdateFacts {
+  return { latestVersion: "0.4.0", leased: 0, update: null, version: "0.3.0", ...overrides };
+}
+
+const STARTED = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+
+describe("the update actions a worker offers", () => {
+  it("offers Update… and Update now as the table says, and keeps Drain and Undrain", () => {
+    const cases: readonly {
+      readonly name: string;
+      readonly connection?: WorkerView["connection"];
+      readonly mode?: "gateway" | "worker";
+      readonly facts: UpdateFacts;
+      readonly offered: readonly string[];
+    }[] = [
+      { name: "a worker's mode", mode: "worker", facts: facts(), offered: [] },
+      {
+        name: "disconnected",
+        connection: "disconnected",
+        facts: facts(),
+        offered: ["drain", "remove-worker"],
+      },
+      {
+        name: "waiting",
+        facts: facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }),
+        offered: ["force-update", "drain"],
+      },
+      {
+        name: "disconnected and waiting",
+        connection: "disconnected",
+        facts: facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }),
+        offered: ["drain", "remove-worker"],
+      },
+      {
+        name: "installing",
+        facts: facts({ update: { ...STARTED, stage: "installing" } }),
+        offered: ["drain"],
+      },
+      {
+        name: "restarting",
+        facts: facts({ update: { ...STARTED, stage: "restarting" } }),
+        offered: ["drain"],
+      },
+      {
+        name: "incompatible whatever the latest",
+        connection: "incompatible",
+        facts: facts({ latestVersion: null }),
+        offered: ["update-worker", "drain"],
+      },
+      { name: "newer", facts: facts(), offered: ["update-worker", "drain"] },
+      { name: "equal", facts: facts({ latestVersion: "0.3.0" }), offered: ["drain"] },
+      { name: "older", facts: facts({ latestVersion: "0.2.0" }), offered: ["drain"] },
+      { name: "no latest", facts: facts({ latestVersion: null }), offered: ["drain"] },
+      {
+        name: "no version",
+        facts: { latestVersion: "0.4.0", leased: 0, update: null },
+        offered: ["drain"],
+      },
+    ];
+    for (const row of cases) {
+      const offered = workerActions(
+        {
+          connection: row.connection ?? "connected",
+          drained: false,
+          id: "wrk_1",
+          name: "mac-mini-1",
+          updateFacts: row.facts,
+        },
+        row.mode ?? "gateway",
+      ).map((action) => action.id);
+      expect(offered, row.name).toEqual(row.offered);
+    }
+    const drained = workerActions(
+      { connection: "connected", drained: true, id: "wrk_1", name: "m", updateFacts: facts() },
+      "gateway",
+    );
+    expect(drained.map((action) => action.id)).toEqual(["update-worker", "undrain"]);
+  });
+});
 
 describe("the actions each kind of item offers", () => {
   it("offers exactly the table's actions: dangerous ones last and marked, worker actions only on a gateway, and the Inbox's one fix", () => {

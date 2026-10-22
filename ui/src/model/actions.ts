@@ -29,7 +29,8 @@ export interface ItemAction {
     | "drain"
     | "undrain"
     | "remove-worker"
-    | "update-worker";
+    | "update-worker"
+    | "force-update";
   readonly itemKey: string;
   readonly label: string;
   readonly danger: boolean;
