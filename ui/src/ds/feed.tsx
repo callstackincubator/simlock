@@ -122,15 +122,19 @@ function useStayAtEnd(box: RefObject<HTMLDivElement | null>): RefObject<boolean>
     const toEnd = () => {
       element.scrollTop = element.scrollHeight;
     };
+    const reachesEnd = (boxHeight: number) =>
+      element.scrollTop + boxHeight >= element.scrollHeight - 2;
     const observer = new ResizeObserver(() => {
-      if (atEnd.current) toEnd();
-      else shrunkFrom = Math.max(height, element.clientHeight);
+      const larger = Math.max(height, element.clientHeight);
+      // why: rows that arrived in the same render as the resize put the end below the reader, who
+      // is no longer at it: the rows in view stay where they are.
+      if (atEnd.current) {
+        if (reachesEnd(larger)) toEnd();
+      } else shrunkFrom = larger;
       height = element.clientHeight;
     });
     const onScrollEnd = () => {
-      if (shrunkFrom !== undefined && element.scrollTop + shrunkFrom >= element.scrollHeight - 2) {
-        toEnd();
-      }
+      if (shrunkFrom !== undefined && reachesEnd(shrunkFrom)) toEnd();
       shrunkFrom = undefined;
     };
     observer.observe(element);

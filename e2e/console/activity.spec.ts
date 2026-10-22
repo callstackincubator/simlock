@@ -151,7 +151,7 @@ interface StubbedAnswer {
  */
 async function stubEvents(
   page: Page,
-  answer: (query: URLSearchParams) => StubbedAnswer,
+  answer: (query: URLSearchParams) => StubbedAnswer | Promise<StubbedAnswer>,
 ): Promise<string[]> {
   const queries: string[] = [];
   await page.route(
@@ -159,7 +159,7 @@ async function stubEvents(
     async (route: Route) => {
       const { search } = new URL(route.request().url());
       queries.push(search);
-      const { events = [], status = 200 } = answer(new URLSearchParams(search));
+      const { events = [], status = 200 } = await answer(new URLSearchParams(search));
       if (status === 200) await route.fulfill({ json: { events } });
       else
         await route.fulfill({ json: { error: { code: "STUBBED", message: "stubbed" } }, status });
@@ -399,16 +399,52 @@ test.describe("the Activity page", () => {
     }
   });
 
+  test("a reader at the end of the feed stays at its end when the end row arrives and shrinks the box", async ({
+    page,
+  }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const queries = await stubEvents(page, (query) =>
+        query.get("before") === null
+          ? { events: stubbedRange(1, 30) }
+          : gate.then(() => ({ events: [] })),
+      );
+      await openEvents(page, host);
+      await expect.poll(() => older(queries).length).toBe(1);
+
+      await feed(page).evaluate((box) => box.scrollTo({ top: box.scrollHeight }));
+      await expect.poll(() => rowOffset(page, "evt_0030").catch(() => undefined)).toBeDefined();
+      release();
+
+      await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
+      await expect
+        .poll(() =>
+          feed(page).evaluate((box) => box.scrollHeight - box.scrollTop - box.clientHeight),
+        )
+        .toBeLessThan(2);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("scrolling within 20 rows of the end loads the 100 events before the oldest held and appends them without moving the rows in view", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       const queries = await stubEvents(page, (query) => {
         const before = query.get("before");
         if (before === null) return { events: stubbedRange(1, 30) };
         if (before === "evt_0030") return { events: stubbedRange(31, 130) };
-        if (before === "evt_0130") return { events: stubbedRange(131, 230) };
+        if (before === "evt_0130") return gate.then(() => ({ events: stubbedRange(131, 180) }));
         return {};
       });
       await openEvents(page, host);
@@ -422,14 +458,20 @@ test.describe("the Activity page", () => {
       await page.waitForTimeout(300);
       expect(older(queries)).toEqual(["?before=evt_0030&limit=100"]);
 
-      await feed(page).evaluate((box, top) => box.scrollTo({ top }), 100 * ROW_PX);
-      await expect.poll(() => rowOffset(page, "evt_0101").catch(() => undefined)).toBeDefined();
-      const inView = await rowOffset(page, "evt_0101");
-      await expect.poll(() => eventsHeld(page)).toBe(230);
+      // why: the reader is at the very end of the 130 rows when the last page arrives, with the
+      // history's end row; the answer waits until the test has noted the row in view.
+      await feed(page).evaluate((box) => box.scrollTo({ top: box.scrollHeight }));
+      await expect.poll(() => rowOffset(page, "evt_0130").catch(() => undefined)).toBeDefined();
+      await expect.poll(() => older(queries).length).toBe(2);
+      const inView = await rowOffset(page, "evt_0130");
+      const scrolled = await feed(page).evaluate((box) => box.scrollTop);
+      release();
+      await expect.poll(() => eventsHeld(page)).toBe(180);
+      await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
 
       expect(older(queries)).toEqual(["?before=evt_0030&limit=100", "?before=evt_0130&limit=100"]);
-      expect(await rowOffset(page, "evt_0101")).toBe(inView);
-      expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(100 * ROW_PX);
+      expect(await rowOffset(page, "evt_0130")).toBe(inView);
+      expect(await feed(page).evaluate((box) => box.scrollTop)).toBe(scrolled);
     } finally {
       await host.dispose();
     }
