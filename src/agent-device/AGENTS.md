@@ -1,7 +1,7 @@
 # Agent-device edge
 
-Does: runs one agent-device daemon per worker and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
-Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds `AgentDeviceSupervisor`). The module host loads both.
+Does: runs two agent-device daemons per worker (the simulator daemon over Simlock's simulator set, the phone daemon beside it with no set) and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
+Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds one `AgentDeviceSupervisor` per role). The module host loads both.
 Uses: ports, auth (`Identity`), http (session, errors), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
 Imported by: the module registry (`index.ts` only); `daemon/main.ts` imports nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
 Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.
@@ -11,11 +11,11 @@ Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no
 | File                                                          | Role                                                                                                                                           |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on                                                               |
-| `worker.ts`                                                   | `createWorker`: supervisor, edge parts, capability, relay target, mount, hooks                                                                 |
-| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop the daemon; availability state                                                                                        |
+| `worker.ts`                                                   | `createWorker`: both supervisors, edge parts, capability, relay target, mount, hooks                                                           |
+| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop one role's daemon (`simulators` or `phones`); availability state                                                      |
 | `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                                                                                       |
 | `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                                                                                               |
-| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`                                                                                                     |
+| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`; a phone daemon's message starts `phone daemon: `                                                   |
 | `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                                                                                    |
 | `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap                                                                           |
 | `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant)                                                                            |
@@ -34,17 +34,28 @@ Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no
 
 ## How it works
 
-Supervisor start (`AgentDeviceSupervisor.start`, at daemon start):
+A worker runs two supervisors, one per role. The `simulators` role is the simulator daemon:
+state dir `<data dir>/agent-device`, pid record `agent-device-daemon.json`, marker
+`--simlock-home=<data dir>`. The `phones` role is the phone daemon: state dir
+`agent-device-phones`, record `agent-device-phones-daemon.json`, marker
+`--simlock-home=<data dir> --simlock-role=phones`; its env has no simulator set and no driver
+lease key, `ANDROID_ADB_SERVER_PORT=5037` (the operator's adb selection keys dropped), and the
+`AGENT_DEVICE_IOS_*` signing keys from `capabilities.agent-device.ios.*`. The phone daemon
+starts when the simulator daemon's start has settled, never awaited by Simlock's start. The
+`agent-device` capability follows the simulator daemon; doctor lists a finding per daemon.
+Nothing is routed to the phone daemon yet.
 
-1. Reap — pid from `<data dir>/agent-device-daemon.json`, else the state dir's `daemon.json`.
-   Signal only if `ps` args end in `--simlock-home=<data dir>`; SIGTERM, check again, SIGKILL.
+Supervisor start (`AgentDeviceSupervisor.start`, at daemon start), per role:
+
+1. Reap — pid from the role's record, else the state dir's `daemon.json`.
+   Signal only if `ps` args end in the role's marker; SIGTERM, check again, SIGKILL.
 2. Find — `capabilities.agent-device.command` (`agent-device`) on `PATH` or as a path; `package.json`
    names `agent-device`; a daemon entry under `dist/src`. Never downloads.
 3. Check — `--version` ≥ 0.21.28 (a prerelease of it is older); Node ≥ 22.12.0 (`shared/compatibility.ts`).
 4. Prepare — state dir `<data dir>/agent-device` (0700, ours), policy file denying
    `boot`, `shutdown`, `device-shutdown`; env from `agentDeviceDaemonEnvironment` plus
    every driver's lease env (iOS device set mapped; no-iOS and no-Android sentinels).
-5. Spawn `node <entry> --simlock-home=<data dir>`; write the pid record.
+5. Spawn `node <entry> <marker>`; write the pid record.
 6. Ready — `daemon.json` names our pid → port listens → `/health` says
    `agent-device-daemon`, RPC protocol 2. Then `running`, generation + 1.
 7. Exit — after ≥ 60 s running: start again now. Sooner: `unavailable`, retry in 30 s.
@@ -127,13 +138,13 @@ under leasing's signal (`lease.endWaitMs`).
 | Renewal tick                                   | TTL / 3                         | lease TTL                                 |
 | Download cap; `/rpc` body                      | 2 GiB; 1 MiB                    | none                                      |
 
-Disk: `<data dir>/agent-device/` (agent-device's own files) and the pid record. Front map,
+Disk: `<data dir>/agent-device/` and `<data dir>/agent-device-phones/` (agent-device's own files) and the two pid records. Front map,
 renewals and release scopes: memory only.
 
 ## Rules
 
 - The simlock lease is the only clock; an agent-device lease never outlives it.
-- A pid is signalled only after the `--simlock-home` marker matches.
+- A pid is signalled only after its role's whole marker matches (`--simlock-home`, and `--simlock-role=phones` for the phone daemon).
 - The edge names no gateway type; the gateway side builds `FleetPort` from its gateway context.
 - A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
 - Tests: `edge.test.ts`, `gateway-front.test.ts`, `front/*.test.ts`, `host/*.test.ts`.

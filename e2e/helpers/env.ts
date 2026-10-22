@@ -429,12 +429,14 @@ export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise
     },
     async teardown() {
       // why: read before teardown deletes the home.
-      const pid = await readAgentDevicePid(state.dataDirectory);
+      const simulatorsPid = await readAgentDevicePid(state.dataDirectory, "agent-device");
+      const phonesPid = await readAgentDevicePid(state.dataDirectory, "agent-device-phones");
       const resolved = await realpath(state.dataDirectory).catch(() => state.dataDirectory);
       try {
         await teardown(state);
       } finally {
-        await killLeftoverAgentDevice(resolved, pid);
+        await killLeftoverAgentDevice(resolved, simulatorsPid, "");
+        await killLeftoverAgentDevice(resolved, phonesPid, " --simlock-role=phones");
       }
     },
   };
@@ -520,8 +522,8 @@ async function teardown(state: TeardownState): Promise<void> {
   }
 }
 
-async function readAgentDevicePid(home: string): Promise<number | undefined> {
-  const text = await readFileIfExists(join(home, "agent-device-daemon.json"));
+async function readAgentDevicePid(home: string, stem: string): Promise<number | undefined> {
+  const text = await readFileIfExists(join(home, `${stem}-daemon.json`));
   if (text === undefined) return undefined;
   try {
     const record = JSON.parse(text) as { pid?: unknown };
@@ -531,13 +533,17 @@ async function readAgentDevicePid(home: string): Promise<number | undefined> {
   }
 }
 
-async function killLeftoverAgentDevice(home: string, pid: number | undefined): Promise<void> {
+async function killLeftoverAgentDevice(
+  home: string,
+  pid: number | undefined,
+  roleSuffix: string,
+): Promise<void> {
   if (pid === undefined || !(await isProcessAlive(pid))) return;
   const { stdout } = await execFileAsync("ps", ["-ww", "-o", "args=", "-p", String(pid)]).catch(
     () => ({ stdout: "" }),
   );
   // why: the supervisor puts the resolved home in the marker; the caller resolved it before the home was removed.
-  const marker = `--simlock-home=${home}`;
+  const marker = `--simlock-home=${home}${roleSuffix}`;
   if (!stdout.trim().endsWith(marker)) return;
   try {
     process.kill(pid, "SIGKILL");

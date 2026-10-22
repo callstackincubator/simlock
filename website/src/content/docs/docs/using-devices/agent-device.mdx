@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 [agent-device](https://github.com/callstack/agent-device) is Callstack's command-line tool for driving mobile apps: it opens an app, reads the screen as a tree of elements, taps, types and takes screenshots. With Simlock, `agent-device open` leases a simulator or emulator from Simlock, and every later command goes to that device. Each agent gets its own device, and a device is wiped when the agent closes it.
 
-Simlock runs one agent-device daemon on each worker and watches it. Agents reach it over HTTP, on the worker or through a gateway, with a Simlock agent token.
+Simlock runs two agent-device daemons on each worker and watches both: one over the simulators and emulators Simlock leases, and a phone daemon beside it that sees the phones plugged into the host. The phone daemon needs the iOS signing values agent-device uses for an iPhone, set with `simlock config set capabilities.agent-device.ios.teamId <id>` (also `bundleId`, `provisioningProfile` and `signingIdentity`), and takes effect on daemon restart. If it cannot start, `simlock doctor` prints a line starting `phone daemon:`; the simulator daemon and the worker's agent-device status are not affected. Agents cannot use the phone daemon yet. Agents reach it over HTTP, on the worker or through a gateway, with a Simlock agent token.
 
 ## Before you start
 
