@@ -181,7 +181,7 @@ test.describe("the Queue page", () => {
 
       await expect(page.getByText("Request not waiting.")).toBeVisible({ timeout: 1_000 });
       await page.keyboard.press("Escape");
-      expect(new URL(page.url()).pathname).toBe("/queue");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/queue");
       await expect(row(page, "agent-b")).toHaveCount(0);
       await expect(page.getByText("No requests are waiting.")).toBeVisible();
       await expect(page.getByRole("dialog")).toHaveCount(0);
