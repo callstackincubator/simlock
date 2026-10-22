@@ -2181,6 +2181,8 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         testCase.running ? "Daemon: running (worker)" : "Daemon stopped",
         ...(testCase.line === undefined ? [] : [testCase.line]),
       ]);
+      if (testCase.line !== undefined)
+        expect(lines.at(-1), `${testCase.label} last line`).toBe(testCase.line);
       const json = JSON.parse((await runDaemonStatus(testCase, true)).stdout) as {
         readonly service?: unknown;
       };

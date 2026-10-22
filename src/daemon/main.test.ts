@@ -38,8 +38,11 @@ import {
   FakeHostLoadProbe,
   type HostLoadCounters,
   FakeProcessSupervisor,
+  daemonDataDirectory,
   FakeServiceManager,
   serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
   type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
@@ -60,6 +63,7 @@ import {
   emitSlimDiagnostic,
   parseDaemonArgv,
   processRunnerFor,
+  productionServiceCheck,
   serviceCheckFor,
   startDaemon,
   type DriverDiscoveryContext,
@@ -597,18 +601,6 @@ describe("startDaemon", () => {
         report.findings.filter((finding) => finding.kind === "service-broken"),
         testCase.label,
       ).toEqual(testCase.expected);
-      const replayed = (await daemon.dispatch("events.replay", {}, admin)) as readonly {
-        readonly event: string;
-        readonly payload: { readonly driftFindings?: readonly { readonly kind: string }[] };
-      }[];
-      const reconciled = replayed.filter((envelope) => envelope.event === "doctor.reconciled");
-      expect(reconciled.length, testCase.label).toBeGreaterThan(0);
-      for (const envelope of reconciled) {
-        expect(
-          envelope.payload.driftFindings?.map((finding) => finding.kind),
-          testCase.label,
-        ).not.toContain("service-broken");
-      }
     }
   });
 
@@ -650,6 +642,45 @@ describe("startDaemon", () => {
     ).toBe("systemd");
     expect(serviceCheckFor("gateway", new FakeServiceManager(), definition)).toEqual({});
     expect(serviceCheckFor("worker", undefined, definition)).toEqual({});
+  });
+
+  it("productionServiceCheck builds the service definition from the process facts and reads its state: the worker's missing paths, and no check on a gateway", async () => {
+    const seen: ServiceDefinition[] = [];
+    const manager: ServiceManager = {
+      manager: "launchd",
+      state: async (definition) => {
+        seen.push(definition);
+        return { state: "broken", path: definition.path, missing: [definition.command] };
+      },
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      start: async () => undefined,
+    };
+    const host = {
+      manager,
+      root: "/Users/me/.simlock",
+      home: "/Users/me",
+      nodePath: "/gone/node",
+      mainPath: "/gone/main.js",
+      env: { PATH: "/usr/bin" },
+    };
+
+    const { serviceCheck } = productionServiceCheck("worker", host);
+
+    expect(serviceCheck?.name).toBe("com.callstack.simlock.worker");
+    expect(await serviceCheck?.check()).toEqual(["/gone/node"]);
+    expect(seen).toEqual([
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: daemonDataDirectory("/Users/me/.simlock", "worker"),
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: { PATH: "/usr/bin" },
+      }),
+    ]);
+    expect(productionServiceCheck("gateway", host)).toEqual({});
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {

@@ -1609,24 +1609,46 @@ export function serviceCheckFor(
   };
 }
 
-function productionServiceCheck(role: DaemonMode): { readonly serviceCheck?: ServiceCheck } {
-  const manager = productionServiceManager(process.platform, {
-    runner: new NodeProcessRunner(),
-    filesystem: new NodeFilesystem(),
-    uid: process.getuid?.() ?? 0,
-  });
-  return serviceCheckFor(role, manager, () => {
-    const root = resolveSimlockHome();
-    return serviceDefinition({
+/** why: the process facts the production service check reads, injectable so a test can prove the definition it builds. */
+export interface ServiceCheckHost {
+  readonly manager: ServiceManager | undefined;
+  readonly root: string;
+  readonly home: string;
+  readonly nodePath: string;
+  readonly mainPath: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+function currentServiceCheckHost(): ServiceCheckHost {
+  return {
+    manager: productionServiceManager(process.platform, {
+      runner: new NodeProcessRunner(),
+      filesystem: new NodeFilesystem(),
+      uid: process.getuid?.() ?? 0,
+    }),
+    root: resolveSimlockHome(),
+    home: homedir(),
+    nodePath: process.execPath,
+    mainPath: fileURLToPath(import.meta.url),
+    env: process.env,
+  };
+}
+
+export function productionServiceCheck(
+  role: DaemonMode,
+  host: ServiceCheckHost = currentServiceCheckHost(),
+): { readonly serviceCheck?: ServiceCheck } {
+  return serviceCheckFor(role, host.manager, () =>
+    serviceDefinition({
       role,
-      root,
-      dataDirectory: daemonDataDirectory(root, role),
-      home: homedir(),
-      nodePath: process.execPath,
-      mainPath: fileURLToPath(import.meta.url),
-      env: process.env,
-    });
-  });
+      root: host.root,
+      dataDirectory: daemonDataDirectory(host.root, role),
+      home: host.home,
+      nodePath: host.nodePath,
+      mainPath: host.mainPath,
+      env: host.env,
+    }),
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
