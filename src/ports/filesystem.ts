@@ -43,6 +43,11 @@ export interface WriteFileExclusiveOptions {
   readonly mode?: number;
 }
 
+export interface MkdirpOptions {
+  /** why: the bits the directory ends with whatever the umask, which can only remove them. */
+  readonly mode?: number;
+}
+
 /**
  * What an un-followed `lstat` reports, narrowed to what ownership validation asks of a
  * path: what it really is, who owns it, and how exposed it is. Anything richer would be
@@ -72,7 +77,7 @@ export interface Filesystem {
     contents: string,
     options?: WriteFileExclusiveOptions,
   ): Promise<void>;
-  mkdirp(path: string): Promise<void>;
+  mkdirp(path: string, options?: MkdirpOptions): Promise<void>;
   /**
    * Moves a path in one step, so what it names becomes visible complete or not at all.
    * Fails when the destination is occupied by anything but an empty directory.
@@ -176,7 +181,7 @@ export class NodeFilesystem implements Filesystem {
     }
   }
 
-  async mkdirp(path: string): Promise<void> {
+  async mkdirp(path: string, _options?: MkdirpOptions): Promise<void> {
     await mkdir(path, { recursive: true });
   }
 
@@ -357,7 +362,7 @@ export class MemoryFilesystem implements Filesystem {
     });
   }
 
-  async mkdirp(path: string): Promise<void> {
+  async mkdirp(path: string, _options?: MkdirpOptions): Promise<void> {
     this.#failIfDefined(path);
     let currentPath = "";
 

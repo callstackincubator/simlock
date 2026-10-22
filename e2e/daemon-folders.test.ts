@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -79,12 +79,13 @@ describe("daemon folders (ADR 0034)", () => {
     expect(result.stdout).toContain("Usage: simlock");
   });
 
-  it("--gateway config set makes a gateway present, after which --gateway status starts it", async () => {
+  it("--gateway config set makes a gateway present in an owner-only folder, after which --gateway status starts it", async () => {
     const env = await withDaemon({ mode: "auto" });
 
     try {
       await makeGatewayPresent(env);
       expect(existsSync(join(gatewayFolder(env), "config.json"))).toBe(true);
+      expect((await stat(gatewayFolder(env))).mode & 0o777).toBe(0o700);
 
       const status = await env.cli(["--gateway", "status", "--json"]);
 
