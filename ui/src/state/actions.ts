@@ -49,8 +49,11 @@ export function useActions(): Actions {
         if (inFlight.has(action.itemKey)) return;
         setInFlight(action.itemKey, true);
         try {
-          await api.write(action.method, action.path);
-          const { description, title, view } = action.success;
+          const answer = await api.write(action.method, action.path, {
+            ...(action.body === undefined ? {} : { body: action.body }),
+            ...(action.timeoutMs === undefined ? {} : { timeoutMs: action.timeoutMs }),
+          });
+          const { description, title, view } = action.outcome?.(answer) ?? action.success;
           const { undo } = action;
           notify({
             title,

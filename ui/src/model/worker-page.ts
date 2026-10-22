@@ -12,6 +12,7 @@ import { levelOf } from "./load-thresholds";
 import { holderOf, leasePath, type TokenRecord } from "./leases";
 import { devicePath } from "./paths";
 import { formatDuration } from "./time";
+import { type UpdateFacts, updateFactsOf, versionLine } from "./versions";
 import {
   connectionStatus,
   deviceStateStatus,
@@ -69,6 +70,8 @@ export interface WorkerRow {
   readonly to: string;
   readonly health: Toned;
   readonly system?: string;
+  readonly version?: string;
+  readonly updateFacts: UpdateFacts;
   readonly use?: WorkerUse;
 }
 
@@ -91,6 +94,8 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const use = useOf(worker);
   const system = systemOf(worker);
   const slots = workerSlots(worker);
+  const updateFacts = updateFactsOf(worker);
+  const version = versionLine(updateFacts);
   return {
     connection: worker.connection,
     takesLeases: !worker.drained,
@@ -106,7 +111,9 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
     mono: worker.label === undefined,
     name: workerName(worker),
     to: `${workerPath(worker.id)}${search}`,
+    updateFacts,
     ...(system === undefined ? {} : { system }),
+    ...(version === undefined ? {} : { version }),
     ...(use === undefined ? {} : { use }),
   };
 }
@@ -594,6 +601,7 @@ export interface WorkerPage {
   readonly mono: boolean;
   readonly health: Toned;
   readonly system?: string;
+  readonly updateFacts: UpdateFacts;
   readonly tabs: readonly { readonly value: WorkerTab; readonly label: string }[];
   readonly overview: OverviewTab;
   readonly host: HostTab;
@@ -646,6 +654,7 @@ export function workerPageOf(input: {
     },
     tabs,
     title: workerName(worker),
+    updateFacts: updateFactsOf(worker),
     ...(host === undefined ? {} : { system: `${host.os} ${host.osVersion}` }),
     ...(starting ? {} : { warm: warmTabOf(worker, now) }),
   };

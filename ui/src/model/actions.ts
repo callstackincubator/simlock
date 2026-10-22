@@ -2,6 +2,7 @@
 // wording of each dialog and toast is fixed here, so no surface words it differently.
 import type { InboxItem } from "./inbox";
 import { type TokenRecord, leaseRows } from "./leases";
+import { isBehind, type UpdateFacts } from "./versions";
 import { requestedDevice } from "./waiting";
 import { type WorkerView, workerName } from "./workers";
 
@@ -22,7 +23,13 @@ export interface ActionToast {
 }
 
 export interface ItemAction {
-  readonly id: "release-lease" | "cancel-request" | "drain" | "undrain" | "remove-worker";
+  readonly id:
+    | "release-lease"
+    | "cancel-request"
+    | "drain"
+    | "undrain"
+    | "remove-worker"
+    | "update-worker";
   readonly itemKey: string;
   readonly label: string;
   readonly danger: boolean;
@@ -30,6 +37,11 @@ export interface ItemAction {
   readonly path: `/v1/${string}`;
   readonly confirm?: ActionConfirm;
   readonly success: ActionToast;
+  // why: an action that sends a JSON body, `{}` for an update to the latest version.
+  readonly body?: Readonly<Record<string, unknown>>;
+  // why: the daemon's answer to the request, when the toast it earns depends on what it says.
+  readonly outcome?: (answer: unknown) => ActionToast;
+  readonly timeoutMs?: number;
   // why: the title of the error toast when the daemon refuses, word for word from the spec.
   readonly failure: string;
   // why: an action that asks nothing can be undone from its toast, by running this one.
@@ -106,6 +118,42 @@ export interface WorkerActionInput {
   readonly name: string;
   readonly connection: WorkerView["connection"];
   readonly drained: boolean;
+  readonly updateFacts?: UpdateFacts;
+}
+
+// why: the daemon's answer to an update request: `daemon.update`'s answer with the worker's id.
+interface UpdateAnswer {
+  readonly update?: { readonly to?: string } | null;
+}
+
+function updateToast(name: string): (answer: unknown) => ActionToast {
+  return (answer) => ({
+    title: `Updating ${name} to ${(answer as UpdateAnswer).update?.to ?? "the latest version"}`,
+  });
+}
+
+function updateAction(worker: WorkerActionInput, facts: UpdateFacts): ItemAction {
+  const from = facts.version === undefined ? "" : ` from ${facts.version}`;
+  return {
+    body: {},
+    confirm: {
+      body: "It has no leases, so it installs at once. It restarts by itself.",
+      busy: "Starting…",
+      confirm: "Update",
+      title: `Update ${worker.name}${from} to ${facts.latestVersion ?? "the latest version"}?`,
+    },
+    danger: false,
+    failure: `Couldn't update ${worker.name}`,
+    id: "update-worker",
+    itemKey: `worker/${worker.id}`,
+    label: "Update…",
+    method: "POST",
+    outcome: updateToast(worker.name),
+    path: `/v1/workers/${encodeURIComponent(worker.id)}/update`,
+    // why: above the gateway's 90 s uplink limit, so the gateway's answer arrives before the console gives up.
+    success: { title: `Updating ${worker.name}` },
+    timeoutMs: 100_000,
+  };
 }
 
 // why: ADR 0037 §4. On a single host the three worker routes answer 501, and when the mode is not
@@ -142,6 +190,13 @@ export function workerActions(
     undo: undrain,
   };
   const actions: ItemAction[] = [worker.drained ? undrain : drain];
+  if (
+    worker.updateFacts !== undefined &&
+    worker.connection === "connected" &&
+    isBehind(worker.updateFacts)
+  ) {
+    actions.unshift(updateAction(worker, worker.updateFacts));
+  }
   if (worker.connection === "disconnected") {
     actions.push({
       confirm: {
