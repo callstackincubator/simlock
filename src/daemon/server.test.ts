@@ -1355,6 +1355,56 @@ describe("DaemonServer startup readiness", () => {
     await client.close();
   });
 
+  it("answers daemon.update with query while starting, and only reports running once a rolled back update's failure is readable", async () => {
+    const converge = deferred<void>();
+    const resultFileGate = deferred<void>();
+    const harness = await createHarness({
+      converge: () => converge.promise,
+      start: false,
+      update: {
+        npm: new FakeNpmCli(),
+        launcher: new FakeUpdaterLauncher(),
+        version: "0.3.0",
+        resultFile: JSON.stringify({
+          from: "0.3.0",
+          to: "0.4.0",
+          stage: "restarting",
+          message: "0.4.0 did not start: health failed",
+          at: 500,
+          rolledBack: true,
+        }),
+        resultFileGate: resultFileGate.promise,
+      },
+    });
+    const startPromise = harness.daemon.start();
+    const client = await createClientRetrying(harness.socketPath);
+    await hello(client);
+
+    // why: a query that parks on readiness must fail the assertion below, not time the test out.
+    const queried = async () => {
+      const parked = new Promise<"parked">((resolve) => setTimeout(() => resolve("parked"), 250));
+      const answer = await Promise.race([client.request("daemon.update", { query: true }), parked]);
+      return answer === "parked" ? answer : answer.payload;
+    };
+    expect(await queried(), "while converging").toMatchObject({
+      health: "starting",
+      lastUpdateFailure: null,
+    });
+
+    converge.resolve();
+    expect(await queried(), "converged, result file not read yet").toMatchObject({
+      health: "starting",
+    });
+
+    resultFileGate.resolve();
+    await startPromise;
+    expect(await queried(), "started").toMatchObject({
+      health: "running",
+      lastUpdateFailure: { stage: "restarting", from: "0.3.0", to: "0.4.0" },
+    });
+    await client.close();
+  });
+
   it("parks a request type other than hello/status.get until convergence completes, then serves it", async () => {
     const converge = deferred<void>();
     const harness = await createHarness({ converge: () => converge.promise, start: false });
@@ -3747,6 +3797,7 @@ async function createHarness(
       readonly packageRoot?: string;
       readonly otherRoleRunning?: boolean;
       readonly resultFile?: string | Error;
+      readonly resultFileGate?: Promise<void>;
     };
   } = {},
 ) {
@@ -3782,12 +3833,16 @@ async function createHarness(
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
   const unreadable =
     options.update?.resultFile instanceof Error ? options.update.resultFile : undefined;
+  const resultFileGate = options.update?.resultFileGate;
   const updateFilesystem =
-    unreadable === undefined
+    unreadable === undefined && resultFileGate === undefined
       ? new MemoryFilesystem()
       : new (class extends MemoryFilesystem {
           override async readFile(...args: Parameters<MemoryFilesystem["readFile"]>) {
-            if (args[0] === "/data/update-result.json") throw unreadable;
+            if (args[0] === "/data/update-result.json") {
+              await resultFileGate;
+              if (unreadable !== undefined) throw unreadable;
+            }
             return super.readFile(...args);
           }
         })();

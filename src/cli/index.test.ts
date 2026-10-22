@@ -7391,6 +7391,22 @@ describe("simlock update and simlock status", () => {
         stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
       },
       {
+        name: "waits through a daemon that answers while it is still starting",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [lost()],
+          after: [
+            answer({ health: "starting" }),
+            answer({
+              lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
+            }),
+          ],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
+      },
+      {
         name: "gives up when the daemon does not come back in 15 minutes",
         argv: ["update"],
         script: {

@@ -104,7 +104,8 @@ class Follower {
         this.#client = await connectDaemonClient(this.environment, this.token, { launch: false });
         const answer = await this.#client.updateDaemon({ query: true });
         this.#lastAnswerAt = this.environment.clock.now();
-        return answer;
+        // why: a daemon still starting answers a query too, but its update result is not read yet, so only a running one has the last word.
+        if (answer.health === "running") return answer;
       } catch {
         if (this.environment.clock.now() - this.#lastAnswerAt >= COME_BACK_MS) throw new GaveUp();
       }

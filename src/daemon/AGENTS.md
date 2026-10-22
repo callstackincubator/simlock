@@ -49,7 +49,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 
 `daemon.update` (worker `Dispatcher`; a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`) is `createUpdateCoordinator`'s, in memory only. A call during an update follows it (`force` on `waiting` installs now); `query` starts nothing.
 A new update: `NpmCli.view` resolves the version (`UPDATE_RESOLVE_FAILED`); the running version, or one newer than `latest` with no `version` named (`isNewerVersion`), is `upToDate`; then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and `socketHeld` on the other role's socket (`UPDATE_SHARED_INSTALL`). Then `waiting`, leasing's update hold and `daemon.update-started`; the updater launches with no leases, with `force`, or when the last `lease.released`/`lease.expired` leaves none.
-Its stdout lines move the state; a failed line, a non-zero exit or a failed launch sets `lastUpdateFailure`, releases the hold and emits `daemon.update-failed`. `DaemonServer.start` calls `readResultFile()` after `daemon.started`: a rolled back update's `update-result.json` is reported the same way and deleted.
+Its stdout lines move the state; a failed line, a non-zero exit or a failed launch sets `lastUpdateFailure`, releases the hold and emits `daemon.update-failed`. `DaemonServer.start` calls `readResultFile()` after convergence and before health is `running`: a rolled back update's `update-result.json` is reported the same way and deleted.
 
 ## Connection (`server.ts`)
 
@@ -62,7 +62,7 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
 5. **`daemon.stop`** — handled by the server, before the version and stopping gates.
-   Needs `admin`. Answers `{ stopping: true }`, then stops. `daemon.update` skips only the version gate; the dispatcher still checks `admin` and parks on readiness.
+   Needs `admin`. Answers `{ stopping: true }`, then stops. `daemon.update` skips only the version gate; the dispatcher still checks `admin` and parks on readiness, except for `query`, which answers while `starting`.
 
 Pushes, keyed by the request's frame id: `progress` (`lease.request`), `started` and `output` (`device.exec`), `component-progress`, `relay-head`. Per connection: `event` (`events.subscribe`). Owner-routed: `lease-lost`, `device-unhealthy`, `device-recovered` go to every connection whose principal owns the lease; `lease-lost` skips the connection that asked for that release. A closed connection only silences its pushes; the request, the lease and a running command go on.
 
@@ -83,7 +83,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 starts → `onSocketClaimed` (module `afterSocketClaimed`, agent-device, uplink, HTTP) → await converge → arm.
 Health: `starting` → `running`, or `failed`.
 
-- `hello` and `status.get` answer at once; `status.get` while `starting` carries
+- `hello`, `status.get` and `daemon.update` with `query` answer at once; `status.get` while `starting` carries
   `daemon`, `host` and `load` only.
 - Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops
   (`convergence-failed`).

@@ -561,7 +561,6 @@ export class DaemonServer {
       // rather than being taken on trust here, one step from the ring buffer.
       this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
     }
-    await this.#reportUpdateResult();
     this.#logger.info("Daemon started", {
       config: configSnapshot,
       protocolVersion: this.#protocolRange.max,
@@ -590,6 +589,8 @@ export class DaemonServer {
   async #converge(): Promise<void> {
     try {
       await this.options.converge?.();
+      // why: read before health is `running`, so a `daemon.update` that sees `running` also sees the failure a rolled back update left.
+      await this.#reportUpdateResult();
       this.#health = "running";
     } catch (error: unknown) {
       this.#health = "failed";
@@ -795,7 +796,7 @@ export class DaemonServer {
       return;
     }
 
-    // why: `daemon.update` is the second frozen call (ADR 0042 §1): it skips the version gate but not the role check and readiness, which the dispatcher still runs.
+    // why: `daemon.update` is the second frozen call (ADR 0042 §1): it skips the version gate but not the role check, which the dispatcher still runs, and readiness except for `query`.
     if (connection.protocolMismatch && frame.type !== "daemon.update") {
       relayChannel?.abort();
       await this.#respondError(
