@@ -57,7 +57,25 @@ If a start through the service fails, the command reports `DAEMON_STARTUP_FAILED
 simlock daemon uninstall
 ```
 
-stops the daemon, unloads the service and deletes its file, and prints `Service removed: <name> (launchd)`. On Linux and Windows both commands are a usage error.
+stops the daemon, unloads the service and deletes its file, and prints `Service removed: <name> (launchd)`. On Linux it unloads and removes the systemd user unit (see below). On Windows both commands are a usage error.
+
+## Start at login (Linux)
+
+```sh
+simlock daemon install
+```
+
+```text
+Service installed: com.callstack.simlock.worker (systemd)
+Daemon running
+To start after a reboot without logging in, run: loginctl enable-linger <user>
+```
+
+This writes a systemd user unit to `$XDG_CONFIG_HOME/systemd/user/<name>.service` (when `XDG_CONFIG_HOME` is an absolute path, else `~/.config/systemd/user/<name>.service`), runs `systemctl --user daemon-reload` and `systemctl --user enable --now <name>.service`. The name is the one the macOS service gets. The unit holds `ExecStart` (Node and `main.js`, plus `--gateway` for a gateway), one `Environment=` line per saved variable that is set, `Restart=on-failure`, `RestartSec=10`, `StartLimitIntervalSec=0`, `KillMode=process`, `TimeoutStopSec=300`, and `StandardOutput` and `StandardError` appended to `daemon.log`. systemd runs the daemon whenever the user has a session, or always with linger, and starts it again 10 seconds after a failure exit.
+
+Stopping the unit kills only the daemon, so emulators it booted keep running. Without linger, the last logout stops the user's whole systemd, and the daemon and its emulators with it. Run `loginctl enable-linger <user>` to keep them. Simlock does not turn linger on.
+
+With no user bus (no session and no linger), `daemon install` fails with `SERVICE_FAILED` (`systemctl --user daemon-reload failed: Failed to connect to bus: ...`) and removes the unit file. Other commands then start the daemon without the service and say `Service <name> is not loaded; started the daemon without it.` The `Service:` line reads `installed (systemd, <name>)`. If a start through the service fails, the command reports `DAEMON_STARTUP_FAILED` as on macOS; if `systemctl` fails, `SERVICE_FAILED`.
 
 ## Check whether it is running
 
@@ -73,7 +91,7 @@ Daemon: running (worker)
 
 `starting` means it is still reading the machine's devices; devices, leases and capacity appear once it finishes. See [Monitoring](/simlock/docs/worker/monitoring) for the rest of the report.
 
-On macOS the last line says what state the service is in, whether the daemon runs or not:
+On macOS and Linux the last line says what state the service is in, whether the daemon runs or not:
 
 ```text
 Service: not installed
@@ -82,9 +100,9 @@ Service: not loaded (launchd, com.callstack.simlock.worker): commands start the 
 Service: broken (launchd, com.callstack.simlock.worker): /Users/me/.nvm/versions/node/v22.13.0/bin/node is gone; run simlock daemon install
 ```
 
-`not loaded` is what you see over SSH with nobody logged in at the screen. `broken` means the service names a Node or `main.js` that is gone, for example after an nvm or Homebrew upgrade; with two paths gone the line reads `<path>, <path> are gone`. On another platform there is no `Service:` line. A gateway prints its own service name.
+`not loaded` is what you see over SSH with nobody logged in at the screen. `broken` means the service names a Node or `main.js` that is gone, for example after an nvm or Homebrew upgrade; with two paths gone the line reads `<path>, <path> are gone`. On another platform there is no `Service:` line. On Linux the manager reads `systemd`. A gateway prints its own service name.
 
-Add `--json` for a machine-readable answer: `{"status":"stopped"}` when nothing runs. On macOS the answer gains a `service` field, for example `{"status":"stopped","service":{"state":"broken","manager":"launchd","name":"com.callstack.simlock.worker","path":"/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist","missing":["/Users/me/.nvm/versions/node/v22.13.0/bin/node"]}}`. `state` is `not-installed`, `installed`, `not-loaded` or `broken`; `path` is absent when not installed and `missing` appears only when broken.
+Add `--json` for a machine-readable answer: `{"status":"stopped"}` when nothing runs. On macOS and Linux the answer gains a `service` field, for example `{"status":"stopped","service":{"state":"broken","manager":"launchd","name":"com.callstack.simlock.worker","path":"/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist","missing":["/Users/me/.nvm/versions/node/v22.13.0/bin/node"]}}`. `state` is `not-installed`, `installed`, `not-loaded` or `broken`; `path` is absent when not installed and `missing` appears only when broken.
 
 ## Stop the daemon
 
