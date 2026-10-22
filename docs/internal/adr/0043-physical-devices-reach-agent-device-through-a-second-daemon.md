@@ -89,9 +89,12 @@ path (ADR 0026) routes non-RPC requests and fans out `devices` per lease; the
 front itself changes nowhere for routing. A request naming no lease goes to
 the simulator daemon.
 
-Nothing changes at a gateway. Simlock's own routing already places a physical
-lease on the worker that holds the enrolled phone, and the gateway relays
-every call to the lease's worker, whose link picks the daemon.
+The gateway's routing does not change. Simlock's own routing already places
+a physical lease on the worker that holds the enrolled phone, and the
+gateway relays every call to the lease's worker, whose link picks the
+daemon. A phone's grant carries no address, only its device id (the serial
+or udid), so wherever the edge needs a phone's address, on the gateway's
+view of a live lease included, it reads that id.
 
 ```mermaid
 sequenceDiagram
