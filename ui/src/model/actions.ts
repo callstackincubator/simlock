@@ -206,6 +206,12 @@ function forceAction(
     },
     id: "force-update",
     label: "Update now",
+    // why: a worker that already runs the version answers upToDate, and the toast says so rather
+    // than that something installs.
+    outcome: (raw) =>
+      (raw as UpdateAnswer).upToDate === true
+        ? updateToast(worker.name)(raw)
+        : { title: `${worker.name} installs ${to} now` },
     success: { title: `${worker.name} installs ${to} now` },
   };
 }

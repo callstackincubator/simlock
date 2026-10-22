@@ -67,4 +67,44 @@ test.describe("the console updates a worker", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("Update now → Install now sends force, a 200 upToDate answer names the version, and a 409 shows its message", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "upd-b" }]);
+    try {
+      await showWorkerFields(page, () => ({
+        latestVersion: "0.4.0",
+        lastUpdateFailure: null,
+        update: { stage: "waiting", leases: 2, from: "0.3.0", to: "0.4.0" },
+        version: "0.3.0",
+      }));
+      const answers = [
+        { json: { started: false, upToDate: true, update: null, version: "0.4.0" }, status: 200 },
+        {
+          json: { error: { code: "CONFLICT", message: "Another update is running." } },
+          status: 409,
+        },
+      ];
+      const posts: string[] = [];
+      await page.route("**/v1/workers/*/update", async (route) => {
+        posts.push(route.request().postData() ?? "");
+        await route.fulfill(answers[posts.length - 1] ?? { status: 500 });
+      });
+      await openFleet(page, fleet.gateway);
+      const row = page.locator("main tbody tr").filter({ hasText: "upd-b" });
+      const toasts = page.getByRole("region", { name: "Notifications" });
+      for (const toast of ["upd-b already runs 0.4.0", "Another update is running."]) {
+        await row.getByRole("button", { name: "Actions for upd-b" }).click();
+        await page.getByRole("menuitem", { name: "Update now" }).click();
+        const dialog = page.getByRole("alertdialog", { name: "Install 0.4.0 on upd-b now?" });
+        await expect(dialog).toContainText("Its 2 leases keep running through the restart.");
+        await dialog.getByRole("button", { name: "Install now" }).click();
+        await expect(toasts.getByText(toast, { exact: true })).toBeVisible();
+      }
+      expect(posts).toEqual(['{"force":true}', '{"force":true}']);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
