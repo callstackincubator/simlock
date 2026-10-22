@@ -79,3 +79,5 @@ async function main(): Promise<number> {
 }
 
 process.exitCode = await main();
+// why: a probe call that timed out can leave its socket open, and that handle must not keep the updater alive.
+process.exit();

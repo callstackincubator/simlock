@@ -35,12 +35,14 @@ class StopRecordingNpm extends FakeNpmCli {
 class FakeProbe implements DaemonProbe {
   stops = 0;
   oldDaemonAnswers = true;
-  newDaemon: { health: string; version: string } | undefined;
+  newDaemon: { health: string; version: string } | "hangs" | undefined;
+  onStop: (() => Promise<void>) | undefined;
 
   constructor(private readonly staysUp = false) {}
 
   async stop(): Promise<void> {
     this.stops += 1;
+    await this.onStop?.();
     if (!this.staysUp) this.oldDaemonAnswers = false;
   }
 
@@ -49,12 +51,14 @@ class FakeProbe implements DaemonProbe {
   }
 
   async state(): Promise<{ health: string; version: string } | undefined> {
+    if (this.newDaemon === "hangs") return new Promise(() => undefined);
     return this.newDaemon;
   }
 }
 
 interface StartSpec {
-  readonly daemon: { health: string; version: string } | null;
+  readonly daemon: { health: string; version: string } | "hangs" | null;
+  readonly hangs?: boolean;
   readonly result?: { code: number; stderr: string };
 }
 
@@ -63,6 +67,7 @@ interface Scenario {
   readonly role?: DaemonRole;
   readonly install?: readonly NpmOutcome[];
   readonly oldDaemonStaysUp?: boolean;
+  readonly serviceRestartsDaemonDuringRollbackInstall?: boolean;
   readonly starts?: readonly StartSpec[];
   readonly expected: {
     readonly stdout: readonly string[];
@@ -79,6 +84,8 @@ interface Scenario {
       readonly copiedBeforeStart: string;
       readonly restoredBeforeRollbackStart?: string;
       readonly liveDuringRollbackInstall?: string;
+      readonly liveWhenRestartedDaemonStopped?: string;
+      readonly filesRestored?: boolean;
       readonly backupLeft: boolean;
     };
     readonly resultFile?: { readonly message: string; readonly mode: number };
@@ -251,6 +258,7 @@ const SCENARIOS: readonly Scenario[] = [
         copiedBeforeStart: "original",
         restoredBeforeRollbackStart: "original",
         liveDuringRollbackInstall: "migrated",
+        filesRestored: true,
         backupLeft: false,
       },
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
@@ -279,28 +287,81 @@ const SCENARIOS: readonly Scenario[] = [
       stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
       exit: 1,
       installs: ["simlock@0.4.0", "simlock@0.3.0"],
-      stops: 2,
-      startArgs: [started(), started()],
+      stops: 3,
+      stderr: [
+        "rollback to 0.3.0 failed: a daemon still answers, so the database copy was not restored",
+      ],
+      startArgs: [started()],
       signals: [`${PID}:SIGKILL`],
-      waitedAtLeastMs: 1_320_000,
+      waitedAtLeastMs: 1_920_000,
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
   {
-    name: "new daemon crash-loops under a service",
-    starts: [{ daemon: null }, { daemon: { health: "running", version: "0.3.0" } }],
+    name: "the service restarts a daemon during the rollback install",
+    serviceRestartsDaemonDuringRollbackInstall: true,
+    starts: [{ daemon: null }],
     expected: {
       stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
       stderr: [],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 2,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      database: {
+        copiedBeforeStart: "original",
+        restoredBeforeRollbackStart: "original",
+        liveWhenRestartedDaemonStopped: "migrated",
+        filesRestored: true,
+        backupLeft: false,
+      },
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
+  {
+    name: "new daemon holds the socket and never answers",
+    starts: [{ daemon: "hangs" }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
       exit: 1,
       installs: ["simlock@0.4.0", "simlock@0.3.0"],
       stops: 1,
       startArgs: [started(), started()],
       signals: [],
       waitedAtLeastMs: 120_000,
+      waitedAtMostMs: 200_000,
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
+  {
+    name: "daemon start never exits",
+    starts: [{ daemon: null, hangs: true }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      waitedAtMostMs: 200_000,
+      resultFile: {
+        message: "0.4.0 did not start: daemon start: did not exit within 2 minutes",
+        mode: 0o600,
+      },
+    },
+  },
+];
+
+const DATABASE_NAMES = [
+  "state.db",
+  "state.db-wal",
+  "state.db-shm",
+  "history.db",
+  "history.db-wal",
+  "history.db-shm",
 ];
 
 async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
@@ -326,14 +387,28 @@ async function expectDatabase(
     readonly copiedBeforeStart: readonly string[];
     readonly liveAtStart: readonly string[];
     readonly liveAtInstall: readonly string[];
+    readonly liveAtStop: readonly string[];
+    readonly liveFiles: () => Promise<Record<string, string | undefined>>;
   },
 ): Promise<void> {
   expect(seen.copiedBeforeStart).toEqual([database.copiedBeforeStart]);
   expect(await seen.filesystem.exists(seen.backupPath)).toBe(database.backupLeft);
   if (database.restoredBeforeRollbackStart !== undefined) {
     expect(seen.liveAtStart[1]).toBe(database.restoredBeforeRollbackStart);
-    // why: the backup held no -wal, so the one the new version wrote must go with the rollback.
-    expect(await seen.filesystem.exists(`${seen.statePath}-wal`)).toBe(false);
+  }
+  if (database.liveWhenRestartedDaemonStopped !== undefined) {
+    expect(seen.liveAtStop.at(-1)).toBe(database.liveWhenRestartedDaemonStopped);
+  }
+  if (database.filesRestored === true) {
+    // why: every file the backup held is back and the one it lacked (history.db-wal, written by the new version) is gone.
+    expect(await seen.liveFiles()).toEqual({
+      "state.db": "original",
+      "state.db-wal": "wal original",
+      "state.db-shm": "shm original",
+      "history.db": "history",
+      "history.db-wal": undefined,
+      "history.db-shm": "history shm",
+    });
   }
   if (database.liveDuringRollbackInstall !== undefined) {
     expect(seen.liveAtInstall[1]).toBe(database.liveDuringRollbackInstall);
@@ -374,7 +449,14 @@ async function expectResultFile(
 describe("runUpdater", () => {
   it.each(SCENARIOS)(
     "installs, restarts, and reports each stage on its pipe: $name",
-    async ({ role = "worker", install, oldDaemonStaysUp, starts = [], expected }) => {
+    async ({
+      role = "worker",
+      install,
+      oldDaemonStaysUp,
+      serviceRestartsDaemonDuringRollbackInstall,
+      starts = [],
+      expected,
+    }) => {
       const clock = new FakeClock(EPOCH);
       const filesystem = new MemoryFilesystem();
       const dataDirectory = role === "gateway" ? "/home/.simlock/gateway" : "/home/.simlock";
@@ -385,25 +467,39 @@ describe("runUpdater", () => {
       const backupPath = `${dataDirectory}/update-backup`;
       await filesystem.writeFileAtomic(statePath, "original");
       await filesystem.writeFileAtomic(`${dataDirectory}/history.db`, "history");
+      await filesystem.writeFileAtomic(`${statePath}-wal`, "wal original");
+      await filesystem.writeFileAtomic(`${statePath}-shm`, "shm original");
+      await filesystem.writeFileAtomic(`${dataDirectory}/history.db-shm`, "history shm");
       const copiedBeforeStart: string[] = [];
       const liveAtStart: string[] = [];
       const liveAtInstall: string[] = [];
+      const liveAtStop: string[] = [];
       const npm = new StopRecordingNpm(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
       npm.probe = probe;
+      probe.onStop = async () => {
+        liveAtStop.push(await filesystem.readFile(statePath));
+      };
       npm.onInstall = async () => {
         liveAtInstall.push(await filesystem.readFile(statePath));
+        if (serviceRestartsDaemonDuringRollbackInstall === true && liveAtInstall.length === 2) {
+          probe.oldDaemonAnswers = true;
+          probe.newDaemon = { health: "running", version: "0.3.0" };
+        }
       };
       const processes = new ScriptedProcessRunner(
         expected.startArgs.map((args, index) => ({
           match: { command: process.execPath, args },
           result: { stdout: "", ...(starts[index]?.result ?? { code: 0, stderr: "" }) },
+          ...(starts[index]?.hangs === true ? { hangs: true } : {}),
           onSpawn: () => {
             const spec = starts[index];
             probe.newDaemon =
               spec === undefined
                 ? { health: "running", version: index === 0 ? "0.4.0" : "0.3.0" }
-                : (spec.daemon ?? undefined);
+                : spec.daemon === null
+                  ? undefined
+                  : spec.daemon;
             void filesystem.exists(resultPath).then((exists) => fileAtRollbackStart.push(exists));
             void (async () => {
               liveAtStart.push(await filesystem.readFile(statePath));
@@ -415,6 +511,9 @@ describe("runUpdater", () => {
                 );
                 await filesystem.writeFileAtomic(statePath, "migrated");
                 await filesystem.writeFileAtomic(`${statePath}-wal`, "written by the new version");
+                await filesystem.writeFileAtomic(`${dataDirectory}/history.db-wal`, "new version");
+                await filesystem.writeFileAtomic(`${statePath}-shm`, "new version");
+                await filesystem.writeFileAtomic(`${dataDirectory}/history.db-shm`, "new version");
               }
             })();
           },
@@ -470,6 +569,18 @@ describe("runUpdater", () => {
           copiedBeforeStart,
           liveAtStart,
           liveAtInstall,
+          liveAtStop,
+          liveFiles: async () =>
+            Object.fromEntries(
+              await Promise.all(
+                DATABASE_NAMES.map(async (name) => [
+                  name,
+                  (await filesystem.exists(`${dataDirectory}/${name}`))
+                    ? await filesystem.readFile(`${dataDirectory}/${name}`)
+                    : undefined,
+                ]),
+              ),
+            ),
         });
       }
       await expectResultFile(expected, { filesystem, resultPath, clock, fileAtRollbackStart });

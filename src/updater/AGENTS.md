@@ -11,8 +11,10 @@ Started by: a daemon through `UpdaterLauncher` (no caller yet).
 2. `daemon.stop`, then wait for the socket to go (10 min, then SIGKILL `--pid`).
 3. Copy `state.db`, `history.db` and their `-wal`/`-shm` to the `update-backup` folder of the data directory.
 4. `node <root>/dist/cli/main.js daemon start [--gateway]`, then poll the probe until `running` at version `to` (2 min).
-5. Not started: stop a daemon that still answers (10 min), write `update-result.json` (0600, `{ from, to, stage: "restarting", message, at, rolledBack }`), reinstall `from`, restore the database copy, start it. A daemon already running `from` counts as started. The updater still exits 1; a failed rollback goes to stderr (`daemon.log`).
+5. Not started: stop a daemon that still answers (10 min), write `update-result.json` (0600, `{ from, to, stage: "restarting", message, at, rolledBack }`), reinstall `from`, then restore the database copy and start it. The restore waits for the socket to stop answering: a daemon that answers then (the service restarted it) gets `daemon.stop` first (10 min); one that never stops leaves the copy in `update-backup` and the rollback fails. The updater still exits 1; a failed rollback goes to stderr (`daemon.log`).
 6. A good start deletes the `update-backup` folder.
+
+Each probe call has a 30 s limit and `daemon start` a 2 min one (`index.ts` `CALL_LIMIT_MS`, `START_LIMIT_MS`); a call past its limit counts as no answer, and a `daemon start` past it as a failed start.
 
 Progress is one JSON line per stage on stdout: `{"stage":"installing"}`, `{"stage":"restarting"}`.
 

@@ -36,6 +36,7 @@ export interface RunUpdaterOptions {
 const POLL_MS = 500;
 const STOP_LIMIT_MS = 10 * 60_000;
 const START_LIMIT_MS = 2 * 60_000;
+const CALL_LIMIT_MS = 30_000;
 const RESULT_FILE = "update-result.json";
 const BACKUP_DIRECTORY = "update-backup";
 const DATABASE_FILES = ["state.db", "history.db"].flatMap((name) => [
@@ -59,11 +60,35 @@ async function waitUntilStopped({ clock, probe }: RunUpdaterOptions): Promise<bo
   return true;
 }
 
+// why: a daemon that holds the socket but never answers must cost one call's limit, not the whole update.
+async function within<T>(clock: Clock, limitMs: number, work: Promise<T>): Promise<T | undefined> {
+  let timer: ReturnType<Clock["setTimer"]> | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = clock.setTimer(limitMs, () => resolve(undefined));
+  });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    if (timer !== undefined) clock.cancel(timer);
+  }
+}
+
+function boundProbe(clock: Clock, probe: DaemonProbe): DaemonProbe {
+  return {
+    stop: async () => {
+      await within(clock, CALL_LIMIT_MS, probe.stop());
+    },
+    answers: async () => (await within(clock, CALL_LIMIT_MS, probe.answers())) ?? false,
+    state: () => within(clock, CALL_LIMIT_MS, probe.state()),
+  };
+}
+
 function writeLine(options: RunUpdaterOptions, line: unknown): void {
   options.stdout.write(`${JSON.stringify(line)}\n`);
 }
 
-export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
+export async function runUpdater(given: RunUpdaterOptions): Promise<number> {
+  const options = { ...given, probe: boundProbe(given.clock, given.probe) };
   const { clock, npm, probe, to } = options;
   writeLine(options, { stage: "installing" });
   const installed = await npm.install(`simlock@${to}`);
@@ -101,8 +126,12 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
   const reinstalled = await npm.install(`simlock@${options.from}`);
   let rollbackFailure: string | undefined;
   if (reinstalled.ok) {
-    await restoreDatabases(options);
-    rollbackFailure = await startDaemon({ ...options, to: options.from });
+    if (await stopAnsweringDaemon(options)) {
+      await restoreDatabases(options);
+      rollbackFailure = await startDaemon({ ...options, to: options.from });
+    } else {
+      rollbackFailure = "a daemon still answers, so the database copy was not restored";
+    }
   } else {
     rollbackFailure = reinstalled.message;
   }
@@ -112,6 +141,13 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
     options.stderr.write(`rollback to ${options.from} failed: ${rollbackFailure}\n`);
   }
   return 1;
+}
+
+// why: under a service manager the service may have restarted a daemon by now; its live databases must not be overwritten.
+async function stopAnsweringDaemon(options: RunUpdaterOptions): Promise<boolean> {
+  if (!(await options.probe.answers())) return true;
+  await options.probe.stop();
+  return waitUntilStopped(options);
 }
 
 async function backupDatabases(options: RunUpdaterOptions): Promise<void> {
@@ -140,12 +176,21 @@ async function restoreDatabases(options: RunUpdaterOptions): Promise<void> {
 }
 
 async function startDaemon(options: RunUpdaterOptions): Promise<string | undefined> {
-  const started = await options.processes.run(process.execPath, [
-    join(options.packageRoot, "dist", "cli", "main.js"),
-    "daemon",
-    "start",
-    ...(options.role === "gateway" ? ["--gateway"] : []),
-  ]);
+  const started = await within(
+    options.clock,
+    START_LIMIT_MS,
+    options.processes.run(
+      process.execPath,
+      [
+        join(options.packageRoot, "dist", "cli", "main.js"),
+        "daemon",
+        "start",
+        ...(options.role === "gateway" ? ["--gateway"] : []),
+      ],
+      { timeoutMs: START_LIMIT_MS },
+    ),
+  );
+  if (started === undefined) return "daemon start: did not exit within 2 minutes";
   if (started.code !== 0) return `daemon start: ${started.stderr.trim()}`;
   return awaitRunning(options);
 }
