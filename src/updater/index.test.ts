@@ -14,6 +14,7 @@ import { runUpdater, type DaemonProbe } from "./index.js";
 const PACKAGE_ROOT = "/global/node_modules/simlock";
 const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
 const PID = 4242;
+const EPOCH = 1_700_000_000_000;
 
 class FakeProbe implements DaemonProbe {
   stops = 0;
@@ -41,6 +42,7 @@ interface Scenario {
   readonly role?: DaemonRole;
   readonly install?: readonly NpmOutcome[];
   readonly oldDaemonStaysUp?: boolean;
+  readonly newDaemon?: { health: string; version: string } | null;
   readonly expected: {
     readonly stdout: readonly string[];
     readonly exit: number;
@@ -49,6 +51,7 @@ interface Scenario {
     readonly startArgs: readonly (readonly string[])[];
     readonly signals: readonly string[];
     readonly waitedAtLeastMs: number;
+    readonly resultFile?: { readonly message: string; readonly mode: number };
   };
 }
 
@@ -96,6 +99,20 @@ const SCENARIOS: readonly Scenario[] = [
       waitedAtLeastMs: 600_000,
     },
   },
+  {
+    name: "new version not running within 2 minutes",
+    newDaemon: null,
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
 ];
 
 async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
@@ -112,8 +129,12 @@ async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
 describe("runUpdater", () => {
   it.each(SCENARIOS)(
     "installs, restarts, and reports each stage on its pipe: $name",
-    async ({ role = "worker", install, oldDaemonStaysUp, expected }) => {
-      const clock = new FakeClock();
+    async ({ role = "worker", install, oldDaemonStaysUp, newDaemon, expected }) => {
+      const clock = new FakeClock(EPOCH);
+      const filesystem = new MemoryFilesystem();
+      const dataDirectory = role === "gateway" ? "/home/.simlock/gateway" : "/home/.simlock";
+      const resultPath = `${dataDirectory}/update-result.json`;
+      const fileAtRollbackStart: boolean[] = [];
       const npm = new FakeNpmCli(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
       const processes = new ScriptedProcessRunner(
@@ -121,7 +142,11 @@ describe("runUpdater", () => {
           match: { command: process.execPath, args },
           result: { code: 0, stdout: "", stderr: "" },
           onSpawn: () => {
-            probe.newDaemon = { health: "running", version: "0.4.0" };
+            probe.newDaemon =
+              newDaemon === null
+                ? undefined
+                : (newDaemon ?? { health: "running", version: "0.4.0" });
+            void filesystem.exists(resultPath).then((exists) => fileAtRollbackStart.push(exists));
           },
         })),
       );
@@ -138,10 +163,10 @@ describe("runUpdater", () => {
           probe,
           processes,
           supervisor,
-          filesystem: new MemoryFilesystem(),
+          filesystem,
           clock,
           packageRoot: PACKAGE_ROOT,
-          dataDirectory: role === "gateway" ? "/home/.simlock/gateway" : "/home/.simlock",
+          dataDirectory,
           stdout: { write: (chunk) => lines.push(chunk) },
         }),
         clock,
@@ -157,7 +182,23 @@ describe("runUpdater", () => {
       expect(supervisor.signals.map((sent) => `${sent.pid}:${sent.signal}`)).toEqual(
         expected.signals,
       );
-      expect(clock.now()).toBeGreaterThanOrEqual(expected.waitedAtLeastMs);
+      expect(clock.now()).toBeGreaterThanOrEqual(EPOCH + expected.waitedAtLeastMs);
+      if (expected.resultFile === undefined) {
+        expect(await filesystem.exists(resultPath)).toBe(false);
+      } else {
+        const written = JSON.parse(await filesystem.readFile(resultPath)) as { at: number };
+        expect(written).toEqual({
+          from: "0.3.0",
+          to: "0.4.0",
+          stage: "restarting",
+          message: expected.resultFile.message,
+          at: expect.any(Number),
+          rolledBack: true,
+        });
+        expect(written.at).toBeGreaterThanOrEqual(EPOCH + expected.waitedAtLeastMs);
+        expect((await filesystem.stat(resultPath)).mode).toBe(expected.resultFile.mode);
+        expect(fileAtRollbackStart).toEqual([false, true]);
+      }
     },
   );
 });
