@@ -81,7 +81,7 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
       .filter((pid) => Number.isInteger(pid));
   } catch (error: unknown) {
     const failure = error as NodeJS.ErrnoException & { stderr?: string };
-    if ((failure.code === 1 || failure.code === "1") && !failure.stderr?.trim()) return [];
+    if (failure.code === "1" && !failure.stderr?.trim()) return [];
     throw error;
   }
 }
