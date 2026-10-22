@@ -7570,20 +7570,6 @@ describe("simlock update and simlock status", () => {
       });
     }
 
-    const statusLines = async (daemon: Partial<StatusGetOutput["daemon"]>) => {
-      const output = outputCapture();
-      await runCli(
-        ["status"],
-        output.environmentWith({
-          connectAdmin: async () =>
-            fakeClient({
-              getStatus: () =>
-                Promise.resolve({ ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, ...daemon } }),
-            }),
-        }),
-      );
-      return output.stdout.split("\n").slice(0, 4);
-    };
     const next = "Host: macOS 15.5 arm64";
     expect(await statusLines({ version: "0.3.0" })).toEqual([
       "Daemon: running (worker)",
@@ -7616,7 +7602,35 @@ describe("simlock update and simlock status", () => {
       "Last update failed (installing): npm error code EACCES",
     ]);
   });
+
+  it("simlock status says when the daemon has seen a newer Simlock version on npm", async () => {
+    for (const [version, latestVersion, line] of [
+      ["0.3.0", "0.4.0", "Simlock: 0.3.0 (0.4.0 available)"],
+      ["0.9.0", "0.10.0", "Simlock: 0.9.0 (0.10.0 available)"],
+      ["0.4.0-rc.2", "0.4.0", "Simlock: 0.4.0-rc.2 (0.4.0 available)"],
+      ["0.4.0", "0.4.0", "Simlock: 0.4.0"],
+      ["0.5.0-rc.1", "0.4.0", "Simlock: 0.5.0-rc.1"],
+      ["0.3.0", null, "Simlock: 0.3.0"],
+    ] as const) {
+      expect((await statusLines({ version, latestVersion }))[1]).toBe(line);
+    }
+  });
 });
+
+async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
+  const output = outputCapture();
+  await runCli(
+    ["status"],
+    output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getStatus: () =>
+            Promise.resolve({ ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, ...daemon } }),
+        }),
+    }),
+  );
+  return output.stdout.split("\n").slice(0, 4);
+}
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
