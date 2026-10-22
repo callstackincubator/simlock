@@ -193,6 +193,8 @@ function alertTestError(
   }
 }
 
+const UPDATE_UPLINK_BOUND_MS = 90_000;
+
 export class GatewayDispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
@@ -427,7 +429,7 @@ export class GatewayDispatcher {
       });
     }
     const { workerId, ...request } = input;
-    const answer = await client.updateDaemon(request);
+    const answer = await this.#withinUplinkBound(client.updateDaemon(request), workerId);
     this.options.workers.refresh(workerId, {
       lastUpdateFailure: answer.lastUpdateFailure,
       latestVersion: answer.latestVersion,
@@ -436,6 +438,31 @@ export class GatewayDispatcher {
     await target.refresh();
     return { ...answer, workerId };
   };
+
+  // why: above the worker's own npm `view` and `root -g` (30 s each); at the limit the view catches up on the next read (ADR 0042 §2).
+  #withinUplinkBound<Value>(call: Promise<Value>, workerId: string): Promise<Value> {
+    return new Promise<Value>((resolve, reject) => {
+      const timer = this.options.clock.setTimer(UPDATE_UPLINK_BOUND_MS, () => {
+        reject(
+          new DispatchError(
+            "WORKER_NOT_CONNECTED",
+            `worker ${workerId} did not answer within 90 s; check simlock worker list`,
+            { workerId },
+          ),
+        );
+      });
+      call.then(
+        (value) => {
+          this.options.clock.cancel(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          this.options.clock.cancel(timer);
+          reject(error);
+        },
+      );
+    });
+  }
 
   #alertsTest: Handler<"alerts.test"> = async (input) => {
     const { destination } = input;
