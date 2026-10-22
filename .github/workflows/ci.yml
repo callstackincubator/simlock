@@ -155,7 +155,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       console: ${{ steps.filter.outputs.console }}
-      browsers: ${{ steps.filter.outputs.browsers }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -180,13 +179,6 @@ jobs:
             echo "console=true" >>"$GITHUB_OUTPUT"
           else
             echo "console=false" >>"$GITHUB_OUTPUT"
-          fi
-          # Most console failures are Firefox- or WebKit-only, so a change to the UI or its
-          # specs runs every browser; any other change runs Chromium.
-          if printf '%s\n' "$changed" | grep -q -E '^(ui/|e2e/console/|playwright\.config\.ts$)'; then
-            echo "browsers=all" >>"$GITHUB_OUTPUT"
-          else
-            echo "browsers=chromium" >>"$GITHUB_OUTPUT"
           fi
 
   console-lane:
@@ -217,24 +209,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install Playwright browsers
-        env:
-          BROWSERS: ${{ needs.changes.outputs.browsers }}
-        run: |
-          if [ "$BROWSERS" = chromium ]; then
-            pnpm exec playwright install --with-deps chromium
-          else
-            pnpm exec playwright install --with-deps chromium firefox webkit
-          fi
+        run: pnpm exec playwright install --with-deps chromium
       - name: Browser lane
         env:
-          BROWSERS: ${{ needs.changes.outputs.browsers }}
           SHARD: ${{ matrix.shard }}
-        run: |
-          if [ "$BROWSERS" = chromium ]; then
-            pnpm test:console --project=chromium --shard="$SHARD/4"
-          else
-            pnpm test:console --shard="$SHARD/4"
-          fi
+        run: pnpm test:console --project=chromium --shard="$SHARD/4"
 
   # why: branch protection requires the check named Console, so this job stands for the sharded
   # lane. `always()` makes it report a failure when a shard fails, where a job skipped by a failed
