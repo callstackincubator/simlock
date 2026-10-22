@@ -83,6 +83,8 @@ export type WorkerDrainInput = OpInput<"worker.drain">;
 export type WorkerDrainOutput = OpOutput<"worker.drain">;
 export type WorkerUndrainOutput = OpOutput<"worker.undrain">;
 export type WorkerRemoveOutput = OpOutput<"worker.remove">;
+export type WorkerUpdateInput = OpInput<"worker.update">;
+export type WorkerUpdateOutput = OpOutput<"worker.update">;
 
 export type AlertsTestInput = OpInput<"alerts.test">;
 export type AlertsTestOutput = OpOutput<"alerts.test">;

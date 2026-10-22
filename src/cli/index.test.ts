@@ -7724,6 +7724,18 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     undrainWorker: (input) =>
       Promise.resolve({ drained: false as const, workerId: input.workerId }),
     removeWorker: (input) => Promise.resolve({ removed: true, workerId: input.workerId }),
+    updateWorker: (input) =>
+      Promise.resolve({
+        health: "running" as const,
+        lastUpdateFailure: null,
+        latestVersion: null,
+        resolved: null,
+        started: false,
+        update: null,
+        upToDate: false,
+        version: "0.3.0",
+        workerId: input.workerId,
+      }),
     testAlertDestination: (input) =>
       Promise.resolve({ destination: input.destination, status: 200 }),
     installComponent: (input) =>

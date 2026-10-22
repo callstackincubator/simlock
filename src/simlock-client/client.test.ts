@@ -268,6 +268,36 @@ describe("connectSimlock: handshake", () => {
     });
   });
 
+  it("the admin client's updateWorker sends worker.update and returns its output, and refuses an empty worker id before sending", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const answer = {
+      health: "running",
+      lastUpdateFailure: null,
+      latestVersion: "0.4.0",
+      resolved: "0.4.0",
+      started: true,
+      update: null,
+      upToDate: false,
+      version: "0.3.0",
+      workerId: "wrk_1",
+    };
+
+    const callPromise = client.updateWorker({ force: true, version: "0.4.0", workerId: "wrk_1" });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("worker.update");
+    expect(call?.payload).toEqual({ force: true, version: "0.4.0", workerId: "wrk_1" });
+    connection.reply(call!.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+    await expect(client.updateWorker({ workerId: "" })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+  });
+
   it("enrolls a device from an admin client with device.add and removes it with device.remove, sending the input and returning the daemon's answer", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });

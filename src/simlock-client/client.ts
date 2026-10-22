@@ -94,6 +94,8 @@ import type {
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
+  WorkerUpdateInput,
+  WorkerUpdateOutput,
 } from "./types.js";
 
 export type {
@@ -167,6 +169,8 @@ export type {
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
+  WorkerUpdateInput,
+  WorkerUpdateOutput,
   WorkerView,
   AlertsTestInput,
   AlertsTestOutput,
@@ -268,12 +272,13 @@ export interface SimlockAdminClient extends SimlockClient {
   listTokens(): Promise<TokenListOutput>;
   revokeToken(input: TokenRevokeInput): Promise<TokenRevokeOutput>;
 
-  /** ADR 0005 §23. A worker lists itself as its only worker; `drainWorker`, `undrainWorker` and
-   * `removeWorker` reject on a worker with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012). */
+  /** why: ADR 0005 §23. A worker lists itself as its only worker; `drainWorker`, `undrainWorker`, `removeWorker` and
+   * `updateWorker` (a gateway updating one of its workers, ADR 0042 §2) reject on a worker with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012). */
   listWorkers(): Promise<WorkerListOutput>;
   drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput>;
+  updateWorker(input: WorkerUpdateInput): Promise<WorkerUpdateOutput>;
 
   /**
    * why: ADR 0035 §1: asks a gateway to post one sample message to the named alert destination, once.
@@ -447,6 +452,7 @@ function buildDegradedClient(
     drainWorker: () => rejected(),
     undrainWorker: () => rejected(),
     removeWorker: () => rejected(),
+    updateWorker: () => rejected(),
     testAlertDestination: () => rejected(),
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
@@ -722,6 +728,10 @@ class SimlockClientImpl {
 
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput> {
     return this.#call("worker.undrain", input);
+  }
+
+  updateWorker(input: WorkerUpdateInput): Promise<WorkerUpdateOutput> {
+    return this.#call("worker.update", input);
   }
 
   testAlertDestination(input: AlertsTestInput): Promise<AlertsTestOutput> {
