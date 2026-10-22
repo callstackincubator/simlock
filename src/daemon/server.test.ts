@@ -3529,6 +3529,17 @@ describe("daemon.update", () => {
           at: 500,
         },
       },
+      {
+        name: "a result file whose message is longer than 2000 characters",
+        contents: resultFile({ message: "e".repeat(3000) }),
+        reported: {
+          stage: "restarting",
+          from: "0.3.0",
+          to: "0.4.0",
+          message: "e".repeat(2000),
+          at: 500,
+        },
+      },
       { name: "a result file that is not valid", contents: "{not json", reported: null },
       {
         name: "a result file that cannot be read",
@@ -3634,7 +3645,8 @@ describe("daemon.update", () => {
         },
       },
       ...[
-        ["a query with another field", { query: true, force: true }],
+        ["a query with force", { query: true, force: true }],
+        ["a query with a version", { query: true, version: "0.4.0" }],
         ["a tag, not a version", { version: "latest" }],
         ["a path, not a version", { version: "../x" }],
         ["a version of 65 characters", { version: `1.0.0-${"a".repeat(59)}` }],
