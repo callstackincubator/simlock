@@ -25,7 +25,9 @@ import {
 import { frontReplyFor, notAvailable } from "./shared/replies.js";
 
 interface AgentDeviceEdgeParts extends AgentDeviceFrontParts {
-  readonly leaseEnd: AgentDeviceLeaseEnd;
+  readonly link: RoutedHostLink;
+  // why: one participant per daemon; for each ended lease only the one whose record holds its scope sends a release.
+  readonly leaseEnds: readonly AgentDeviceLeaseEnd[];
 }
 
 function createAgentDeviceEdgeParts(
@@ -35,13 +37,17 @@ function createAgentDeviceEdgeParts(
   platforms: readonly AgentDevicePlatform[],
   registry: ModuleRegistryView,
 ): AgentDeviceEdgeParts {
-  const record = new ReleaseScopeRecord();
+  const simulatorRecord = new ReleaseScopeRecord();
+  const phoneRecord = new ReleaseScopeRecord();
   return {
-    leaseEnd: new AgentDeviceLeaseEnd(upstream, record),
+    leaseEnds: [
+      new AgentDeviceLeaseEnd(upstream, simulatorRecord),
+      new AgentDeviceLeaseEnd(phoneUpstream, phoneRecord),
+    ],
     link: new RoutedHostLink(
       {
-        phones: new AgentDeviceHost(phoneUpstream, platforms),
-        simulators: new AgentDeviceHost(upstream, platforms, record),
+        phones: new AgentDeviceHost(phoneUpstream, platforms, phoneRecord),
+        simulators: new AgentDeviceHost(upstream, platforms, simulatorRecord),
       },
       registry,
     ),
@@ -142,7 +148,13 @@ export function createWorkerWith(
             void supervisor.start().then(() => phoneSupervisor.start());
           }
         },
-        beforeDeviceReclaim: (ended, signal) => parts.leaseEnd.leaseEnded(ended, signal),
+        beforeDeviceReclaim: async (ended, signal) => {
+          try {
+            await Promise.all(parts.leaseEnds.map((end) => end.leaseEnded(ended, signal)));
+          } finally {
+            parts.link.forget(ended.leaseId);
+          }
+        },
         beforeDrain: async () => {
           disposeAgentDeviceEdge(parts);
           await cancelWaitingAllocates(parts, (id) => ctx.cancelPending(id));

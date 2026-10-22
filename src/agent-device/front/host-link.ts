@@ -92,6 +92,11 @@ export class RoutedHostLink implements HostLink {
     return this.hosts[role].forward(request, identity);
   }
 
+  // why: a lease that ended no longer needs its daemon remembered, and the map holds only live phone leases.
+  forget(leaseId: string): void {
+    this.#roles.delete(leaseId);
+  }
+
   // why: the phone daemon's reason is named with its role, so an agent can tell it from the simulator daemon's.
   async #phoneStatus(): Promise<LinkStatus> {
     const status = await this.hosts.phones.status();
