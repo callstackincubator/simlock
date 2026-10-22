@@ -4283,10 +4283,11 @@ describe("startDaemon gateway update", () => {
   async function startUpdatable(
     launcher: FakeUpdaterLauncher,
     filesystem = new MemoryFilesystem(),
+    given?: string,
   ) {
     await filesystem.mkdirp("/opt/simlock");
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-gw-update-"));
-    temporaryDirectories.push(directory);
+    const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-update-")));
+    if (given === undefined) temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const daemon = await startDaemon({
       clock,
@@ -4333,5 +4334,30 @@ describe("startDaemon gateway update", () => {
         to: "0.4.0",
       });
     expect(await daemonOf(daemon)).toMatchObject({ health: "running", update: null });
+  });
+
+  it("a gateway that starts after a rolled-back update reports the failure in status.get and announces daemon.update-failed", async () => {
+    const filesystem = new MemoryFilesystem();
+    const failure = {
+      at: 900,
+      from: "0.3.0",
+      message: "the new version did not start",
+      stage: "restarting",
+      to: "0.4.0",
+    };
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-gw-rolled-back-"));
+    temporaryDirectories.push(directory);
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "update-result.json"),
+      JSON.stringify(failure),
+    );
+    const { daemon } = await startUpdatable(new FakeUpdaterLauncher(), filesystem, directory);
+
+    expect((await daemonOf(daemon)).lastUpdateFailure).toEqual(failure);
+    await expect(
+      daemon.dispatch("events.replay", {}, operator) as Promise<readonly { event: string }[]>,
+    ).resolves.toContainEqual(expect.objectContaining({ event: "daemon.update-failed" }));
+    await expect(filesystem.exists(join(directory, "update-result.json"))).resolves.toBe(false);
   });
 });
