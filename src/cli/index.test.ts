@@ -7261,6 +7261,17 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     runNuke: () => Promise.resolve({ deletedDevices: [], releasedLeaseIds: [] }),
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
+    updateDaemon: () =>
+      Promise.resolve({
+        started: false,
+        upToDate: true,
+        resolved: null,
+        version: "test",
+        health: "running" as const,
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      }),
     replayEvents: () => Promise.resolve([]),
     usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),

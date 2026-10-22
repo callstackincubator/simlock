@@ -1,6 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -59,6 +59,7 @@ import {
 } from "../auth/index.js";
 import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonServer } from "./server.js";
+import { createDaemonProbe } from "../updater/index.js";
 import { createUpdateCoordinator } from "./update-coordinator.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
 import { linkPair } from "../link/testing.js";
@@ -3263,6 +3264,43 @@ describe("daemon.update", () => {
     expect(replies.sort()).toEqual([false, true]);
     expect(racing.launcher.launches).toHaveLength(1);
     expect(racing.started).toHaveLength(1);
+  });
+
+  it("accepts daemon.update from an admin on a connection whose protocol range does not overlap, refuses an agent there, and lets the updater's probe read health and version through query", async () => {
+    const previous = { min: PROTOCOL_VERSION_RANGE.min - 1, max: PROTOCOL_VERSION_RANGE.max - 1 };
+    const mismatched = (role: "admin" | "agent") =>
+      createHarness({
+        protocolVersion: previous,
+        resolveRole: { resolve: () => role },
+        update: { npm: new FakeNpmCli(), launcher: new FakeUpdaterLauncher(), version: "0.3.0" },
+      });
+    const connectDegraded = (socketPath: string) =>
+      connectSimlockClient({ connector: new NodeIpcTransport(), endpoint: socketPath }, true);
+
+    const admin = await mismatched("admin");
+    const client = await connectDegraded(admin.socketPath);
+    await expect(client.getStatus()).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
+    await expect(client.updateDaemon({ query: true })).resolves.toMatchObject({
+      started: false,
+      version: "0.3.0",
+      health: "running",
+      update: null,
+    });
+    await client.close();
+
+    const dataDirectory = dirname(admin.socketPath);
+    await writeFile(join(dataDirectory, "admin.token"), "token\n");
+    const probe = createDaemonProbe({ dataDirectory, filesystem: new NodeFilesystem() });
+    await expect(probe.state()).resolves.toEqual({ health: "running", version: "0.3.0" });
+
+    const agent = await mismatched("agent");
+    const refused = await connectDegraded(agent.socketPath);
+    await expect(refused.updateDaemon({ query: true })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await refused.close();
   });
 
   it("refuses an update that cannot resolve, change or install anything, and answers upToDate when nothing is needed", async () => {

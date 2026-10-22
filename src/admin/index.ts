@@ -27,6 +27,8 @@ export type {
   ComponentInstallOutput,
   ComponentInstallProgress,
   DaemonStopOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   DeviceAddInput,
   DeviceAddOutput,
   DeviceRecoveredPush,

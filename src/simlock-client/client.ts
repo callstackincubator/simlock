@@ -41,6 +41,8 @@ import type {
   ComponentRemoveInput,
   ComponentRemoveOutput,
   DaemonStopOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   DeviceAddInput,
   DeviceAddOutput,
   DeviceRecoveredPush,
@@ -107,6 +109,8 @@ export type {
   ComponentRemoveInput,
   ComponentRemoveOutput,
   DaemonStopOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   DeviceAddInput,
   DeviceAddOutput,
   DeviceRecoveredPush,
@@ -256,6 +260,7 @@ export interface SimlockAdminClient extends SimlockClient {
    * purely as an API-surface choice matching the ADR's operation matrix (the daemon itself
    * does not gate this operation by role at all -- see the caveat in the PR report). */
   stopDaemon(): Promise<DaemonStopOutput>;
+  updateDaemon(input?: DaemonUpdateInput): Promise<DaemonUpdateOutput>;
   replayEvents(input?: EventsReplayInput): Promise<EventsReplayOutput>;
   usage(window: UsageGetInput): Promise<UsageGetOutput>;
   subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>>;
@@ -457,6 +462,7 @@ function buildDegradedClient(
           throw toSimlockError(callError);
         },
       ),
+    updateDaemon: () => rejected(),
     replayEvents: () => rejected(),
     usage: () => rejected(),
     subscribeEvents: () => rejected(),
@@ -659,6 +665,10 @@ class SimlockClientImpl {
 
   stopDaemon(): Promise<DaemonStopOutput> {
     return this.#call("daemon.stop", {});
+  }
+
+  updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
+    return this.#call("daemon.update", input);
   }
 
   replayEvents(input: EventsReplayInput = {}): Promise<EventsReplayOutput> {
