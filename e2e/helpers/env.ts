@@ -467,6 +467,12 @@ interface TeardownState {
   readonly socketPath: string;
 }
 
+interface DaemonStopResult {
+  readonly pidDiscoveryFailed?: boolean;
+  readonly pidsBeforeStop: readonly number[];
+  readonly stopError?: unknown;
+}
+
 async function teardown(state: TeardownState): Promise<void> {
   const { backgroundProcesses, env, gatewayFlag, home, mcpClients, realDrivers, socketPath } =
     state;
@@ -478,13 +484,21 @@ async function teardown(state: TeardownState): Promise<void> {
   }
   await Promise.all([...backgroundProcesses].map((handle) => handle.waitForExit(10_000)));
 
-  const pidsBeforeStop = await stopDaemonForTeardown(socketPath, env, gatewayFlag);
-  const strayPids = await killAndVerifyDaemonPids(socketPath, pidsBeforeStop);
+  const stopResult = await stopDaemonForTeardown(socketPath, env, gatewayFlag);
+  const strayPids = await killAndVerifyDaemonPids(socketPath, stopResult.pidsBeforeStop);
+
+  if (stopResult.pidDiscoveryFailed) {
+    throw (
+      stopResult.stopError ??
+      new Error(`could not verify daemon process ownership for ${socketPath}`)
+    );
+  }
 
   // why: a timed-out test may still be running and writing into its simulator home
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
   await rm(home, { force: true, recursive: true });
 
+  if (stopResult.stopError !== undefined) throw stopResult.stopError;
   if (strayPids.length > 0) {
     throw new Error(
       `withDaemon teardown found stray daemon process(es) that outlived \`daemon stop\` for ${socketPath}: ${strayPids.join(", ")}`,
@@ -496,26 +510,47 @@ async function stopDaemonForTeardown(
   socketPath: string,
   env: NodeJS.ProcessEnv,
   gatewayFlag: readonly string[],
-): Promise<number[]> {
+): Promise<DaemonStopResult> {
   // Capture who (if anyone) is holding the socket *before* the graceful stop, so
   // we can verify those specific pids actually exit -- checking only "is the
   // socket file still there" after `daemon stop` would miss a process that
   // unlinked its socket on the way out but never actually terminated.
-  const pidsBeforeStop = await pidsHoldingSocket(socketPath);
-  if (pidsBeforeStop.length > 0) {
-    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
-    if (stopped.code !== 0) {
-      throw new Error(`daemon stop failed before teardown of ${socketPath}: ${stopped.stderr}`);
+  let pidsBeforeStop: number[] = [];
+  let stopError: unknown;
+  let pidDiscoveryFailed = false;
+  try {
+    pidsBeforeStop = await pidsHoldingSocket(socketPath);
+  } catch (error: unknown) {
+    pidDiscoveryFailed = true;
+    stopError = error;
+  }
+  // why: attempt graceful shutdown even if lsof could not identify the process.
+  if (existsSync(socketPath) && (pidsBeforeStop.length > 0 || pidDiscoveryFailed)) {
+    try {
+      const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+      if (stopped.code !== 0) {
+        stopError ??= new Error(
+          `daemon stop failed before teardown of ${socketPath}: ${stopped.stderr}`,
+        );
+      }
+    } catch (error: unknown) {
+      stopError ??= error;
     }
   }
-  // why: a daemon a test SIGKILLed leaves its socket file behind, and nobody will remove it.
-  if (pidsBeforeStop.length > 0) {
-    await waitFor(() => !existsSync(socketPath), {
-      timeout: 5_000,
-      label: "daemon socket removed during teardown",
-    });
+  if (pidsBeforeStop.length > 0 || (pidDiscoveryFailed && existsSync(socketPath))) {
+    try {
+      await waitFor(() => !existsSync(socketPath), {
+        timeout: 5_000,
+        label: "daemon socket removed during teardown",
+      });
+    } catch (error: unknown) {
+      stopError ??= error;
+    }
   }
-  return pidsBeforeStop;
+  if (pidDiscoveryFailed) {
+    stopError ??= new Error(`could not verify daemon process ownership for ${socketPath}`);
+  }
+  return { pidDiscoveryFailed, pidsBeforeStop, stopError };
 }
 
 async function killAndVerifyDaemonPids(
@@ -613,9 +648,10 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
       .filter((line) => line !== "")
       .map(Number)
       .filter((pid) => Number.isInteger(pid));
-  } catch {
-    // lsof exits non-zero when nothing holds the file, or may be unavailable.
-    return [];
+  } catch (error: unknown) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: string };
+    if ((failure.code === 1 || failure.code === "1") && !failure.stderr?.trim()) return [];
+    throw error;
   }
 }
 

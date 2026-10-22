@@ -75,8 +75,15 @@ async function isProcessAlive(pid: number): Promise<boolean> {
 
 async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
   if (!existsSync(socketPath)) return [];
-  return new Promise((resolve) => {
-    execFile("lsof", ["-t", socketPath], (_error, stdout) => {
+  return new Promise((resolve, reject) => {
+    execFile("lsof", ["-t", socketPath], (error, stdout) => {
+      if (error) {
+        const failure = error as NodeJS.ErrnoException & { stderr?: string };
+        if ((failure.code !== 1 && failure.code !== "1") || failure.stderr?.trim()) {
+          reject(error);
+          return;
+        }
+      }
       resolve(
         stdout
           .split("\n")
@@ -113,6 +120,27 @@ async function waitForDaemonPidsToExit(pids: ReadonlySet<number>): Promise<void>
       label: "daemon process exited after SIGKILL",
     });
   }
+}
+
+async function closeActivePages(preserved: ReadonlySet<Page>): Promise<unknown> {
+  let firstError: unknown;
+  for (const page of activePages) {
+    if (preserved.has(page)) continue;
+    if (!page.isClosed()) {
+      try {
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      } catch (error: unknown) {
+        firstError ??= error;
+      }
+      try {
+        await page.close();
+      } catch (error: unknown) {
+        firstError ??= error;
+      }
+    }
+    activePages.delete(page);
+  }
+  return firstError;
 }
 
 /**
@@ -176,22 +204,47 @@ export async function startDaemon(
   const daemonPids = new Set<number>();
   let daemonStarted = false;
   let daemonMayBeRunning = false;
+  let daemonPidDiscoveryFailed = false;
   const stop = async () => {
     if (!daemonMayBeRunning) return;
-    const pids = await pidsHoldingSocket(socketPath);
+    let pids: number[] = [];
+    let discoveryError: unknown;
+    try {
+      pids = await pidsHoldingSocket(socketPath);
+    } catch (error: unknown) {
+      daemonPidDiscoveryFailed = true;
+      discoveryError = error;
+    }
     for (const pid of pids) daemonPids.add(pid);
-    if (pids.length === 0 && !existsSync(socketPath)) {
+    if (pids.length === 0 && discoveryError === undefined) {
       daemonMayBeRunning = false;
       return;
     }
-    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
-    if (daemonStarted) expect(stopped.code, stopped.stderr).toBe(0);
-    await waitFor(() => !existsSync(socketPath), {
-      timeout: 10_000,
-      label: "daemon socket removed",
-    });
-    daemonStarted = false;
-    daemonMayBeRunning = false;
+    let stopError: unknown;
+    if (existsSync(socketPath)) {
+      try {
+        const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+        if (daemonStarted && stopped.code !== 0) {
+          stopError = new Error(`daemon stop failed: ${stopped.stderr}`);
+        }
+      } catch (error: unknown) {
+        stopError = error;
+      }
+      try {
+        await waitFor(() => !existsSync(socketPath), {
+          timeout: 10_000,
+          label: "daemon socket removed",
+        });
+      } catch (error: unknown) {
+        stopError ??= error;
+      }
+    }
+    if (!existsSync(socketPath)) {
+      daemonStarted = false;
+      daemonMayBeRunning = false;
+    }
+    if (discoveryError !== undefined) throw discoveryError;
+    if (stopError !== undefined) throw stopError;
   };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
@@ -227,21 +280,24 @@ export async function startDaemon(
   };
   const dispose = async (options: { readonly preservePages?: readonly Page[] } = {}) => {
     const preserved = new Set(options.preservePages ?? []);
-    for (const page of activePages) {
-      if (preserved.has(page)) continue;
-      if (page.isClosed()) {
-        activePages.delete(page);
-        continue;
-      }
-      await page.unrouteAll({ behavior: "ignoreErrors" });
-      await page.close();
-      activePages.delete(page);
-    }
+    let cleanupError = await closeActivePages(preserved);
     for (const handle of background) handle.kill("SIGTERM");
-    await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
-    await stop();
+    try {
+      await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
+    } catch (error: unknown) {
+      cleanupError ??= error;
+    }
+    try {
+      await stop();
+    } catch (error: unknown) {
+      cleanupError ??= error;
+    }
     await waitForDaemonPidsToExit(daemonPids);
+    if (daemonPidDiscoveryFailed) {
+      throw cleanupError ?? new Error(`cannot verify daemon exit for ${socketPath}`);
+    }
     await rm(home, { force: true, recursive: true });
+    if (cleanupError !== undefined) throw cleanupError;
   };
   try {
     await start();
