@@ -377,6 +377,18 @@ function causeFacts(device: {
   ];
 }
 
+function updateFailureFacts(worker: WorkerView, now: number): readonly InboxFact[] {
+  const failure = worker.lastUpdateFailure;
+  return failure === undefined || failure === null
+    ? []
+    : [
+        { label: "From", value: failure.from },
+        { label: "To", value: failure.to },
+        { label: "Stage", value: failure.stage },
+        { label: "When", value: `${formatDuration(now - failure.at)} ago` },
+      ];
+}
+
 function workerFacts(
   item: Exclude<WorkerItem, { readonly device: unknown }>,
   now: number,
@@ -394,17 +406,7 @@ function workerFacts(
   if (item.condition === "drained") {
     return [{ label: "Leases still held", value: String(worker.leases?.length ?? 0) }];
   }
-  if (item.condition === "update failed") {
-    const failure = worker.lastUpdateFailure;
-    return failure === undefined || failure === null
-      ? []
-      : [
-          { label: "From", value: failure.from },
-          { label: "To", value: failure.to },
-          { label: "Stage", value: failure.stage },
-          { label: "When", value: `${formatDuration(now - failure.at)} ago` },
-        ];
-  }
+  if (item.condition === "update failed") return updateFailureFacts(worker, now);
   const { protocol } = worker;
   return protocol === undefined
     ? []
