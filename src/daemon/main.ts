@@ -148,6 +148,8 @@ export interface StartDaemonOptions {
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
   /** why: test-only, replaces the registry of optional modules. */
+  /** why: the entry removes the credential when SIGTERM lands after it was written but before the daemon is up; called only once this daemon owns the file. */
+  readonly onAdminSecretWritten?: (remove: () => Promise<void>) => void;
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
   readonly role?: DaemonMode;
@@ -262,7 +264,7 @@ async function composeDaemon(
   });
   onStateOpened(state);
   // why: both modes check the same credentials, so the checks are built once, before the mode branch.
-  const auth = createAuth({
+  const created = createAuth({
     clock,
     config: config.http,
     database: state.database,
@@ -273,6 +275,7 @@ async function composeDaemon(
     logger: logger.child("auth"),
     secrets: new CryptoTokenSecrets(),
   });
+  const auth = { ...created, adminSecret: reportingAdminSecret(created.adminSecret, options) };
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
@@ -1591,7 +1594,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   } else {
     // why: one SIGTERM handler for both phases: before the daemon is up there is nothing to stop, so it exits 0 at once; after, it stops with reason `signal` and exits 0.
     let running: Awaited<ReturnType<typeof startDaemon>> | undefined;
-    void startDaemon({ role })
+    let removeAdminSecret: (() => Promise<void>) | undefined;
+    void startDaemon({
+      role,
+      onAdminSecretWritten: (remove) => {
+        removeAdminSecret = remove;
+      },
+    })
       .then((daemon) => {
         running = daemon;
       })
@@ -1606,11 +1615,27 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       });
     process.once("SIGTERM", () => {
       if (running === undefined) {
-        process.exit(0);
+        // why: the credential is written before startup finishes; a daemon exiting now must not leave it behind.
+        void (removeAdminSecret?.() ?? Promise.resolve()).finally(() => process.exit(0));
+        return;
       }
       void running.stop("signal").finally(() => process.exit(0));
     });
   }
+}
+
+/** why: hands the entry a way to remove the credential only after this daemon wrote it, so a start that lost the race never removes the winner's file. */
+function reportingAdminSecret(
+  secret: Auth["adminSecret"],
+  options: StartDaemonOptions,
+): Auth["adminSecret"] {
+  return {
+    persist: async () => {
+      await secret.persist();
+      options.onAdminSecretWritten?.(() => secret.remove());
+    },
+    remove: () => secret.remove(),
+  };
 }
 
 /** why: a root's staging directory sits beside it, so the sweep looks there for leftovers. */
