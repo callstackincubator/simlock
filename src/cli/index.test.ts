@@ -10017,7 +10017,7 @@ describe("simlock worker update", () => {
           "worker.update is a gateway operation",
           { operation: "worker.update" },
         ),
-        code: 1,
+        code: 2,
         stderr: "worker.update is a gateway operation",
         polls: 0,
       },
