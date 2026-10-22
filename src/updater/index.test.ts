@@ -1,15 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { promiseState } from "../test-support/promise-state.js";
 import {
   FakeClock,
   FakeNpmCli,
   FakeProcessSupervisor,
   MemoryFilesystem,
+  NodeFilesystem,
   ScriptedProcessRunner,
   type DaemonRole,
   type NpmOutcome,
 } from "../ports/index.js";
-import { runUpdater, type DaemonProbe } from "./index.js";
+import { checkInstall, runUpdater, type DaemonProbe } from "./index.js";
 
 const PACKAGE_ROOT = "/global/node_modules/simlock";
 const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
@@ -372,4 +376,45 @@ describe("runUpdater", () => {
       }
     },
   );
+});
+
+describe("checkInstall", () => {
+  const trees: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(trees.splice(0).map((tree) => rm(tree, { recursive: true, force: true })));
+  });
+
+  it.each([
+    { name: "npm global", layout: "npm", globalRoot: "ok", ok: true },
+    { name: "pnpm global", layout: "pnpm", globalRoot: "ok", ok: false },
+    { name: "source checkout", layout: "checkout", globalRoot: "ok", ok: false },
+    { name: "npm root -g failing", layout: "npm", globalRoot: "fails", ok: false },
+  ] as const)("tells npm installs from others: $name", async ({ layout, globalRoot, ok }) => {
+    const tree = await realpath(await mkdtemp(join(tmpdir(), "simlock-install-")));
+    trees.push(tree);
+    const npmModules = join(tree, "npm", "lib", "node_modules");
+    await mkdir(join(npmModules, "simlock"), { recursive: true });
+    const real = {
+      npm: join(npmModules, "simlock"),
+      pnpm: join(tree, "pnpm", "store", "simlock"),
+      checkout: join(tree, "checkout"),
+    }[layout];
+    await mkdir(real, { recursive: true });
+    // why: pnpm and a checkout run from a folder outside npm's global root, which then holds no simlock.
+    if (layout !== "npm") await rm(join(npmModules, "simlock"), { recursive: true });
+    const packageRoot = join(tree, "running");
+    await symlink(real, packageRoot);
+    const npm = new FakeNpmCli({
+      globalRoot: [
+        globalRoot === "ok"
+          ? { ok: true, output: `${npmModules}\n` }
+          : { ok: false, message: "npm: command not found" },
+      ],
+    });
+
+    const result = await checkInstall({ npm, filesystem: new NodeFilesystem(), packageRoot });
+
+    expect(result).toEqual(ok ? { ok: true } : { ok: false, foundPath: real });
+  });
 });

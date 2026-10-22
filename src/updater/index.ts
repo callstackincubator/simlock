@@ -156,3 +156,15 @@ async function startDaemon(options: RunUpdaterOptions): Promise<string | undefin
     await sleep(clock, POLL_MS);
   }
 }
+
+export type InstallCheck =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly foundPath: string };
+
+export async function checkInstall(_options: {
+  readonly npm: NpmCli;
+  readonly filesystem: Filesystem;
+  readonly packageRoot: string;
+}): Promise<InstallCheck> {
+  return { ok: true };
+}
