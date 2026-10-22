@@ -413,10 +413,18 @@ export class GatewayDispatcher {
   };
 
   #workerUpdate: Handler<"worker.update"> = async (input) => {
+    const view = this.options.workers.view(input.workerId);
+    if (view === undefined) {
+      throw new DispatchError("UNKNOWN_WORKER", `Unknown worker: ${input.workerId}`, {
+        workerId: input.workerId,
+      });
+    }
     const target = this.options.directory.target(input.workerId);
     const client = liveClient(target);
-    if (client === undefined || target === undefined) {
-      throw new DispatchError("INTERNAL", `worker ${input.workerId} has no session`);
+    if (view.connection === "disconnected" || client === undefined || target === undefined) {
+      throw new DispatchError("WORKER_NOT_CONNECTED", `worker ${input.workerId} is not connected`, {
+        workerId: input.workerId,
+      });
     }
     const { workerId, ...request } = input;
     const answer = await client.updateDaemon(request);
