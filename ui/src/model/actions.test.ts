@@ -320,6 +320,38 @@ describe("the Update… dialog", () => {
   });
 });
 
+describe("the Update now dialog", () => {
+  it("counts the update's leases in its body and sends {\"force\":true} to the worker's update route", () => {
+    const cases: readonly [number, string][] = [
+      [2, "Its 2 leases keep running through the restart."],
+      [1, "Its lease keeps running through the restart."],
+    ];
+    for (const [leases, body] of cases) {
+      const action = workerActions(
+        {
+          connection: "connected",
+          drained: false,
+          id: "wrk/1",
+          name: "mac-mini-1",
+          updateFacts: facts({ update: { ...STARTED, leases, stage: "waiting" } }),
+        },
+        "gateway",
+      ).find((candidate) => candidate.id === "force-update");
+      expect(action?.confirm, String(leases)).toEqual({
+        body,
+        busy: "Starting…",
+        confirm: "Install now",
+        title: "Install 0.4.0 on mac-mini-1 now?",
+      });
+      expect([action?.method, action?.path, action?.body]).toEqual([
+        "POST",
+        "/v1/workers/wrk%2F1/update",
+        { force: true },
+      ]);
+    }
+  });
+});
+
 describe("the actions each kind of item offers", () => {
   it("offers exactly the table's actions: dangerous ones last and marked, worker actions only on a gateway, and the Inbox's one fix", () => {
     checksLease();
