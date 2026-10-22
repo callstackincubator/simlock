@@ -185,6 +185,27 @@ export function serviceLine(service: ServiceReport): string {
   return `Service: not loaded ${who}: commands start the daemon without it`;
 }
 
+function daemonLines(daemon: StatusGetOutput["daemon"]): string[] {
+  const { update, lastUpdateFailure } = daemon;
+  return [
+    `Daemon: ${daemon.health} (${daemon.mode})`,
+    `Simlock: ${daemon.version}`,
+    ...(update === null
+      ? []
+      : [
+          `Updating to ${update.to}: ${
+            update.stage === "waiting"
+              ? `waiting for ${update.leases} ${update.leases === 1 ? "lease" : "leases"}`
+              : update.stage
+          }`,
+        ]),
+    ...(lastUpdateFailure === null
+      ? []
+      : [`Last update failed (${lastUpdateFailure.stage}): ${lastUpdateFailure.message}`]),
+    ...consoleLines(daemon),
+  ];
+}
+
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 export function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
@@ -195,8 +216,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
     queueDepth === undefined
   ) {
     return [
-      `Daemon: ${daemon.health} (${daemon.mode})`,
-      ...consoleLines(daemon),
+      ...daemonLines(daemon),
       `Host: ${formatHost(host)}`,
       ...loadLines(status),
       "Devices, leases and capacity appear once startup finishes.",
@@ -241,8 +261,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
       `Lease ${lease.id}: ${lease.requesterId}${lease.workerId === undefined ? "" : ` on ${lease.workerId}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
-    `Daemon: ${daemon.health} (${daemon.mode})`,
-    ...consoleLines(daemon),
+    ...daemonLines(daemon),
     `Host: ${formatHost(host)}`,
     ...loadLines(status),
     ...historyLines(status.history),

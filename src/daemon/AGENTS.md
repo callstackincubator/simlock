@@ -47,40 +47,24 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 
 ## Update (`update-coordinator.ts`)
 
-`daemon.update` has a handler in the worker `Dispatcher` (a gateway's answers `UNSUPPORTED_IN_GATEWAY_MODE`), so the socket, the uplink and HTTP all reach it.
-
-1. `query` returns the state and starts nothing. A call while an update runs follows it (`started: false`); `force` on a `waiting` one installs now.
-2. Otherwise the version is resolved with `NpmCli.view` (`simlock@latest`, or `simlock@<version>`): a failure is `UPDATE_RESOLVE_FAILED`. The running version, or a running version newer than `latest` when no `version` was named (`isNewerVersion`), answers `upToDate` and changes nothing.
-3. Then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and the other role's socket (`socketHeld`, `UPDATE_SHARED_INSTALL`: a worker and a gateway of one user share one install) are checked, so a refusal changes nothing.
-4. The update enters `waiting` with the lease count, leasing's update hold closes admission, and `daemon.update-started` is emitted.
-5. The updater is launched at once with no leases or with `force`, else when the last `lease.released` or `lease.expired` leaves none (`UpdaterLauncher`; `installing`).
-6. The updater's stdout lines move the state (`{"stage":"restarting"}`) or end it: a `{"failed":…}` line, a non-zero exit while this daemon runs, or a launch that throws sets `lastUpdateFailure` (the message cut to 2000 characters), clears the state, releases the update hold and emits `daemon.update-failed`. The first failure of a run wins.
-7. `DaemonServer.start` calls `readResultFile()` after `daemon.started`: a rolled back update leaves `update-result.json`, and this start sets `lastUpdateFailure` from it, emits `daemon.update-failed` and deletes the file. A file that does not parse is deleted and reports nothing.
-
-The state lives in memory only.
+`daemon.update` (worker `Dispatcher`; a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`) is `createUpdateCoordinator`'s, in memory only. A call during an update follows it (`force` on `waiting` installs now); `query` starts nothing.
+A new update: `NpmCli.view` resolves the version (`UPDATE_RESOLVE_FAILED`); the running version, or one newer than `latest` with no `version` named (`isNewerVersion`), is `upToDate`; then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and `socketHeld` on the other role's socket (`UPDATE_SHARED_INSTALL`). Then `waiting`, leasing's update hold and `daemon.update-started`; the updater launches with no leases, with `force`, or when the last `lease.released`/`lease.expired` leaves none.
+Its stdout lines move the state; a failed line, a non-zero exit or a failed launch sets `lastUpdateFailure`, releases the hold and emits `daemon.update-failed`. `DaemonServer.start` calls `readResultFile()` after `daemon.started`: a rolled back update's `update-result.json` is reported the same way and deleted.
 
 ## Connection (`server.ts`)
 
-1. **Claim** — `DaemonEndpointHost.start`: a live peer → `DaemonAlreadyRunningError`;
-   a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
+1. **Claim** — `DaemonEndpointHost.start`: a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
-   Role: the uplink connection is `admin` by acceptance; otherwise the resolver.
-   Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
-   Both are fixed for the connection's life.
+   Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
    is `{ min: 55, max: 55 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
-5. **`daemon.stop`** — handled by the server, before the version and stopping gates. **`daemon.update`** skips only the version gate: the dispatcher still checks the role (`admin`) and parks on readiness.
-   Needs `admin`. Answers `{ stopping: true }`, then stops.
+5. **`daemon.stop`** — handled by the server, before the version and stopping gates.
+   Needs `admin`. Answers `{ stopping: true }`, then stops. `daemon.update` skips only the version gate; the dispatcher still checks `admin` and parks on readiness.
 
-Pushes, keyed by the request's frame id: `progress` (`lease.request`), `started` and
-`output` (`device.exec`), `component-progress`, `relay-head`. Per connection: `event`
-(`events.subscribe`). Owner-routed: `lease-lost`, `device-unhealthy`,
-`device-recovered` go to every connection whose principal owns the lease; `lease-lost`
-skips the connection that asked for that release. A closed connection only silences
-its pushes; the request, the lease and a running command go on.
+Pushes, keyed by the request's frame id: `progress` (`lease.request`), `started` and `output` (`device.exec`), `component-progress`, `relay-head`. Per connection: `event` (`events.subscribe`). Owner-routed: `lease-lost`, `device-unhealthy`, `device-recovered` go to every connection whose principal owns the lease; `lease-lost` skips the connection that asked for that release. A closed connection only silences its pushes; the request, the lease and a running command go on.
 
 ## Dispatch (`dispatch.ts` `runDispatch`)
 
@@ -89,8 +73,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 1. No handler → `UNKNOWN_REQUEST`.
 2. Parse input → `BAD_REQUEST`.
 3. Role: `admin` passes all; `agent` only `agent` operations → `FORBIDDEN`.
-4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes,
-   so the handler answers `UNKNOWN_LEASE`.
+4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes, so the handler answers `UNKNOWN_LEASE`.
 5. Park on readiness — every operation but `status.get`.
 6. Handler → parse output; a mismatch is logged and answers `INTERNAL`.
 
@@ -118,10 +101,7 @@ Credential resolution (`resolveHelloRole` in `src/auth`), at `hello`:
 3. The per-start admin secret → `admin`.
 4. Anything else → `ADMIN_AUTHENTICATION_FAILED`, connection closed.
 
-Admin secret: fresh each start, hash kept in memory. Written to `admin.token`
-(0600, atomic) only after the claim; removed on stop before releasing the
-endpoint, so old shutdown cannot remove a replacement's credential. A daemon
-that lost the claim never touches it.
+Admin secret: fresh each start, hash kept in memory. Written to `admin.token` (0600, atomic) only after the claim; removed on stop before releasing the endpoint, so old shutdown cannot remove a replacement's credential. A daemon that lost the claim never touches it.
 
 Security model: cooperative identity, not a hostile-process boundary.
 
@@ -132,8 +112,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 
 ## Uplink and relays (worker side)
 
-- `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host
-  load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
+- `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
 - `relay.request` runs only on that connection; targets come from `relayTargets`
   (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).

@@ -4667,6 +4667,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toBe(
         `Daemon: running (${mode})\n` +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4681,7 +4682,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         const output = outputCapture();
         const answer = {
           ...EMPTY_STATUS,
-          daemon: { health: "running", mode },
+          daemon: { ...EMPTY_STATUS.daemon, mode },
           physicalQueueDepth: 1,
           queueDepth: 2,
         } as unknown as StatusGetOutput;
@@ -4695,6 +4696,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
         expect(output.stdout).toBe(
           `Daemon: running (${mode})\n` +
+            "Simlock: 0.0.0-test\n" +
             "Host: macOS 15.5 arm64\n" +
             "Running global: 0 + 0 reserved/2, warm 0\n" +
             "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4783,6 +4785,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toBe(
         "Daemon: starting (worker)\n" +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           "Devices, leases and capacity appear once startup finishes.\n",
       );
@@ -4893,6 +4896,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     it("simlock status prints the Load line after the Host line, on a starting daemon and a running one", async () => {
       expect(await print({ ...STARTING, load: LOAD })).toBe(
         "Daemon: starting (worker)\n" +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           FULL_LINE +
           "Devices, leases and capacity appear once startup finishes.\n",
@@ -4984,7 +4988,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
 
     expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
-      "Daemon: running (worker)\nConsole: http://127.0.0.1:4700/\nHost: ",
+      "Daemon: running (worker)\nSimlock: 0.0.0-test\nConsole: http://127.0.0.1:4700/\nHost: ",
     );
     expect(await print(EMPTY_STATUS)).not.toContain("Console:");
   });
@@ -7237,6 +7241,7 @@ describe("simlock update and simlock status", () => {
       readonly polls?: readonly Step[];
       readonly after?: readonly (Step | Error)[];
       readonly onPoll?: (index: number, interrupt: () => void) => void;
+      readonly onReconnect?: (interrupt: () => void) => void;
     },
   ) {
     const output = outputCapture();
@@ -7262,6 +7267,7 @@ describe("simlock update and simlock status", () => {
       clock,
       connectAdmin: async () => clientOver(polls, script.first),
       connectExistingAdmin: async () => {
+        script.onReconnect?.(() => signals.emit("SIGINT"));
         const step = after.length > 1 ? after.shift() : after[0];
         if (step === undefined || step instanceof Error) throw step ?? new Error("refused");
         return clientOver([step]);
@@ -7407,6 +7413,19 @@ describe("simlock update and simlock status", () => {
         },
         code: 0,
         stdout: `${header}${wait}Stopped following. The update goes on; run simlock status to see it.\n`,
+        calls: [{}, { query: true }],
+      },
+      {
+        name: "Ctrl-C while the daemon restarts stops following",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [lost()],
+          after: [new Error("refused")],
+          onReconnect: (interrupt) => interrupt(),
+        },
+        code: 0,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nStopped following. The update goes on; run simlock status to see it.\n`,
         calls: [{}, { query: true }],
       },
     ];

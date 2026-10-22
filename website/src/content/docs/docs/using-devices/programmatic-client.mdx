@@ -10,7 +10,7 @@ A Node.js program on the machine that runs the Simlock daemon can lease devices 
 | Import | For | Can |
 | --- | --- | --- |
 | `simlock/client` | Agents and tools that need devices | Lease, renew, release, run commands on a leased device, read the catalog and status |
-| `simlock/admin` | Operator tools | Everything above, plus every lease and device, tokens, cleanup, events and stopping the daemon |
+| `simlock/admin` | Operator tools | Everything above, plus every lease and device, tokens, cleanup, events, updating the daemon and stopping it |
 
 Both talk to the daemon over its local socket. They have no network transport: a program on another machine uses the [HTTP API](/simlock/docs/using-devices/remote-agents) instead.
 
@@ -177,6 +177,22 @@ The admin credential lets a program release every agent's lease and stop the dae
 </Aside>
 
 A missing or wrong credential fails the connection with `ADMIN_AUTHENTICATION_FAILED`. An admin client has every method of the agent client too.
+
+### Update the daemon
+
+`admin.updateDaemon({ version?, force?, query? })` is what `simlock update` calls. It resolves the version with npm, starts the update and answers at once; the daemon then takes no new leases, waits for its leases to end (unless `force`), installs and restarts.
+
+```ts
+const answer = await admin.updateDaemon({ version: "0.4.0" });
+// { started: true, upToDate: false, resolved: "0.4.0", version: "0.3.0", health: "running",
+//   update: { stage: "waiting", leases: 2, from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1760000000000 },
+//   lastUpdateFailure: null, latestVersion: null }
+```
+
+- `started` is true only for the call that began the update. A call while an update runs follows it (`started: false`, whatever `version` it names); `force` on a waiting update installs now.
+- `upToDate` is true when nothing was needed: the resolved version is the running one, or the running one is newer than `latest` and no `version` was named.
+- `{ query: true }` starts nothing and returns the same answer: poll it to follow the update. It works while the daemon restarts only by reconnecting, and across a protocol change: like `stopDaemon()`, `updateDaemon()` is accepted by a daemon on another protocol version, so a client that fails every other call with `PROTOCOL_VERSION_UNSUPPORTED` can still update it.
+- Refusals: `UPDATE_RESOLVE_FAILED`, `UPDATE_UNSUPPORTED_INSTALL` and `UPDATE_SHARED_INSTALL` (see [Errors](/simlock/docs/reference/errors#updating-simlock)). `version` must be an exact version such as `0.4.0` or `0.4.0-rc.1`.
 
 ## Related
 
