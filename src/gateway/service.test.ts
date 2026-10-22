@@ -1237,6 +1237,51 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("shows a worker's update, last update failure and latest version from its status, and a later status without an update clears it", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    const update = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const failure = {
+      at: 500,
+      from: "0.2.0",
+      message: "npm failed",
+      stage: "installing",
+      to: "0.3.0",
+    } as const;
+    const base = statusFixture();
+    worker.status = {
+      ...base,
+      daemon: { ...base.daemon, lastUpdateFailure: failure, latestVersion: "0.4.0", update },
+    };
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        lastUpdateFailure: failure,
+        latestVersion: "0.4.0",
+        update,
+      }),
+    );
+
+    worker.status = { ...worker.status, daemon: { ...worker.status.daemon, update: null } };
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.update).toBeNull());
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      lastUpdateFailure: failure,
+      latestVersion: "0.4.0",
+    });
+
+    await harness.service.stop();
+  });
+
   it("a worker advertising protocol 10 is incompatible on the gateway and nothing it pushes reaches the gateway's bus", async () => {
     const worker10 = { min: 10, max: 10 };
     expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, worker10)).toBeUndefined();
