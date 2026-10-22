@@ -47,6 +47,8 @@ interface Scenario {
     readonly installs: readonly string[];
     readonly stops: number;
     readonly startArgs: readonly (readonly string[])[];
+    readonly signals: readonly string[];
+    readonly waitedAtLeastMs: number;
   };
 }
 
@@ -61,6 +63,8 @@ const SCENARIOS: readonly Scenario[] = [
       installs: ["simlock@0.4.0"],
       stops: 1,
       startArgs: [started()],
+      signals: [],
+      waitedAtLeastMs: 0,
     },
   },
   {
@@ -75,6 +79,21 @@ const SCENARIOS: readonly Scenario[] = [
       installs: ["simlock@0.4.0"],
       stops: 0,
       startArgs: [],
+      signals: [],
+      waitedAtLeastMs: 0,
+    },
+  },
+  {
+    name: "old daemon still answering after 10 minutes",
+    oldDaemonStaysUp: true,
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 0,
+      installs: ["simlock@0.4.0"],
+      stops: 1,
+      startArgs: [started()],
+      signals: [`${PID}:SIGKILL`],
+      waitedAtLeastMs: 600_000,
     },
   },
 ];
@@ -135,6 +154,10 @@ describe("runUpdater", () => {
       ).toEqual(expected.installs);
       expect(probe.stops).toBe(expected.stops);
       expect(processes.calls.map((call) => call.args)).toEqual(expected.startArgs);
+      expect(supervisor.signals.map((sent) => `${sent.pid}:${sent.signal}`)).toEqual(
+        expected.signals,
+      );
+      expect(clock.now()).toBeGreaterThanOrEqual(expected.waitedAtLeastMs);
     },
   );
 });
