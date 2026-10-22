@@ -70,7 +70,7 @@ The state lives in memory only.
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
-5. **`daemon.stop`** — handled by the server, before the version and stopping gates.
+5. **`daemon.stop`** — handled by the server, before the version and stopping gates. **`daemon.update`** skips only the version gate: the dispatcher still checks the role (`admin`) and parks on readiness.
    Needs `admin`. Answers `{ stopping: true }`, then stops.
 
 Pushes, keyed by the request's frame id: `progress` (`lease.request`), `started` and

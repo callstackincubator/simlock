@@ -63,7 +63,7 @@ Three identities:
   helpers its `NOT_SHAPES` lists. A new helper that carries no wire shape goes in that list.
 - `hello` picks the highest overlap. None → `PROTOCOL_VERSION_UNSUPPORTED` with both ranges.
   A protocol-2 daemon is mapped by `mapLegacyProtocolMismatch`.
-- `daemon.stop` is accepted at any version, so the upgrade path exists.
+- `daemon.stop` and `daemon.update` are accepted at any version (`DaemonServer` skips the version gate for them; the role check and readiness still run), so the upgrade path exists. Their input and answer never change shape; `operations.test.ts` pins `daemon.update`'s JSON schemas.
 
 ## Errors
 
