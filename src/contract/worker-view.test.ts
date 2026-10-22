@@ -49,7 +49,14 @@ describe("workerViewFields", () => {
         receivedAt: 0,
         status: {
           capacity: CAPACITY,
-          daemon: { health: "running", mode: "worker" },
+          daemon: {
+            health: "running",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
           host: HOST,
           leases: [],
           queueDepth: 0,
@@ -78,7 +85,14 @@ describe("workerViewFields", () => {
       receivedAt: 0,
       status: {
         capacity: CAPACITY,
-        daemon: { health: "running", mode: "worker" },
+        daemon: {
+          health: "running",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         host: HOST,
         leases: [],
         queueDepth: 0,
@@ -103,7 +117,14 @@ describe("workerViewFields", () => {
         receivedAt: 0,
         status: {
           capacity: CAPACITY,
-          daemon: { health: "running", mode: "worker" },
+          daemon: {
+            health: "running",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
           host: HOST,
           leases: [],
           queueDepth: 0,
@@ -137,7 +158,14 @@ describe("workerViewFields", () => {
         receivedAt: 0,
         status: {
           capacity: CAPACITY,
-          daemon: { health: "running", mode: "worker" },
+          daemon: {
+            health: "running",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
           host: HOST,
           leases: [],
           queueDepth: 0,
@@ -163,7 +191,17 @@ describe("workerViewFields", () => {
   it("builds a starting worker's view from its health and host alone, with every other field absent", () => {
     const view = workerViewFields({
       receivedAt: 0,
-      status: { daemon: { health: "starting", mode: "worker" }, host: HOST },
+      status: {
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host: HOST,
+      },
     });
 
     expect(view).toEqual({ health: "starting", host: HOST });
@@ -175,7 +213,17 @@ describe("workerViewFields", () => {
       catalog: { platforms: [] },
       config: CONFIG,
       devices: [],
-      status: { daemon: { health: "starting", mode: "worker" }, host: HOST },
+      status: {
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host: HOST,
+      },
     });
 
     expect(view).toEqual({ health: "starting", host: HOST });
@@ -193,7 +241,14 @@ describe("workerViewFields", () => {
       devices: [],
       status: {
         capacity: CAPACITY,
-        daemon: { health: "running", mode: "worker" },
+        daemon: {
+          health: "running",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         devices: [],
         host: HOST,
         leases: [],
@@ -203,7 +258,18 @@ describe("workerViewFields", () => {
     });
     const starting = workerViewFields({
       receivedAt: 0,
-      status: { daemon: { health: "starting", mode: "worker" }, host: HOST, warmPool },
+      status: {
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host: HOST,
+        warmPool,
+      },
     });
 
     expect(running.warmPool).toEqual(warmPool);
@@ -216,7 +282,14 @@ describe("workerViewFields", () => {
       devices: [],
       status: {
         capacity: CAPACITY,
-        daemon: { health: "running", mode: "worker" },
+        daemon: {
+          health: "running",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         devices: [],
         host: HOST,
         leases: [],
@@ -239,7 +312,14 @@ describe("workerViewFields", () => {
   it("copies the physical line's depth beside the virtual one", () => {
     const status = {
       capacity: CAPACITY,
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: HOST,
       leases: [],
@@ -256,7 +336,17 @@ describe("workerViewFields", () => {
   it("leaves a field out of a running worker's view when the worker's answer has none, rather than making it empty", () => {
     const view = workerViewFields({
       receivedAt: 0,
-      status: { daemon: { health: "running", mode: "worker" }, host: HOST },
+      status: {
+        daemon: {
+          health: "running",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host: HOST,
+      },
     });
 
     expect(Object.keys(view).sort()).toEqual(["health", "host", "installs", "waiting"]);
@@ -278,7 +368,14 @@ describe("workerViewFields", () => {
     const running = (load?: typeof LOAD) =>
       ({
         capacity: CAPACITY,
-        daemon: { health: "running", mode: "worker" },
+        daemon: {
+          health: "running",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         devices: [],
         host: HOST,
         leases: [],
@@ -300,7 +397,14 @@ describe("workerViewFields", () => {
 
     it("workerViewFields copies load from a starting worker's status", () => {
       const status = {
-        daemon: { health: "starting", mode: "worker" },
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         host: HOST,
         load: LOAD,
       } as unknown as Parameters<typeof workerViewFields>[0]["status"];
@@ -316,7 +420,14 @@ describe("workerViewFields", () => {
 
     it("workerViewFields leaves load out when the status has none", () => {
       const starting = {
-        daemon: { health: "starting", mode: "worker" },
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         host: HOST,
       } as unknown as Parameters<typeof workerViewFields>[0]["status"];
 

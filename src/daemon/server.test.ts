@@ -32,6 +32,8 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
   FakeKeySetFetcher,
+  FakeNpmCli,
+  FakeUpdaterLauncher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -56,6 +58,7 @@ import {
 } from "../auth/index.js";
 import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonServer } from "./server.js";
+import { createUpdateCoordinator } from "./update-coordinator.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
 import { linkPair } from "../link/testing.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
@@ -3070,6 +3073,123 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
   });
 });
 
+describe("daemon.update", () => {
+  async function updateRig(leases: number) {
+    const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] });
+    const launcher = new FakeUpdaterLauncher();
+    const harness = await createHarness({ update: { npm, launcher, version: "0.3.0" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const leaseIds: string[] = [];
+    for (let index = 0; index < leases; index += 1) {
+      const grant = await client.request("lease.request", {
+        requesterId: `agent-${index}`,
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+      });
+      leaseIds.push(leaseIdOf(grant));
+    }
+    const started: unknown[] = [];
+    harness.eventBus.subscribe("daemon.update-started", (envelope) => {
+      started.push(envelope.payload);
+    });
+    const updateOf = async (): Promise<unknown> =>
+      ((await client.request("status.get", {})).payload as { daemon: { update: unknown } }).daemon
+        .update;
+    return { ...harness, client, launcher, leaseIds, npm, started, updateOf };
+  }
+  const run = (stage: "waiting" | "installing", forced: boolean, extra = {}) => ({
+    stage,
+    from: "0.3.0",
+    to: "0.4.0",
+    forced,
+    startedAt: 1_000,
+    ...extra,
+  });
+
+  it("starts an update that status.get shows as waiting with the lease count, then installing", async () => {
+    const idle = await updateRig(0);
+    await expect(idle.client.request("daemon.update", {})).resolves.toMatchObject({
+      ok: true,
+      payload: {
+        started: true,
+        upToDate: false,
+        resolved: "0.4.0",
+        version: "0.3.0",
+        health: "running",
+        update: run("installing", false),
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
+    });
+    expect(await idle.updateOf()).toEqual(run("installing", false));
+    expect(idle.npm.calls).toEqual([{ method: "view", spec: "simlock@latest" }]);
+    expect(idle.launcher.launches).toEqual([
+      {
+        entry: "/opt/simlock/dist/updater/main.js",
+        from: "0.3.0",
+        to: "0.4.0",
+        role: "worker",
+        pid: 4242,
+        simlockHome: "/home/simlock",
+        logPath: "/data/daemon.log",
+      },
+    ]);
+    expect(idle.started).toEqual([{ from: "0.3.0", to: "0.4.0", forced: false }]);
+
+    const held = await updateRig(2);
+    await expect(held.client.request("daemon.update", {})).resolves.toMatchObject({
+      payload: { started: true, update: run("waiting", false, { leases: 2 }) },
+    });
+    expect(await held.updateOf()).toEqual(run("waiting", false, { leases: 2 }));
+    expect(held.launcher.launches).toEqual([]);
+    await held.client.request("lease.release", { leaseId: held.leaseIds[0] });
+    await expect.poll(held.updateOf).toEqual(run("waiting", false, { leases: 1 }));
+    expect(held.launcher.launches).toEqual([]);
+    await held.client.request("lease.release", { leaseId: held.leaseIds[1] });
+    await expect.poll(held.updateOf).toEqual(run("installing", false));
+    expect(held.launcher.launches).toHaveLength(1);
+
+    const forced = await updateRig(2);
+    await expect(forced.client.request("daemon.update", { force: true })).resolves.toMatchObject({
+      payload: { started: true, update: run("installing", true) },
+    });
+    expect(forced.launcher.launches).toHaveLength(1);
+    expect(forced.started).toEqual([{ from: "0.3.0", to: "0.4.0", forced: true }]);
+    expect(forced.registry.snapshot.leases).toHaveLength(2);
+
+    const waiting = await updateRig(2);
+    await waiting.client.request("daemon.update", {});
+    expect(await waiting.updateOf()).toEqual(run("waiting", false, { leases: 2 }));
+    await expect(waiting.client.request("daemon.update", { force: true })).resolves.toMatchObject({
+      payload: { started: false, update: run("installing", true) },
+    });
+    expect(waiting.launcher.launches).toHaveLength(1);
+    expect(waiting.started).toEqual([{ from: "0.3.0", to: "0.4.0", forced: false }]);
+
+    const converge = deferred<void>();
+    const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] });
+    const launcher = new FakeUpdaterLauncher();
+    const starting = await createHarness({
+      converge: () => converge.promise,
+      start: false,
+      update: { npm, launcher, version: "0.3.0" },
+    });
+    const startPromise = starting.daemon.start();
+    const client = await createClientRetrying(starting.socketPath);
+    await hello(client);
+    const parked = client.request("daemon.update", {});
+    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    expect(npm.calls).toEqual([]);
+    converge.resolve();
+    await startPromise;
+    await expect(parked).resolves.toMatchObject({
+      payload: { started: true, update: run("installing", false) },
+    });
+  });
+});
+
 /** Drives an in-memory `IpcConnection` the way `createClient` drives a real socket -- enough to
  * send request frames and await their replies. Used for uplink tests, where there is no socket
  * at all: the connection is the one a worker dialled out and handed to its own daemon. */
@@ -3149,6 +3269,11 @@ async function createHarness(
     readonly protocolVersion?: ProtocolRange;
     readonly includeEnrollment?: boolean;
     readonly relayTargets?: RelayTargets;
+    readonly update?: {
+      readonly npm: FakeNpmCli;
+      readonly launcher: FakeUpdaterLauncher;
+      readonly version: string;
+    };
   } = {},
 ) {
   const directory =
@@ -3255,7 +3380,23 @@ async function createHarness(
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
     ...(options.beginStop === undefined ? {} : { beginStop: options.beginStop }),
     ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
-    version: "test",
+    ...(options.update === undefined
+      ? {}
+      : {
+          update: createUpdateCoordinator({
+            npm: options.update.npm,
+            launcher: options.update.launcher,
+            registry,
+            eventBus,
+            version: options.update.version,
+            packageRoot: "/opt/simlock",
+            simlockHome: "/home/simlock",
+            role: "worker",
+            logPath: "/data/daemon.log",
+            pid: 4242,
+          }),
+        }),
+    version: options.update?.version ?? "test",
   });
   runningDaemons.push(daemon);
   if (options.start ?? true) {

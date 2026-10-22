@@ -419,7 +419,14 @@ describe("CLI: exit codes", () => {
   describe("remote passthrough (ADR 0005 device.exec)", () => {
     const gatewayStatus = {
       ...EMPTY_STATUS,
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
     };
     const ownLease = {
       deviceId: "dev_1",
@@ -4087,7 +4094,14 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
       const output = outputCapture();
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
-        daemon: { health: "running", mode: "gateway" },
+        daemon: {
+          health: "running",
+          mode: "gateway",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         load: { ageMs: 4_000, ...PARTS },
         workers: [
           {
@@ -4435,7 +4449,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           warm: 0,
         },
       },
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       devices: [
         {
@@ -4630,7 +4651,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
               getStatus: () =>
                 Promise.resolve({
                   ...EMPTY_STATUS,
-                  daemon: { health: "running" as const, mode },
+                  daemon: {
+                    health: "running" as const,
+                    mode,
+                    version: "0.0.0-test",
+                    update: null,
+                    lastUpdateFailure: null,
+                    latestVersion: null,
+                  },
                   warmPool,
                 }),
             }),
@@ -4733,7 +4761,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
   describe("against a starting daemon", () => {
     const STARTING: StatusGetOutput = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
     };
 
@@ -4829,7 +4864,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const FULL_LINE =
       "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago\n";
     const STARTING = {
-      daemon: { health: "starting" as const, mode: "worker" as const },
+      daemon: {
+        health: "starting" as const,
+        mode: "worker" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
     };
 
@@ -5077,7 +5119,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     };
     const status: StatusGetOutput = {
       ...EMPTY_STATUS,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       installs: [{ ...install, workerId: "wrk_1" }],
       workers: [
         {
@@ -7135,7 +7184,14 @@ const EMPTY_STATUS = {
     },
     global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
   },
-  daemon: { health: "running", mode: "worker" },
+  daemon: {
+    health: "running",
+    mode: "worker",
+    version: "0.0.0-test",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+  },
   queueDepth: 0,
 } satisfies StatusGetOutput;
 
@@ -8315,7 +8371,14 @@ describe("CLI: a worker's capabilities", () => {
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: platform,
       },
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       leases: [],

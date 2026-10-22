@@ -65,6 +65,7 @@ import {
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
 import { RelayConnection, type RelayTargets } from "./relay.js";
+import type { UpdateCoordinator } from "./update-coordinator.js";
 
 type RequestId = string | number;
 
@@ -166,6 +167,7 @@ export interface DaemonServerEngineOptions {
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
   readonly tokens?: TokenOperations;
+  readonly update?: UpdateCoordinator;
 }
 
 export interface DaemonServerCommonOptions {
@@ -315,6 +317,7 @@ function buildDispatcher(
     registry: options.registry,
     ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    ...(options.update === undefined ? {} : { update: options.update }),
     version: options.version,
   });
 }
@@ -1186,6 +1189,12 @@ export class DaemonServer {
         return this.#dispatcher.dispatch("device.add", frame.payload, this.#session(connection));
       case "device.remove":
         return this.#dispatcher.dispatch("device.remove", frame.payload, this.#session(connection));
+      case "daemon.update":
+        return this.#dispatcher.dispatch(
+          "daemon.update",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       // why: "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`

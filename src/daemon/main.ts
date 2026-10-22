@@ -906,6 +906,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     directory: gatewayService,
     eventHistory,
     health: () => daemon.health,
+    version: options.version,
     host: fitHostFacts({ ...options.hostSystem, tools: [] }),
     ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
     leaseIndex,

@@ -246,6 +246,7 @@ function harness(
     eventHistory: options.eventHistory ?? ringEventHistory(eventBus),
     ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: () => options.health ?? "running",
+    version: "0.0.0-test",
     host: GATEWAY_HOST,
     ...(options.load === undefined ? {} : { load: options.load }),
     leaseIndex,

@@ -204,7 +204,14 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     // A starting worker answers `status.get` with `daemon` and `host` only.
     worker.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture({ arch: "x64" }),
     };
     worker.devices = [deviceFixture("dev_1", "leased")];
@@ -256,7 +263,14 @@ describe("GatewayService", () => {
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
     worker.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
     worker.devices = [deviceFixture("dev_1", "leased")];
@@ -389,7 +403,14 @@ describe("GatewayService", () => {
     };
     worker.status = statusFixture({
       capacity,
-      daemon: { health: "failed", mode: "worker" },
+      daemon: {
+        health: "failed",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
@@ -1405,7 +1426,14 @@ describe("GatewayService", () => {
 
     // A's held `status.get` now answers `starting`, after B built the current view.
     clientA.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
     release();
@@ -1810,7 +1838,14 @@ describe("GatewayService: a worker's capabilities in its view", () => {
     const { harness } = await joinedWith([available]);
     const restarted = new ScriptedWorkerClient();
     restarted.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
 

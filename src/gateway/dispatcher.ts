@@ -124,6 +124,7 @@ export interface GatewayDispatcherOptions {
    * `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly health: () => "starting" | "running" | "failed";
+  readonly version: string;
   readonly host: AggregateStatusOptions["host"];
   readonly load?: () => AggregateStatusOptions["load"];
   readonly awaitReady: () => Promise<void>;
@@ -232,6 +233,10 @@ export class GatewayDispatcher {
       "worker.undrain": this.#workerUndrain,
       "worker.remove": this.#workerRemove,
       "alerts.test": this.#alertsTest,
+      "daemon.update": unsupportedByDesign(
+        "daemon.update",
+        "daemon.update updates one machine's daemon; a gateway cannot update itself yet",
+      ),
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
@@ -316,7 +321,15 @@ export class GatewayDispatcher {
     const history = this.options.eventHistory.status();
     if (this.options.health() === "starting") {
       return {
-        daemon: { health: "starting", mode: "gateway", ...consoleUrl },
+        daemon: {
+          health: "starting",
+          mode: "gateway",
+          version: this.options.version,
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+          ...consoleUrl,
+        },
         history,
         host: this.options.host,
         ...loadField,
@@ -324,6 +337,7 @@ export class GatewayDispatcher {
     }
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
+      version: this.options.version,
       host: this.options.host,
       ...(load === undefined ? {} : { load }),
       physicalQueueDepth: this.options.coordinator.physicalQueueDepth,
