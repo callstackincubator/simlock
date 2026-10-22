@@ -59,7 +59,7 @@ import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import type { WorkerDirectory } from "./fleet-ports.js";
+import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
@@ -412,17 +412,22 @@ export class GatewayDispatcher {
     return { drained: false, workerId: input.workerId };
   };
 
-  #workerUpdate: Handler<"worker.update"> = async (input) => ({
-    health: "running",
-    lastUpdateFailure: null,
-    latestVersion: null,
-    resolved: null,
-    started: false,
-    update: null,
-    upToDate: false,
-    version: "",
-    workerId: input.workerId,
-  });
+  #workerUpdate: Handler<"worker.update"> = async (input) => {
+    const target = this.options.directory.target(input.workerId);
+    const client = liveClient(target);
+    if (client === undefined || target === undefined) {
+      throw new DispatchError("INTERNAL", `worker ${input.workerId} has no session`);
+    }
+    const { workerId, ...request } = input;
+    const answer = await client.updateDaemon(request);
+    this.options.workers.refresh(workerId, {
+      lastUpdateFailure: answer.lastUpdateFailure,
+      latestVersion: answer.latestVersion,
+      update: answer.update,
+    });
+    await target.refresh();
+    return { ...answer, workerId };
+  };
 
   #alertsTest: Handler<"alerts.test"> = async (input) => {
     const { destination } = input;
