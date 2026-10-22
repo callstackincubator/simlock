@@ -2,7 +2,7 @@
 
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
 Entry: `src/main.tsx` → `App` (`src/app/app.tsx`).
-Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and `version-order.ts`'s `isNewerVersion` as a value, imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle).
+Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and `version-order.ts`'s `isNewerVersion` as a value, imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle); this one `past-index` exemption in `.dependency-cruiser.mjs` is maintainer-authorized (#825 Decisions).
 Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 ## Layers

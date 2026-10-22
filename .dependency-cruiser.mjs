@@ -25,6 +25,7 @@ const components = findComponents("src")
 
 // why: the console imports the contract's `isNewerVersion` as a value; the index also exports the
 // zod schemas, which would put zod's `eval` in the bundle and break its Content-Security-Policy.
+// Maintainer-authorized 2026-10-22 (#825 Decisions, "Console import of the newer rule"): this one file only.
 const entryFiles = (component) =>
   component === "src/contract"
     ? "index|testing|definition|version-order"
