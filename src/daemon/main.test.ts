@@ -37,6 +37,7 @@ import {
   FakeHostInfo,
   FakeHostLoadProbe,
   FakeNpmCli,
+  FakeUpdaterLauncher,
   type NpmCli,
   type NpmOutcome,
   type HostLoadCounters,
@@ -4268,5 +4269,69 @@ describe("startDaemon version check", () => {
     const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
     const gateway = await startChecked(gatewayNpm, { role: "gateway" });
     await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
+  });
+});
+
+describe("startDaemon gateway update", () => {
+  const operator = {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startUpdatable(
+    launcher: FakeUpdaterLauncher,
+    filesystem = new MemoryFilesystem(),
+  ) {
+    await filesystem.mkdirp("/opt/simlock");
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-gw-update-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: {
+        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+      },
+      dataDirectory: directory,
+      drivers: [],
+      filesystem,
+      hostLoadProbe: null,
+      logger: new NoopLogger(),
+      npm: new FakeNpmCli({
+        globalRoot: [{ ok: true, output: "/opt" }],
+        view: [{ ok: true, output: "0.4.0" }],
+      }),
+      role: "gateway",
+      updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+      version: "0.3.0",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { daemon, directory, filesystem };
+  }
+
+  const daemonOf = async (daemon: DaemonServer) =>
+    ((await daemon.dispatch("status.get", {}, operator)) as { daemon: Record<string, unknown> })
+      .daemon;
+
+  it("a failed install shows in the gateway's status.get as lastUpdateFailure, and the gateway keeps serving", async () => {
+    const launcher = new FakeUpdaterLauncher({
+      exit: 1,
+      lines: [JSON.stringify({ failed: { message: "npm exited 1", stage: "installing" } })],
+    });
+    const { daemon } = await startUpdatable(launcher);
+
+    await daemon.dispatch("daemon.update", {}, operator);
+
+    await expect
+      .poll(async () => (await daemonOf(daemon)).lastUpdateFailure)
+      .toEqual({
+        at: 1_000,
+        from: "0.3.0",
+        message: "npm exited 1",
+        stage: "installing",
+        to: "0.4.0",
+      });
+    expect(await daemonOf(daemon)).toMatchObject({ health: "running", update: null });
   });
 });
