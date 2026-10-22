@@ -118,7 +118,12 @@ const COLUMNS: readonly Column<WorkerRow>[] = [
     header: "Worker",
   },
   {
-    cell: (row) => <Status tone={row.health.tone}>{row.health.word}</Status>,
+    cell: (row) => (
+      <span className="worker-name">
+        <Status tone={row.health.tone}>{row.health.word}</Status>
+        {row.stage === undefined ? null : <span className="worker-system">{row.stage}</span>}
+      </span>
+    ),
     header: "State",
   },
   { cell: (row) => <Slots slots={row.slots} label={row.slotsLabel} />, header: "Slots" },

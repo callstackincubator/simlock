@@ -4,6 +4,7 @@ import {
   hasIssue,
   platformSlots,
   slotsLabel,
+  stageLine,
   workerHealth,
   workerSlots,
 } from "./fleet";
@@ -97,10 +98,12 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const slots = workerSlots(worker);
   const updateFacts = updateFactsOf(worker);
   const version = versionLine(updateFacts);
+  const health = workerHealth(worker);
+  const stage = health.word === "updating" && worker.update ? stageLine(worker.update) : undefined;
   return {
     connection: worker.connection,
     takesLeases: !worker.drained,
-    health: workerHealth(worker),
+    health,
     id: worker.id,
     meters: loadFigures(worker).map((card) => ({
       label: card.label,
@@ -115,6 +118,7 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
     updateFacts,
     ...(system === undefined ? {} : { system }),
     ...(version === undefined ? {} : { version }),
+    ...(stage === undefined ? {} : { stage }),
     ...(use === undefined ? {} : { use }),
   };
 }
