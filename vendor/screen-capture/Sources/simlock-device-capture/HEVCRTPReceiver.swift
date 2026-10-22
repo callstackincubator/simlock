@@ -256,17 +256,19 @@ final class HEVCRTPReceiver {
             let delay = lastSenderReport == 0
                 ? 0
                 : UInt32(min((now - lastSenderReportAt) * 65_536, Double(UInt32.max)))
+            // One append per field: one `+` chain here is what Xcode 16's type checker gives
+            // up on ("unable to type-check this expression in reasonable time").
             packet = [0x81, 201, 0, 7]
-                + Self.word(receiver)
-                + Self.word(source)
-                + [UInt8(fraction),
-                   UInt8(truncatingIfNeeded: total >> 16),
-                   UInt8(truncatingIfNeeded: total >> 8),
-                   UInt8(truncatingIfNeeded: total)]
-                + Self.word(highestSequence)
-                + Self.word(UInt32(jitter))
-                + Self.word(lastSenderReport)
-                + Self.word(delay)
+            packet.append(contentsOf: Self.word(receiver))
+            packet.append(contentsOf: Self.word(source))
+            packet.append(UInt8(fraction))
+            packet.append(UInt8(truncatingIfNeeded: total >> 16))
+            packet.append(UInt8(truncatingIfNeeded: total >> 8))
+            packet.append(UInt8(truncatingIfNeeded: total))
+            packet.append(contentsOf: Self.word(highestSequence))
+            packet.append(contentsOf: Self.word(UInt32(jitter)))
+            packet.append(contentsOf: Self.word(lastSenderReport))
+            packet.append(contentsOf: Self.word(delay))
             previousExpected = expected
             previousReceived = receivedPackets
         } else {
