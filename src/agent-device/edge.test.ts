@@ -1023,6 +1023,18 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
+  it("after a phone lease ends, an allocate that reuses its lease id for a virtual device reaches the simulator daemon", async () => {
+    const rig = await setUpWithPhone();
+    await granted(rig, 1, { physical: true, platform: "android" });
+    await release(rig, 1);
+    await expect.poll(() => listed(rig)).toEqual([]);
+
+    await granted(rig, 1, { platform: "android" });
+
+    expect(allocatesReceived(rig, 1)).toHaveLength(1);
+    expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toHaveLength(1);
+  });
+
   it("allocate with `physical: false` and `physical: null` are granted", async () => {
     const rig = await setUp({ maxRunning: 8 });
 
