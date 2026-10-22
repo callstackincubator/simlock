@@ -58,8 +58,10 @@ flowchart LR
    failure or `null`, and they are separate fields. `query`
    returns that answer and starts nothing, so it is also how a follower
    or the updater reads a daemon across a protocol change. So a gateway can update, and follow, a worker that
-   shows `incompatible`, and the gateway and its workers can be updated
-   in any order.
+   shows `incompatible`, and a gateway and workers on separate machines
+   can be updated in any order. A worker and a gateway on one Mac share
+   an install (§13) and are updated by hand: stop one role, update the
+   other, then start the stopped one.
 2. **Every surface reaches the same call.** `simlock update` on the
    machine, `POST /v1/update` on the daemon's own HTTP API, and, on a
    gateway, `worker.update` (`POST /v1/workers/{id}/update`, `simlock worker update <id>`), which sends
@@ -119,13 +121,19 @@ flowchart LR
    `-shm` files to `<data dir>/update-backup/`. A rollback restores them
    before it starts the old version, so a migration the new version ran
    never blocks it (ADR 0036 §5); they are deleted once the new daemon is
-   ready. If the rollback fails too, the machine stays
-   down and the updater logs it to `daemon.log`.
+   ready. The updater never unloads the service under a service manager
+   (ADR 0041), so the manager may restart a failing new daemon while the
+   updater rolls back. The rollback installs the old version, runs
+   `simlock daemon start`, and ends once a daemon answers `query` with
+   the old version, whether the service or the updater started it (an
+   already-running daemon counts as started). If the rollback fails too,
+   the machine stays down and the updater logs it to `daemon.log`.
 9. **npm only.** A Simlock not installed by global npm (a source
    checkout, a pnpm global) refuses the update before anything changes,
    naming how it was installed and the command to run by hand.
 10. **Latest by default, any version by name.** Without `version` the
-   updater installs `latest`; with it, that version, older ones included.
+   updater resolves `latest` to its exact version (§5) and installs that;
+   with `version`, that version, older ones included.
    Without `version`, a daemon newer than `latest` (a prerelease) is
    never downgraded. "Newer" is semver order against the `latest` tag,
    one rule for every surface.
@@ -167,7 +175,7 @@ sequenceDiagram
   G-->>O: 202
   Note over W: updating: no new leases, waits for 2 leases
   W->>U: spawn detached, after last lease ends
-  U->>U: npm i -g simlock@latest
+  U->>U: npm i -g simlock@<resolved exact version>
   alt install fails
     U-->>W: exit 1, npm's error on the pipe
     W-->>G: update failed, back in rotation
@@ -203,7 +211,8 @@ stateDiagram-v2
 - During `installing`, the files of the running daemon are replaced. A
   module it loads lazily after that would come from the new version, so
   the window is kept to the install alone.
-- An update restart fires `worker.disconnected`; `worker.connected`
-  follows when the returning worker is compatible with the gateway. An
-  `incompatible` worker returns without it, and the gateway reads it
-  through `daemon.update` `query`.
+- An update restart drops the worker's uplink, which emits
+  `worker.disconnected` for a worker that was connected. The returning
+  worker emits `worker.connected` only when it is compatible with the
+  gateway; an `incompatible` one emits none (EVENTS.md), and the gateway
+  reads it through `daemon.update` `query`.
