@@ -271,6 +271,7 @@ export type DaemonServerOptions =
   | (DaemonServerCommonOptions & DaemonServerEngineOptions & { readonly dispatcher?: undefined })
   | (DaemonServerCommonOptions & {
       readonly dispatcher: ContractDispatcher;
+      readonly update?: UpdateCoordinator;
     });
 
 type DaemonHealth = "starting" | "running" | "failed";
@@ -577,13 +578,13 @@ export class DaemonServer {
     this.#engine?.physicalDeviceWatcher?.start();
     // why: a gateway's `events.subscribe` parked on readiness resumes only after this continuation, so the rollback's `daemon.update-failed` waits one turn of the event loop for it to subscribe.
     await new Promise<void>((resolve) => setImmediate(resolve));
-    if (!this.#stopping) this.#engine?.update?.announceResultFile();
+    if (!this.#stopping) this.options.update?.announceResultFile();
   }
 
   // why: a stale or unreadable result file must never keep the daemon from starting.
   async #reportUpdateResult(): Promise<void> {
     try {
-      await this.#engine?.update?.readResultFile();
+      await this.options.update?.readResultFile();
     } catch (error: unknown) {
       this.#logger.warn("Could not read the update result file", { message: errorMessage(error) });
     }

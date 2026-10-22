@@ -1048,6 +1048,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     ...(hostLoad === undefined ? {} : { hostLoad }),
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: gatewayDispatcher,
+    update,
     eventBus,
     host: new DaemonEndpointHost({
       connector: options.ipc,
