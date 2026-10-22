@@ -259,6 +259,35 @@ async function waitListening(origin: string): Promise<void> {
   throw new Error("the daemon never listened");
 }
 
+const phoneSerial = "R58Y61A60HN";
+
+// why: one Android driver serving a virtual Pixel 8 and an enrolled, present phone, so a test can lease either through the same worker.
+async function setUpWithPhone(options: SetUpOptions = {}): Promise<Rig> {
+  const rig = await setUp({
+    ...options,
+    drivers: (clock) => [
+      new FakeDriver({
+        availableOsVersions: ["35"],
+        clock,
+        defaultModels: { phone: ["Pixel 8"] },
+        knownModels: ["Pixel 8"],
+        modelClasses: { "Pixel 8": "phone" },
+        physicalDevices: [
+          { class: "phone", ids: [phoneSerial], model: "Pixel 8", osVersion: "15" },
+        ],
+        platform: "android",
+      }),
+    ],
+  });
+  await rig.daemon.dispatch("device.add", { id: phoneSerial, platform: "android" }, adminSession);
+  rig.driver.setPhysicalPresence(phoneSerial, true);
+  return rig;
+}
+
+function allocatePhone(rig: Rig, n: number, extra: Record<string, unknown> = {}) {
+  return allocate(rig, n, { platform: "android", ...extra, physical: true });
+}
+
 async function advance(rig: Rig, ms: number, step = 1_000): Promise<void> {
   for (let elapsed = 0; elapsed < ms; elapsed += step) {
     rig.clock.advance(Math.min(step, ms - elapsed));
@@ -895,6 +924,40 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
     expect(await leases(rig)).toEqual([]);
     expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toEqual([]);
+  });
+
+  it("allocate with `physical: true` while the phone daemon is not running answers `agent-device is not available on this simlock: phone daemon: <message>` and releases the lease; a virtual allocate is granted, a command on a live phone lease answers the same, and with the simulator daemon down a physical allocate answers the simulator daemon's reason", async () => {
+    const down = [
+      ["starting", "phone daemon: starting"],
+      ["adb not found", "phone daemon: adb not found"],
+    ] as const;
+    for (const [reason, message] of down) {
+      const rig = await setUpWithPhone({ maxRunning: 4 });
+      rig.phone.setUnavailable(reason);
+
+      const answer = await envelopeOf(await allocatePhone(rig, 1));
+
+      expect(answer.error).toMatchObject(refusal(`${notAvailable}${message}`, "COMMAND_FAILED"));
+      await expect.poll(() => listed(rig)).toEqual([]);
+      await granted(rig, 2, { platform: "android" });
+      expect(await listed(rig)).toEqual([hex(2)]);
+    }
+
+    const live = await setUpWithPhone();
+    await granted(live, 1, { platform: "android", physical: true });
+    live.phone.setUnavailable("starting");
+    const liveCommand = await envelopeOf(await command(live, "snapshot", 1));
+    expect(liveCommand.error).toMatchObject(
+      refusal(`${notAvailable}phone daemon: starting`, "COMMAND_FAILED"),
+    );
+
+    const simulatorsDown = await setUpWithPhone();
+    simulatorsDown.fake.setUnavailable("found 0.20.3");
+    const simulatorsDownAnswer = await envelopeOf(await allocatePhone(simulatorsDown, 1));
+    expect(simulatorsDownAnswer.error).toMatchObject(
+      refusal(`${notAvailable}found 0.20.3`, "COMMAND_FAILED"),
+    );
+    expect(await listed(simulatorsDown)).toEqual([]);
   });
 
   it("allocate with `physical: false` and `physical: null` are granted", async () => {
