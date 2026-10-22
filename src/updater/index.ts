@@ -29,6 +29,7 @@ export interface RunUpdaterOptions {
   readonly packageRoot: string;
   readonly dataDirectory: string;
   readonly stdout: { write(chunk: string): void };
+  readonly stderr: { write(chunk: string): void };
 }
 
 const POLL_MS = 500;

@@ -37,12 +37,17 @@ class FakeProbe implements DaemonProbe {
   }
 }
 
+interface StartSpec {
+  readonly daemon: { health: string; version: string } | null;
+  readonly result?: { code: number; stderr: string };
+}
+
 interface Scenario {
   readonly name: string;
   readonly role?: DaemonRole;
   readonly install?: readonly NpmOutcome[];
   readonly oldDaemonStaysUp?: boolean;
-  readonly newDaemon?: { health: string; version: string } | null;
+  readonly starts?: readonly StartSpec[];
   readonly expected: {
     readonly stdout: readonly string[];
     readonly exit: number;
@@ -51,6 +56,7 @@ interface Scenario {
     readonly startArgs: readonly (readonly string[])[];
     readonly signals: readonly string[];
     readonly waitedAtLeastMs: number;
+    readonly stderr?: readonly string[];
     readonly resultFile?: { readonly message: string; readonly mode: number };
   };
 }
@@ -101,7 +107,7 @@ const SCENARIOS: readonly Scenario[] = [
   },
   {
     name: "new version not running within 2 minutes",
-    newDaemon: null,
+    starts: [{ daemon: null }],
     expected: {
       stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
       exit: 1,
@@ -116,7 +122,7 @@ const SCENARIOS: readonly Scenario[] = [
   {
     name: "--gateway",
     role: "gateway",
-    newDaemon: null,
+    starts: [{ daemon: null }],
     expected: {
       stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
       exit: 1,
@@ -125,6 +131,68 @@ const SCENARIOS: readonly Scenario[] = [
       startArgs: [started("--gateway"), started("--gateway")],
       signals: [],
       waitedAtLeastMs: 120_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
+  {
+    name: "new version reports health failed",
+    starts: [{ daemon: { health: "failed", version: "0.4.0" } }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 0,
+      resultFile: { message: "0.4.0 did not start: health failed", mode: 0o600 },
+    },
+  },
+  {
+    name: "daemon start exits non-zero",
+    starts: [{ daemon: null, result: { code: 1, stderr: "port busy" } }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 0,
+      resultFile: { message: "0.4.0 did not start: daemon start: port busy", mode: 0o600 },
+    },
+  },
+  {
+    name: "rollback install fails too",
+    starts: [{ daemon: null }],
+    install: [
+      { ok: true, output: "" },
+      { ok: false, message: "npm error EACCES" },
+    ],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      stderr: ["rollback to 0.3.0 failed: npm error EACCES"],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
+  {
+    name: "rolled-back daemon does not start either",
+    starts: [{ daemon: null }, { daemon: null }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      stderr: ["rollback to 0.3.0 failed: did not answer within 2 minutes"],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 240_000,
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
@@ -145,7 +213,7 @@ async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
 describe("runUpdater", () => {
   it.each(SCENARIOS)(
     "installs, restarts, and reports each stage on its pipe: $name",
-    async ({ role = "worker", install, oldDaemonStaysUp, newDaemon, expected }) => {
+    async ({ role = "worker", install, oldDaemonStaysUp, starts = [], expected }) => {
       const clock = new FakeClock(EPOCH);
       const filesystem = new MemoryFilesystem();
       const dataDirectory = role === "gateway" ? "/home/.simlock/gateway" : "/home/.simlock";
@@ -155,20 +223,22 @@ describe("runUpdater", () => {
       const npm = new FakeNpmCli(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
       const processes = new ScriptedProcessRunner(
-        expected.startArgs.map((args) => ({
+        expected.startArgs.map((args, index) => ({
           match: { command: process.execPath, args },
-          result: { code: 0, stdout: "", stderr: "" },
+          result: { stdout: "", ...(starts[index]?.result ?? { code: 0, stderr: "" }) },
           onSpawn: () => {
+            const spec = starts[index];
             probe.newDaemon =
-              newDaemon === null
-                ? undefined
-                : (newDaemon ?? { health: "running", version: "0.4.0" });
+              spec === undefined
+                ? { health: "running", version: index === 0 ? "0.4.0" : "0.3.0" }
+                : (spec.daemon ?? undefined);
             void filesystem.exists(resultPath).then((exists) => fileAtRollbackStart.push(exists));
           },
         })),
       );
       const supervisor = new FakeProcessSupervisor([PID]);
       const lines: string[] = [];
+      const errors: string[] = [];
 
       const exit = await settle(
         runUpdater({
@@ -185,11 +255,13 @@ describe("runUpdater", () => {
           packageRoot: PACKAGE_ROOT,
           dataDirectory,
           stdout: { write: (chunk) => lines.push(chunk) },
+          stderr: { write: (chunk) => errors.push(chunk) },
         }),
         clock,
       );
 
       expect(lines.join("").trimEnd().split("\n")).toEqual(expected.stdout);
+      expect(errors.join("").split("\n").filter(Boolean)).toEqual(expected.stderr ?? []);
       expect(exit).toBe(expected.exit);
       expect(
         npm.calls.filter((call) => call.method === "install").map((call) => call.spec),
