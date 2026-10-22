@@ -32,6 +32,7 @@ export interface RunUpdaterOptions {
 }
 
 const POLL_MS = 500;
+const STOP_LIMIT_MS = 10 * 60_000;
 
 function sleep(clock: Clock, milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
@@ -53,7 +54,12 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
   }
   writeLine(options, { stage: "restarting" });
   await probe.stop();
+  const stopDeadline = clock.now() + STOP_LIMIT_MS;
   while (await probe.answers()) {
+    if (clock.now() >= stopDeadline) {
+      options.supervisor.signal(options.pid, "SIGKILL");
+      break;
+    }
     await sleep(clock, POLL_MS);
   }
   await processes.run(process.execPath, [
