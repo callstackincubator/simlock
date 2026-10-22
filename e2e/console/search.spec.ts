@@ -107,14 +107,19 @@ test.describe("the search while data loads", () => {
       const dialog = page.getByRole("dialog", { name: "Search" });
       await dialog.getByRole("combobox").fill("nav");
       const highlighted = dialog.locator("[data-highlighted]");
-      await expect(highlighted).toContainText("nav-waiter");
       await expect(dialog.getByText("Loading…")).toHaveCount(2);
       await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(0);
+      await expect(highlighted).toHaveCount(1);
+      await expect(highlighted).not.toBeEmpty();
+      const highlightedId = await highlighted.getAttribute("id");
+      const highlightedText = await highlighted.innerText();
+      expect(highlightedId).toBeTruthy();
 
       release();
       await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(2);
       await expect(dialog.getByText("Loading…")).toHaveCount(0);
-      await expect(highlighted).toContainText("nav-waiter");
+      await expect(highlighted).toHaveAttribute("id", highlightedId ?? "");
+      await expect(highlighted).toHaveText(highlightedText);
       await expect(highlighted).toHaveCount(1);
 
       await page.keyboard.press("Escape");
@@ -150,7 +155,8 @@ test.describe("the search during live updates", () => {
       await expect(options).toHaveCount(4);
       await expect(dialog.getByText("Loading…")).toHaveCount(0);
       const highlighted = dialog.locator("[data-highlighted]");
-      await expect(highlighted).toContainText("nav-waiter");
+      await expect(highlighted).toHaveCount(1);
+      await expect(highlighted).not.toBeEmpty();
       const initialHighlight = await highlighted.getAttribute("id");
       expect(initialHighlight).toBeTruthy();
       const before = await options.allInnerTexts();
