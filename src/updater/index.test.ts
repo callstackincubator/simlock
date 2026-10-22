@@ -251,6 +251,21 @@ const SCENARIOS: readonly Scenario[] = [
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
+  {
+    name: "new daemon crash-loops under a service",
+    starts: [{ daemon: null }, { daemon: { health: "running", version: "0.3.0" } }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      stderr: [],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
 ];
 
 async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
