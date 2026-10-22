@@ -124,8 +124,8 @@ describe("the update actions in the search", () => {
     });
     const current = worker("wrk_4", "mac-pro-4", { latestVersion: "0.3.0", version: "0.3.0" });
     expect(search("update", { workers: [behind, waiting, current] })).toEqual([
-      "Actions: Update… — mac-studio-2",
       "Actions: Update now — mac-mini-3",
+      "Actions: Update… — mac-studio-2",
     ]);
     expect(search("update", { mode: "worker", workers: [behind] })).toEqual([]);
   });
