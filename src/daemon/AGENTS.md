@@ -49,7 +49,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 
 `daemon.update` (worker `Dispatcher`; a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`) is `createUpdateCoordinator`'s, in memory only. A call during an update follows it (`force` on `waiting` installs now); `query` starts nothing.
 A new update: `NpmCli.view` resolves the version (`UPDATE_RESOLVE_FAILED`); the running version, or one newer than `latest` with no `version` named (`isNewerVersion`), is `upToDate`; then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and `socketHeld` on the other role's socket (`UPDATE_SHARED_INSTALL`). Then `waiting`, leasing's update hold and `daemon.update-started`; the updater launches with no leases, with `force`, or when the last `lease.released`/`lease.expired` leaves none.
-Its stdout lines move the state; a failed line, a non-zero exit or a failed launch sets `lastUpdateFailure`, releases the hold and emits `daemon.update-failed`. `DaemonServer.start` calls `readResultFile()` after convergence and before health is `running`: a rolled back update's `update-result.json` is reported the same way and deleted.
+Its stdout lines move the state; a failed line, a non-zero exit or a failed launch sets `lastUpdateFailure`, releases the hold and emits `daemon.update-failed`. `DaemonServer.start` calls `readResultFile()` after convergence and before health is `running`, so a `running` daemon already shows the failure in `lastUpdateFailure`; a rolled back update's `update-result.json` is deleted there, and `announceResultFile()` emits its `daemon.update-failed` once the daemon serves, so a parked `events.subscribe` receives it.
 
 ## Connection (`server.ts`)
 

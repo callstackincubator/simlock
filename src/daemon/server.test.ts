@@ -1391,6 +1391,10 @@ describe("DaemonServer startup readiness", () => {
       lastUpdateFailure: null,
     });
 
+    // why: a gateway's events.subscribe parks until the daemon is ready, so it must still get the rollback's event.
+    const subscribed = client.request("events.subscribe", {});
+    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+
     converge.resolve();
     expect(await queried(), "converged, result file not read yet").toMatchObject({
       health: "starting",
@@ -1398,6 +1402,20 @@ describe("DaemonServer startup readiness", () => {
 
     resultFileGate.resolve();
     await startPromise;
+    await expect(subscribed).resolves.toMatchObject({ ok: true });
+    await expect
+      .poll(
+        () =>
+          client
+            .frames()
+            .some(
+              (frame) =>
+                frame.push === "event" &&
+                JSON.stringify(frame.payload).includes('"daemon.update-failed"'),
+            ),
+        { message: "the parked subscriber receives daemon.update-failed" },
+      )
+      .toBe(true);
     expect(await queried(), "started").toMatchObject({
       health: "running",
       lastUpdateFailure: { stage: "restarting", from: "0.3.0", to: "0.4.0" },

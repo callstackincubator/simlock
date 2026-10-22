@@ -321,7 +321,7 @@ async function dispatchSteps<Op extends OperationName>(
     typeof definition.effect === "function" ? definition.effect(input) : definition.effect;
   checkAccess(operation, definition, input, session, pipeline);
 
-  // why: ADR 0042 §1: `query` is how the updater reads a daemon, and it must see one that is still starting; it starts nothing, so it needs no converged daemon.
+  // why: `daemon.update {query}` answers at once while the daemon is starting, because the updater and `simlock update` read a daemon that has not converged yet; it starts nothing, so it needs no converged daemon.
   const isQuery = operation === "daemon.update" && (input as { query?: boolean }).query === true;
   if (operation !== "status.get" && !isQuery) {
     await pipeline.awaitReady?.();

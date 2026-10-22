@@ -45,6 +45,7 @@ export interface UpdateCoordinator {
   request(input: UpdateInput): Promise<UpdateOutcome>;
   state(): UpdateProgress;
   readResultFile(): Promise<void>;
+  announceResultFile(): void;
 }
 
 export interface UpdateCoordinatorOptions {
@@ -109,6 +110,7 @@ function stateOf(run: Run): UpdateState {
 class Coordinator implements UpdateCoordinator {
   #run: Run | undefined;
   #lastFailure: UpdateFailure | null = null;
+  #unannounced: UpdateFailure | undefined;
   #calls: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: UpdateCoordinatorOptions) {
@@ -266,7 +268,7 @@ class Coordinator implements UpdateCoordinator {
   }
 
   async readResultFile(): Promise<void> {
-    const { filesystem, dataDirectory, eventBus } = this.options;
+    const { filesystem, dataDirectory } = this.options;
     const path = join(dataDirectory, RESULT_FILE);
     let contents: string;
     try {
@@ -279,8 +281,20 @@ class Coordinator implements UpdateCoordinator {
     const failure = parseResultFile(contents);
     if (failure === undefined) return;
     this.#lastFailure = failure;
+    this.#unannounced = failure;
+  }
+
+  // why: the failure is set while the daemon converges but announced only once the daemon serves, because a subscriber's `events.subscribe` is parked until then and would miss it.
+  announceResultFile(): void {
+    const failure = this.#unannounced;
+    if (failure === undefined) return;
+    this.#unannounced = undefined;
     const { stage, from, to, message } = failure;
-    eventBus.emit("daemon.update-failed", { stage, from, to, message }, "update-coordinator");
+    this.options.eventBus.emit(
+      "daemon.update-failed",
+      { stage, from, to, message },
+      "update-coordinator",
+    );
   }
 
   #outcome(started: boolean, resolved: string | null): UpdateOutcome {

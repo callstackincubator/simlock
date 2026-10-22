@@ -575,6 +575,9 @@ export class DaemonServer {
     // this monitor.
     this.#engine?.healthMonitor?.start();
     this.#engine?.physicalDeviceWatcher?.start();
+    // why: a gateway's `events.subscribe` parked on readiness resumes only after this continuation, so the rollback's `daemon.update-failed` waits one turn of the event loop for it to subscribe.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (!this.#stopping) this.#engine?.update?.announceResultFile();
   }
 
   // why: a stale or unreadable result file must never keep the daemon from starting.
