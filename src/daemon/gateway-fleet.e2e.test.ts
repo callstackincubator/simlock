@@ -37,6 +37,7 @@ import type { Filesystem, IpcConnector, IpcListenerFactory, NpmCli } from "../po
 import {
   FakeHostInfo,
   FakeNpmCli,
+  FakeUpdaterLauncher,
   MemoryFilesystem,
   NodeIpcTransport,
   NoopLogger,
@@ -46,7 +47,7 @@ import {
 import { FakeWebhookPoster } from "../ports/testing.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
-import { startDaemon } from "./main.js";
+import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 
 function passthroughOptions(command: PassthroughCommand): object {
@@ -136,6 +137,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
   async function startGateway(
     alerts: { destinations?: readonly AlertDestination[]; poster?: FakeWebhookPoster } = {},
+    extra: Partial<StartDaemonOptions> = {},
   ): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
     directories.push(directory);
@@ -154,6 +156,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       logger: new NoopLogger(),
       version: "1.0.0-e2e",
       ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
+      ...extra,
     });
     daemons.push(daemon);
     return daemon;
@@ -297,6 +300,46 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       latestVersion: "0.4.0",
       update: null,
     });
+  });
+
+  it("daemon.update on a gateway goes straight to installing with fleet leases held, and its status.get shows it", async () => {
+    const launcher = new FakeUpdaterLauncher();
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/opt/simlock");
+    const gateway = await startGateway(
+      {},
+      {
+        filesystem,
+        npm: new FakeNpmCli({
+          globalRoot: [{ ok: true, output: "/opt" }],
+          view: [{ ok: true, output: "2.0.0" }],
+        }),
+        updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+      },
+    );
+    const { secret: token } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label: "worker-a" },
+      adminSession(),
+    );
+    await startWorker({ label: "worker-a", model: "Pixel-A", stdout: "a", token });
+    await vi.waitFor(async () => {
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      expect(workerServes(workers, "Pixel-A")).toBe(true);
+    });
+    await gateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", noWait: true, platform: "android" },
+      agentSession(),
+    );
+
+    const answer = await gateway.dispatch("daemon.update", {}, adminSession());
+
+    const installing = { forced: false, from: "1.0.0-e2e", stage: "installing", to: "2.0.0" };
+    expect(answer).toMatchObject({ resolved: "2.0.0", started: true, update: installing });
+    expect(launcher.launches).toMatchObject([{ from: "1.0.0-e2e", role: "gateway", to: "2.0.0" }]);
+    const status = await gateway.dispatch("status.get", {}, adminSession());
+    expect(status.daemon.update).toMatchObject(installing);
   });
 
   it("emits queue.changed once when the gateway has started, with depth 0, and no capacity.changed of its own", async () => {

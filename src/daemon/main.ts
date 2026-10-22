@@ -98,6 +98,7 @@ import {
   NodeProcessSupervisor,
   NodeSystemStats,
   NodeUpdaterLauncher,
+  type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
   NodeTcpStreamConnector,
@@ -175,6 +176,12 @@ export interface StartDaemonOptions {
   /** why: test-only, replaces the npm CLI the version check and the update coordinator run. */
   readonly npm?: NpmCli;
   readonly processRunner?: ProcessRunner;
+  /** why: test-only, replaces the launcher, package root and shared-install check of the gateway's update coordinator. */
+  readonly updater?: {
+    readonly launcher: UpdaterLauncher;
+    readonly otherRoleRunning: () => Promise<boolean>;
+    readonly packageRoot: string;
+  };
   /** why: test-only, the protocol range the worker daemon announces. */
   readonly protocolVersion?: number | ProtocolRange;
   readonly processSupervisor?: ProcessSupervisor;
