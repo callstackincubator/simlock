@@ -122,6 +122,7 @@ async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
     clock.advance(1_000);
   }
   await new Promise<void>((resolve) => setImmediate(resolve));
+  if (state.state === "rejected") await promise;
   expect(state.state).toBe("fulfilled");
   return promise;
 }
@@ -133,6 +134,7 @@ describe("runUpdater", () => {
       const clock = new FakeClock(EPOCH);
       const filesystem = new MemoryFilesystem();
       const dataDirectory = role === "gateway" ? "/home/.simlock/gateway" : "/home/.simlock";
+      await filesystem.mkdirp(dataDirectory);
       const resultPath = `${dataDirectory}/update-result.json`;
       const fileAtRollbackStart: boolean[] = [];
       const npm = new FakeNpmCli(install === undefined ? {} : { install });

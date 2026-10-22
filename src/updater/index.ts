@@ -33,6 +33,8 @@ export interface RunUpdaterOptions {
 
 const POLL_MS = 500;
 const STOP_LIMIT_MS = 10 * 60_000;
+const START_LIMIT_MS = 2 * 60_000;
+const RESULT_FILE = "update-result.json";
 
 function sleep(clock: Clock, milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
@@ -45,7 +47,7 @@ function writeLine(options: RunUpdaterOptions, line: unknown): void {
 }
 
 export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
-  const { clock, npm, probe, processes, to } = options;
+  const { clock, npm, probe, to } = options;
   writeLine(options, { stage: "installing" });
   const installed = await npm.install(`simlock@${to}`);
   if (!installed.ok) {
@@ -62,14 +64,37 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
     }
     await sleep(clock, POLL_MS);
   }
-  await processes.run(process.execPath, [
+  const reason = await startDaemon(options);
+  if (reason === undefined) return 0;
+  await options.filesystem.writeFileAtomic(
+    join(options.dataDirectory, RESULT_FILE),
+    JSON.stringify({
+      from: options.from,
+      to,
+      stage: "restarting",
+      message: `${to} did not start: ${reason}`,
+      at: clock.now(),
+      rolledBack: true,
+    }),
+    { mode: 0o600 },
+  );
+  await npm.install(`simlock@${options.from}`);
+  await startDaemon({ ...options, to: options.from });
+  return 1;
+}
+
+async function startDaemon(options: RunUpdaterOptions): Promise<string | undefined> {
+  const { clock, probe, to } = options;
+  await options.processes.run(process.execPath, [
     join(options.packageRoot, "dist", "cli", "main.js"),
     "daemon",
     "start",
   ]);
+  const deadline = clock.now() + START_LIMIT_MS;
   for (;;) {
     const state = await probe.state();
-    if (state?.health === "running" && state.version === to) return 0;
+    if (state?.health === "running" && state.version === to) return undefined;
+    if (clock.now() >= deadline) return "did not answer within 2 minutes";
     await sleep(clock, POLL_MS);
   }
 }
