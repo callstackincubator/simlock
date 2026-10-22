@@ -50,6 +50,7 @@ export interface UpdateCoordinator {
 
 export interface UpdateCoordinatorOptions {
   readonly npm: NpmCli;
+  readonly latestVersion: () => string | null;
   readonly launcher: UpdaterLauncher;
   readonly leasing: UpdateHold;
   readonly registry: Pick<Registry, "snapshot">;
@@ -125,7 +126,7 @@ class Coordinator implements UpdateCoordinator {
     return {
       update: this.#run === undefined ? null : stateOf(this.#run),
       lastUpdateFailure: this.#lastFailure,
-      latestVersion: null,
+      latestVersion: this.options.latestVersion(),
     };
   }
 

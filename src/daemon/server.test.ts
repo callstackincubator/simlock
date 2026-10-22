@@ -3961,6 +3961,7 @@ async function createHarness(
       : {
           update: createUpdateCoordinator({
             npm: options.update.npm,
+            latestVersion: () => null,
             launcher: options.update.launcher,
             leasing: engine.leasing,
             registry,

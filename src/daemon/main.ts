@@ -136,6 +136,7 @@ import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { socketHeld } from "../updater/index.js";
 import { createUpdateCoordinator } from "./update-coordinator.js";
+import { startVersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
   DaemonEndpointHost,
@@ -446,6 +447,9 @@ async function composeDaemon(
     role: "worker",
   });
   // Builds leasing on top of core (ADR 0018 §2).
+  const npm =
+    options.npm ?? new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory });
+  const versionCheck = startVersionCheck({ npm, clock, logger: logger.child("version-check") });
   const leasing = createLeasing({
     clock,
     components,
@@ -602,7 +606,8 @@ async function composeDaemon(
     adminSecret: auth.adminSecret,
     tokens: auth.tokens,
     update: createUpdateCoordinator({
-      npm: new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory }),
+      npm,
+      latestVersion: () => versionCheck.latest(),
       launcher: new NodeUpdaterLauncher(),
       leasing,
       registry,
@@ -633,6 +638,7 @@ async function composeDaemon(
     },
     // Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
     dispose: async () => {
+      versionCheck.dispose();
       core.dispose();
       leasing.dispose();
       // Before the drivers: a running install is ended through its signal while its driver
