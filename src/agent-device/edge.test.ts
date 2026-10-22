@@ -1000,6 +1000,29 @@ describe("the agent-device front, through the whole worker daemon", () => {
     );
   });
 
+  it("when simlock ends a phone lease (presence lost, an operator's release of all) the release reaches the phone daemon, not the simulator daemon, and the agent's next heartbeat answers ended by simlock", async () => {
+    const endings = [
+      async (rig: Rig) => {
+        rig.driver.setPhysicalPresence(phoneSerial, false);
+        await advance(rig, 120_000);
+      },
+      async (rig: Rig) => {
+        await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+      },
+    ];
+    for (const end of endings) {
+      const rig = await setUpWithPhone();
+      await granted(rig, 1, { physical: true, platform: "android" });
+
+      await end(rig);
+
+      await expect.poll(() => listed(rig)).toEqual([]);
+      await expect.poll(() => rig.phone.rpcRequests("agent_device.lease.release")).toHaveLength(1);
+      expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+      expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+    }
+  });
+
   it("allocate with `physical: false` and `physical: null` are granted", async () => {
     const rig = await setUp({ maxRunning: 8 });
 
