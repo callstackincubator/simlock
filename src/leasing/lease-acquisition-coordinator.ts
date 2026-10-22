@@ -411,6 +411,15 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     });
   }
 
+  // why: a `new` waiter reaches `#decide` after resolving its spec or being sent back to retry, and the update hold refuses everything not yet provisioning.
+  #refuseNewForUpdate(waiter: AcquisitionWaiter): boolean {
+    if (!this.#updateHold || waiter.state !== "new") return false;
+    if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
+      this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
+    }
+    return true;
+  }
+
   async releaseUpdateHold(): Promise<void> {
     await this.options.decisions.run(async () => {
       this.#updateHold = false;
@@ -936,13 +945,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#reject(waiter, new NukeCancelledError(), "killed");
       return undefined;
     }
-    // why: a `new` waiter reaches here after resolving its spec or being sent back to retry, and the update hold refuses everything not yet provisioning.
-    if (this.#updateHold && waiter.state === "new") {
-      if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
-        this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
-      }
-      return undefined;
-    }
+    if (this.#refuseNewForUpdate(waiter)) return undefined;
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
     if (plan.kind === "grant-ready") {
