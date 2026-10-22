@@ -165,6 +165,5 @@ export {
   FakeUpdaterLauncher,
   type LaunchedUpdater,
   NodeUpdaterLauncher,
-  type UpdaterLaunch,
   type UpdaterLauncher,
 } from "./updater-launcher.js";

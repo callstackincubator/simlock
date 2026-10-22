@@ -11,10 +11,111 @@ const USAGE = "Usage: simlock update [--version <version>] [--force] [--json]\n"
 
 type Answer = Awaited<ReturnType<SimlockAdminClient["updateDaemon"]>>;
 type UpdateState = NonNullable<Answer["update"]>;
+type Environment = CommandContext["environment"];
+
+interface Followed {
+  readonly answer: Answer;
+  readonly from?: UpdateState;
+  readonly interrupted?: true;
+}
 
 function plural(count: number): string {
   return `${count} ${count === 1 ? "lease" : "leases"}`;
 }
+
+function upToDateMessage(answer: Answer, version: string | undefined): string {
+  if (version !== undefined) return `simlock ${answer.version} is already running`;
+  if (answer.resolved === answer.version) return `simlock ${answer.version} is already the latest`;
+  return `simlock ${answer.version} is newer than the latest (${answer.resolved}). Use --version to install another version.`;
+}
+
+function progressLine(update: UpdateState, first: boolean): string {
+  if (update.stage === "installing") return `Installing simlock@${update.to}`;
+  if (update.stage === "restarting") return "Restarting the daemon";
+  const base = `Waiting for ${plural(update.leases)} to end.`;
+  return first ? `${base} Ctrl-C stops following; simlock update --force stops waiting.` : base;
+}
+
+class Follower {
+  #client: SimlockAdminClient;
+  #stopped = false;
+  #shown = "";
+  #lastAnswerAt: number;
+
+  constructor(
+    client: SimlockAdminClient,
+    private readonly environment: Environment,
+    private readonly token: string | undefined,
+    private readonly say: (line: string) => void,
+    private readonly termination: ReturnType<typeof waitForTermination>,
+  ) {
+    this.#client = client;
+    this.#lastAnswerAt = environment.clock.now();
+    void termination.settled.then(() => {
+      this.#stopped = true;
+    });
+  }
+
+  async follow(first: Answer): Promise<Followed> {
+    const tracking = first.update ?? undefined;
+    if (tracking !== undefined) this.say(`Updating simlock ${tracking.from} → ${tracking.to}`);
+    let current: Answer | undefined = first;
+    while (current?.update != null) {
+      this.#show(current.update);
+      await this.#pause();
+      current = this.#stopped ? undefined : await this.#poll();
+    }
+    return current === undefined
+      ? { answer: first, ...(tracking === undefined ? {} : { from: tracking }), interrupted: true }
+      : { answer: current, ...(tracking === undefined ? {} : { from: tracking }) };
+  }
+
+  close(): Promise<void> {
+    return this.#client.close().catch(() => undefined);
+  }
+
+  #show(update: UpdateState): void {
+    const key = update.stage === "waiting" ? `waiting ${update.leases}` : update.stage;
+    if (key === this.#shown) return;
+    this.say(progressLine(update, this.#shown === ""));
+    this.#shown = key;
+  }
+
+  async #pause(): Promise<void> {
+    await Promise.race([this.environment.sleep(POLL_MS), this.termination.settled]);
+  }
+
+  async #poll(): Promise<Answer | undefined> {
+    try {
+      const answer = await this.#client.updateDaemon({ query: true });
+      this.#lastAnswerAt = this.environment.clock.now();
+      return this.#stopped ? undefined : answer;
+    } catch (error: unknown) {
+      if (isSimlockError(error) && error.kind !== "transport") throw error;
+      await this.close();
+      if (this.#shown !== "restarting") this.say("Restarting the daemon");
+      this.#shown = "restarting";
+      return this.#reconnect();
+    }
+  }
+
+  async #reconnect(): Promise<Answer | undefined> {
+    for (;;) {
+      await this.#pause();
+      if (this.#stopped) return undefined;
+      try {
+        this.#client = await connectDaemonClient(this.environment, this.token, { launch: false });
+        const answer = await this.#client.updateDaemon({ query: true });
+        this.#lastAnswerAt = this.environment.clock.now();
+        return answer;
+      } catch {
+        if (this.environment.clock.now() - this.#lastAnswerAt >= COME_BACK_MS) throw new GaveUp();
+      }
+    }
+  }
+}
+
+class GaveUp extends Error {}
 
 async function run(
   argv: readonly string[],
@@ -38,110 +139,54 @@ async function run(
   const say = (line: string): void => {
     if (!json) environment.stdout.write(`${line}\n`);
   };
-  const stopFollowing = (): number => {
-    say("Stopped following. The update goes on; run simlock status to see it.");
-    return 0;
-  };
-  let client = await connectDaemonClient(environment, token);
+  const client = await connectDaemonClient(environment, token);
   const termination = waitForTermination(environment.signals);
-  let stopped = false;
-  void termination.settled.then(() => {
-    stopped = true;
-  });
-  const pause = async (): Promise<void> => {
-    await Promise.race([environment.sleep(POLL_MS), termination.settled]);
-  };
+  const follower = new Follower(client, environment, token, say, termination);
   try {
-    let current = await client.updateDaemon({
+    const first = await client.updateDaemon({
       ...(version === undefined ? {} : { version }),
       ...(values.force === true ? { force: true } : {}),
     });
-    if (current.upToDate) {
-      if (json) writeResult((value) => environment.stdout.write(value), current);
-      else say(upToDateMessage(current, version));
+    if (first.upToDate) {
+      if (json) writeResult((value) => environment.stdout.write(value), first);
+      else say(upToDateMessage(first, version));
       return 0;
     }
-    const tracking = current.update ?? undefined;
-    if (tracking !== undefined) say(`Updating simlock ${tracking.from} → ${tracking.to}`);
-    let lastAnswerAt = environment.clock.now();
-    let shown = "";
-    const show = (update: UpdateState): void => {
-      const key = update.stage === "waiting" ? `waiting ${update.leases}` : update.stage;
-      if (key === shown) return;
-      say(progressLine(update, shown === ""));
-      shown = key;
-    };
-    while (current.update !== null) {
-      show(current.update);
-      await pause();
-      if (stopped) return stopFollowing();
-      try {
-        current = await client.updateDaemon({ query: true });
-        lastAnswerAt = environment.clock.now();
-      } catch (error: unknown) {
-        if (isSimlockError(error) && error.kind !== "transport") throw error;
-        await client.close().catch(() => undefined);
-        if (shown !== "restarting") say("Restarting the daemon");
-        shown = "restarting";
-        for (;;) {
-          await pause();
-          if (stopped) return stopFollowing();
-          try {
-            client = await connectDaemonClient(environment, token, { launch: false });
-            current = await client.updateDaemon({ query: true });
-            lastAnswerAt = environment.clock.now();
-            break;
-          } catch {
-            if (environment.clock.now() - lastAnswerAt >= COME_BACK_MS) {
-              say("The daemon did not come back; run simlock status.");
-              return 1;
-            }
-          }
-        }
-      }
-    }
-    return finish(current, tracking, json, environment);
+    return await finish(await follower.follow(first), environment, say, json);
+  } catch (error: unknown) {
+    if (!(error instanceof GaveUp)) throw error;
+    say("The daemon did not come back; run simlock status.");
+    return 1;
   } finally {
     termination.dispose();
-    await client.close().catch(() => undefined);
+    await follower.close();
   }
 }
 
-function upToDateMessage(answer: Answer, version: string | undefined): string {
-  if (version !== undefined) return `simlock ${answer.version} is already running`;
-  if (answer.resolved === answer.version) return `simlock ${answer.version} is already the latest`;
-  return `simlock ${answer.version} is newer than the latest (${answer.resolved}). Use --version to install another version.`;
-}
-
-function progressLine(update: UpdateState, first: boolean): string {
-  if (update.stage === "installing") return `Installing simlock@${update.to}`;
-  if (update.stage === "restarting") return "Restarting the daemon";
-  const base = `Waiting for ${plural(update.leases)} to end.`;
-  return first ? `${base} Ctrl-C stops following; simlock update --force stops waiting.` : base;
-}
-
 function finish(
-  answer: Answer,
-  tracking: UpdateState | undefined,
+  followed: Followed,
+  environment: Environment,
+  say: (line: string) => void,
   json: boolean,
-  environment: CommandContext["environment"],
 ): number {
+  const { answer, from } = followed;
+  if (followed.interrupted === true) {
+    say("Stopped following. The update goes on; run simlock status to see it.");
+    return 0;
+  }
   const failure = answer.lastUpdateFailure;
   const failed =
-    failure !== null &&
-    tracking !== undefined &&
-    failure.from === tracking.from &&
-    failure.to === tracking.to;
+    failure !== null && from !== undefined && failure.from === from.from && failure.to === from.to;
   if (json) {
     writeResult((value) => environment.stdout.write(value), answer);
   } else if (failed) {
-    environment.stdout.write(
+    say(
       failure.stage === "installing"
-        ? `Update failed (installing): ${failure.message}\nsimlock ${failure.from} is still running and takes leases again.\n`
-        : `Update failed (restarting): ${failure.message}. Rolled back to ${failure.from}.\n`,
+        ? `Update failed (installing): ${failure.message}\nsimlock ${failure.from} is still running and takes leases again.`
+        : `Update failed (restarting): ${failure.message}. Rolled back to ${failure.from}.`,
     );
   } else {
-    environment.stdout.write(`simlock ${answer.version} is running\n`);
+    say(`simlock ${answer.version} is running`);
   }
   return failed ? 1 : 0;
 }

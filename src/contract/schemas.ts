@@ -578,7 +578,7 @@ const updateStateBase = {
 };
 
 /** Where an update is, from the call until the daemon restarts or the update ends (ADR 0042 §11). */
-export const updateStateSchema = z.discriminatedUnion("stage", [
+const updateStateSchema = z.discriminatedUnion("stage", [
   z.object({ stage: z.literal("waiting"), leases: z.number().int().min(0), ...updateStateBase }),
   z.object({ stage: z.literal("installing"), ...updateStateBase }),
   z.object({ stage: z.literal("restarting"), ...updateStateBase }),
