@@ -179,10 +179,20 @@ function updateAction(worker: WorkerActionInput, facts: UpdateFacts): ItemAction
   };
 }
 
-function forceAction(worker: WorkerActionInput, to: string): ItemAction {
+function forceAction(
+  worker: WorkerActionInput,
+  update: { readonly to: string; readonly leases: number },
+): ItemAction {
+  const { leases, to } = update;
   return {
     ...updateBase(worker),
     body: { force: true },
+    confirm: {
+      body: `Its ${leases === 1 ? "lease keeps" : `${leases} leases keep`} running through the restart.`,
+      busy: "Starting…",
+      confirm: "Install now",
+      title: `Install ${to} on ${worker.name} now?`,
+    },
     id: "force-update",
     label: "Update now",
     success: { title: `${worker.name} installs ${to} now` },
@@ -196,7 +206,7 @@ function updateEntry(worker: WorkerActionInput): ItemAction | undefined {
   const facts = worker.updateFacts;
   if (facts === undefined || worker.connection === "disconnected") return undefined;
   if (facts.update !== null) {
-    return facts.update.stage === "waiting" ? forceAction(worker, facts.update.to) : undefined;
+    return facts.update.stage === "waiting" ? forceAction(worker, facts.update) : undefined;
   }
   if (worker.connection === "incompatible" || isBehind(facts)) return updateAction(worker, facts);
   return undefined;
