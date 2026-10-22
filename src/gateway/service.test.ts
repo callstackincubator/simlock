@@ -1201,6 +1201,37 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("reads an incompatible worker's update with daemon.update query on the tick", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError({ min: 5, max: 5 });
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    const update = {
+      forced: false,
+      from: "0.2.0",
+      stage: "installing",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    worker.updateAnswer = { ...worker.updateAnswer, latestVersion: "0.4.0", update };
+
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        latestVersion: "0.4.0",
+        update,
+      }),
+    );
+    expect(worker.updateInputs).toEqual([{ query: true }]);
+
+    await harness.service.stop();
+  });
+
   it("a worker advertising protocol 10 is incompatible on the gateway and nothing it pushes reaches the gateway's bus", async () => {
     const worker10 = { min: 10, max: 10 };
     expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, worker10)).toBeUndefined();
