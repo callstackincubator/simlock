@@ -40,7 +40,8 @@ list and this one the same.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the timing
   tests, the e2e lane in three shards); the Quality check passes only when all of them
-  do. The console lane runs on
+  do. The console lane runs in four shards
+  (the required Console check passes only when they all do) on
   every push to `main`, and on a pull request when it changes a source, UI,
   console spec or build file: in every browser when it changes `ui/` or the
   console specs, else in Chromium only.
