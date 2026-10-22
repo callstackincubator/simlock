@@ -451,7 +451,7 @@ describe("parseUpdaterArgs", () => {
     "reads the arguments a daemon gives the updater and refuses the rest: $name",
     ({ argv, parsed }) => {
       if (parsed === undefined) {
-        expect(() => parseUpdaterArgs(argv)).toThrow("updater arguments");
+        expect(() => parseUpdaterArgs(argv)).toThrow("bad updater arguments");
       } else {
         expect(parseUpdaterArgs(argv)).toEqual(parsed);
       }

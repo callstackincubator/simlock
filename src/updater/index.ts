@@ -188,6 +188,32 @@ export interface UpdaterArguments {
   readonly role: DaemonRole;
 }
 
-export function parseUpdaterArgs(_argv: readonly string[]): UpdaterArguments {
-  return { from: "", to: "", pid: 0, role: "worker" };
+const VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/;
+
+export function parseUpdaterArgs(argv: readonly string[]): UpdaterArguments {
+  const values = new Map<string, string>();
+  let role: DaemonRole = "worker";
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index] ?? "";
+    if (flag === "--gateway") {
+      role = "gateway";
+    } else if (["--from", "--to", "--pid"].includes(flag) && argv[index + 1] !== undefined) {
+      values.set(flag, argv[index + 1] ?? "");
+      index += 1;
+    } else {
+      throw new Error(`bad updater arguments: ${flag}`);
+    }
+  }
+  const from = values.get("--from") ?? "";
+  const to = values.get("--to") ?? "";
+  const pid = Number(values.get("--pid"));
+  if (
+    !VERSION_PATTERN.test(from) ||
+    !VERSION_PATTERN.test(to) ||
+    !Number.isInteger(pid) ||
+    pid < 1
+  ) {
+    throw new Error("bad updater arguments: --from, --to and --pid are required");
+  }
+  return { from, to, pid, role };
 }
