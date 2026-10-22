@@ -22,8 +22,8 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | Exit | Error codes | Meaning |
 | --- | --- | --- |
 | 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
-| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
-| 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `GATEWAY_NOT_PRESENT`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
+| 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
 | 12 | `NO_DRIVER`, `CAPABILITY_MISSING`, `RUNTIME_MISSING`, `UNKNOWN_MODEL`, `INSUFFICIENT_DISK_SPACE`, `LICENSE_NOT_ACCEPTED`, `DOWNLOADS_DISABLED`, `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE`, `DEVICE_NOT_ENROLLABLE`, `UNKNOWN_DEVICE`, `HISTORY_NOT_KEPT`, `UNKNOWN_WORKER`, `UNKNOWN_ALERT_DESTINATION` | What you named does not exist here, or this machine cannot provide it. |
@@ -95,6 +95,14 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | `INTERNAL` | 1 | 500 | Something unexpected failed. | Check `simlock daemon logs`. If it repeats, report it with the log. |
 | `DOCTOR_UNAVAILABLE` | 1 | 503 | This daemon has no doctor to run. A daemon started by `simlock` always has one. | Check `simlock daemon logs`, and report it if it repeats. |
 | `NUKE_UNAVAILABLE` | 1 | 503 | This daemon has no reset for `nuke` to run. A daemon started by `simlock` always has one. | Check `simlock daemon logs`, and report it if it repeats. |
+
+## Updating Simlock
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `UPDATE_RESOLVE_FAILED` | 1 | 502 | npm could not find the version (`No match found for version 9.9.9`) or could not be reached. The message carries npm's own text. Nothing changed. | Check the version with `npm view simlock versions`, or npm's registry and network settings on that machine. |
+| `UPDATE_UNSUPPORTED_INSTALL` | 2 | 409 | Simlock was not installed with `npm i -g simlock` (a source checkout, a pnpm global). The message names where it runs from. Nothing changed. | Update it the way you installed it. |
+| `UPDATE_SHARED_INSTALL` | 2 | 409 | The worker and the gateway of this user share one install, and the other one is running. Nothing changed. | Stop the other daemon (`simlock daemon stop`, or `simlock --gateway daemon stop`), update, then start it again. |
 
 ## Access
 

@@ -133,6 +133,7 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
+import { socketHeld } from "../updater/index.js";
 import { createUpdateCoordinator } from "./update-coordinator.js";
 import {
   DaemonAlreadyRunningError,
@@ -605,7 +606,13 @@ async function composeDaemon(
       eventBus,
       clock,
       filesystem,
-      otherRoleRunning: async () => false,
+      otherRoleRunning: () =>
+        socketHeld(
+          ipc,
+          resolveDaemonSocketPath(
+            daemonDataDirectory(resolveSimlockHome(), role === "worker" ? "gateway" : "worker"),
+          ),
+        ),
       version,
       packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
       simlockHome: resolveSimlockHome(),

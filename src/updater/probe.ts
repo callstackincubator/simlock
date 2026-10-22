@@ -14,6 +14,17 @@ export interface DaemonProbeOptions {
   readonly ipc?: IpcConnector;
 }
 
+// why: a socket file outlives its daemon and a stopping daemon accepts then closes connections, so only a refused or missing endpoint proves no daemon holds it; any other failure cannot prove it.
+export async function socketHeld(ipc: IpcConnector, endpoint: string): Promise<boolean> {
+  try {
+    await (await ipc.connect(endpoint)).close();
+    return true;
+  } catch (error: unknown) {
+    if (!(error instanceof IpcError)) return true;
+    return error.code !== "connection-refused" && error.code !== "endpoint-not-found";
+  }
+}
+
 // why: the admin client is the only way the updater talks to the daemon, as any CLI does.
 export function createDaemonProbe(options: DaemonProbeOptions): DaemonProbe {
   const { dataDirectory, filesystem } = options;
@@ -38,16 +49,7 @@ export function createDaemonProbe(options: DaemonProbeOptions): DaemonProbe {
       use(async (client) => {
         await client.stopDaemon();
       }),
-    // why: a socket file outlives its daemon and a stopping daemon accepts then closes connections, so only a refused or missing endpoint proves no daemon holds it; any other failure cannot prove it.
-    listening: async () => {
-      try {
-        await (await ipc.connect(endpoint)).close();
-        return true;
-      } catch (error: unknown) {
-        if (!(error instanceof IpcError)) return true;
-        return error.code !== "connection-refused" && error.code !== "endpoint-not-found";
-      }
-    },
+    listening: () => socketHeld(ipc, endpoint),
     state: async () => {
       try {
         return await use(async (client) => {

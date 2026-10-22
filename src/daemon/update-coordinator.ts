@@ -1,9 +1,11 @@
 import { join } from "node:path";
 
 import type { EventBus } from "../bus/index.js";
-import type { UpdateFailure, UpdateState } from "../contract/index.js";
+import { isNewerVersion, type UpdateFailure, type UpdateState } from "../contract/index.js";
 import type { Registry } from "../core/index.js";
 import type { UpdateHold } from "../leasing/index.js";
+import { checkInstall } from "../updater/index.js";
+import { DispatchError } from "./dispatch.js";
 import type { Clock, DaemonRole, Filesystem, NpmCli, UpdaterLauncher } from "../ports/index.js";
 
 export interface UpdateInput {
@@ -93,11 +95,44 @@ class Coordinator implements UpdateCoordinator {
       }
       return this.#outcome(false, null);
     }
-    const spec = input.version ?? "latest";
+    const to = await this.#resolve(input.version ?? "latest");
+    const { version } = this.options;
+    if (to === version || (input.version === undefined && !isNewerVersion(to, version))) {
+      return { ...this.#outcome(false, to), upToDate: true };
+    }
+    await this.#requireNpmInstall();
+    await this.#begin(to, input.force === true);
+    return this.#outcome(true, to);
+  }
+
+  async #resolve(spec: string): Promise<string> {
     const viewed = await this.options.npm.view(`simlock@${spec}`);
-    if (!viewed.ok) throw new Error(viewed.message);
-    await this.#begin(viewed.output, input.force === true);
-    return this.#outcome(true, viewed.output);
+    if (!viewed.ok) {
+      throw new DispatchError(
+        "UPDATE_RESOLVE_FAILED",
+        `could not resolve simlock@${spec}: ${viewed.message}`,
+      );
+    }
+    return viewed.output;
+  }
+
+  async #requireNpmInstall(): Promise<void> {
+    const { npm, filesystem, packageRoot, role, otherRoleRunning } = this.options;
+    const install = await checkInstall({ npm, filesystem, packageRoot });
+    if (!install.ok) {
+      throw new DispatchError(
+        "UPDATE_UNSUPPORTED_INSTALL",
+        `simlock was not installed with npm i -g (found ${install.foundPath}). Update it by hand.`,
+      );
+    }
+    if (await otherRoleRunning()) {
+      const other = role === "worker" ? "gateway" : "worker";
+      const flag = role === "worker" ? "--gateway " : "";
+      throw new DispatchError(
+        "UPDATE_SHARED_INSTALL",
+        `the ${other} daemon of this user runs from the same install; stop it first with simlock ${flag}daemon stop`,
+      );
+    }
   }
 
   async #begin(to: string, forced: boolean): Promise<void> {

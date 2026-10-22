@@ -50,8 +50,10 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 `daemon.update` has a handler in the worker `Dispatcher` (a gateway's answers `UNSUPPORTED_IN_GATEWAY_MODE`), so the socket, the uplink and HTTP all reach it.
 
 1. `query` returns the state and starts nothing. A call while an update runs follows it (`started: false`); `force` on a `waiting` one installs now.
-2. Otherwise the version is resolved with `NpmCli.view` (`simlock@latest`, or `simlock@<version>`), the update enters `waiting` with the lease count, and `daemon.update-started` is emitted.
-3. The updater is launched at once with no leases or with `force`, else when the last `lease.released` or `lease.expired` leaves none.
+2. Otherwise the version is resolved with `NpmCli.view` (`simlock@latest`, or `simlock@<version>`): a failure is `UPDATE_RESOLVE_FAILED`. The running version, or a running version newer than `latest` when no `version` was named (`isNewerVersion`), answers `upToDate` and changes nothing.
+3. Then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and the other role's socket (`socketHeld`, `UPDATE_SHARED_INSTALL`: a worker and a gateway of one user share one install) are checked, so a refusal changes nothing.
+4. The update enters `waiting` with the lease count, leasing's update hold closes admission, and `daemon.update-started` is emitted.
+5. The updater is launched at once with no leases or with `force`, else when the last `lease.released` or `lease.expired` leaves none.
 
 The state lives in memory only.
 

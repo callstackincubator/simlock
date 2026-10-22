@@ -105,6 +105,9 @@ export interface ErrorDetailsMap {
   HISTORY_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
   DAEMON_UPDATING: Record<string, never>;
+  UPDATE_UNSUPPORTED_INSTALL: Record<string, never>;
+  UPDATE_RESOLVE_FAILED: Record<string, never>;
+  UPDATE_SHARED_INSTALL: Record<string, never>;
   INTERNAL: Record<string, never>;
   GATEWAY_NOT_PRESENT: Record<string, never>;
   SERVICE_FAILED: Record<string, never>;
@@ -373,6 +376,24 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   },
   NUKE_UNAVAILABLE: { code: "NUKE_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
   DAEMON_UPDATING: { code: "DAEMON_UPDATING", kind: "domain", cliExitCode: 1, httpStatus: 503 },
+  UPDATE_UNSUPPORTED_INSTALL: {
+    code: "UPDATE_UNSUPPORTED_INSTALL",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 409,
+  },
+  UPDATE_RESOLVE_FAILED: {
+    code: "UPDATE_RESOLVE_FAILED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 502,
+  },
+  UPDATE_SHARED_INSTALL: {
+    code: "UPDATE_SHARED_INSTALL",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 409,
+  },
   HISTORY_NOT_KEPT: { code: "HISTORY_NOT_KEPT", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   HISTORY_UNAVAILABLE: {
     code: "HISTORY_UNAVAILABLE",
