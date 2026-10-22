@@ -950,6 +950,12 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(liveCommand.error).toMatchObject(
       refusal(`${notAvailable}phone daemon: starting`, "COMMAND_FAILED"),
     );
+    const beforeRules = await envelopeOf(
+      await runCommand(live, "snapshot", 1, { flags: { serial: "emulator-9999" } }),
+    );
+    expect(beforeRules.error).toMatchObject(
+      refusal(`${notAvailable}phone daemon: starting`, "COMMAND_FAILED"),
+    );
 
     const simulatorsDown = await setUpWithPhone();
     simulatorsDown.fake.setUnavailable("found 0.20.3");
@@ -1021,6 +1027,34 @@ describe("the agent-device front, through the whole worker daemon", () => {
       expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
       expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
     }
+  });
+
+  it("a virtual allocate whose address is also its driver id reaches the simulator daemon, not the phone daemon", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          addressIsDeviceId: true,
+          availableOsVersions: ["35"],
+          clock,
+          defaultModels: { phone: ["Pixel 8"] },
+          knownModels: ["Pixel 8"],
+          modelClasses: { "Pixel 8": "phone" },
+          physicalDevices: [
+            { class: "phone", ids: [phoneSerial], model: "Pixel 8", osVersion: "15" },
+          ],
+          platform: "android",
+        }),
+      ],
+    });
+    await rig.daemon.dispatch("device.add", { id: phoneSerial, platform: "android" }, adminSession);
+    rig.driver.setPhysicalPresence(phoneSerial, true);
+
+    await granted(rig, 1, { platform: "android" });
+
+    expect(rig.fake.rpcRequests("agent_device.lease.allocate")).toMatchObject([
+      { params: { leaseId: hex(1), serial: expect.stringMatching(/^fake-android-/) } },
+    ]);
+    expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toEqual([]);
   });
 
   it("after a phone lease ends, an allocate that reuses its lease id for a virtual device reaches the simulator daemon", async () => {
