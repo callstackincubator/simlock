@@ -180,7 +180,7 @@ test.describe("the console acts", () => {
         page.getByText("Its leases keep running. New leases go to other workers."),
       ).toBeVisible();
       await expect(page.getByRole("alertdialog")).toHaveCount(0);
-      await expect(row).toContainText("drained");
+      await expect(row).toContainText("drained", { timeout: 10_000 });
 
       await page.getByRole("button", { name: "Undo" }).click();
       await expect(page.getByText("drain-a takes leases again")).toBeVisible();

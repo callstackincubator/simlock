@@ -58,6 +58,8 @@ test.describe("the shell", () => {
     };
     await page.setViewportSize({ height: 900, width: 1440 });
     await page.goto("/");
+    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByLabel("Operator token")).toBeEnabled();
 
     await page.keyboard.press(tab);
     await expect(page.getByLabel("Operator token")).toBeFocused();
