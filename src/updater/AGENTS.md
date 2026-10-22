@@ -3,7 +3,7 @@
 Does: the process a daemon starts to install a Simlock version with npm and restart the role's daemon; it rolls back a version that does not start.
 Entry: `index.ts` → `runUpdater(options)` (returns the exit code), `checkInstall`, `parseUpdaterArgs`, `DaemonProbe`, `createDaemonProbe` (`probe.ts`, the admin-client probe `main.ts` uses; its `state` is `daemon.update {query}`, a call every protocol version accepts), `socketHeld` (the one check that a socket still has a daemon behind it, also the daemon's shared-install check). `main.ts` is the process entry: `node <package root>/dist/updater/main.js --from <v> --to <v> --pid <daemon pid> [--gateway]`, env `SIMLOCK_HOME`.
 Uses: ports, admin (in `probe.ts` only). Never imports: daemon, cli, core.
-Started by: a daemon through `UpdaterLauncher` (no caller yet).
+Started by: a daemon through `UpdaterLauncher` (`src/daemon/update-coordinator.ts`, which also imports `checkInstall` and `socketHeld`).
 
 ## Steps
 

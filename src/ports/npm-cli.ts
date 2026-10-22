@@ -30,7 +30,6 @@ export class FakeNpmCli implements NpmCli {
     };
   }
 
-  // fallow-ignore-next-line unused-class-member -- the daemon's update call (#836) resolves a version with it.
   async view(spec: string): Promise<NpmOutcome> {
     return this.#answer("view", spec);
   }
