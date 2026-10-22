@@ -9,6 +9,7 @@ import {
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { test as base, expect, type Page } from "@playwright/test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -52,6 +53,9 @@ export interface RunningDaemon extends ConsoleDaemon {
   start(): Promise<void>;
   /** Stops the daemon and deletes its home. */
   dispose(): Promise<void>;
+  /** why: stats endpoints only project completed minutes, so fixtures prepare one while stopped. */
+  /** Moves projected minute rows into a completed historical minute, then restarts. */
+  prepareHistoricalUsage(): Promise<void>;
 }
 
 export interface StartOptions {
@@ -194,6 +198,21 @@ export async function startDaemon(
       socketPath,
       start,
       stop,
+      async prepareHistoricalUsage() {
+        await stop();
+        const database = new DatabaseSync(join(dataDirectory, "history.db"));
+        try {
+          // why: Usage reads whole minutes only; moving the real projection while stopped keeps
+          // presentation tests deterministic without changing the daemon's clock or live database.
+          database.exec(
+            "UPDATE minute_rows SET minute = minute - 120000, carryUntil = CASE WHEN carryUntil IS NULL THEN NULL ELSE carryUntil - 120000 END",
+          );
+          database.exec("UPDATE gaps SET at = at - 120000");
+        } finally {
+          database.close();
+        }
+        await start();
+      },
       tokens,
       url: url ?? "",
       writeDriverScript: (script) => writeFile(scriptPath, JSON.stringify(script)),
