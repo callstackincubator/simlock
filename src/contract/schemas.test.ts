@@ -5,6 +5,7 @@ import {
   capabilityReason,
   deviceRecordSchema,
   doctorReportSchema,
+  eventEnvelopeSchema,
   fitHostFacts,
   fitHostLoad,
   fitPlatformCatalog,
@@ -1005,6 +1006,29 @@ describe("waitingRequestSchema's workers", () => {
         { reason: "full", workerId: "wrk_a" },
       ]).success,
     ).toBe(false);
+  });
+});
+
+describe("opaque fields stay optional on the wire", () => {
+  it("accepts an answer whose opaque driverData or payload key is absent (JSON drops undefined)", () => {
+    const record = {
+      physical: false,
+      id: "device-1",
+      driverDeviceId: "SIM-1",
+      spec: { physical: false, platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      mode: "full",
+      state: "ready",
+      createdAt: 0,
+    };
+    const orphan = {
+      findings: [
+        { kind: "orphan-device", platform: "ios", device: { deviceId: "SIM-1", address: "a" } },
+      ],
+    };
+    const envelope = { id: "evt_1", seq: 1, timestamp: 1, event: "x", module: "m" };
+    expect(deviceRecordSchema.safeParse(record).success).toBe(true);
+    expect(doctorReportSchema.safeParse(orphan).success).toBe(true);
+    expect(eventEnvelopeSchema.safeParse(envelope).success).toBe(true);
   });
 });
 

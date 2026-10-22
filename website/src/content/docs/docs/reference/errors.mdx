@@ -131,5 +131,6 @@ The CLI and the HTTP API each add a few codes of their own:
 | --- | --- | --- | --- | --- |
 | `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
 | `UNAUTHENTICATED` | HTTP | 401 | The request has no token, or one the daemon does not accept. | Send a valid token as `Authorization: Bearer <token>`. |
+| `UNSUPPORTED_MEDIA_TYPE` | HTTP | 415 | A request with a JSON body did not send `Content-Type: application/json`. | Send the header `Content-Type: application/json`. |
 | `UNKNOWN_LEASE_REQUEST` | HTTP | 404 | No lease request has this ID. | Check the ID the create call returned. |
 | `REQUEST_NOT_CANCELLABLE` | HTTP | 409 | The lease request was already granted, or device work for it is under way. When it was granted, the answer carries the `leaseId`. | Release the lease in place of cancelling the request. |

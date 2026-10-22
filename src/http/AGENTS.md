@@ -4,23 +4,29 @@ Does: the network API — `/v1` routes, bearer token → session, SSE, lease-req
 Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway`
 (`server.ts`).
 Uses: auth, contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
-bus, core (types), ports. Never imports: drivers, gateway.
+bus, core (types), modules (types), ports. Never imports: drivers, gateway.
 Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/remote-agents.mdx), [console.mdx](../../website/src/content/docs/docs/worker/console.mdx).
 
 ## Files
 
-| File                    | Role                                                             |
-| ----------------------- | ---------------------------------------------------------------- |
-| `app.ts`                | Every `/v1` route, error boundary, request log line              |
-| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403       |
-| `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession` |
-| `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources               |
-| `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls        |
-| `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response        |
-| `sse.ts`                | `pipeSse`: ordered writes, keepalive                             |
-| `errors.ts`             | `HttpApiError`, `mapError`: error → status and body              |
-| `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`     |
-| `test-fakes.ts`         | Fakes for this module's tests                                    |
+| File                    | Role                                                                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.ts`                | Every `/v1` route, error boundary, request log line                                                                                            |
+| `routes.ts`             | `declareRoute`: a route declaration plus its base error codes; `validationHook`                                                                |
+| `route-declarations.ts` | The declared routes (`DECLARED_ROUTES`): System and Devices, with the lease and admin lists                                                    |
+| `lease-declarations.ts` | The declared lease and lease-request routes (`LEASE_ROUTES`), their reply and SSE message schemas                                              |
+| `admin-declarations.ts` | The declared worker, component, token and event routes (`ADMIN_ROUTES`), which side answers 501, install's and the event stream's SSE messages |
+| `openapi.ts`            | `buildOpenApiDocument(modules)`: the OpenAPI 3.1 document                                                                                      |
+| `module-routes.ts`      | `moduleRoutes`: the routes a module definition's `http` carries, as registrable paths                                                          |
+| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403                                                                                     |
+| `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession`                                                                               |
+| `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources                                                                                             |
+| `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls                                                                                      |
+| `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response                                                                                      |
+| `sse.ts`                | `pipeSse`: ordered writes, keepalive                                                                                                           |
+| `errors.ts`             | `HttpApiError`, `mapError`: error → status and body                                                                                            |
+| `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`                                                                                   |
+| `test-fakes.ts`         | Fakes for this module's tests                                                                                                                  |
 
 ## How a request runs
 
@@ -34,12 +40,28 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
    Neither valid → 401 `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
    A proxy-signed (`ambient`) identity on any method but GET, HEAD or OPTIONS needs
    `Sec-Fetch-Site: same-origin` exactly, else 403 `FORBIDDEN` (mounts included). Tokens are exempt.
-4. Body — strict zod schema (`jsonBody`), else 400 `BAD_REQUEST`.
+4. Input — a declared route's query, path and JSON body schemas run before the handler;
+   a failure is 400 `BAD_REQUEST` (`validationHook`). A JSON body without a JSON content type is
+   415 `UNSUPPORTED_MEDIA_TYPE`, malformed JSON 400 `Invalid JSON body` (`mapError` reads the
+   library's `HTTPException`). Renew's body is optional: an empty body is read as none, whatever
+   the content type, and `emptyBodyAsNone` says so before the validator.
 5. `buildHttpSession` — principal = the identity's (a token's id, or `proxy:<iss>#<sub>`); `operator` → `admin`, `agent` → `agent`.
 6. `deps.dispatch` — the daemon's own dispatcher, in process: `DaemonServer.dispatch`.
    Role check, `authorize` and readiness parking run there.
 7. `app.onError` → `mapError` → `{ error: { code, message, ...details } }`. `NO_CAPACITY`
    adds `Retry-After: 5`. An unknown error answers `INTERNAL`, "Internal error", and is logged.
+
+## Route declarations
+
+`declareRoute` (`routes.ts`) wraps `createRoute`: a route states its method, path, tag, role, input
+schemas, reply and its own error codes, and the helper adds the bearer requirement and the base
+codes: `UNAUTHENTICATED` and `FORBIDDEN` (not on `/v1/healthz`), `DAEMON_STOPPING`,
+`DAEMON_STARTUP_FAILED` and `INTERNAL` on every route, `BAD_REQUEST` on a route with any input,
+`UNSUPPORTED_MEDIA_TYPE` on a route with a JSON body. `errorExtras` adds a status's body fields and headers (`capacityReason`, `Retry-After`). The code lists are documentation: nothing
+enforces them. `app.openapi` registers the declaration, and a handler's JSON reply is type-checked
+against it (never at run time; a stream, which declares `stream: sseMessage({...})`, or a bodiless 204 returns any `Response`). `route-declarations.ts` holds them, `buildOpenApiDocument` writes
+the document from the same list plus the routes of every definition that carries `http` (`module-routes.ts`; the stream's, none for agent-device), and `pnpm openapi <file>` saves it. The route-coverage test in
+`core-routes.test.ts` checks that every route the app serves is declared.
 
 `HttpMount` adds a prefix (`/v1/<prefix>`, `/v1/<prefix>/*`) behind the same auth. Today: the
 agent-device front and the stream (`/v1/stream`).

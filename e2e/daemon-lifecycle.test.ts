@@ -64,7 +64,7 @@ describe("daemon lifecycle & recovery", () => {
     60_000,
   );
 
-  it("SIGTERM before startup finishes exits 0 at once instead of waiting for the start", async () => {
+  it("SIGTERM before startup finishes exits 0 at once instead of waiting for the start, and removes the admin.token it wrote", async () => {
     const env = await withDaemon({ mode: "auto" });
     await env.driverScript.set({
       ios: {
@@ -92,6 +92,7 @@ describe("daemon lifecycle & recovery", () => {
 
       expect(code).toBe(0);
       expect(Date.now() - sentAt).toBeLessThan(10_000);
+      expect(existsSync(join(env.home, "admin.token"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
