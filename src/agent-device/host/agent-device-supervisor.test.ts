@@ -816,6 +816,52 @@ describe("AgentDeviceSupervisor reaping by role", () => {
   );
 });
 
+describe("AgentDeviceSupervisor stopping and restarting the phone daemon", () => {
+  const phonesRecordPath = `${home}/agent-device-phones-daemon.json`;
+  const phones = {
+    expectations: [versionRun(), phoneSpawn(), versionRun(), phoneSpawn()],
+    role: "phones",
+  } as const;
+
+  it("stop signals the phone daemon and removes its record", async () => {
+    const harness = await run(phones);
+    const pid = harness.children[0]?.pid;
+
+    await advancing(harness, harness.agentDevice.stop());
+
+    expect(harness.processes.signals).toEqual([{ pid, signal: "SIGTERM" }]);
+    await expect(harness.filesystem.exists(phonesRecordPath)).resolves.toBe(false);
+    expect(stateOf(harness)).toBe("off");
+  });
+
+  it.each([
+    { afterMs: 60_000, restartsAtOnce: true },
+    { afterMs: 5_000, restartsAtOnce: false },
+  ])(
+    "a phone daemon that exits $afterMs ms after it was ready restarts at once only when that is 60 s or more, else after 30 s with a warning that names its role",
+    async ({ afterMs, restartsAtOnce }) => {
+      const harness = await run(phones);
+      await advanceBy(harness, afterMs);
+
+      harness.children[0]?.exit(9);
+      await flush();
+
+      if (restartsAtOnce) {
+        expect(stateOf(harness)).toBe("starting");
+      } else {
+        expect(unavailable(harness)).toMatchObject({ reason: "start-failed" });
+        expect(
+          warnings(harness).some((line) => line.includes("agent-device (phones) start failed")),
+        ).toBe(true);
+        await advanceBy(harness, 29_000);
+        expect(daemonSpawns(harness)).toHaveLength(1);
+      }
+      await advanceUntil(harness, () => stateOf(harness) === "running", 5_000);
+      expect(daemonSpawns(harness)).toHaveLength(2);
+    },
+  );
+});
+
 describe("AgentDeviceSupervisor state directory", () => {
   it("creates a missing state directory with mode 0700", async () => {
     const harness = await run();
