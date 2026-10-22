@@ -160,4 +160,4 @@ export type {
   SqliteValue,
 } from "./sqlite.js";
 export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";
-export { FakeNpmCli, type NpmCli, type NpmOutcome } from "./npm-cli.js";
+export { FakeNpmCli, NodeNpmCli, type NpmCli, type NpmOutcome } from "./npm-cli.js";

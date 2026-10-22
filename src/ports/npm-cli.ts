@@ -1,3 +1,6 @@
+import type { Filesystem } from "./filesystem.js";
+import type { ProcessRunner } from "./process-runner.js";
+
 export type NpmOutcome =
   | { readonly ok: true; readonly output: string }
   | { readonly ok: false; readonly message: string };
@@ -45,5 +48,28 @@ export class FakeNpmCli implements NpmCli {
       throw new Error(`FakeNpmCli has no answer for ${method}`);
     }
     return outcome;
+  }
+}
+
+export interface NodeNpmCliOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+  readonly dataDirectory: string;
+  readonly execPath?: string;
+}
+
+export class NodeNpmCli implements NpmCli {
+  constructor(private readonly options: NodeNpmCliOptions) {}
+
+  async view(_spec: string): Promise<NpmOutcome> {
+    return { ok: false, message: "" };
+  }
+
+  async install(_spec: string): Promise<NpmOutcome> {
+    return { ok: false, message: "" };
+  }
+
+  async globalRoot(): Promise<NpmOutcome> {
+    return { ok: false, message: "" };
   }
 }
