@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import {
   createServer,
   type IncomingMessage,
@@ -9,6 +10,7 @@ import {
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
 
 import { test as base, expect, type Page } from "@playwright/test";
@@ -65,6 +67,33 @@ export interface StartOptions {
 }
 
 const FAKE_DRIVER_MODULE = join(REPO_ROOT, "dist/e2e/index.js");
+const execFileAsync = promisify(execFile);
+
+async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
+  if (!existsSync(socketPath)) return [];
+  try {
+    const { stdout } = await execFileAsync("lsof", ["-t", socketPath]);
+    return stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isInteger(pid));
+  } catch (error: unknown) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: string };
+    if ((failure.code === 1 || failure.code === "1") && !failure.stderr?.trim()) return [];
+    throw error;
+  }
+}
+
+async function isProcessAlive(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
 
 /**
  * Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
@@ -125,8 +154,18 @@ export async function startDaemon(
   const socketPath = join(dataDirectory, "daemon.sock");
   const background = new Set<CliBackgroundHandle>();
   const stop = async () => {
-    await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
-    await waitFor(() => !existsSync(socketPath), { timeout: 10_000 }).catch(() => undefined);
+    const pids = await pidsHoldingSocket(socketPath);
+    if (pids.length === 0) return;
+    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+    expect(stopped.code, stopped.stderr).toBe(0);
+    await waitFor(() => !existsSync(socketPath), {
+      timeout: 10_000,
+      label: "daemon socket removed",
+    });
+    await waitFor(
+      async () => !(await Promise.all(pids.map((pid) => isProcessAlive(pid)))).some(Boolean),
+      { timeout: 20_000, interval: 100, label: "daemon process exited" },
+    );
   };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
@@ -155,6 +194,7 @@ export async function startDaemon(
   };
   const dispose = async () => {
     for (const handle of background) handle.kill("SIGTERM");
+    await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
     await stop();
     await rm(home, { force: true, recursive: true });
   };
