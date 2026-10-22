@@ -4616,6 +4616,35 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     ).toEqual([["queued", "updating"]]);
   });
 
+  it("refuses a request that is still resolving its spec when the update hold begins", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { resolveSpec: 50 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver, limits: runningLimit });
+    const resolving = harness.engine
+      .request(request, asking("resolving"))
+      .catch((error: unknown) => error);
+    await flush();
+
+    await harness.engine.leasing.holdForUpdate();
+    clock.advance(50);
+    await flush();
+
+    expect(await resolving, "the request that was resolving").toBeInstanceOf(DaemonUpdatingError);
+    expect(driver.calls.map((call) => call.operation)).not.toContain("provision");
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload as { requester: string; reason: string })
+        .map(({ requester, reason }) => [requester, reason]),
+    ).toEqual([["resolving", "updating"]]);
+  });
+
   it("lists a request that waits for a device the warm pool is booting as waiting-for-device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({

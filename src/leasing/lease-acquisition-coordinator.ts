@@ -401,9 +401,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async holdForUpdate(): Promise<void> {
     await this.options.decisions.run(async () => {
       this.#updateHold = true;
-      // why: ADR 0042 §3: a request already provisioning is granted, so only the ones still waiting for their turn are refused.
+      // why: a request already provisioning is granted (#825 Decisions), so only the ones not yet provisioning, `new` (still resolving its spec) or queued, are refused.
       for (const waiter of this.options.queue.pending() as readonly AcquisitionWaiter[]) {
-        if (waiter.state !== "queued") continue;
+        if (waiter.state !== "queued" && waiter.state !== "new") continue;
         if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
           this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
         }
@@ -934,6 +934,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #decide(waiter: AcquisitionWaiter): Promise<OperationPlan | undefined> {
     if (this.#admissionClosed && waiter.state !== "rejected") {
       this.#reject(waiter, new NukeCancelledError(), "killed");
+      return undefined;
+    }
+    // why: a `new` waiter reaches here after resolving its spec or being sent back to retry, and the update hold refuses everything not yet provisioning.
+    if (this.#updateHold && waiter.state === "new") {
+      if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
+        this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
+      }
       return undefined;
     }
     const plan = this.#nextPlan(waiter);
