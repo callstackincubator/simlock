@@ -75,7 +75,7 @@ This writes a systemd user unit to `$XDG_CONFIG_HOME/systemd/user/<name>.service
 
 Stopping the unit kills only the daemon, so emulators it booted keep running. Without linger, the last logout stops the user's whole systemd, and the daemon and its emulators with it. Run `loginctl enable-linger <user>` to keep them. Simlock does not turn linger on.
 
-With no user bus (no session and no linger), `daemon install` fails with `SERVICE_FAILED` (`systemctl --user daemon-reload failed: Failed to connect to bus: ...`) and removes the unit file. Other commands then start the daemon without the service and say `Service <name> is not loaded; started the daemon without it.` The `Service:` line reads `installed (systemd, <name>)`. If a start through the service fails, the command reports `DAEMON_STARTUP_FAILED` as on macOS; if `systemctl` fails, `SERVICE_FAILED`.
+With no user bus (no session and no linger), `daemon install` fails with `SERVICE_FAILED` (`systemctl --user daemon-reload failed: Failed to connect to bus: ...`) and removes the unit file. Other commands then start the daemon without the service and say `Service <name> is not loaded; started the daemon without it.` The `Service:` line reads `not loaded (systemd, <name>)`. If a start through the service fails, the command reports `DAEMON_STARTUP_FAILED` as on macOS; if `systemctl` fails, `SERVICE_FAILED`.
 
 ## Check whether it is running
 

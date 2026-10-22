@@ -143,7 +143,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
         manager: serviceManager,
         platform: process.platform,
         home: homedir(),
-        user: userInfo().username,
+        user: () => userInfo().username,
         root,
         nodePath: process.execPath,
         mainPath,

@@ -2001,7 +2001,7 @@ async function runDaemonStatus(
     service: {
       manager,
       platform: manager === undefined ? "linux" : "darwin",
-      user: "me",
+      user: () => "me",
       definition: async () =>
         serviceDefinition({
           role: testCase.role,
@@ -2206,7 +2206,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
           },
         } as unknown as ServiceManager,
         platform: "darwin",
-        user: "me",
+        user: () => "me",
         definition: async () =>
           serviceDefinition({
             role: "worker",
@@ -8656,6 +8656,7 @@ describe("CLI: daemon install (#830)", () => {
     readonly root: string;
     readonly env?: NodeJS.ProcessEnv;
     readonly linux?: boolean;
+    readonly user?: () => string;
   }): Promise<{
     readonly exitCode: number;
     readonly output: ReturnType<typeof outputCapture>;
@@ -8688,7 +8689,7 @@ describe("CLI: daemon install (#830)", () => {
           manager: serviceManager,
           platform: options.linux === true ? "linux" : "darwin",
           home: options.linux === true ? "/home/me" : home,
-          user: "me",
+          user: options.user ?? (() => "me"),
           root,
           nodePath,
           mainPath,
@@ -8816,6 +8817,23 @@ describe("CLI: daemon install (#830)", () => {
         "To start after a reboot without logging in, run: loginctl enable-linger me",
       );
     }
+
+    // why: a uid with no passwd entry makes the user lookup throw; install must still succeed.
+    const unknownUser = (): string => {
+      throw new Error("ENOENT: no passwd entry for uid 1234");
+    };
+    const lookupFails = await install({
+      argv: ["daemon", "install"],
+      role: "worker",
+      root: "/home/me/.simlock",
+      linux: true,
+      user: unknownUser,
+    });
+    expect(lookupFails.output.stderr).toBe("");
+    expect(lookupFails.exitCode).toBe(0);
+    expect(lookupFails.output.stdout.trimEnd().split("\n").at(-1)).toBe(
+      "To start after a reboot without logging in, run: loginctl enable-linger <user>",
+    );
   });
 
   async function runWithService(options: {
@@ -8873,7 +8891,7 @@ describe("CLI: daemon install (#830)", () => {
       service: {
         manager: serviceManager,
         platform: "darwin",
-        user: "me",
+        user: () => "me",
         definition: async () =>
           serviceDefinition({
             role: "worker",
@@ -9229,7 +9247,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
       service: {
         manager,
         platform: options.platform ?? "darwin",
-        user: "me",
+        user: () => "me",
         home,
         root,
         nodePath,

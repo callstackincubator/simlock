@@ -13,13 +13,23 @@ function serviceAccess(
 ): {
   readonly manager: ServiceManager;
   readonly definition: () => Promise<ServiceDefinition>;
-  readonly user: string;
+  readonly user: () => string;
 } {
   const { service } = environment;
   if (service?.manager === undefined) {
     throw new UsageError(`daemon ${command} is supported on macOS and Linux only`);
   }
   return { manager: service.manager, definition: service.definition, user: service.user };
+}
+
+/** why: a container run with a uid that has no passwd entry makes the lookup throw; the hint is
+ * advice, so install names a placeholder instead of failing after the service is already in place. */
+function userForHint(lookupUser: () => string): string {
+  try {
+    return lookupUser();
+  } catch {
+    return "<user>";
+  }
 }
 
 async function serviceReport(
@@ -119,7 +129,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (command === "install") {
-    const { manager, definition, user } = serviceAccess(environment, "install");
+    const { manager, definition, user: lookupUser } = serviceAccess(environment, "install");
     const service = await definition();
     const stopped = await stopRunningDaemon(environment, token);
     await manager.install(service);
@@ -141,7 +151,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
       environment.stdout.write(runningLines(status));
       environment.stdout.write(
         manager.manager === "systemd"
-          ? `To start after a reboot without logging in, run: loginctl enable-linger ${user}\n`
+          ? `To start after a reboot without logging in, run: loginctl enable-linger ${userForHint(lookupUser)}\n`
           : "To start after a reboot, turn on automatic login for this user.\n",
       );
     }

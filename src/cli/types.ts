@@ -34,7 +34,8 @@ export interface ServiceSetup {
   readonly manager: ServiceManager | undefined;
   readonly platform: NodeJS.Platform;
   readonly home: string;
-  readonly user: string;
+  /** why: read only where the linger hint needs it; the lookup throws for a uid with no passwd entry. */
+  readonly user: () => string;
   readonly root: string;
   readonly nodePath: string;
   readonly mainPath: string;
@@ -43,7 +44,8 @@ export interface ServiceSetup {
 export interface CliServiceAccess {
   readonly manager: ServiceManager | undefined;
   readonly platform: NodeJS.Platform;
-  readonly user: string;
+  /** why: read only where the linger hint needs it; the lookup throws for a uid with no passwd entry. */
+  readonly user: () => string;
   readonly definition: () => Promise<ServiceDefinition>;
 }
 
