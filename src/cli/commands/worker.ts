@@ -129,8 +129,8 @@ async function runWorkerUpdate(
   });
   const find = async (): Promise<WorkerView | undefined> =>
     (await client.listWorkers()).workers.find((worker) => worker.id === workerId);
-  let view = await find();
-  const name = workerName(view, workerId);
+  const first = await find();
+  const name = workerName(first, workerId);
   if (answer.upToDate) {
     environment.stdout.write(`${name} is already on the latest (${answer.version})\n`);
     return 0;
@@ -143,14 +143,24 @@ async function runWorkerUpdate(
     );
     return 0;
   }
-  for (;;) {
+  return follow({ environment, find, first, name, to });
+}
+
+async function follow(options: {
+  readonly environment: CommandContext["environment"];
+  readonly find: () => Promise<WorkerView | undefined>;
+  readonly first: WorkerView | undefined;
+  readonly name: string;
+  readonly to: string;
+}): Promise<number> {
+  const { environment, find, name, to } = options;
+  for (let view = options.first; ; view = await find()) {
     const outcome = followOutcome(view, to, name);
     if (outcome !== undefined) {
       environment.stdout.write(`${outcome.text}\n`);
       return outcome.code;
     }
     await environment.sleep(FOLLOW_POLL_MS);
-    view = await find();
   }
 }
 

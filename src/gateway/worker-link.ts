@@ -331,25 +331,7 @@ export class WorkerLink {
         workerId: this.workerId,
         message: errorMessage(error),
       });
-      // P1: a `WorkerCallTimeoutError` here is not "anything else" -- it is the one failure this
-      // class already knows means "the socket is not answering", and it used to mean nothing
-      // happened at all: `registry.refresh` was never reached, so `connection` stayed
-      // `connected` and `lastSeenAt` stayed stale, forever, on a half-open uplink. After
-      // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` in a row, close the link -- which routes through
-      // `#handleClosed` into `registry.disconnected` -- rather than let it keep confidently
-      // reporting a machine nothing can reach. `close()` is fire-and-forget here on purpose: it
-      // flips `#closed` synchronously before its own first `await`, which is what the `finally`
-      // block below needs to skip queuing another refresh behind a link that is on its way out.
-      if (error instanceof WorkerCallTimeoutError) {
-        this.#consecutiveRefreshTimeouts += 1;
-        if (this.#consecutiveRefreshTimeouts >= MAX_CONSECUTIVE_REFRESH_TIMEOUTS) {
-          this.#logger.warn("Worker stopped answering; closing its uplink", {
-            workerId: this.workerId,
-            consecutiveTimeouts: this.#consecutiveRefreshTimeouts,
-          });
-          void this.close();
-        }
-      }
+      this.#countTimeout(error);
     } finally {
       this.#refreshing = false;
       const queued = this.#queuedRefresh;
@@ -358,6 +340,28 @@ export class WorkerLink {
       if (queued !== undefined) {
         if (this.#closed) queued.resolve();
         else void this.refresh(queued.options).then(queued.resolve);
+      }
+    }
+  }
+
+  #countTimeout(error: unknown): void {
+    // why: P1: a `WorkerCallTimeoutError` here is not "anything else" -- it is the one failure this
+    // class already knows means "the socket is not answering", and it used to mean nothing
+    // happened at all: `registry.refresh` was never reached, so `connection` stayed
+    // `connected` and `lastSeenAt` stayed stale, forever, on a half-open uplink. After
+    // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` in a row, close the link -- which routes through
+    // `#handleClosed` into `registry.disconnected` -- rather than let it keep confidently
+    // reporting a machine nothing can reach. `close()` is fire-and-forget here on purpose: it
+    // flips `#closed` synchronously before its own first `await`, which is what the `finally`
+    // block below needs to skip queuing another refresh behind a link that is on its way out.
+    if (error instanceof WorkerCallTimeoutError) {
+      this.#consecutiveRefreshTimeouts += 1;
+      if (this.#consecutiveRefreshTimeouts >= MAX_CONSECUTIVE_REFRESH_TIMEOUTS) {
+        this.#logger.warn("Worker stopped answering; closing its uplink", {
+          workerId: this.workerId,
+          consecutiveTimeouts: this.#consecutiveRefreshTimeouts,
+        });
+        void this.close();
       }
     }
   }
