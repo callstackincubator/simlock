@@ -53,8 +53,8 @@ export function createDaemonProbe(options: DaemonProbeOptions): DaemonProbe {
     state: async () => {
       try {
         return await use(async (client) => {
-          const status = await client.getStatus();
-          return { health: status.daemon.health, version: client.daemonVersion };
+          const answer = await client.updateDaemon({ query: true });
+          return { health: answer.health, version: answer.version };
         });
       } catch {
         return undefined;

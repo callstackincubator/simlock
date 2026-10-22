@@ -785,7 +785,8 @@ export class DaemonServer {
       return;
     }
 
-    if (connection.protocolMismatch) {
+    // why: `daemon.update` is the second frozen call (ADR 0042 §1): it skips the version gate but not the role check and readiness, which the dispatcher still runs.
+    if (connection.protocolMismatch && frame.type !== "daemon.update") {
       relayChannel?.abort();
       await this.#respondError(
         connection.socket,

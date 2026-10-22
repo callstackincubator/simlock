@@ -388,21 +388,12 @@ export async function connectSimlockClient(
 }
 
 /**
- * ADR §6's escape hatch, on the client side: everything but `stopDaemon()` and `close()`
- * rejects with the captured `PROTOCOL_VERSION_UNSUPPORTED` error (never sent to the daemon --
- * every other operation requires a completed handshake this connection never got); `close()`
- * still works so a caller that decides not to stop the daemon can tidy up. `stopDaemon()` calls
- * straight through the wire: the daemon accepts `daemon.stop` "at any protocol version it has
- * ever spoken" (ADR §6), ahead of its own mismatch gate, specifically so this is reachable.
- *
- * `role`/`principal` cannot be the connection's real resolved values -- the daemon resolves
- * them before the mismatch check but the failed `hello` never reports them back (see the PR
- * report's weak-spots list) -- so `role` reflects which entry point the caller used
- * (`connectSimlock` vs. `connectSimlockAdmin`) rather than a verified fact, and `principal` is
- * whatever the caller supplied (or `""` when it supplied none). Neither is load-bearing here:
- * the only operation this client permits (`daemon.stop`) is gated by the daemon's own role
- * check on the credential it already verified, not by anything this object reports about
- * itself.
+ * why: ADR §6's escape hatch on the client side. A mismatch leaves the connection open so an admin can still send the
+ * two frozen calls, `stopDaemon()` and `updateDaemon()` (the daemon answers them at any protocol version, ahead of its
+ * mismatch gate); everything else rejects with the captured `PROTOCOL_VERSION_UNSUPPORTED` error without being sent,
+ * and `close()` still works. `role` reflects which entry point the caller used and `principal` what it supplied,
+ * because the daemon resolves them but the failed `hello` never reports them back; the daemon's own role check on the
+ * credential it already verified is what gates the two calls.
  */
 function buildDegradedClient(
   wire: SimlockWire,
@@ -444,25 +435,8 @@ function buildDegradedClient(
     runCleanup: () => rejected(),
     runNuke: () => rejected(),
     getConfig: () => rejected(),
-    stopDaemon: () =>
-      wire.call("daemon.stop", {}).then(
-        (payload) => {
-          const result = OPERATIONS["daemon.stop"].output.safeParse(payload);
-          if (!result.success) {
-            throw new SimlockError(
-              "BAD_FRAME",
-              "protocol",
-              "Daemon's daemon.stop response did not match the contract output schema",
-              {},
-            );
-          }
-          return result.data;
-        },
-        (callError: unknown) => {
-          throw toSimlockError(callError);
-        },
-      ),
-    updateDaemon: () => rejected(),
+    stopDaemon: () => frozenCall(wire, "daemon.stop", {}),
+    updateDaemon: (input = {}) => frozenCall(wire, "daemon.update", input),
     replayEvents: () => rejected(),
     usage: () => rejected(),
     subscribeEvents: () => rejected(),
@@ -484,6 +458,41 @@ function buildDegradedClient(
     relayCancel: () => rejected(),
   };
   return client;
+}
+
+// why: the two frozen calls (`daemon.stop`, `daemon.update`) are the only ones a degraded client sends, and the daemon answers them at any protocol version.
+function frozenCall(
+  wire: SimlockWire,
+  operation: "daemon.stop",
+  input: Record<string, never>,
+): Promise<DaemonStopOutput>;
+function frozenCall(
+  wire: SimlockWire,
+  operation: "daemon.update",
+  input: DaemonUpdateInput,
+): Promise<DaemonUpdateOutput>;
+function frozenCall(
+  wire: SimlockWire,
+  operation: "daemon.stop" | "daemon.update",
+  input: unknown,
+): Promise<unknown> {
+  return wire.call(operation, input).then(
+    (payload) => {
+      const result = OPERATIONS[operation].output.safeParse(payload);
+      if (!result.success) {
+        throw new SimlockError(
+          "BAD_FRAME",
+          "protocol",
+          `Daemon's ${operation} response did not match the contract output schema`,
+          {},
+        );
+      }
+      return result.data;
+    },
+    (callError: unknown) => {
+      throw toSimlockError(callError);
+    },
+  );
 }
 
 function isLinkConnection(connection: IpcConnection): connection is LinkConnection {

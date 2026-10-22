@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   OPERATIONS,
@@ -1728,5 +1729,93 @@ describe("events.replay input", () => {
     for (const beforeId of ["evt_", "abc"]) expect(parse({ beforeId }).success).toBe(false);
     expect(parse({ beforeId: "evt_abc", sinceTs: 5 }).success).toBe(false);
     expect(parse({ limit: 5, sinceTs: 5 }).success).toBe(false);
+  });
+});
+
+describe("daemon.update", () => {
+  const SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+  const exactVersion = {
+    type: "string",
+    maxLength: 64,
+    pattern: "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$",
+  };
+  const version = { type: "string", maxLength: 64 };
+  const stateBase = {
+    from: version,
+    to: version,
+    forced: { type: "boolean" },
+    startedAt: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+  };
+  const state = (stage: string, extra: Record<string, unknown> = {}) => ({
+    type: "object",
+    properties: { stage: { type: "string", const: stage }, ...extra, ...stateBase },
+    required: ["stage", ...Object.keys(extra), "from", "to", "forced", "startedAt"],
+    additionalProperties: false,
+  });
+
+  it("keeps the input and the answer the shapes every daemon version accepts, because it is a frozen call", () => {
+    expect(z.toJSONSchema(OPERATIONS["daemon.update"].input, { io: "input" })).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        version: exactVersion,
+        force: { type: "boolean" },
+        query: { type: "boolean" },
+      },
+    });
+    expect(z.toJSONSchema(OPERATIONS["daemon.update"].output)).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        started: { type: "boolean" },
+        upToDate: { type: "boolean" },
+        resolved: { anyOf: [exactVersion, { type: "null" }] },
+        version,
+        health: { type: "string", enum: ["starting", "running", "failed"] },
+        update: {
+          anyOf: [
+            {
+              oneOf: [
+                state("waiting", {
+                  leases: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+                }),
+                state("installing"),
+                state("restarting"),
+              ],
+            },
+            { type: "null" },
+          ],
+        },
+        lastUpdateFailure: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                stage: { type: "string", enum: ["installing", "restarting"] },
+                from: version,
+                to: version,
+                message: { type: "string", maxLength: 2000 },
+                at: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+              },
+              required: ["stage", "from", "to", "message", "at"],
+              additionalProperties: false,
+            },
+            { type: "null" },
+          ],
+        },
+        latestVersion: { anyOf: [version, { type: "null" }] },
+      },
+      required: [
+        "started",
+        "upToDate",
+        "resolved",
+        "version",
+        "health",
+        "update",
+        "lastUpdateFailure",
+        "latestVersion",
+      ],
+      additionalProperties: false,
+    });
   });
 });

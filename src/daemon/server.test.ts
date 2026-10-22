@@ -3366,6 +3366,17 @@ describe("daemon.update", () => {
           },
         },
       },
+      ...[
+        ["a query with another field", { query: true, force: true }],
+        ["a tag, not a version", { version: "latest" }],
+        ["a path, not a version", { version: "../x" }],
+        ["a version of 65 characters", { version: `1.0.0-${"a".repeat(59)}` }],
+      ].map(([name, input]) => ({
+        name: `${name as string}`,
+        setup: {},
+        input: input as Record<string, unknown>,
+        reply: { ok: false, error: { code: "BAD_REQUEST" } },
+      })),
     ];
     for (const { name, setup, input = {}, reply } of cases) {
       const rig = await updateRig(0, 2, setup);
