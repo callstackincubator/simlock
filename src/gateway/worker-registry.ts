@@ -306,11 +306,9 @@ export class WorkerRegistry {
   }
 
   /**
-   * An uplink the gateway turned away at the upgrade (ADR 0005 §4/§22). The reason is the
-   * outcome the token check produced, kept apart here for the same reason it is kept apart on
-   * the wire: `unauthenticated` (`401`) is "no token, or one I do not know" and points at the
-   * join token, while `forbidden` (`403`) is "a real credential without this authority" and
-   * points at its role -- two different things for an operator to go and fix.
+   * why: the reason is the outcome the token check produced, kept apart so an operator knows
+   * what to fix: `unauthenticated` (`401`) points at the join token, `forbidden` (`403`) at its
+   * role, `worker-mismatch` (`403`) at the worker the token is pinned to (ADR 0005 §4/§22).
    *
    * There is no view to build: the peer never became a worker, so this is a fact and nothing
    * else, and `workerId` is only ever what the connection claimed in its header.

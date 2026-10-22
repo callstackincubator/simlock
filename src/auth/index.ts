@@ -103,12 +103,17 @@ export function createAuthFrom(
       if (adminSecret.verify(hello.credential)) return "admin";
       throw new AdminAuthenticationFailedError();
     },
-    authenticateUplink: async (credential) => {
+    authenticateUplink: async (credential, claimedWorkerId) => {
       if (credential === undefined) return "unauthenticated";
       const record = await store.verify(credential);
       if (record === undefined) return "unauthenticated";
       if (record.role !== "worker") return "forbidden";
-      return { outcome: "accept", tokenId: record.id };
+      if (claimedWorkerId === undefined || claimedWorkerId === "") return "worker-mismatch";
+      const pinned =
+        record.workerId === undefined
+          ? await store.pinWorker(record.id, claimedWorkerId)
+          : record.workerId === claimedWorkerId;
+      return pinned ? { outcome: "accept", tokenId: record.id } : "worker-mismatch";
     },
     tokens: {
       create: (role, label) => store.create(role, label),

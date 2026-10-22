@@ -31,7 +31,7 @@ A joined worker gives its gateway the same rights as an operator on that worker.
    {"secret":"slk_7mQ2xVb9Lr4pK0sZt8YcN1dHf6WjE3uAoG5iRk2Pq-s","token":{"id":"tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24","role":"worker","label":"mac-mini-2","createdAt":1792569600000}}
    ```
 
-   Copy the `secret`. It is printed once. Make one token per worker, so that you can revoke one machine without touching the others.
+   Copy the `secret`. It is printed once. Make one token per worker: the first worker that joins with a token is paired with it, and the gateway refuses any other worker that tries the same token. See [Pair a token with its worker](#pair-a-token-with-its-worker).
 
 2. On the worker, set the gateway's address, the token and a display name, all in one command:
 
@@ -83,10 +83,33 @@ simlock daemon logs
 | --- | --- | --- |
 | `Uplink to gateway established` | The worker joined. | Nothing. |
 | `Uplink to gateway failed; retrying` with reason `rejected` and `The gateway refused the uplink with HTTP 401` | The gateway does not know the token: it is mistyped, revoked, or made on another daemon. | Make a new join token on the gateway and set it on the worker. |
-| The same, with `HTTP 403` | The token is real but is not a worker token. | Make one with `--role worker`. |
+| The same, with `HTTP 403` | The token is real but is not a worker token, or it is paired with another worker. | Make a new join token for this worker with `--role worker`. On the gateway, `simlock events` shows `worker.rejected` with the reason: `forbidden` or `worker-mismatch`. |
 | `Uplink to gateway failed; retrying` with any other reason | The worker cannot reach the gateway. | Check the address, DNS, and that the reverse proxy passes WebSocket upgrades. |
 
 A worker shown as `incompatible` is connected, but it and the gateway run Simlock versions that cannot talk to each other. The gateway sends it no requests. Update the older one.
+
+## Pair a token with its worker
+
+The first time a worker joins with a join token, the gateway pairs the token with that worker's id. From then on:
+
+- The worker can reconnect and restart with the token as often as it needs.
+- Another machine that tries the same token is refused with `HTTP 403`, and the gateway records `worker.rejected` with reason `worker-mismatch`. The paired worker stays connected.
+- The worker cannot join with a second token while the first one is still valid.
+
+`simlock --gateway token list` shows the pairing: a join token that has been used has a `workerId`, the same id `worker list` shows.
+
+```json
+{"tokens":[{"id":"tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24","role":"worker","label":"mac-mini-2","createdAt":1792569600000,"workerId":"4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68"}]}
+```
+
+A worker's id lives in its Simlock folder. If you move the token to another machine, or the worker gets a new id (a new Simlock folder, or a reinstalled machine), pair it again: revoke the old token, make a new one, and set it on the worker.
+
+```sh
+simlock --gateway token revoke tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24
+simlock --gateway token create --role worker --label mac-mini-2
+```
+
+Then set the new `secret` on the worker as in step 2 above, and restart it.
 
 ## What changes on a joined worker
 

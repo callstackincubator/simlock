@@ -18,10 +18,16 @@ CREATE TABLE tokens (
 ) STRICT;
 `;
 
+// why: the unique index keeps a worker id pinned to one live token, so a second token cannot take over a paired worker.
+const TOKENS_V2 = `
+ALTER TABLE tokens ADD COLUMN worker_id TEXT;
+CREATE UNIQUE INDEX tokens_worker_id ON tokens (worker_id);
+`;
+
 export const tokensOwner: SqliteSchemaOwner = {
-  migrations: [TOKENS_V1],
+  migrations: [TOKENS_V1, TOKENS_V2],
   name: "tokens",
-  version: 1,
+  version: 2,
 };
 
 export interface TokenStoreOptions {
@@ -73,8 +79,15 @@ export class TokenStore {
     );
   }
 
-  async pinWorker(_id: string, _workerId: string): Promise<boolean> {
-    return false;
+  // why: OR IGNORE leaves the row unpinned when another token holds the id, and the re-read in the same transaction decides, so two first joins at once cannot both win.
+  async pinWorker(id: string, workerId: string): Promise<boolean> {
+    return inTransaction(this.#database, () => {
+      this.#database
+        .prepare("UPDATE OR IGNORE tokens SET worker_id = ? WHERE id = ? AND worker_id IS NULL")
+        .run(workerId, id);
+      const row = this.#database.prepare("SELECT worker_id FROM tokens WHERE id = ?").get(id);
+      return row?.worker_id === workerId;
+    });
   }
 
   async verify(secret: string): Promise<TokenRecord | undefined> {
@@ -92,5 +105,6 @@ function toRecord(row: Record<string, unknown>): TokenRecord {
     role: row.role as TokenRole,
     ...(row.label === null ? {} : { label: row.label as string }),
     createdAt: Number(row.created_at),
+    ...(row.worker_id === null ? {} : { workerId: row.worker_id as string }),
   };
 }

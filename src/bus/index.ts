@@ -321,10 +321,11 @@ export interface EventMap {
     readonly version?: string;
   };
   /**
-   * An uplink was turned away at the door, before any session existed (ADR 0005 §4/§22).
-   * Two reasons, and they are the same two the rest of the API tells apart:
+   * why: an uplink turned away at the door leaves no other trace (ADR 0005 §4/§22).
    * `unauthenticated` (`401`) is a missing or unrecognized join token -- a revoked or mistyped
-   * one lands here -- and `forbidden` (`403`) is a real token whose role is not `worker`.
+   * one lands here; `forbidden` (`403`) is a real token whose role is not `worker`; and
+   * `worker-mismatch` (`403`) is a join token pinned to another worker id, or a worker id
+   * another token is pinned to.
    *
    * Version skew is deliberately *not* one of these: a worker whose `hello` finds no
    * overlapping protocol range authenticated fine, so it enters the registry as
