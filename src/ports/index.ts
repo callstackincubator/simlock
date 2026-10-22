@@ -43,6 +43,7 @@ export {
   LaunchdServiceManager,
   productionServiceManager,
   ServiceFailedError,
+  SystemdServiceManager,
   type ServiceDefinition,
   type ServiceManager,
   serviceDefinition,

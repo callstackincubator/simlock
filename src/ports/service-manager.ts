@@ -21,6 +21,7 @@ export interface ServiceDefinition {
 }
 
 export interface ServiceDefinitionInput {
+  readonly manager?: ServiceManagerName;
   readonly role: DaemonRole;
   readonly root: string;
   readonly dataDirectory: string;
@@ -264,6 +265,27 @@ export class LaunchdServiceManager implements ServiceManager {
   }
 }
 
+export interface SystemdServiceManagerOptions {
+  readonly runner: ProcessRunner;
+  readonly filesystem: Filesystem;
+}
+
+export class SystemdServiceManager implements ServiceManager {
+  readonly manager = "systemd";
+
+  constructor(private readonly options: SystemdServiceManagerOptions) {}
+
+  async state(_definition: ServiceDefinition): Promise<ServiceState> {
+    return { state: "not-installed" };
+  }
+
+  async install(_definition: ServiceDefinition): Promise<void> {}
+
+  async uninstall(_definition: ServiceDefinition): Promise<void> {}
+
+  async start(_definition: ServiceDefinition): Promise<void> {}
+}
+
 export function productionServiceManager(
   platform: NodeJS.Platform,
   dependencies: {
@@ -272,5 +294,6 @@ export function productionServiceManager(
     readonly uid: number;
   },
 ): ServiceManager | undefined {
+  if (platform === "linux") return new SystemdServiceManager(dependencies);
   return platform === "darwin" ? new LaunchdServiceManager(dependencies) : undefined;
 }

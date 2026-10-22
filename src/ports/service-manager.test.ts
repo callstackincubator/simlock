@@ -3,10 +3,16 @@ import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "./filesystem.js";
-import { ScriptedProcessRunner } from "./process-runner.js";
+import {
+  ScriptedProcessRunner,
+  type ProcessResult,
+  type ProcessRunner,
+  type ProcessRunOptions,
+} from "./process-runner.js";
 import {
   LaunchdServiceManager,
   productionServiceManager,
+  SystemdServiceManager,
   serviceDefinition,
   ServiceFailedError,
   type ServiceDefinition,
@@ -335,14 +341,14 @@ describe("LaunchdServiceManager (#830)", () => {
     await expect(install).rejects.toThrow("denied");
   });
 
-  it("productionServiceManager is the launchd adapter on macOS and nothing elsewhere", () => {
+  it("productionServiceManager is the launchd adapter on macOS, the systemd adapter on Linux and nothing elsewhere", () => {
     const dependencies = {
       runner: new ScriptedProcessRunner([]),
       filesystem: new MemoryFilesystem(),
       uid: 501,
     };
     expect(productionServiceManager("darwin", dependencies)).toBeInstanceOf(LaunchdServiceManager);
-    expect(productionServiceManager("linux", dependencies)).toBeUndefined();
+    expect(productionServiceManager("linux", dependencies)).toBeInstanceOf(SystemdServiceManager);
     expect(productionServiceManager("win32", dependencies)).toBeUndefined();
   });
 
@@ -361,5 +367,291 @@ describe("LaunchdServiceManager (#830)", () => {
 
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]?.options.timeoutMs).toBe(10_000);
+  });
+});
+
+const linuxHome = "/home/me";
+const linuxRoot = "/home/me/.simlock";
+
+function systemdDefinition(
+  role: "worker" | "gateway",
+  env: NodeJS.ProcessEnv = {},
+): ServiceDefinition {
+  return serviceDefinition({
+    manager: "systemd",
+    role,
+    root: linuxRoot,
+    dataDirectory: role === "gateway" ? `${linuxRoot}/gateway` : linuxRoot,
+    home: linuxHome,
+    nodePath: "/usr/bin/node",
+    mainPath: "/opt/simlock/dist/daemon/main.js",
+    env,
+  });
+}
+
+type Unit = Record<string, Record<string, string[]>>;
+
+// why: the test reads the unit the way systemd does, as sections of keys that may repeat, so it
+// does not depend on the order or the spacing the adapter writes.
+function parseUnit(text: string): Unit {
+  const unit: Unit = {};
+  let section = "";
+  for (const line of text.split("\n")) {
+    const header = /^\[(\w+)\]$/.exec(line);
+    if (header !== null) {
+      section = header[1] ?? "";
+      unit[section] = {};
+    } else if (line.includes("=") && section !== "") {
+      const [key = "", ...rest] = line.split("=");
+      (unit[section]![key] ??= []).push(rest.join("="));
+    }
+  }
+  return unit;
+}
+
+const bus = "Failed to connect to bus: No medium found";
+const systemctl = (...args: string[]) => ({ command: "systemctl", args: ["--user", ...args] });
+const reply = (code: number, stdout = "", stderr = "") => ({ code, stdout, stderr });
+
+class MissingSystemctlRunner implements ProcessRunner {
+  readonly calls: string[] = [];
+  async run(
+    command: string,
+    args: readonly string[],
+    _options?: ProcessRunOptions,
+  ): Promise<ProcessResult> {
+    this.calls.push([command, ...args].join(" "));
+    throw Object.assign(new Error(`spawn ${command} ENOENT`), { code: "ENOENT" });
+  }
+  spawn(): never {
+    throw new Error("unused");
+  }
+  spawnStreaming(): never {
+    throw new Error("unused");
+  }
+}
+
+describe("SystemdServiceManager (#832)", () => {
+  async function put(filesystem: MemoryFilesystem, path: string, text = ""): Promise<void> {
+    await filesystem.mkdirp(dirname(path));
+    await filesystem.writeFileAtomic(path, text);
+  }
+
+  it("an operator on Linux installs, starts and removes a systemd user unit", async () => {
+    const saved = { PATH: "/usr/bin:/opt/bin", ANDROID_HOME: "/sdk", JAVA_HOME: "/jdk" };
+    const textCases = [
+      {
+        label: "worker, saved variables set, secrets in the shell",
+        role: "worker" as const,
+        env: { ...saved, SIMLOCK_ADMIN_TOKEN: "secret" },
+        execStart: "/usr/bin/node /opt/simlock/dist/daemon/main.js",
+        environment: [
+          `"SIMLOCK_HOME=${linuxRoot}"`,
+          '"PATH=/usr/bin:/opt/bin"',
+          '"ANDROID_HOME=/sdk"',
+          '"JAVA_HOME=/jdk"',
+        ],
+        log: `append:${linuxRoot}/daemon.log`,
+      },
+      {
+        label: "gateway, no variable set",
+        role: "gateway" as const,
+        env: {},
+        execStart: "/usr/bin/node /opt/simlock/dist/daemon/main.js --gateway",
+        environment: [`"SIMLOCK_HOME=${linuxRoot}"`],
+        log: `append:${linuxRoot}/gateway/daemon.log`,
+      },
+    ];
+    for (const testCase of textCases) {
+      const definition = systemdDefinition(testCase.role, testCase.env);
+      const filesystem = new MemoryFilesystem();
+      const runner = new ScriptedProcessRunner([
+        { match: systemctl("daemon-reload"), result: reply(0) },
+        { match: systemctl("enable", "--now", `${definition.name}.service`), result: reply(0) },
+      ]);
+
+      await new SystemdServiceManager({ runner, filesystem }).install(definition);
+
+      expect(await filesystem.exists(definition.path), `${testCase.label}: unit exists`).toBe(true);
+      expect(parseUnit(await filesystem.readFile(definition.path)), testCase.label).toEqual({
+        Unit: { Description: ["simlock worker daemon"], StartLimitIntervalSec: ["0"] },
+        Service: {
+          ExecStart: [testCase.execStart],
+          Environment: testCase.environment,
+          Restart: ["on-failure"],
+          RestartSec: ["10"],
+          KillMode: ["process"],
+          TimeoutStopSec: ["300"],
+          StandardOutput: [testCase.log],
+          StandardError: [testCase.log],
+        },
+        Install: { WantedBy: ["default.target"] },
+      });
+      expect(
+        runner.calls.map((call) => call.args.join(" ")),
+        testCase.label,
+      ).toEqual(["--user daemon-reload", `--user enable --now ${definition.name}.service`]);
+      for (const call of runner.calls) expect(call.options.timeoutMs, testCase.label).toBe(10_000);
+      expect((await filesystem.stat(definition.logPath)).mode, testCase.label).toBe(0o600);
+    }
+
+    const name = systemdDefinition("worker").name;
+    const pathCases = [
+      { xdg: "/xdg/config", path: `/xdg/config/systemd/user/${name}.service` },
+      { xdg: "relative/config", path: `${linuxHome}/.config/systemd/user/${name}.service` },
+      { xdg: undefined, path: `${linuxHome}/.config/systemd/user/${name}.service` },
+    ];
+    for (const testCase of pathCases) {
+      const env = testCase.xdg === undefined ? {} : { XDG_CONFIG_HOME: testCase.xdg };
+      expect(systemdDefinition("worker", env).path, String(testCase.xdg)).toBe(testCase.path);
+    }
+
+    const definition = systemdDefinition("worker");
+    const unit = `${definition.name}.service`;
+    const started = new ScriptedProcessRunner([
+      { match: systemctl("start", unit), result: reply(0) },
+    ]);
+    await new SystemdServiceManager({ runner: started, filesystem: new MemoryFilesystem() }).start(
+      definition,
+    );
+    expect(started.calls[0]?.options.timeoutMs).toBe(10_000);
+    const refused = new SystemdServiceManager({
+      runner: new ScriptedProcessRunner([
+        { match: systemctl("start", unit), result: reply(1, "", "Unit not found.\nsecond") },
+      ]),
+      filesystem: new MemoryFilesystem(),
+    }).start(definition);
+    await expect(refused).rejects.toBeInstanceOf(ServiceFailedError);
+    await expect(refused).rejects.toThrow(`systemctl --user start ${unit} failed: Unit not found.`);
+
+    const failures = [
+      {
+        label: "no user bus",
+        runner: new ScriptedProcessRunner([
+          { match: systemctl("daemon-reload"), result: reply(1, "", `${bus}\nmore`) },
+        ]),
+        message: `systemctl --user daemon-reload failed: ${bus}`,
+      },
+      {
+        label: "enable refused",
+        runner: new ScriptedProcessRunner([
+          { match: systemctl("daemon-reload"), result: reply(0) },
+          { match: systemctl("enable", "--now", unit), result: reply(1, "", "Boom") },
+        ]),
+        message: `systemctl --user enable --now ${unit} failed: Boom`,
+      },
+      {
+        label: "systemctl missing",
+        runner: new MissingSystemctlRunner(),
+        message: "systemctl --user daemon-reload failed: spawn systemctl ENOENT",
+      },
+    ];
+    for (const testCase of failures) {
+      const filesystem = new MemoryFilesystem();
+      const install = new SystemdServiceManager({ runner: testCase.runner, filesystem }).install(
+        definition,
+      );
+      await expect(install, testCase.label).rejects.toBeInstanceOf(ServiceFailedError);
+      await expect(install, testCase.label).rejects.toThrow(testCase.message);
+      expect(await filesystem.exists(definition.path), testCase.label).toBe(false);
+    }
+
+    const node = definition.command;
+    const main = definition.args[0] ?? "";
+    const isEnabled = (result: ReturnType<typeof reply>) => ({
+      match: systemctl("is-enabled", unit),
+      result,
+    });
+    const unitText = (execStart: string) => `[Service]\nExecStart=${execStart}\n`;
+    const stateCases = [
+      {
+        label: "no unit file",
+        present: [],
+        text: undefined,
+        script: [],
+        state: { state: "not-installed" },
+      },
+      {
+        label: "Node path gone",
+        present: [main],
+        text: unitText(`${node} ${main}`),
+        script: [],
+        state: { state: "broken", path: definition.path, missing: [node] },
+      },
+      {
+        label: "both paths gone",
+        present: [],
+        text: unitText(`${node} ${main}`),
+        script: [],
+        state: { state: "broken", path: definition.path, missing: [node, main] },
+      },
+      {
+        label: "no readable ExecStart",
+        present: [node, main],
+        text: "[Service]\nRestart=on-failure\n",
+        script: [],
+        state: { state: "broken", path: definition.path, missing: [definition.path] },
+      },
+      {
+        label: "enabled",
+        present: [node, main],
+        text: unitText(`${node} ${main}`),
+        script: [isEnabled(reply(0, "enabled\n"))],
+        state: { state: "installed", path: definition.path },
+      },
+      {
+        label: "disabled",
+        present: [node, main],
+        text: unitText(`${node} ${main}`),
+        script: [isEnabled(reply(1, "disabled\n"))],
+        state: { state: "not-loaded", path: definition.path },
+      },
+      {
+        label: "no user bus",
+        present: [node, main],
+        text: unitText(`${node} ${main}`),
+        script: [isEnabled(reply(1, "", bus))],
+        state: { state: "not-loaded", path: definition.path },
+      },
+    ];
+    for (const testCase of stateCases) {
+      const filesystem = new MemoryFilesystem();
+      for (const present of testCase.present) await put(filesystem, present);
+      if (testCase.text !== undefined) await put(filesystem, definition.path, testCase.text);
+      const runner = new ScriptedProcessRunner(testCase.script);
+
+      const state = await new SystemdServiceManager({ runner, filesystem }).state(definition);
+
+      expect(state, testCase.label).toEqual(testCase.state);
+      expect(runner.calls.length, testCase.label).toBe(testCase.script.length);
+      for (const call of runner.calls) expect(call.options.timeoutMs, testCase.label).toBe(10_000);
+    }
+
+    const removal = new MemoryFilesystem();
+    await put(removal, definition.path, "[Service]\n");
+    const removeRunner = new ScriptedProcessRunner([
+      { match: systemctl("disable", "--now", unit), result: reply(0) },
+      { match: systemctl("daemon-reload"), result: reply(0) },
+    ]);
+    await new SystemdServiceManager({ runner: removeRunner, filesystem: removal }).uninstall(
+      definition,
+    );
+    expect(removeRunner.calls.map((call) => call.args.join(" "))).toEqual([
+      `--user disable --now ${unit}`,
+      "--user daemon-reload",
+    ]);
+    expect(await removal.exists(definition.path)).toBe(false);
+
+    const kept = new MemoryFilesystem();
+    await put(kept, definition.path, "[Service]\n");
+    const refusal = new SystemdServiceManager({
+      runner: new ScriptedProcessRunner([
+        { match: systemctl("disable", "--now", unit), result: reply(1, "", "Nope") },
+      ]),
+      filesystem: kept,
+    }).uninstall(definition);
+    await expect(refusal).rejects.toBeInstanceOf(ServiceFailedError);
+    await expect(refusal).rejects.toThrow(`systemctl --user disable --now ${unit} failed: Nope`);
+    expect(await kept.exists(definition.path)).toBe(true);
   });
 });
