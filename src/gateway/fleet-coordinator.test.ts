@@ -1043,6 +1043,31 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
+  it("handles a worker's DAEMON_UPDATING answer as NO_CAPACITY: the view is read again, the request stays queued and is placed once the view changes", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("DAEMON_UPDATING", "domain", "The daemon is updating", {}),
+      kind: "error",
+    });
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const outcome = coordinator.request(REQUEST, requestOptions());
+    const state = promiseState(outcome);
+    await tick();
+
+    expect(state.state).toBe("pending");
+    expect(coordinator.queueDepth).toBe(1);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+
+    workers.refresh("wrk_a", { update: null });
+    await tick();
+
+    expect((await outcome).lease.worker?.id).toBe("wrk_a");
+  });
+
   it("forwards device.exec with the namespaced requesterId reaching the scripted worker client", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
