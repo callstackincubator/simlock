@@ -89,6 +89,7 @@ async function startDaemon(options: RunUpdaterOptions): Promise<string | undefin
     join(options.packageRoot, "dist", "cli", "main.js"),
     "daemon",
     "start",
+    ...(options.role === "gateway" ? ["--gateway"] : []),
   ]);
   const deadline = clock.now() + START_LIMIT_MS;
   for (;;) {
