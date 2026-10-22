@@ -401,8 +401,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async holdForUpdate(): Promise<void> {
     await this.options.decisions.run(async () => {
       this.#updateHold = true;
-      for (const waiter of this.options.queue.cancelAll(() => new DaemonUpdatingError())) {
-        this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
+      // why: ADR 0042 §3: a request already provisioning is granted, so only the ones still waiting for their turn are refused.
+      for (const waiter of this.options.queue.pending() as readonly AcquisitionWaiter[]) {
+        if (waiter.state !== "queued") continue;
+        if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
+          this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
+        }
       }
     });
   }

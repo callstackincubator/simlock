@@ -32,7 +32,11 @@ import {
   MemoryFilesystem,
 } from "../ports/index.js";
 import { createLeasing } from "./index.js";
-import { NoCapacityError, ProvisionFailedError } from "./lease-acquisition-coordinator.js";
+import {
+  DaemonUpdatingError,
+  NoCapacityError,
+  ProvisionFailedError,
+} from "./lease-acquisition-coordinator.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
@@ -4571,6 +4575,45 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     expect(listing(harness)).toEqual([
       { reason: undefined, requesterId: "meanwhile", stage: "starting" },
     ]);
+  });
+
+  it("refuses a queued request when the update hold begins and still grants the one that is provisioning", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { provision: 50 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver, limits: runningLimit });
+    const provisioning = harness.engine
+      .request(request, asking("provisioning"))
+      .catch((error: unknown) => error);
+    await flush();
+    const queued = harness.engine
+      .request(request, asking("queued"))
+      .catch((error: unknown) => error);
+    await flush();
+    expect(listing(harness)).toEqual([
+      { reason: undefined, requesterId: "provisioning", stage: "starting" },
+      { reason: "platform-running-limit", requesterId: "queued", stage: "queued" },
+    ]);
+
+    await harness.engine.leasing.holdForUpdate();
+    clock.advance(50);
+    await flush();
+
+    expect(await queued).toBeInstanceOf(DaemonUpdatingError);
+    expect(await provisioning, "the request that was provisioning").toMatchObject({
+      lease: { id: expect.any(String) },
+    });
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload as { requester: string; reason: string })
+        .map(({ requester, reason }) => [requester, reason]),
+    ).toEqual([["queued", "updating"]]);
   });
 
   it("lists a request that waits for a device the warm pool is booting as waiting-for-device", async () => {
