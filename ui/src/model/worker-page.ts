@@ -71,6 +71,7 @@ export interface WorkerRow {
   readonly health: Toned;
   readonly system?: string;
   readonly version?: string;
+  readonly stage?: string;
   readonly updateFacts: UpdateFacts;
   readonly use?: WorkerUse;
 }

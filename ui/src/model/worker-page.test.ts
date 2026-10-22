@@ -175,6 +175,38 @@ describe("a worker's version line", () => {
   });
 });
 
+describe("a worker's row while it updates", () => {
+  it("reads amber updating with the stage under it, over drained, under a red finding, and drained again once the update ends", () => {
+    const base = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+    const waiting = (leases: number) => ({ ...base, leases, stage: "waiting" as const });
+    const cases: readonly [string, Partial<WorkerView>, string, string | undefined][] = [
+      ["waiting, two", { update: waiting(2) }, "updating", "waiting for 2 leases"],
+      ["waiting, one", { update: waiting(1) }, "updating", "waiting for 1 lease"],
+      ["installing", { update: { ...base, stage: "installing" } }, "updating", "installing"],
+      ["restarting", { update: { ...base, stage: "restarting" } }, "updating", "restarting"],
+      [
+        "drained and updating",
+        { drained: true, update: waiting(1) },
+        "updating",
+        "waiting for 1 lease",
+      ],
+      ["drained, update over", { drained: true, update: null }, "drained", undefined],
+      [
+        "disconnected",
+        { connection: "disconnected", update: waiting(1) },
+        "disconnected",
+        undefined,
+      ],
+      ["failed", { health: "failed", update: waiting(1) }, "failed", undefined],
+    ];
+    for (const [name, overrides, word, stage] of cases) {
+      const row = workerRow(worker(overrides));
+      expect([row.health.word, row.stage], name).toEqual([word, stage]);
+    }
+    expect(workerRow(worker({ update: waiting(1) })).health.tone).toBe("warn");
+  });
+});
+
 describe("the list's filters and header", () => {
   const busy = worker({
     id: "wrk_busy",
