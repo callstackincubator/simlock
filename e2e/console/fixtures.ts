@@ -89,6 +89,32 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
   });
 }
 
+async function waitForDaemonPidsToExit(pids: ReadonlySet<number>): Promise<void> {
+  const alive = async () =>
+    (await Promise.all([...pids].map((pid) => isProcessAlive(pid)))).some(Boolean);
+  try {
+    await waitFor(async () => !(await alive()), {
+      timeout: 5_000,
+      interval: 100,
+      label: "daemon process exited",
+    });
+  } catch {
+    for (const pid of pids) {
+      if (!(await isProcessAlive(pid))) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    await waitFor(async () => !(await alive()), {
+      timeout: 10_000,
+      interval: 100,
+      label: "daemon process exited after SIGKILL",
+    });
+  }
+}
+
 /**
  * Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
  * does: fake devices use no real memory, so a nominal per-device budget keeps the RAM gate from
@@ -214,27 +240,7 @@ export async function startDaemon(
     for (const handle of background) handle.kill("SIGTERM");
     await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
     await stop();
-    try {
-      await waitFor(
-        async () =>
-          !(await Promise.all([...daemonPids].map((pid) => isProcessAlive(pid)))).some(Boolean),
-        { timeout: 5_000, interval: 100, label: "daemon process exited" },
-      );
-    } catch {
-      for (const pid of daemonPids) {
-        if (!(await isProcessAlive(pid))) continue;
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (killError: unknown) {
-          if ((killError as NodeJS.ErrnoException).code !== "ESRCH") throw killError;
-        }
-      }
-      await waitFor(
-        async () =>
-          !(await Promise.all([...daemonPids].map((pid) => isProcessAlive(pid)))).some(Boolean),
-        { timeout: 10_000, interval: 100, label: "daemon process exited after SIGKILL" },
-      );
-    }
+    await waitForDaemonPidsToExit(daemonPids);
     await rm(home, { force: true, recursive: true });
   };
   try {

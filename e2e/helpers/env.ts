@@ -478,6 +478,25 @@ async function teardown(state: TeardownState): Promise<void> {
   }
   await Promise.all([...backgroundProcesses].map((handle) => handle.waitForExit(10_000)));
 
+  const pidsBeforeStop = await stopDaemonForTeardown(socketPath, env, gatewayFlag);
+  const strayPids = await killAndVerifyDaemonPids(socketPath, pidsBeforeStop);
+
+  // why: a timed-out test may still be running and writing into its simulator home
+  if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
+  await rm(home, { force: true, recursive: true });
+
+  if (strayPids.length > 0) {
+    throw new Error(
+      `withDaemon teardown found stray daemon process(es) that outlived \`daemon stop\` for ${socketPath}: ${strayPids.join(", ")}`,
+    );
+  }
+}
+
+async function stopDaemonForTeardown(
+  socketPath: string,
+  env: NodeJS.ProcessEnv,
+  gatewayFlag: readonly string[],
+): Promise<number[]> {
   // Capture who (if anyone) is holding the socket *before* the graceful stop, so
   // we can verify those specific pids actually exit -- checking only "is the
   // socket file still there" after `daemon stop` would miss a process that
@@ -496,18 +515,30 @@ async function teardown(state: TeardownState): Promise<void> {
       label: "daemon socket removed during teardown",
     });
   }
+  return pidsBeforeStop;
+}
 
+async function killAndVerifyDaemonPids(
+  socketPath: string,
+  pidsBeforeStop: readonly number[],
+): Promise<number[]> {
   // A process can keep running for a little while after its socket is unlinked
   // (event-loop drain, especially under load) -- give `pidsBeforeStop` a real grace
   // window rather than a single point-in-time check, so a merely-slow exit is not
   // mistaken for a genuine leak.
-  await waitFor(
-    async () => {
-      const alive = await Promise.all(pidsBeforeStop.map((pid) => isProcessAlive(pid)));
-      return !alive.some(Boolean);
-    },
-    { timeout: 20_000, interval: 100 },
-  );
+  try {
+    await waitFor(
+      async () => {
+        const alive = await Promise.all(pidsBeforeStop.map((pid) => isProcessAlive(pid)));
+        return !alive.some(Boolean);
+      },
+      { timeout: 20_000, interval: 100 },
+    );
+  } catch (error: unknown) {
+    if (!(error instanceof Error && error.message.startsWith("waitFor timed out after 20000ms"))) {
+      throw error;
+    }
+  }
 
   const stillHoldingSocket = await pidsHoldingSocket(socketPath);
   const stillAlive = (
@@ -528,18 +559,7 @@ async function teardown(state: TeardownState): Promise<void> {
     { timeout: 10_000, interval: 100, label: "stray daemon processes exited" },
   );
 
-  // Here rather than in each test's own `finally`: a test that hits its timeout is abandoned
-  // with its body still running, so its `finally` may not have run yet -- and a booted
-  // simulator keeps writing into its device directory while `rm` below walks it (`ENOTEMPTY`),
-  // then outlives the home. The daemon is stopped by now, so nothing boots another one.
-  if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
-  await rm(home, { force: true, recursive: true });
-
-  if (strayPids.length > 0) {
-    throw new Error(
-      `withDaemon teardown found stray daemon process(es) that outlived \`daemon stop\` for ${socketPath}: ${strayPids.join(", ")}`,
-    );
-  }
+  return strayPids;
 }
 
 async function readAgentDevicePid(home: string): Promise<number | undefined> {
