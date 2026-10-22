@@ -2935,6 +2935,7 @@ describe("startDaemon with the agent-device edge", () => {
       readonly processRunner: ScriptedProcessRunner;
       readonly processSupervisor: FakeProcessSupervisor;
       readonly role?: "gateway";
+      readonly tcpProbe?: FakeTcpProbe;
     },
   ) {
     const clock = ports.clock ?? new FakeClock(1_000);
@@ -2958,11 +2959,11 @@ describe("startDaemon with the agent-device edge", () => {
       ],
       processRunner: ports.processRunner,
       processSupervisor: ports.processSupervisor,
-      tcpProbe: new FakeTcpProbe(),
+      tcpProbe: ports.tcpProbe ?? new FakeTcpProbe(),
       version: "1.2.3",
     });
     runningDaemons.push(daemon);
-    return { daemon, sink };
+    return { clock, daemon, sink };
   }
 
   it("runs a module's beforeDriversDispose and stops agent-device's child, both before the drivers are disposed", async () => {
@@ -3327,6 +3328,116 @@ describe("startDaemon with the agent-device edge", () => {
         )
         .toEqual(["agent-device", "alpha"]);
     });
+
+    it.each([
+      {
+        name: "both daemons down: agent-device is found nowhere",
+        simulator: "missing",
+        phones: undefined,
+        findings: ["simulator", "phones", "alpha"],
+        capability: "unavailable",
+      },
+      {
+        name: "the phone daemon finds a wrong version",
+        simulator: "running",
+        phones: "0.20.3\n",
+        findings: ["phones", "alpha"],
+        capability: "available",
+      },
+      {
+        name: "the phone daemon cannot start",
+        simulator: "running",
+        phones: "unstartable",
+        findings: ["phones", "alpha"],
+        capability: "available",
+      },
+    ] as const)(
+      "lists a phone daemon finding that starts with `phone daemon: ` after the simulator daemon's and before another module's, while the capability follows the simulator daemon: $name",
+      async ({ capability, findings, phones, simulator }) => {
+        const setup = await setUp({
+          capabilities: {
+            "agent-device": {
+              command: simulator === "missing" ? "/opt/missing/agent-device" : command,
+              enabled: true,
+            },
+            alpha: { enabled: true },
+          },
+        });
+        const version = (stdout: string) => ({
+          match: { args: [realCli, "--version"], command: process.execPath },
+          result: { code: 0, stderr: "", stdout },
+        });
+        const health = new FakeAgentDeviceHealth();
+        health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+        const tcpProbe = new FakeTcpProbe();
+        const runner = new ScriptedProcessRunner(
+          simulator === "missing"
+            ? []
+            : [
+                version("0.21.28\n"),
+                {
+                  hangs: true,
+                  match: {
+                    args: [entry, `--simlock-home=${setup.directory}`],
+                    command: process.execPath,
+                  },
+                  onSpawn: async () => {
+                    await setup.filesystem.writeFileAtomic(
+                      join(setup.directory, "agent-device", "daemon.json"),
+                      JSON.stringify({ httpPort: 4310, pid: 2, token: "t" }),
+                    );
+                    tcpProbe.startListening(4310);
+                  },
+                },
+                ...(phones === "unstartable" || phones === undefined
+                  ? [version("0.21.28\n")]
+                  : [version(phones)]),
+              ],
+        );
+        const { clock, daemon } = await startEdge(setup, {
+          agentDevice: agentDeviceModuleWith({ health }),
+          clock: new FakeClock(1_000),
+          modules: [
+            fakeModule({
+              findings: () => [{ message: "it is down", remedy: "bring it up" }],
+              name: "alpha",
+            }),
+          ],
+          processRunner: runner,
+          processSupervisor: new FakeProcessSupervisor(),
+          tcpProbe,
+        });
+        const unavailable = async () =>
+          (
+            (await daemon.dispatch("doctor.run", {}, operator)) as {
+              readonly findings: readonly {
+                readonly kind: string;
+                readonly module?: string;
+                readonly message?: string;
+              }[];
+            }
+          ).findings.filter((finding) => finding.kind === "module-unavailable");
+        const labelled = async () =>
+          (await unavailable()).map((finding) =>
+            finding.module === "alpha"
+              ? "alpha"
+              : finding.message?.startsWith("phone daemon: ") === true
+                ? "phones"
+                : "simulator",
+          );
+        // why: the simulator daemon's polls sleep on the fake clock, so the test advances it until the findings settle.
+        for (let tick = 0; tick < 400; tick += 1) {
+          if (JSON.stringify(await labelled()) === JSON.stringify(findings)) break;
+          await new Promise((resolve) => setImmediate(resolve));
+          clock.advance(100);
+        }
+
+        expect(await labelled()).toEqual(findings);
+        const status = await daemon.dispatch("status.get", {}, operator);
+        expect(status.capabilities).toMatchObject([{ name: "agent-device", state: capability }]);
+      },
+      20_000,
+    );
 
     it("reports module-unavailable for agent-device, naming the command when capabilities.agent-device.command is found nowhere", async () => {
       const setup = await setUp({
