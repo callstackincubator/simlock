@@ -1,4 +1,4 @@
-import { isNewerVersion } from "../../../src/contract/index";
+import { isNewerVersion } from "../../../src/contract/version-order";
 import type { WorkerView } from "./workers";
 
 // why: the facts of a worker's update that every surface reads the same way: the version it runs,

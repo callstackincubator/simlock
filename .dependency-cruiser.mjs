@@ -23,6 +23,13 @@ const components = findComponents("src")
   .filter((dir) => dir !== "src")
   .flatMap((dir) => [dir, `dist${dir.slice("src".length)}`]);
 
+// why: the console imports the contract's `isNewerVersion` as a value; the index also exports the
+// zod schemas, which would put zod's `eval` in the bundle and break its Content-Security-Policy.
+const entryFiles = (component) =>
+  component === "src/contract"
+    ? "index|testing|definition|version-order"
+    : "index|testing|definition";
+
 const pastIndex = components.map((component) => ({
   name: "past-index",
   comment: `${component} is entered through its index`,
@@ -30,7 +37,7 @@ const pastIndex = components.map((component) => ({
   from: { pathNot: `^${escape(component)}/` },
   to: {
     path: `^${escape(component)}/`,
-    pathNot: `^${escape(component)}/(index|testing|definition)\\.(ts|js)$`,
+    pathNot: `^${escape(component)}/(${entryFiles(component)})\\.(ts|js)$`,
   },
 }));
 

@@ -9,20 +9,20 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 
 ## Files
 
-| File               | Role                                                                                                  |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| `operations.ts`    | Every operation: name, role, effect, input, output, `authorize`; `OPERATIONS`                         |
-| `schemas.ts`       | Wire shapes, re-declared by hand from core; `fit*` bounders                                           |
-| `roles.ts`         | `Role`, `AuthorizeContext`, `ownsLease`                                                               |
-| `errors.ts`        | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`                                     |
-| `pushes.ts`        | `PUSH_SCHEMAS`: every push kind                                                                       |
-| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                                                |
-| `worker-view.ts`   | `workerViewFields`, view refresh interval and events                                                  |
-| `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                          |
-| `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares |
-| `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                               |
-| `relay.ts`         | Bounded relay ids, channel ids, headers                                                               |
-| `console-url.ts`   | The console address `status.get` reports                                                              |
+| File               | Role                                                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operations.ts`    | Every operation: name, role, effect, input, output, `authorize`; `OPERATIONS`                                                                                                     |
+| `schemas.ts`       | Wire shapes, re-declared by hand from core; `fit*` bounders                                                                                                                       |
+| `roles.ts`         | `Role`, `AuthorizeContext`, `ownsLease`                                                                                                                                           |
+| `errors.ts`        | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`                                                                                                                 |
+| `pushes.ts`        | `PUSH_SCHEMAS`: every push kind                                                                                                                                                   |
+| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                                                                                                                            |
+| `worker-view.ts`   | `workerViewFields`, view refresh interval and events                                                                                                                              |
+| `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                      |
+| `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod) |
+| `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                           |
+| `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                           |
+| `console-url.ts`   | The console address `status.get` reports                                                                                                                                          |
 
 ## Operations
 

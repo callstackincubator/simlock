@@ -302,7 +302,12 @@ function expectedRow(view: WorkerView): {
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
-  const system = view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`;
+  const system = [
+    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
+    view.version === undefined ? "" : `simlock ${view.version}`,
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
   return {
     bars: 3,
     slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,
