@@ -8,6 +8,9 @@ export interface CapacityFiguresPayload {
   readonly warm: number;
 }
 
+/** why: each reason points an operator at a different fix: the token, its role, or the worker it is pinned to. */
+export type WorkerRejectedReason = "unauthenticated" | "forbidden" | "worker-mismatch";
+
 export interface EventMap {
   "lease.requested": {
     /** The stored request's id, so an observer can correlate this event with its record. */
@@ -342,7 +345,7 @@ export interface EventMap {
    * debugging.
    */
   "worker.rejected": {
-    readonly reason: "forbidden" | "unauthenticated";
+    readonly reason: WorkerRejectedReason;
     readonly workerId?: string;
     readonly label?: string;
     readonly count?: number;

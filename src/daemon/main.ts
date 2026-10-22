@@ -812,7 +812,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // real and simply has no authority here (403); anything else is unauthenticated (401).
     // C-2: the accepted case names the token's own id, so `token.revoke` can later find and
     // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
-    authenticate: (credential) => auth.authenticateUplink(credential),
+    authenticate: (credential) => auth.authenticateUplink(credential, undefined),
     clock,
     drainStore: new StateDrainStore({ database: state.database, logger: logger.child("gateway") }),
     eventBus,

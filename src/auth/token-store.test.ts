@@ -1,8 +1,13 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, NodeFilesystem, NodeSqliteOpener, NoopLogger } from "../ports/index.js";
 import type { SqliteDatabase } from "../ports/index.js";
 import type { TokenSecrets } from "../ports/token-secrets.js";
+import { openStateDatabase } from "../state/index.js";
 import { openMemoryStateDatabase } from "./testing.js";
 import { TokenStore, tokensOwner } from "./token-store.js";
 
@@ -67,6 +72,7 @@ describe("TokenStore", () => {
         role: "agent",
         label: "ci-runner",
         created_at: 1_000,
+        worker_id: null,
       },
     ]);
     expect(JSON.stringify(rows)).not.toContain("fake-secret");
@@ -222,5 +228,57 @@ describe("TokenStore", () => {
 
     await expect(store.verify("slk_anything")).resolves.toBeUndefined();
     await expect(store.revoke("tok_anything")).resolves.toBe(false);
+  });
+
+  it("pins a token to a worker id once, and lists the token with it", async () => {
+    const { store, database } = await tokenStore();
+    const { record } = await store.create("worker", "mac-mini");
+
+    await expect(store.pinWorker(record.id, "wrk_a")).resolves.toBe(true);
+    await expect(store.pinWorker(record.id, "wrk_b")).resolves.toBe(false);
+
+    await expect(store.list()).resolves.toEqual([{ ...record, workerId: "wrk_a" }]);
+    expect(storedRows(database)[0]?.worker_id).toBe("wrk_a");
+  });
+
+  it("moves a version 1 tokens table up, keeping its tokens unpinned until their first pin", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-tokens-v1-"));
+    const open = (owner: typeof tokensOwner) =>
+      openStateDatabase({
+        dataDirectory: directory,
+        filesystem: new NodeFilesystem(),
+        logger: new NoopLogger(),
+        oldFiles: [],
+        owners: [owner],
+        sqlite: new NodeSqliteOpener(),
+        upgradeStep: "",
+      });
+    try {
+      const old = await open({
+        ...tokensOwner,
+        migrations: tokensOwner.migrations.slice(0, 1),
+        version: 1,
+      });
+      old.database
+        .prepare("INSERT INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, NULL, 5)")
+        .run("tok_old", "hash-old", "worker");
+      old.close();
+
+      const state = await open(tokensOwner);
+      try {
+        const { store } = await tokenStore({ database: state.database });
+        await expect(store.list()).resolves.toEqual([
+          { id: "tok_old", hash: "hash-old", role: "worker", createdAt: 5 },
+        ]);
+        await expect(store.pinWorker("tok_old", "wrk_a")).resolves.toBe(true);
+        await expect(store.list()).resolves.toEqual([
+          { id: "tok_old", hash: "hash-old", role: "worker", createdAt: 5, workerId: "wrk_a" },
+        ]);
+      } finally {
+        state.close();
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });

@@ -73,6 +73,10 @@ export class TokenStore {
     );
   }
 
+  async pinWorker(_id: string, _workerId: string): Promise<boolean> {
+    return false;
+  }
+
   async verify(secret: string): Promise<TokenRecord | undefined> {
     const row = this.#database
       .prepare("SELECT * FROM tokens WHERE hash = ?")

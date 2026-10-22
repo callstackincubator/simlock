@@ -101,7 +101,7 @@ export interface UplinkListener {
  *   valid elsewhere and carries no authority here, exactly as a `worker` token carries none on
  *   any other `/v1` route.
  */
-export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden";
+export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden" | "worker-mismatch";
 
 /**
  * `authenticate`'s actual return type: the bare outcome, or -- only on acceptance -- an object

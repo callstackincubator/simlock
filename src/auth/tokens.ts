@@ -6,6 +6,7 @@ export interface TokenRecord {
   readonly role: TokenRole;
   readonly label?: string;
   readonly createdAt: number;
+  readonly workerId?: string;
 }
 
 export interface TokenOperations {

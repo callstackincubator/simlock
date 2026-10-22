@@ -6,7 +6,7 @@
  * Everything here is lifecycle. What an operation *answers* lives in `GatewayDispatcher`, and
  * what a view *is* lives in `WorkerRegistry`; this class only makes sure both are fed.
  */
-import type { EventBus } from "../bus/index.js";
+import type { EventBus, WorkerRejectedReason } from "../bus/index.js";
 import type {
   AcceptedUplink,
   Clock,
@@ -67,7 +67,10 @@ export interface GatewayServiceOptions {
    * module never learns what a token *is* -- except its id, which an `accept` may optionally
    * carry (`UplinkAuthResult`) so `closeLinksForToken` (C-2) can later find the link it opened.
    */
-  readonly authenticate: (credential: string | undefined) => Promise<UplinkAuthResult>;
+  readonly authenticate: (
+    credential: string | undefined,
+    workerId: string | undefined,
+  ) => Promise<UplinkAuthResult>;
   /** `gateway.disconnectedRetentionMs` (§6). */
   readonly retentionMs: number;
   /** This gateway's own `lease.maxTtlMs` (§15) -- threaded straight into the registry, which
@@ -148,7 +151,7 @@ export class GatewayService {
     this.#listener = await this.options.uplinks.listen({
       accept: (uplink) => this.#accept(uplink),
       authenticate: async (credential, claimed) => {
-        const result = await this.options.authenticate(credential);
+        const result = await this.options.authenticate(credential, undefined);
         const outcome = uplinkOutcome(result);
         // ADR 0005 §22's fleet audit trail includes the joins that failed: a revoked token
         // retrying at its backoff cap is invisible on the gateway otherwise, and "why is that
@@ -175,7 +178,7 @@ export class GatewayService {
    * was -- just not once per attempt.
    */
   #recordRejection(
-    reason: "forbidden" | "unauthenticated",
+    reason: WorkerRejectedReason,
     workerId: string | undefined,
     label: string | undefined,
   ): void {

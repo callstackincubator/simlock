@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { freeLoopbackPort, mintJoinToken, waitFor, withDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
 const LEASE_ARGS = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -128,14 +128,12 @@ describe("simlock stats", () => {
       role: "gateway",
       driver: "none",
     });
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    const { secret } = minted.json as { secret: string };
     const oneAtATime = { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } };
-    const joinWith = (label: string) =>
+    const joinWith = async (label: string) =>
       withDaemon({
         configOverrides: {
           ...oneAtATime,
-          gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` },
+          gateway: { label, token: await mintJoinToken(gateway), url: `ws://127.0.0.1:${port}` },
         },
         driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
       });

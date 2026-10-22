@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import {
+  mintJoinToken,
+  type TestEnv,
+  waitFor,
+  withDaemon,
+  withHttpDaemon,
+} from "./helpers/index.js";
 
 /**
  * ADR 0005's happy path, over real transports: a real gateway process, real worker processes
@@ -68,16 +74,16 @@ async function startFleet(specs: readonly WorkerSpec[], agentId: string): Promis
     driver: "none",
   }));
 
-  const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-  expect(minted.code).toBe(0);
-  const { secret } = minted.json as { secret: string };
-
   const workers: TestEnv[] = [];
   for (const spec of specs) {
     const worker = await withDaemon({
       agentId,
       configOverrides: {
-        gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${port}` },
+        gateway: {
+          label: spec.label,
+          token: await mintJoinToken(gateway),
+          url: `ws://127.0.0.1:${port}`,
+        },
         ...(spec.limits === undefined ? {} : { limits: spec.limits }),
       },
       // Before the daemon starts, not after: the worker reports its catalog as its uplink

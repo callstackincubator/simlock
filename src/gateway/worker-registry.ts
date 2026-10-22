@@ -11,7 +11,7 @@
  */
 import type { z } from "zod";
 
-import type { EventBus } from "../bus/index.js";
+import type { EventBus, WorkerRejectedReason } from "../bus/index.js";
 import {
   type grantedDeviceSchema,
   type ProtocolRange,
@@ -325,7 +325,7 @@ export class WorkerRegistry {
    * in the overwhelmingly common case of an isolated refusal.
    */
   rejected(
-    reason: "forbidden" | "unauthenticated",
+    reason: WorkerRejectedReason,
     workerId: string | undefined,
     label: string | undefined,
     count?: number,

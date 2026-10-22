@@ -41,6 +41,7 @@ export interface AuthOptions {
 export type UplinkAnswer =
   | "unauthenticated"
   | "forbidden"
+  | "worker-mismatch"
   | { readonly outcome: "accept"; readonly tokenId: string };
 
 export interface Auth {
@@ -49,7 +50,10 @@ export interface Auth {
     readonly principal?: string;
     readonly credential?: string;
   }): Promise<Role>;
-  authenticateUplink(credential: string | undefined): Promise<UplinkAnswer>;
+  authenticateUplink(
+    credential: string | undefined,
+    claimedWorkerId: string | undefined,
+  ): Promise<UplinkAnswer>;
   readonly tokens: TokenOperations;
   readonly adminSecret: { persist(): Promise<void>; remove(): Promise<void> };
 }
