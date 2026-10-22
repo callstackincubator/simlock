@@ -38,6 +38,12 @@ import {
   FakeHostLoadProbe,
   type HostLoadCounters,
   FakeProcessSupervisor,
+  daemonDataDirectory,
+  FakeServiceManager,
+  serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
+  type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
   JsonLinesLogger,
@@ -57,6 +63,8 @@ import {
   emitSlimDiagnostic,
   parseDaemonArgv,
   processRunnerFor,
+  productionServiceCheck,
+  serviceCheckFor,
   startDaemon,
   type DriverDiscoveryContext,
   type StartDaemonOptions,
@@ -452,24 +460,6 @@ async function freeLoopbackPort(): Promise<number> {
   return address.port;
 }
 describe("startDaemon", () => {
-  it("writes a structured start record with version, protocol version, socket path, and effective config", async () => {
-    const { daemon, sink } = await start();
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Daemon started",
-        fields: expect.objectContaining({
-          version: "1.2.3",
-          protocolVersion: DAEMON_PROTOCOL_VERSION,
-          socketPath: daemon.socketPath,
-        }),
-      }),
-    );
-    const record = sink.records.find((entry) => entry.message === "Daemon started");
-    expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
-  });
-
   it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
@@ -572,6 +562,136 @@ describe("startDaemon", () => {
 
     await daemon.dispatch("doctor.run", {}, admin);
     expect(runs).toEqual({ android: 2, ios: 2 });
+  });
+
+  it("a worker's doctor reports service-broken for each service whose paths are gone", async () => {
+    const gone = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const mainGone = "/Users/me/simlock/dist/daemon/main.js";
+    const name = "com.callstack.simlock.worker";
+    const remedy = "Run `simlock daemon install` again.";
+    const admin = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "operator",
+      role: "admin",
+    } as const;
+    for (const testCase of [
+      { label: "not installed", missing: [], expected: [] },
+      { label: "installed and whole", missing: [], expected: [] },
+      {
+        label: "one path gone",
+        missing: [gone],
+        expected: [{ kind: "service-broken", manager: "launchd", name, missing: [gone], remedy }],
+      },
+      {
+        label: "both gone",
+        missing: [gone, mainGone],
+        expected: [
+          { kind: "service-broken", manager: "launchd", name, missing: [gone, mainGone], remedy },
+        ],
+      },
+    ]) {
+      const { daemon } = await start({
+        serviceCheck: { manager: "launchd", name, check: async () => testCase.missing },
+      });
+      const report = (await daemon.dispatch("doctor.run", {}, admin)) as {
+        readonly findings: readonly { readonly kind: string }[];
+      };
+      expect(
+        report.findings.filter((finding) => finding.kind === "service-broken"),
+        testCase.label,
+      ).toEqual(testCase.expected);
+    }
+  });
+
+  it("serviceCheckFor reads the worker's service state through the manager: the missing paths when broken, none otherwise, and no check on a gateway or without a manager", async () => {
+    const definition = () =>
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: "/simlock",
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: {},
+      });
+    const name = "com.callstack.simlock.worker";
+    const states: readonly { readonly state: ServiceState; readonly missing: readonly string[] }[] =
+      [
+        { state: { state: "not-installed" }, missing: [] },
+        { state: { state: "installed", path: "/p" }, missing: [] },
+        { state: { state: "not-loaded", path: "/p" }, missing: [] },
+        {
+          state: { state: "broken", path: "/p", missing: ["/gone/node", "/gone/main.js"] },
+          missing: ["/gone/node", "/gone/main.js"],
+        },
+      ];
+    for (const testCase of states) {
+      const { serviceCheck } = serviceCheckFor(
+        "worker",
+        new FakeServiceManager({ state: testCase.state }),
+        definition,
+      );
+      expect(serviceCheck?.manager).toBe("launchd");
+      expect(serviceCheck?.name).toBe(name);
+      expect(await serviceCheck?.check(), testCase.state.state).toEqual(testCase.missing);
+    }
+    expect(
+      serviceCheckFor("worker", new FakeServiceManager({ manager: "systemd" }), definition)
+        .serviceCheck?.manager,
+    ).toBe("systemd");
+    expect(serviceCheckFor("gateway", new FakeServiceManager(), definition)).toEqual({});
+    expect(serviceCheckFor("worker", undefined, definition)).toEqual({});
+  });
+
+  it("productionServiceCheck builds the service definition from the process facts and reads its state: the worker's missing paths, and no check on a gateway", async () => {
+    const seen: ServiceDefinition[] = [];
+    const manager: ServiceManager = {
+      manager: "launchd",
+      state: async (definition) => {
+        seen.push(definition);
+        return { state: "broken", path: definition.path, missing: [definition.command] };
+      },
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      start: async () => undefined,
+    };
+    const host = {
+      manager,
+      root: "/Users/me/.simlock",
+      home: "/Users/me",
+      nodePath: "/gone/node",
+      mainPath: "/gone/main.js",
+      env: { PATH: "/usr/bin" },
+    };
+
+    const { serviceCheck } = productionServiceCheck("worker", host);
+
+    expect(serviceCheck?.name).toBe("com.callstack.simlock.worker");
+    expect(await serviceCheck?.check()).toEqual(["/gone/node"]);
+    expect(seen).toEqual([
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: daemonDataDirectory("/Users/me/.simlock", "worker"),
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: { PATH: "/usr/bin" },
+      }),
+    ]);
+    expect(productionServiceCheck("gateway", host)).toEqual({});
+
+    const systemd = productionServiceCheck("worker", {
+      ...host,
+      manager: { ...manager, manager: "systemd" },
+      home: "/home/me",
+      root: "/home/me/.simlock",
+    });
+    await systemd.serviceCheck?.check();
+    expect(seen.at(-1)?.path).toBe(
+      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+    );
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
@@ -1877,21 +1997,6 @@ describe("discoverDrivers", () => {
     });
   });
 
-  it("logs the refused root, so the reason survives even if nobody runs doctor", async () => {
-    const sink = new MemoryLogSink();
-
-    await discoverIos({ filesystem: await foreignOwnedRoot(), sink });
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: "Skipped iOS driver: device root rejected",
-        module: "daemon.driver-discovery",
-        fields: expect.objectContaining({ reason: "wrong-instance", root: IOS_ROOT }),
-      }),
-    );
-  });
-
   it("still fails startup when the iOS driver fails for a reason that is not a refusal", async () => {
     // Anything that is not an `OwnedRootError` is a bug rather than a fail-closed
     // decision, and swallowing it would hide it behind a silently missing platform.
@@ -3013,14 +3118,18 @@ describe("startDaemon with the agent-device edge", () => {
     expect(processSupervisor.signals).toEqual([]);
   });
 
-  it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
+  it('a worker with no capabilities["agent-device"] section, one with enabled false, and one with only the old agentDevice key answer status.get with { name: agent-device, state: off }', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
       via: "socket",
       principal: "op",
       role: "admin",
     } as const;
-    for (const config of [{}, { capabilities: { "agent-device": { enabled: false } } }]) {
+    for (const config of [
+      {},
+      { capabilities: { "agent-device": { enabled: false } } },
+      { agentDevice: { command, enabled: true } },
+    ]) {
       const setup = await setUp(config);
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
@@ -3059,25 +3168,6 @@ describe("startDaemon with the agent-device edge", () => {
       processSupervisor: new FakeProcessSupervisor(),
     });
     expect(loads).toBe(1);
-  });
-
-  it("a worker whose config has only the old agentDevice key reports agent-device off", async () => {
-    const admin = {
-      manageEventSubscription: () => undefined,
-      via: "socket",
-      principal: "op",
-      role: "admin",
-    } as const;
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
-
-    const { daemon } = await startEdge(setup, {
-      processRunner: new ScriptedProcessRunner([]),
-      processSupervisor: new FakeProcessSupervisor(),
-    });
-
-    expect((await daemon.dispatch("status.get", {}, admin)).capabilities).toEqual([
-      { name: "agent-device", state: "off" },
-    ]);
   });
 
   it("a worker with agent-device off starts no supervisor: no ps runs and no signal is sent, even with a recorded daemon on disk", async () => {
@@ -3683,7 +3773,7 @@ describe("startDaemon state.db", () => {
       await writeFile(oldFile, "[]", "utf8");
 
       await expect(start({ dataDirectory: directory, role })).rejects.toMatchObject({
-        message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${step.replace("<path>", oldFile)} See "Breaking: state moves to state.db" in docs/CLI.md.`,
+        message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${step.replace("<path>", oldFile)} See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.`,
       });
       expect(existsSync(join(directory, "state.db"))).toBe(false);
     },

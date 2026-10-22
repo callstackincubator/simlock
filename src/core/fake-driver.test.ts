@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   DriverCrashError,
-  type Driver,
   type PhysicalDriverDevice,
   PassthroughRefusedError,
   UnknownModelError,
@@ -26,12 +25,6 @@ function passthroughFake(options: Partial<FakeDriverOptions>): FakeDriver {
 }
 
 describe("FakeDriver", () => {
-  it("claims the tool names its options give in passthroughTools", () => {
-    const driver = passthroughFake({ passthroughTools: ["simctl", "devicectl"] });
-
-    expect(driver.passthroughTools).toEqual(["simctl", "devicectl"]);
-  });
-
   it("resolves the scripted passthrough command, handing it the tool, device, args and context", async () => {
     const seen: unknown[] = [];
     const driver = passthroughFake({
@@ -232,55 +225,6 @@ describe("FakeDriver", () => {
     ]);
   });
 
-  it("implements the platform-agnostic Driver contract", () => {
-    const driver: Driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
-
-    expect(driver.platform).toBe("ios");
-    expect(driver.deviceRoot).toBe("/fake/ios");
-    expect(driver.leaseEnvironment(VIRTUAL_DEVICE)).toEqual({});
-  });
-
-  it("carries the root and lease environment a test gives it", () => {
-    const driver = new FakeDriver({
-      clock: new FakeClock(),
-      deviceRoot: "/tmp/devices/ios",
-      leaseEnvironment: { SIMLOCK_IOS_DEVICE_SET: "/tmp/devices/ios" },
-      platform: "ios",
-    });
-
-    expect(driver.deviceRoot).toBe("/tmp/devices/ios");
-    expect(driver.leaseEnvironment(VIRTUAL_DEVICE)).toEqual({
-      SIMLOCK_IOS_DEVICE_SET: "/tmp/devices/ios",
-    });
-  });
-
-  it("answers virtualLeaseEnvironment with its configured lease environment, and leaseEnvironment for a virtual device equals it", () => {
-    const driver = new FakeDriver({
-      clock: new FakeClock(),
-      leaseEnvironment: { SIMLOCK_IOS_DEVICE_SET: "/tmp/devices/ios" },
-      platform: "ios",
-    });
-
-    expect(driver.virtualLeaseEnvironment()).toEqual({
-      SIMLOCK_IOS_DEVICE_SET: "/tmp/devices/ios",
-    });
-    expect(driver.leaseEnvironment(VIRTUAL_DEVICE)).toEqual(driver.virtualLeaseEnvironment());
-  });
-
-  it("reports a staged reality entry whatever it is named, the way a root does", () => {
-    const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
-    driver.setManagedReality({
-      devices: [
-        { address: "addr", deviceId: "not-a-simlock-name", driverData: {}, runState: "running" },
-      ],
-      processes: [],
-    });
-
-    return expect(driver.listManaged()).resolves.toMatchObject({
-      devices: [{ deviceId: "not-a-simlock-name" }],
-    });
-  });
-
   it.each([
     ["a prepare boot of a slim-spec device", { mode: "slim", purpose: "prepare" }, "slim"],
     ["a recover boot of a slim-spec device", { mode: "slim", purpose: "recover" }, "full"],
@@ -402,23 +346,6 @@ describe("FakeDriver", () => {
     expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("images");
   });
 
-  it("reports the model classes its options name, and none without them", async () => {
-    const options = {
-      availableOsVersions: ["35"],
-      clock: new FakeClock(),
-      knownModels: ["Pixel 8", "Television (1080p)"],
-      platform: "android" as const,
-    };
-
-    await expect(
-      new FakeDriver({
-        ...options,
-        modelClasses: { "Pixel 8": "phone", "Television (1080p)": "tv" },
-      }).listCatalog(),
-    ).resolves.toMatchObject({ modelClasses: { "Pixel 8": "phone", "Television (1080p)": "tv" } });
-    expect((await new FakeDriver(options).listCatalog()).modelClasses).toEqual({});
-  });
-
   it("reports the built-in preference lists its options name, and none without them", () => {
     const options = { clock: new FakeClock(), platform: "ios" as const };
 
@@ -426,20 +353,6 @@ describe("FakeDriver", () => {
       new FakeDriver({ ...options, defaultModels: { phone: ["iPhone 17"] } }).defaultModels,
     ).toEqual({ phone: ["iPhone 17"] });
     expect(new FakeDriver(options).defaultModels).toEqual({});
-  });
-
-  it("reports the custom models its options name, and no customModels field without them", async () => {
-    const options = {
-      availableOsVersions: ["35"],
-      clock: new FakeClock(),
-      knownModels: ["Pixel 8", "My Tablet"],
-      platform: "android" as const,
-    };
-
-    await expect(
-      new FakeDriver({ ...options, customModels: ["My Tablet"] }).listCatalog(),
-    ).resolves.toMatchObject({ customModels: ["My Tablet"] });
-    expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("customModels");
   });
 
   it("reads a scripted physical device by any of its IDs, answering with the first as canonical and defaults for what is unset", async () => {

@@ -171,7 +171,7 @@ describe("gateway smoke", () => {
       "smoke-agent",
     );
 
-    // 1. Leasing is identical against a gateway (docs/CLI.md, "Against a gateway") -- same
+    // why: 1. Leasing is identical against a gateway (the CLI reference) -- same
     //    flags, same grant line, plus a `worker` block saying where it landed.
     const leased = await gateway.cli(
       ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"],
@@ -199,13 +199,13 @@ describe("gateway smoke", () => {
     expect(workerLeases).toHaveLength(1);
     expect(workerLeases[0]?.requesterId).toMatch(/^gw:[^:]+:smoke-agent$/);
 
-    // 3. The CLI branches on `status.get`'s `mode`: against a gateway `simlock adb` sends
+    // why: 3. The CLI branches on `status.get`'s `mode`: against a gateway `simlock adb` sends
     //    `device.exec` instead of spawning locally, prints what streams back on the matching
     //    stream, and exits with the tool's own code. Nothing else in the suite runs that branch.
     //    `input: ""` closes the child's stdin, which models `simlock adb ... < /dev/null` and is
     //    load-bearing here rather than tidiness: against a *worker* the CLI spawns the tool with
     //    inherited stdio and never reads stdin, but against a gateway it must read stdin to EOF
-    //    before it can send the one `stdin` string `device.exec` carries (docs/CLI.md). The test
+    //    before it can send the one `stdin` string `device.exec` carries. The test
     //    harness spawns with a pipe it never closes, so without this the CLI waits for an EOF
     //    that never comes -- which is exactly what a real caller would see if it handed simlock
     //    an open pipe it never closed.
@@ -339,8 +339,8 @@ describe("gateway smoke", () => {
     await fetch(`${baseUrl}/v1/leases/${leaseId}`, { headers: auth, method: "DELETE" });
   });
 
-  // #186: the gateway issued this lease and still holds it, so its single-lease read answers it
-  // rather than `404 UNKNOWN_LEASE`, in the shape `docs/HTTP-API.md` gives a gateway lease: the
+  // why: #186: the gateway issued this lease and still holds it, so its single-lease read answers it
+  // rather than `404 UNKNOWN_LEASE`, in the shape the HTTP API gives a gateway lease: the
   // lease the request resource reports, plus `workerId`/`worker` naming the machine it lives on.
   it("serves GET /v1/leases/{id} for a lease the gateway granted over HTTP: the granted lease, naming its worker (#186)", async () => {
     const { baseUrl, gateway } = await startFleet(
@@ -406,7 +406,7 @@ describe("gateway smoke", () => {
     await fetch(`${baseUrl}/v1/leases/${grantedLease.id}`, { headers: auth, method: "DELETE" });
   });
 
-  // #253: `docs/HTTP-API.md` ("The lease object") gives a gateway-issued lease `workerId` and
+  // why: #253: the HTTP API gives a gateway-issued lease `workerId` and
   // `worker`, and the request resource embeds that object once `granted`. It is handed out in
   // two places: the `201` when the grant lands before any progress, and the stored request read
   // back. The first request provisions, so its `201` is not granted; it warms the device. The

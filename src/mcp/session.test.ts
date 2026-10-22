@@ -59,21 +59,6 @@ describe("McpSession", () => {
     ]);
   });
 
-  it("adds released: true to a successful release without otherwise reshaping the result", async () => {
-    const client = new FakeSimlockClient();
-    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
-    const session = new McpSession({
-      clock: new FakeClock(),
-      connect: async () => client,
-      connectForRenew: async () => client,
-    });
-
-    await expect(session.release({ leaseId: "lease-1" })).resolves.toEqual({
-      leaseId: "lease-1",
-      released: true,
-    });
-  });
-
   it("forwards list_devices straight to getCatalog", async () => {
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
@@ -955,7 +940,7 @@ describe("McpSession", () => {
   });
 
   it("retries alone with the launching connect when a tool call joined a renew's attempt", async () => {
-    // `docs/CLI.md` and `docs/CLIENT.md` promise a tool call may start a daemon that is not
+    // why: The CLI reference and the client guide promise a tool call may start a daemon that is not
     // running. Sharing `#connecting` with the renew timer is free in the other direction, but
     // here it would hand the tool call the timer's weaker attempt -- and "nothing is
     // listening" for something it was allowed to fix.

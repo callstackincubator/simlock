@@ -257,50 +257,70 @@ describe("a physical lease request: grant", () => {
     expect(grant.device.spec).toMatchObject({ model: "iPhone 15 Pro", osVersion: "18.4" });
   });
 
-  it('--os 18 with only an iPhone on 18.4.1 enrolled exits with UNKNOWN_MODEL at once, and its message names --os ">=18 <19"', async () => {
-    const env = await startWith({ ios: [IPHONE_1841] });
-    const accepted = await granted(env, physical("agent-range", "--os", ">=18 <19"));
-    expect(accepted.device.driverDeviceId).toBe(UDID_1841);
-    await release(env, accepted);
+  it.each([
+    {
+      platform: "ios",
+      enrolled: { ios: [IPHONE_1841] },
+      driverDeviceId: UDID_1841,
+      accepted: ">=18 <19",
+      refused: "18",
+      range: ">=18 <19",
+    },
+    {
+      platform: "ios",
+      enrolled: { ios: [IPHONE_1841] },
+      driverDeviceId: UDID_1841,
+      accepted: ">=18.4 <18.5",
+      refused: "18.4",
+      range: ">=18.4 <18.5",
+    },
+    {
+      platform: "ios",
+      enrolled: { ios: [IPHONE_A] },
+      driverDeviceId: UDID_A,
+      accepted: "18.4",
+      refused: "18.4.1",
+      range: undefined,
+    },
+    {
+      platform: "android",
+      enrolled: { android: [PIXEL] },
+      driverDeviceId: SERIAL,
+      accepted: "34",
+      refused: "33",
+      range: undefined,
+    },
+  ])(
+    "--os $refused on the only enrolled $platform device, which accepts --os $accepted, exits with UNKNOWN_MODEL at once, and its message names the --os range only for a partial iOS version",
+    async ({ platform, enrolled, driverDeviceId, accepted, refused, range }) => {
+      const env = await startWith(enrolled);
+      const leaseArgs = (agent: string, os: string): string[] => [
+        "lease",
+        "--platform",
+        platform,
+        "--physical",
+        "--os",
+        os,
+        "--agent-id",
+        agent,
+      ];
+      const first = await granted(env, leaseArgs("agent-accepted", accepted));
+      expect(first.device.driverDeviceId).toBe(driverDeviceId);
+      await release(env, first);
 
-    const refused = await env.cli(physical("agent-exact", "--os", "18", "--detach"), {
-      timeout: 15_000,
-    });
+      const result = await env.cli([...leaseArgs("agent-refused", refused), "--detach"], {
+        timeout: 15_000,
+      });
 
-    expect(refused.code, refused.stderr).toBe(12);
-    expect(refused.error?.code).toBe("UNKNOWN_MODEL");
-    expect(refused.error?.message).toContain('--os ">=18 <19"');
-  });
-
-  it('--os 18.4 with only an iPhone on 18.4.1 enrolled exits with UNKNOWN_MODEL at once, and its message names --os ">=18.4 <18.5"', async () => {
-    const env = await startWith({ ios: [IPHONE_1841] });
-    const accepted = await granted(env, physical("agent-range", "--os", ">=18.4 <18.5"));
-    expect(accepted.device.driverDeviceId).toBe(UDID_1841);
-    await release(env, accepted);
-
-    const refused = await env.cli(physical("agent-exact", "--os", "18.4", "--detach"), {
-      timeout: 15_000,
-    });
-
-    expect(refused.code, refused.stderr).toBe(12);
-    expect(refused.error?.code).toBe("UNKNOWN_MODEL");
-    expect(refused.error?.message).toContain('--os ">=18.4 <18.5"');
-  });
-
-  it("--os 18.4.1 with only an iPhone on 18.4 enrolled exits with UNKNOWN_MODEL at once, and its message names no range", async () => {
-    const env = await startWith({ ios: [IPHONE_A] });
-    const accepted = await granted(env, physical("agent-exact", "--os", "18.4"));
-    expect(accepted.device.driverDeviceId).toBe(UDID_A);
-    await release(env, accepted);
-
-    const refused = await env.cli(physical("agent-newer", "--os", "18.4.1", "--detach"), {
-      timeout: 15_000,
-    });
-
-    expect(refused.code, refused.stderr).toBe(12);
-    expect(refused.error?.code).toBe("UNKNOWN_MODEL");
-    expect(refused.error?.message).not.toMatch(/>=|<\d/);
-  });
+      expect(result.code, result.stderr).toBe(12);
+      expect(result.error?.code).toBe("UNKNOWN_MODEL");
+      if (range === undefined) {
+        expect(result.error?.message).not.toMatch(/>=|<\d/);
+      } else {
+        expect(result.error?.message).toContain(`--os "${range}"`);
+      }
+    },
+  );
 
   it("--platform android --physical --os 34 is granted the phone on API 34", async () => {
     const env = await startWith({ android: [PIXEL] });
@@ -319,41 +339,6 @@ describe("a physical lease request: grant", () => {
     expect(grant.device.driverDeviceId).toBe(SERIAL);
     expect(grant.device.physical).toBe(true);
     expect(grant.device.spec.osVersion).toBe("34");
-  });
-
-  it("--platform android --physical --os 33 with only a phone on API 34 enrolled exits with UNKNOWN_MODEL at once, and its message names no range", async () => {
-    const env = await startWith({ android: [PIXEL] });
-    const accepted = await granted(env, [
-      "lease",
-      "--platform",
-      "android",
-      "--physical",
-      "--os",
-      "34",
-      "--agent-id",
-      "agent-exact",
-    ]);
-    expect(accepted.device.driverDeviceId).toBe(SERIAL);
-    await release(env, accepted);
-
-    const refused = await env.cli(
-      [
-        "lease",
-        "--platform",
-        "android",
-        "--physical",
-        "--os",
-        "33",
-        "--agent-id",
-        "agent-older",
-        "--detach",
-      ],
-      { timeout: 15_000 },
-    );
-
-    expect(refused.code, refused.stderr).toBe(12);
-    expect(refused.error?.code).toBe("UNKNOWN_MODEL");
-    expect(refused.error?.message).not.toMatch(/>=|<\d/);
   });
 
   it("the grant's environment is the fake driver's answer for that device: SIMLOCK_DEVICE_UDID on iOS, ANDROID_SERIAL and ANDROID_ADB_SERVER_PORT=5037 on Android", async () => {

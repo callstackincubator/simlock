@@ -20,7 +20,7 @@ import type {
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
-import { Doctor, type OptionalModuleFinding } from "./doctor.js";
+import { Doctor, type OptionalModuleFinding, type ServiceCheck } from "./doctor.js";
 import type { DeviceMode, Platform, TargetResolution, WaitingDemand } from "./domain.js";
 import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
@@ -65,6 +65,7 @@ interface CoreOptions {
   readonly optionalModules?: (() => readonly OptionalModuleFinding[]) | undefined;
   /** The checks `doctor` runs per platform this host could run. None if omitted. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[] | undefined;
+  readonly serviceCheck?: ServiceCheck | undefined;
   readonly registry: Registry;
   readonly state: StateDatabase;
   readonly systemStats: SystemStats;
@@ -293,6 +294,7 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.optionalModules === undefined ? {} : { optionalModules: options.optionalModules }),
     prerequisiteChecks: options.prerequisiteChecks ?? [],
+    ...(options.serviceCheck === undefined ? {} : { serviceCheck: options.serviceCheck }),
     quarantine,
     registry,
     warmPool: {

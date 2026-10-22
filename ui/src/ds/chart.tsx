@@ -16,6 +16,8 @@ import {
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
+import { Panel } from "./panel";
+
 export interface MinuteCount {
   readonly at: number;
   readonly label: string;
@@ -96,12 +98,6 @@ function columnOf(bucketMs: number): string {
   return bucketMs <= 60_000 ? "Minute" : "Time";
 }
 
-function disclosureOf(bucketMs: number): string {
-  if (bucketMs >= 3_600_000) return "Hour by hour";
-  if (bucketMs <= 60_000) return "Minute by minute";
-  return `Every ${bucketMs / 60_000} minutes`;
-}
-
 export function MinuteTable(props: {
   readonly minutes: readonly MinuteCount[];
   readonly heading: string;
@@ -109,9 +105,10 @@ export function MinuteTable(props: {
 }) {
   const { bucketMs = 60_000, heading, minutes } = props;
   return (
-    <details className="chart-data">
-      <summary>{disclosureOf(bucketMs)}</summary>
-      <table className="table">
+    // why: a table grows to its rows whatever its height, so the hiding is on a wrapper.
+    <div className="visually-hidden">
+      <table className="chart-data">
+        <caption>{heading}</caption>
         <thead>
           <tr>
             <th scope="col">{columnOf(bucketMs)}</th>
@@ -133,6 +130,28 @@ export function MinuteTable(props: {
           ))}
         </tbody>
       </table>
-    </details>
+    </div>
+  );
+}
+
+// why: the Overview and Usage draw a minute series the same way: the chart, its one-line summary
+// and the table of the same numbers, both for a reader who cannot see it; the table is not drawn.
+export function ChartPanel(props: {
+  readonly chart: {
+    readonly title: string;
+    readonly unit: string;
+    readonly heading: string;
+    readonly summary: string;
+    readonly bucketMs: number;
+    readonly points: readonly MinuteCount[];
+  };
+}) {
+  const { bucketMs, heading, points, summary, title, unit } = props.chart;
+  return (
+    <Panel title={title}>
+      <MinuteChart kind="area" title={title} unit={unit} minutes={points} />
+      <p className="chart-summary">{summary}</p>
+      <MinuteTable minutes={points} heading={heading} bucketMs={bucketMs} />
+    </Panel>
   );
 }

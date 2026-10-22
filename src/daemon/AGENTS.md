@@ -10,19 +10,20 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Files
 
-| File                    | Role                                                                   |
-| ----------------------- | ---------------------------------------------------------------------- |
-| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks       |
-| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop    |
-| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`             |
-| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                    |
-| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery              |
-| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                     |
-| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                        |
-| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink              |
-| `error-code.ts`         | `classifyError`: thrown error → contract code                          |
-| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove` |
-| `test-relay-support.ts` | Test helpers for relay e2e tests                                       |
+| File                    | Role                                                                                                             |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                 |
+| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                              |
+| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                       |
+| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                              |
+| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                        |
+| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                               |
+| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                  |
+| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi` |
+| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                        |
+| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                    |
+| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                           |
+| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                 |
 
 ## Composition (`main.ts`)
 
@@ -52,7 +53,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
    Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
    Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 51, max: 51 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 54, max: 54 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
@@ -134,7 +135,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   `eventLog.maxBytes` (256 MiB); usage rows are kept `metrics.retention` (90 days). `onSocketClaimed`
   starts it in both modes with the role and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
   failed migration) stops the daemon with reason `history-refused` and exit 1. `status.get` carries its `history`, also while starting. `usage.get` (both dispatchers, `usageAnswer` in `dispatch.ts`) reads the same file's usage rows through `core/usage` on a read thread; `main.ts` passes `historyPath` in both modes, and `dispose` stops the thread. `history.status().opened` false → `HISTORY_UNAVAILABLE`; a window ending before the oldest row → `HISTORY_NOT_KEPT`.
-- A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
+- SIGTERM to a running daemon runs `stop("signal")` and exits 0; one that arrives before the start finishes exits 0 at once (one handler in `main.ts`, the entry). A start that finds a daemon answering logs `Daemon already running` at `info` to the role's `daemon.log` and exits 0. A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
 
 ## Rules
 

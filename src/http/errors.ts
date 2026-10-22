@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 
 import { RequestCancelledError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 import { classifyError } from "../daemon/error-code.js";
@@ -57,10 +58,6 @@ export class HttpApiError extends Error {
     super(message);
     this.name = "HttpApiError";
   }
-}
-
-export function unauthenticated(message: string): HttpApiError {
-  return new HttpApiError(401, "UNAUTHENTICATED", message);
 }
 
 export function forbidden(message: string): HttpApiError {
@@ -133,6 +130,8 @@ function tableEntry(code: SimlockErrorCode): (typeof ERROR_TABLE)[SimlockErrorCo
  * fell through to `INTERNAL` here while the socket reported the real code.
  */
 export function mapError(error: unknown): MappedError {
+  const fromLibrary = libraryRefusal(error);
+  if (fromLibrary !== undefined) return mapError(fromLibrary);
   if (error instanceof HttpApiError) {
     return {
       status: error.status,
@@ -170,6 +169,17 @@ export function mapError(error: unknown): MappedError {
     message: recognized && error instanceof Error ? error.message : "Internal error",
     ...(extra === undefined ? {} : { extra }),
   };
+}
+
+// why: Hono's validator raises an `HTTPException` for a body it cannot read, which would map to 500 `INTERNAL`.
+function libraryRefusal(error: unknown): HttpApiError | undefined {
+  if (!(error instanceof HTTPException)) return undefined;
+  if (error.status === 415) {
+    return new HttpApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json");
+  }
+  return error.status === 400 && error.message === "Malformed JSON in request body"
+    ? badRequest("Invalid JSON body")
+    : undefined;
 }
 
 /** A `DispatchError` whose `details` are a plain object worth putting on the wire. */

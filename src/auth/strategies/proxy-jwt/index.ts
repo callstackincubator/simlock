@@ -25,7 +25,9 @@ type Reason =
   | "malformed";
 
 function required(message: string) {
-  return { required_error: SET_TOGETHER, invalid_type_error: message };
+  return {
+    error: (issue: { input?: unknown }) => (issue.input === undefined ? SET_TOGETHER : message),
+  };
 }
 
 function isKeyUrl(value: string): boolean {
@@ -65,7 +67,7 @@ const proxyAuthSchema = z.object({
     .min(1, "a non-empty string")
     .max(512, "at most 512 characters"),
   signOutUrl: z
-    .string({ invalid_type_error: "an http:// or https:// URL" })
+    .string({ error: "an http:// or https:// URL" })
     .refine(isWebUrl, "an http:// or https:// URL")
     .optional(),
 });

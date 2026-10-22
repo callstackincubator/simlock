@@ -11,6 +11,7 @@ export type {
   ModuleDispatch,
   ModuleEndedLease,
   ModuleFinding,
+  ModuleHttpResponse,
   ModuleLeaseEndParticipant,
   ModuleMount,
   ModuleRelayTarget,

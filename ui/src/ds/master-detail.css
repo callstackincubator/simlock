@@ -1,69 +1,4 @@
-/* A list on the left, the chosen item on the right. Below 768px only one of them shows. */
-
-.master-detail {
-  overflow-x: clip;
-  display: grid;
-  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
-  min-height: 100vh;
-}
-
-.master-wide {
-  grid-template-columns: minmax(300px, 440px) minmax(0, 1fr);
-}
-
-.list-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-right: 1px solid var(--border);
-  animation: enter-left var(--duration-move) var(--ease) both;
-}
-
-.list-head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-
-.list-title {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-}
-
-.list-title h1 {
-  flex: 1;
-  font-size: var(--text-lg);
-}
-
-.list-meta {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-}
-
-.list-body {
-  flex: 1;
-  min-height: 0;
-}
-
-.list-foot {
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
-}
-
-.list-foot .pager {
-  flex-direction: column;
-  align-items: stretch;
-}
-
-.list-foot .pager-steps {
-  margin-left: 0;
-  justify-content: space-between;
-}
+/* A list of rows, and the breadcrumb a worker's page carries. */
 
 .list {
   margin: 0;
@@ -123,20 +58,6 @@
   text-overflow: ellipsis;
 }
 
-.inspector {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-width: 0;
-  padding: var(--space-4) var(--space-6) var(--space-12);
-  animation: enter-right var(--duration-move) var(--ease) both;
-}
-
-.inspector-empty {
-  justify-content: center;
-  align-items: center;
-}
-
 .crumbs {
   display: flex;
   flex-wrap: wrap;
@@ -149,86 +70,6 @@
 .crumb + .crumb::before {
   content: "/";
   margin-right: var(--space-2);
-}
-
-.inspector-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.inspector-heading {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.inspector-title {
-  font-size: var(--text-xl);
-  overflow-wrap: anywhere;
-}
-
-.inspector-title.mono {
-  font-size: var(--text-lg);
-  font-weight: 500;
-}
-
-.inspector-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.inspector-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.inspector-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-@keyframes enter-left {
-  from {
-    opacity: 0;
-    transform: translateX(-18px);
-  }
-}
-
-@keyframes enter-right {
-  from {
-    opacity: 0;
-    transform: translateX(24px);
-  }
-}
-
-@media (max-width: 767.98px) {
-  .master-detail {
-    grid-template-columns: minmax(0, 1fr);
-    min-height: 0;
-  }
-
-  .focus-list > .inspector,
-  .focus-detail > .list-pane {
-    display: none;
-  }
-
-  .list-pane {
-    border-right: 0;
-  }
-
-  .inspector {
-    padding: var(--space-4) var(--space-4) var(--space-12);
-  }
 }
 
 .crumb {

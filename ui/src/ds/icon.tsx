@@ -3,7 +3,7 @@ const PATHS = {
   workers: "M2 3h12v4H2zM2 9h12v4H2zM5 5h.01M5 11h.01",
   leases: "M10 2a4 4 0 1 1-3.5 6L2 12.5V14h2v-1.5h1.5V11h1.5l1-1",
   waiting: "M2 4h12M2 8h9M2 12h6",
-  attention: "M8 2l6.5 11.5h-13zM8 6.5v3M8 11.5v.01",
+  inbox: "M2 9l2-6h8l2 6v4H2zM2 9h4l1 2h2l1-2h4",
   events: "M1.5 8h3l2-5 3 10 2-5h3",
   usage: "M2 14V2M2 14h12M5 11V8M8 11V5M11 11V7",
   collapse: "M2 2.5h12v11H2zM6 2.5v11M11.5 6L9.5 8l2 2",
@@ -11,7 +11,9 @@ const PATHS = {
   menu: "M2 4h12M2 8h12M2 12h12",
   close: "M3 3l10 10M13 3L3 13",
   signOut: "M6 2.5H2.5v11H6M10 5l3 3-3 3M13 8H6",
+  more: "M3.5 8h.01M8 8h.01M12.5 8h.01",
   device: "M5 1.5h6v13H5zM7.5 12.5h1",
+  search: "M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5",
 } as const;
 
 export type IconName = keyof typeof PATHS;
@@ -26,6 +28,7 @@ export function Icon({ name }: { readonly name: IconName }) {
       fill="none"
       stroke="currentColor"
       strokeWidth="1.5"
+      strokeLinecap="square"
       aria-hidden="true"
       focusable="false"
     >

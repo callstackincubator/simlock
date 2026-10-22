@@ -1,10 +1,11 @@
 import { useEffect } from "react";
 
-import { AppFrame, Button, Icon, Sidebar, Status, StatusDot } from "../ds";
+import { AppFrame, Button, CommandPalette, Icon, Sidebar, Status, StatusDot } from "../ds";
 import { NotFoundScreen } from "../screens/not-found";
 import { usePath } from "../state/router";
+import { useSearchPalette, useSearchSession } from "../state/search";
 import {
-  useAttentionCount,
+  useInboxCount,
   useConnectionStatus,
   useSignedIn,
   useSignOut,
@@ -13,11 +14,14 @@ import {
 import { useSidebar } from "../state/sidebar";
 import { ROUTES, routeFor } from "./routes";
 
+const PAGES = ROUTES.map((route) => ({ label: route.label, path: route.path }));
+
 export function Shell() {
   const path = usePath();
   const route = routeFor(path);
-  const attention = useAttentionCount();
+  const inbox = useInboxCount();
   const sidebar = useSidebar();
+  const palette = useSearchPalette();
   useTokenCheck();
 
   useEffect(() => {
@@ -26,12 +30,11 @@ export function Shell() {
 
   const entries = ROUTES.map((entry) => ({
     current: entry === route,
+    ...(entry.group === undefined ? {} : { group: entry.group }),
     icon: entry.icon,
     label: entry.label,
     to: entry.path,
-    ...(entry.path === "/attention" && attention !== undefined
-      ? { alert: true, count: attention }
-      : {}),
+    ...(entry.path === "/inbox" && inbox !== undefined ? { alert: true, count: inbox } : {}),
   }));
 
   return (
@@ -41,11 +44,13 @@ export function Shell() {
           entries={entries}
           collapsed={sidebar.collapsed}
           onToggle={sidebar.toggle}
+          onSearch={palette.show}
           footer={(collapsed) => <SidebarFoot collapsed={collapsed} />}
         />
       }
     >
       {route === undefined ? <NotFoundScreen /> : <route.Screen />}
+      {palette.open ? <SearchDialog hide={palette.hide} /> : null}
     </AppFrame>
   );
 }
@@ -106,5 +111,19 @@ function SignOutButton(props: {
       <Icon name="signOut" />
       <span className="nav-label">Sign out</span>
     </Button>
+  );
+}
+
+function SearchDialog({ hide }: { readonly hide: () => void }) {
+  const session = useSearchSession(PAGES, hide);
+  return (
+    <CommandPalette
+      groups={session.groups}
+      typed={session.typed}
+      empty={session.empty}
+      onType={session.type}
+      onChoose={session.choose}
+      onClose={hide}
+    />
   );
 }

@@ -87,12 +87,20 @@ export async function startDaemon(
   const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
   const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
   const { http: extraHttp, ...extraConfig } = options.config ?? {};
+  // why: a worker that joins a gateway may not enable HTTP (it is reached through the gateway), so it defaults off; a test's explicit `http.enabled` still wins, so an invalid override is not silently repaired.
+  const joined = (extraConfig.gateway as { url?: unknown } | undefined)?.url !== undefined;
+  const httpConfig = {
+    enabled: !joined,
+    host: "127.0.0.1",
+    port,
+    ...(extraHttp as object | undefined),
+  };
   await mkdir(dataDirectory, { recursive: true });
   await writeFile(
     join(dataDirectory, "config.json"),
     JSON.stringify({
       ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      http: { enabled: true, host: "127.0.0.1", port, ...(extraHttp as object | undefined) },
+      http: httpConfig,
       ...extraConfig,
     }),
   );
@@ -124,6 +132,7 @@ export async function startDaemon(
     // the daemon fails to bind its HTTP port and stops (#553). So a clean exit is not yet a start:
     // wait for this start's own "HTTP gateway listening" or `EADDRINUSE` line (the log keeps the
     // earlier starts' lines), and fail on the latter.
+    if (started.code === 0 && !httpConfig.enabled) return;
     if (started.code === 0) {
       await waitFor(
         async () => {
@@ -149,7 +158,8 @@ export async function startDaemon(
     await start();
     const status = await cli([...gatewayFlag, "status", "--json"], env);
     const url = (status.json as { daemon: { consoleUrl?: string } }).daemon.consoleUrl;
-    expect(url).toBe(`http://127.0.0.1:${port}/`);
+    if (httpConfig.enabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
+    else expect(url).toBeUndefined();
     const mint = async (role: string) => {
       const minted = await cli([...gatewayFlag, "token", "create", "--role", role], env);
       expect(minted.code, minted.stderr).toBe(0);
@@ -160,16 +170,18 @@ export async function startDaemon(
       operator: await mint("operator"),
       worker: await mint("worker"),
     };
-    await waitFor(
-      async () => {
-        try {
-          return (await fetch(new URL("/v1/healthz", url))).ok;
-        } catch {
-          return false;
-        }
-      },
-      { label: "HTTP listener accepting connections" },
-    );
+    if (url !== undefined) {
+      await waitFor(
+        async () => {
+          try {
+            return (await fetch(new URL("/v1/healthz", url))).ok;
+          } catch {
+            return false;
+          }
+        },
+        { label: "HTTP listener accepting connections" },
+      );
+    }
     return {
       cli: (args) => cli([...gatewayFlag, ...args], env),
       cliBackground(args) {
@@ -331,7 +343,7 @@ export interface ProxiedDaemon {
 }
 
 export async function startProxiedDaemon(
-  options: { readonly signOutUrl?: boolean } = {},
+  options: { readonly signOutUrl?: boolean; readonly driverScript?: FakeDriverScript } = {},
 ): Promise<ProxiedDaemon> {
   const { privateKey, publicKey } = await generateKeyPair("ES256");
   const jwk = { ...(await exportJWK(publicKey)), alg: "ES256", kid: "test-key", use: "sig" };
@@ -407,6 +419,7 @@ export async function startProxiedDaemon(
   let daemon: RunningDaemon;
   try {
     daemon = await startDaemon("worker", {
+      ...(options.driverScript === undefined ? {} : { driverScript: options.driverScript }),
       config: {
         http: {
           proxyAuth: {
@@ -503,12 +516,17 @@ export async function signIn(page: Page, token: string): Promise<void> {
 
 export const NAV = [
   { label: "Overview", path: "/" },
-  { label: "Workers", path: "/workers" },
+  { label: "Inbox", path: "/inbox" },
+  { label: "Fleet", path: "/fleet" },
   { label: "Leases", path: "/leases" },
-  { label: "Waiting", path: "/waiting" },
-  { label: "Attention", path: "/attention" },
-  { label: "Events", path: "/events" },
+  { label: "Queue", path: "/queue" },
+  { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
+] as const;
+
+export const NAV_GROUPS = [
+  { label: "Operate", links: ["Fleet", "Leases", "Queue"] },
+  { label: "Observe", links: ["Activity", "Usage"] },
 ] as const;
 
 export const NAV_LABELS = NAV.map((entry) => entry.label);
@@ -529,4 +547,62 @@ export async function openFromNav(page: Page, label: string): Promise<void> {
     await nav.getByRole("button", { name: "Open menu" }).click();
   }
   await nav.getByRole("link", { name: label, exact: true }).click();
+}
+
+// why: a host with one lease held by `surface-agent`, for checks that need the console's menu,
+// dialog and toast open.
+export async function startHostWithLease(): Promise<RunningDaemon> {
+  const host = await startDaemon("worker", {
+    driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+  });
+  const granted = await host.cli([
+    "lease",
+    "--platform",
+    "ios",
+    "--device",
+    "iPhone 16",
+    "--os",
+    "18.4",
+    "--agent-id",
+    "surface-agent",
+    "--detach",
+  ]);
+  expect(granted.code, granted.stderr).toBe(0);
+  return host;
+}
+
+// why: signs in on Leases and opens, in turn, an error toast (a release the daemon never answers),
+// the row's menu over it, and the release dialog over it, calling `check` with each open.
+export async function withActionSurfaces(
+  page: Page,
+  host: RunningDaemon,
+  check: (surface: "toast" | "menu" | "dialog") => Promise<void>,
+): Promise<void> {
+  await page.goto(new URL("/leases", host.url).toString());
+  await signIn(page, host.tokens.operator);
+  await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
+  const row = page.locator("main tbody tr").filter({ hasText: "surface-agent" });
+  const menuButton = row.getByRole("button", { name: "Actions for surface-agent" });
+  const dialog = page.getByRole("alertdialog", { name: "Release surface-agent's lease?" });
+  await page.route("**/v1/leases/*", (route) =>
+    route.request().method() === "DELETE" ? route.abort() : route.continue(),
+  );
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Release lease" }).click();
+  await dialog.getByRole("button", { name: "Release lease" }).click();
+  await expect(
+    page.getByRole("region", { name: "Notifications" }).getByText("The daemon did not answer."),
+  ).toBeVisible();
+  await settled(page);
+  await check("toast");
+
+  await menuButton.click();
+  await expect(page.getByRole("menuitem", { name: "Release lease" })).toBeVisible();
+  await settled(page);
+  await check("menu");
+
+  await page.getByRole("menuitem", { name: "Release lease" }).click();
+  await expect(dialog).toBeVisible();
+  await settled(page);
+  await check("dialog");
 }

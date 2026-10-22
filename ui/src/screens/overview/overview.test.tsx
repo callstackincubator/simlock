@@ -1,4 +1,4 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { inConsole } from "../../state/test-support";
 import { describe, expect, it } from "vitest";
 
 import { figuresOf } from "../../model/figures";
@@ -15,77 +15,153 @@ function text(html: string): string {
 }
 
 const quiet: Overview = {
-  activity: [],
-  attention: [],
   figures: { kind: "loading" },
-  platforms: [],
+  capacity: [],
+  ending: { label: "Ending soon", value: "0" },
+  inbox: { couldNotCheck: [], needsYou: [], problems: 0 },
   tiles: [],
   workers: [],
 };
 
 describe("the overview screen", () => {
-  it("says so in one line where a fleet has no workers, nothing needs attention and nothing happened", () => {
-    const shown = text(renderToStaticMarkup(<OverviewBody overview={quiet} />));
+  it("says so in one line where a fleet has no workers and nothing needs you", () => {
+    const shown = text(inConsole(<OverviewBody overview={quiet} />));
 
     expect(shown).toContain("No workers have connected.");
-    expect(shown).toContain("Nothing needs attention.");
-    expect(shown).toContain("No events in the last hour.");
+    expect(shown).toContain("Nothing needs you");
+    expect(shown).not.toContain("Activity");
   });
 
-  it("names each worker's health in its square, its devices in words beside the slots, and a muted dash where a count is not known", () => {
-    const html = renderToStaticMarkup(
+  it("shows the Needs you panel with its rows and the Inbox link, and no Nothing needs you", () => {
+    const shown = inConsole(
       <OverviewBody
         overview={{
           ...quiet,
-          platforms: [
-            { busyPercent: 0, leasedPercent: 0, name: "iOS", readyPercent: 0 },
-            {
-              busyPercent: 0,
-              leasedPercent: 50,
-              limit: 4,
-              name: "Android",
-              readyPercent: 0,
-              running: 2,
-            },
-          ],
-          workers: [
-            {
-              health: { tone: "warn", word: "memory 88%" },
-              id: "w1",
-              leases: 2,
-              name: "mac-mini-01",
-              slots: [
-                { kind: "leased", label: "iPhone 16 18.4, leased" },
-                { kind: "free", label: "free" },
-              ],
-              slotsLabel: "1 leased, 1 free",
-              to: "/workers/w1",
-            },
-            {
-              health: { tone: "warn", word: "starting" },
-              id: "w2",
-              name: "mac-mini-02",
-              slots: [],
-              slotsLabel: "Not reported",
-              to: "/workers/w2",
-            },
-          ],
+          inbox: {
+            couldNotCheck: [],
+            needsYou: [
+              {
+                key: "w1/disconnected",
+                subject: "mac-1",
+                to: "/inbox/w1%2Fdisconnected",
+                tone: "error",
+                word: "disconnected",
+              },
+            ],
+            problems: 5,
+          },
         }}
       />,
     );
 
-    expect(html).toContain('class="status-dot status-dot-warn" role="img" aria-label="memory 88%"');
-    expect(html).toContain('role="img" aria-label="1 leased, 1 free"');
-    expect(html).toContain('href="/workers/w1"');
-    expect(text(html)).not.toContain("memory 88%");
-    expect(html).toContain('<td data-label="Leases" class="num"><span class="muted">—</span></td>');
-    expect(html).toContain('<span class="muted">—</span></span></p>');
-    expect(text(html)).toContain("2 of 4 running");
-    expect(html.match(/class="share-bar"/g)).toHaveLength(1);
+    expect(shown).toContain('href="/inbox/w1%2Fdisconnected"');
+    expect(shown).toContain('href="/inbox">All in Inbox (5)</a>');
+    expect(text(shown)).toContain("Needs you");
+    expect(text(shown)).not.toContain("Nothing needs you");
   });
 
-  it("draws the range picker as a radio group of four with the chosen range checked, three chart panels and the Capacity panel", () => {
-    const shown = renderToStaticMarkup(
+  it("says Could not check, and not Nothing needs you, when a read failed and no problem is known", () => {
+    const shown = text(
+      inConsole(
+        <OverviewBody
+          overview={{
+            ...quiet,
+            inbox: { couldNotCheck: ["waiting requests", "leases"], needsYou: [], problems: 0 },
+          }}
+        />,
+      ),
+    );
+
+    expect(shown).toContain("Could not check: waiting requests, leases");
+    expect(shown).not.toContain("Nothing needs you");
+  });
+
+  it("shows the Needs you panel and the Could not check line together when a read failed and a problem is known", () => {
+    const shown = text(
+      inConsole(
+        <OverviewBody
+          overview={{
+            ...quiet,
+            inbox: {
+              couldNotCheck: ["leases"],
+              needsYou: [
+                {
+                  key: "w1/disconnected",
+                  subject: "mac-1",
+                  to: "/inbox/w1%2Fdisconnected",
+                  tone: "error",
+                  word: "disconnected",
+                },
+              ],
+              problems: 1,
+            },
+          }}
+        />,
+      ),
+    );
+
+    expect(shown).toContain("Needs you");
+    expect(shown).toContain("All in Inbox (1)");
+    expect(shown).toContain("Could not check: leases");
+    expect(shown).not.toContain("Nothing needs you");
+  });
+
+  it("links the workers table to Fleet and says 2 workers not read yet in the plural", () => {
+    const shown = inConsole(
+      <OverviewBody overview={{ ...quiet, capacity: [{ name: "iOS", notRead: 2, parts: [] }] }} />,
+    );
+
+    expect(shown).toContain('href="/fleet">Open Fleet</a>');
+    expect(text(shown)).toContain("iOS 2 workers not read yet");
+    expect(shown).toContain('aria-label="iOS: no devices"');
+  });
+
+  it("draws the workers with Fleet's table, every row and no pager, and notes capacity not read yet", () => {
+    const html = inConsole(
+      <OverviewBody
+        overview={{
+          ...quiet,
+          capacity: [
+            { name: "iOS", notRead: 1, parts: [] },
+            {
+              name: "Android",
+              notRead: 0,
+              parts: [
+                { count: 2, kind: "leased", percent: 50, word: "leased" },
+                { count: 2, kind: "offline", percent: 50, word: "offline" },
+              ],
+            },
+          ],
+          workers: Array.from({ length: 12 }, (_, index) => ({
+            connection: "connected" as const,
+            takesLeases: true,
+            health: { tone: "ok" as const, word: "connected" },
+            id: `w${index}`,
+            meters: [],
+            mono: false,
+            name: `mac-${index}`,
+            slots: [],
+            slotsLabel: "No devices",
+            to: `/fleet/w${index}`,
+          })),
+        }}
+      />,
+    );
+
+    const table = text(html);
+    for (const header of ["Worker", "State", "Slots", "Use", "CPU", "Memory", "Disk"]) {
+      expect(table).toContain(header);
+    }
+    expect(html).toContain('href="/fleet/w0"');
+    expect(html).toContain('href="/fleet/w11"');
+    expect(html).not.toContain("Workers pages");
+    expect(text(html)).toContain("iOS 1 worker not read yet");
+    expect(html).toContain('role="img" aria-label="Android: 2 leased, 2 offline"');
+    expect(text(html)).toContain("2 leased 2 offline");
+  });
+
+  it("draws the range picker as a radio group of four with the chosen range checked, two chart panels and the Capacity panel", () => {
+    const shown = inConsole(
       <OverviewBody overview={withFigures({})} range="6h" onRange={() => undefined} />,
     );
 
@@ -104,15 +180,15 @@ describe("the overview screen", () => {
       expect.arrayContaining([
         "Leases held, last 6 hours",
         "Requests in the queue, last 6 hours",
-        "Device slots in use, last 6 hours",
-        "Capacity",
+        "Capacity · all workers",
       ]),
     );
+    expect(headings).not.toContain("Device slots in use, last 6 hours");
   });
 
   it("shows the partial note above the tiles when the figures carry one, and no note otherwise", () => {
     const partial = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={withFigures({ coversFrom: NOW - 90 * 60_000, partial: true })}
           range="1h"
@@ -121,22 +197,19 @@ describe("the overview screen", () => {
       ),
     );
     const whole = text(
-      renderToStaticMarkup(
-        <OverviewBody overview={withFigures({})} range="1h" onRange={() => undefined} />,
-      ),
+      inConsole(<OverviewBody overview={withFigures({})} range="1h" onRange={() => undefined} />),
     );
 
     expect(partial).toContain("Figures cover from today 10:30.");
-    expect(partial.indexOf("Figures cover from")).toBeLessThan(partial.indexOf("Utilisation"));
+    expect(partial.indexOf("Figures cover from")).toBeLessThan(partial.indexOf("Leased"));
     expect(whole).not.toContain("Figures cover from");
   });
 
   it("shows a refused stats read as one item after Workers and as one panel, and leaves the fleet's tiles and panels", () => {
     const shown = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
           overview={overviewOf({
-            events: [],
             figures: { kind: "refused", message: "The stats are not allowed." },
             now: NOW,
             requests: [],
@@ -150,11 +223,11 @@ describe("the overview screen", () => {
 
     expect(shown.split("The stats are not allowed.")).toHaveLength(3);
     expect(shown.indexOf("The stats are not allowed.")).toBeGreaterThan(shown.indexOf("Workers 0"));
-    for (const kept of ["Utilisation", "Leases", "Waiting", "Capacity", "Attention", "Activity"]) {
+    for (const kept of ["Leased", "Waiting", "Ending soon", "Capacity", "Nothing needs you"]) {
       expect(shown, kept).toContain(kept);
     }
     expect(shown).toContain("No workers have connected.");
-    for (const gone of ["Granted", "Wait p95", "Leases held, last hour"]) {
+    for (const gone of ["Wait p95", "Leases held, last hour"]) {
       expect(shown, gone).not.toContain(gone);
     }
   });
@@ -166,20 +239,20 @@ describe("the overview screen", () => {
       figures: { ...kept.figures, refusal: "The stats are not allowed." },
     } as Overview;
     const shown = text(
-      renderToStaticMarkup(<OverviewBody overview={stale} range="6h" onRange={() => undefined} />),
+      inConsole(<OverviewBody overview={stale} range="6h" onRange={() => undefined} />),
     );
 
     expect(shown.split("The stats are not allowed.")).toHaveLength(2);
-    expect(shown.indexOf("The stats are not allowed.")).toBeLessThan(shown.indexOf("Granted"));
+    expect(shown.indexOf("The stats are not allowed.")).toBeLessThan(shown.indexOf("Wait p95"));
     expect(shown).toContain("Wait p95");
     expect(shown).toContain("Leases held, last 6 hours");
   });
 
   it("shows Loading… in the same two places while the stats read is loading", () => {
     const shown = text(
-      renderToStaticMarkup(
+      inConsole(
         <OverviewBody
-          overview={overviewOf({ events: [], now: NOW, requests: [], workers: [] })}
+          overview={overviewOf({ now: NOW, requests: [], workers: [] })}
           range="1h"
           onRange={() => undefined}
         />,
@@ -187,7 +260,7 @@ describe("the overview screen", () => {
     );
 
     expect(shown.split("Loading…")).toHaveLength(3);
-    expect(shown).toContain("Utilisation");
+    expect(shown).toContain("Leased");
     expect(shown).not.toContain("Wait p95");
   });
 });
@@ -204,7 +277,6 @@ function withFigures(shape: { coversFrom?: number; partial?: boolean }): Overvie
     ...shape,
   });
   return overviewOf({
-    events: [],
     figures: { data: figuresOf(stats, "6h", NOW), kind: "ready" },
     now: NOW,
     requests: [],

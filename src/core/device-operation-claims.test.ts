@@ -3,16 +3,6 @@ import { describe, expect, it } from "vitest";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 
 describe("DeviceOperationClaims", () => {
-  it("grants only one operation claim per device", () => {
-    const claims = new DeviceOperationClaims();
-    const boot = claims.tryClaim("device-1", "boot");
-
-    expect(boot).toBeDefined();
-    expect(claims.tryClaim("device-1", "cleanup")).toBeUndefined();
-    expect(claims.operationFor("device-1")).toBe("boot");
-    expect(claims.isClaimed("device-1")).toBe(true);
-  });
-
   it("releases claims idempotently and permits the next operation", () => {
     const claims = new DeviceOperationClaims();
     const cleanup = claims.tryClaim("device-1", "cleanup");

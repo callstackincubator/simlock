@@ -15,7 +15,7 @@ const escape = (path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const testFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?)$";
 const linkTestFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?|/testing\\.ts)$";
 // why: the console layers below the screens are plain TypeScript, so a test drives them without a browser.
-const uiLibrary = "(^|node_modules/)(react|react-dom|recharts|@tanstack/[^/]+)(/|$)";
+const uiLibrary = "(^|node_modules/)(react|react-dom|recharts|@base-ui/react|@tanstack/[^/]+)(/|$)";
 const fsOrProcess = "^(node:)?(fs|fs/promises|child_process)$";
 
 // why: e2e imports the compiled package from dist/, which mirrors src/, so each component's rule covers its compiled copy too.
@@ -251,6 +251,12 @@ export default {
       "a console screen reaches data only through the state layer: no network, storage or business rule of its own",
       "^ui/src/screens/",
       { path: "^ui/src/(app|data|model)/" },
+    ),
+    direction(
+      "ui-base-ui-in-ds-only",
+      "only the console's design system imports Base UI; everything else uses its wrapped parts",
+      "^ui/src/(?!ds/)",
+      { path: "(^|node_modules/)@base-ui/react(/|$)" },
     ),
     direction(
       "cli-router-imports-no-component-values",

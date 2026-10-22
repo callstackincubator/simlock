@@ -1,7 +1,8 @@
 import "./sidebar.css";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 
+import { Button } from "./button";
 import { Icon, type IconName } from "./icon";
 import { Link } from "./link";
 
@@ -12,6 +13,7 @@ export interface NavEntry {
   readonly current: boolean;
   readonly count?: number;
   readonly alert?: boolean;
+  readonly group?: string;
 }
 
 export function Wordmark({ short = false }: { readonly short?: boolean }) {
@@ -49,10 +51,13 @@ export function Sidebar(props: {
   readonly entries: readonly NavEntry[];
   readonly collapsed: boolean;
   readonly onToggle: () => void;
+  readonly onSearch: () => void;
   readonly footer: (collapsed: boolean) => ReactNode;
 }) {
-  const { collapsed, entries, footer, onToggle } = props;
+  const { collapsed, entries, footer, onSearch, onToggle } = props;
   const [menuOpen, setMenuOpen] = useState(false);
+  const groups = [...new Set(entries.flatMap((entry) => (entry.group ? [entry.group] : [])))];
+  const nav = { collapsed, onNavigate: () => setMenuOpen(false) };
   return (
     <nav
       className={`sidebar${collapsed ? " sidebar-collapsed" : ""}${menuOpen ? " sidebar-open" : ""}`}
@@ -75,32 +80,33 @@ export function Sidebar(props: {
           <Icon name={menuOpen ? "close" : "menu"} />
         </button>
       </div>
-      <ul className="sidebar-nav">
-        {entries.map((entry) => (
-          <li key={entry.to}>
-            <Link
-              to={entry.to}
-              className="nav-item"
-              aria-current={entry.current ? "page" : undefined}
-              title={collapsed ? entry.label : undefined}
-              onClick={() => setMenuOpen(false)}
-            >
-              <Icon name={entry.icon} />
-              <span className="nav-label">{entry.label}</span>
-              {entry.count === undefined || entry.count === 0 ? null : (
-                <span className={entry.alert === true ? "nav-count nav-count-alert" : "nav-count"}>
-                  {entry.count}
-                  <span className="visually-hidden">{entry.count === 1 ? " item" : " items"}</span>
-                </span>
-              )}
-            </Link>
-          </li>
-        ))}
-      </ul>
-      <div className="sidebar-foot">
-        {footer(collapsed)}
+      <div className="sidebar-nav">
         <button
           type="button"
+          className="sidebar-search"
+          title={collapsed ? "Search or jump to…" : undefined}
+          onClick={() => {
+            onSearch();
+            setMenuOpen(false);
+          }}
+        >
+          <Icon name="search" />
+          <span className="nav-label">Search or jump to…</span>
+        </button>
+        <NavList entries={entries.filter((entry) => entry.group === undefined)} {...nav} />
+        {groups.map((group) => (
+          <NavGroup
+            key={group}
+            label={group}
+            entries={entries.filter((entry) => entry.group === group)}
+            {...nav}
+          />
+        ))}
+      </div>
+      <div className="sidebar-foot">
+        {footer(collapsed)}
+        <Button
+          variant="secondary"
           className="sidebar-toggle"
           aria-expanded={!collapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -109,9 +115,54 @@ export function Sidebar(props: {
         >
           <Icon name={collapsed ? "expand" : "collapse"} />
           <span className="nav-label">Collapse</span>
-        </button>
+        </Button>
       </div>
     </nav>
+  );
+}
+
+interface NavListProps {
+  readonly entries: readonly NavEntry[];
+  readonly collapsed: boolean;
+  readonly onNavigate: () => void;
+}
+
+function NavList({ collapsed, entries, onNavigate }: NavListProps) {
+  return (
+    <ul className="sidebar-list">
+      {entries.map((entry) => (
+        <li key={entry.to}>
+          <Link
+            to={entry.to}
+            className="nav-item"
+            aria-current={entry.current ? "page" : undefined}
+            title={collapsed ? entry.label : undefined}
+            onClick={onNavigate}
+          >
+            <Icon name={entry.icon} />
+            <span className="nav-label">{entry.label}</span>
+            {entry.count === undefined || entry.count === 0 ? null : (
+              <span className={entry.alert === true ? "nav-count nav-count-alert" : "nav-count"}>
+                {entry.count}
+                <span className="visually-hidden">{entry.count === 1 ? " item" : " items"}</span>
+              </span>
+            )}
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function NavGroup(props: NavListProps & { readonly label: string }) {
+  const id = useId();
+  return (
+    <div role="group" aria-labelledby={id} className="nav-group">
+      <p id={id} className="nav-group-label">
+        {props.label}
+      </p>
+      <NavList {...props} />
+    </div>
   );
 }
 
@@ -124,7 +175,7 @@ export function Page(props: {
   return (
     <div className="page">
       <header className="page-head">
-        <h1>{title}</h1>
+        <h1 tabIndex={-1}>{title}</h1>
         {actions === undefined ? null : <div className="page-actions">{actions}</div>}
       </header>
       {children}

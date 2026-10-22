@@ -146,40 +146,17 @@ describe("MCP server (smoke)", () => {
     }
   });
 
-  it("the lease tool's input schema in tools/list has no fleetRequestId", async () => {
+  it("the lease tool's input schema in tools/list lists noWait and physical, and has no fleetRequestId and no requires", async () => {
     const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
     try {
       const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
       const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      const properties = Object.keys(leaseTool?.inputSchema.properties ?? {});
 
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).not.toContain("fleetRequestId");
-    } finally {
-      await close();
-    }
-  });
-
-  it("the lease tool's input schema in tools/list has no requires", async () => {
-    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
-    try {
-      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
-      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
-
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).not.toContain("requires");
-    } finally {
-      await close();
-    }
-  });
-
-  it("the lease tool's input schema in tools/list lists physical", async () => {
-    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
-    try {
-      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
-      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
-
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
-      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("physical");
+      expect(properties).toContain("noWait");
+      expect(properties).not.toContain("fleetRequestId");
+      expect(properties).not.toContain("requires");
+      expect(properties).toContain("physical");
     } finally {
       await close();
     }
@@ -219,18 +196,41 @@ describe("MCP server (smoke)", () => {
     }
   });
 
-  it("rejects invalid tool arguments through the registered schema before touching the client", async () => {
-    const client = new FakeSimlockClient();
-    const { mcpClient, close } = await connectedServer(client);
-    try {
-      const result = await call(mcpClient, "lease_simulator", { model: "", platform: "desktop" });
-      expect(result.isError).toBe(true);
-      expect(text(result)).toContain("Input validation error");
-      expect(client.calls).toEqual([]);
-    } finally {
-      await close();
-    }
-  });
+  it.each([
+    [
+      "lease_simulator",
+      { model: "iPhone 17 Pro", platform: "ios" },
+      { model: 7, platform: "ios" },
+      "requestLease",
+    ],
+    ["list_devices", {}, { platform: 7 }, "getCatalog"],
+    ["release_simulator", { leaseId: "lease-1" }, { leaseId: 7 }, "releaseLease"],
+    ["lease_status", {}, undefined, "listLeases"],
+  ] as const)(
+    "%s reaches the client with a valid input, and a wrong-type input is refused through the registered schema before touching the client",
+    async (tool, valid, wrong, method) => {
+      const client = new FakeSimlockClient();
+      client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+      client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+      client.listLeasesImpl = () => Promise.resolve({ leases: [] });
+      const { mcpClient, close } = await connectedServer(client);
+      try {
+        const ok = await call(mcpClient, tool, valid);
+        expect(ok.isError).not.toBe(true);
+        expect(client.calls.map((entry) => entry.method)).toEqual([method]);
+
+        if (wrong === undefined) return;
+        client.calls.length = 0;
+        const refused = await call(mcpClient, tool, wrong);
+        expect(refused.isError).toBe(true);
+        expect(text(refused)).toContain("Input validation error");
+        expect(client.calls).toEqual([]);
+      } finally {
+        await close();
+      }
+    },
+  );
 
   it("relays a lease-lost push as an MCP logging notification (MCP-only relay)", async () => {
     const client = new FakeSimlockClient();

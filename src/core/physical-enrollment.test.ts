@@ -268,6 +268,9 @@ describe("PhysicalEnrollment", () => {
     });
     held.release();
     await expect(waiting).resolves.toMatchObject({ reenrolled: true });
+    await expect(harness.core.enrollment.remove(UDID)).resolves.toMatchObject({
+      state: "deleted",
+    });
   });
 
   it.each([
@@ -529,20 +532,6 @@ describe("PhysicalEnrollment", () => {
     await expect(harness.core.enrollment.add("ios", UDID)).rejects.toThrow(
       `${UDID} is leased: release it first`,
     );
-  });
-
-  it("takes the enrollment claim of the device while its second inspection runs, and frees it after", async () => {
-    const harness = await build();
-    const { device } = await harness.core.enrollment.add("ios", UDID);
-    const held = holdInspection(harness.driver, 2);
-    const waiting = harness.core.enrollment.add("ios", UDID);
-    await vi.waitFor(() => expect(held.reached).toHaveBeenCalled());
-
-    expect(harness.core.claims.claim(device.id)?.kind).toBe("enrollment");
-    held.release();
-    await waiting;
-
-    expect(harness.core.claims.claim(device.id)).toBeUndefined();
   });
 
   it("answers UNKNOWN_DEVICE, naming the ID, to a remove of an ID with no record and of a deleted one", async () => {

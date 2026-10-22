@@ -189,8 +189,8 @@ jobs:
             echo "browsers=chromium" >>"$GITHUB_OUTPUT"
           fi
 
-  console:
-    name: Console
+  console-lane:
+    name: Console (${{ matrix.shard }}/4)
     needs: changes
     # Runs unless Changes said there is nothing to test, so a broken Changes job runs the lane.
     if: ${{ !cancelled() && needs.changes.outputs.console != 'false' }}
@@ -198,6 +198,11 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 15
+    strategy:
+      # why: one red shard must not cancel the others, or their failures go unreported.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,12 +228,36 @@ jobs:
       - name: Browser lane
         env:
           BROWSERS: ${{ needs.changes.outputs.browsers }}
+          SHARD: ${{ matrix.shard }}
         run: |
           if [ "$BROWSERS" = chromium ]; then
-            pnpm test:console --project=chromium
+            pnpm test:console --project=chromium --shard="$SHARD/4"
           else
-            pnpm test:console
+            pnpm test:console --shard="$SHARD/4"
           fi
+
+  # why: branch protection requires the check named Console, so this job stands for the sharded
+  # lane. `always()` makes it report a failure when a shard fails, where a job skipped by a failed
+  # need would count as passed; a lane skipped by Changes leaves it green.
+  console:
+    name: Console
+    needs: [changes, console-lane]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            case $result in
+              success | skipped) ;;
+              *) echo "a job Console needs ended $result" >&2; exit 1 ;;
+            esac
+          done
 
   fallow:
     name: Fallow

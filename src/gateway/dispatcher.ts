@@ -39,6 +39,7 @@ import { createUsageReader, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
+  EVENTS_PAGE_DEFAULT,
   OPERATIONS,
   requestedDevice,
   type OperationName,
@@ -48,6 +49,7 @@ import {
   DispatchError,
   identityGet,
   runDispatch,
+  eventsPageAnswer,
   usageAnswer,
   type DispatchSession,
   type ErasedHandler,
@@ -95,7 +97,7 @@ export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly workers: WorkerRegistry;
   /**
    * why: ADR 0035 §1; declared here, not imported from `src/alerts`, which this module may not
@@ -341,7 +343,16 @@ export class GatewayDispatcher {
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
-    this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+    input.beforeId === undefined && input.limit === undefined
+      ? this.options.eventHistory.replay(
+          input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
+        )
+      : eventsPageAnswer(
+          this.options.eventHistory.replayPage({
+            ...(input.beforeId === undefined ? {} : { beforeId: input.beforeId }),
+            limit: input.limit ?? EVENTS_PAGE_DEFAULT,
+          }),
+        );
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

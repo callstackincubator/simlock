@@ -88,44 +88,66 @@ function extractGlobalFlags(argv: readonly string[]): {
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
  * touching it; only a real command builds an environment. A `SIMLOCK_HOME` whose socket path
  * exceeds the platform limit throws `SocketPathTooLongError`, and this runs inside `runCli`'s
- * try, where that throw becomes the single structured error line `docs/CLI.md` promises instead
+ * try, where that throw becomes the single structured error line the CLI reference promises instead
  * of a raw stack trace. */
 async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment> {
-  const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }] = await Promise.all([
+  const [
+    { join, dirname },
+    { fileURLToPath },
+    ports,
+    { buildCliEnvironment },
+    { homedir, userInfo },
+  ] = await Promise.all([
     import("node:path"),
     import("node:url"),
     import("../ports/index.js"),
     import("./environment.js"),
+    import("node:os"),
   ]);
   const {
-    NodeDaemonLauncher,
+    launcherFor,
     NodeFilesystem,
     NodeIpcTransport,
+    NodeProcessRunner,
     NodeSystemStats,
     SystemClock,
+    productionServiceManager,
     resolveDaemonHome,
     resolveSimlockHome,
   } = ports;
   const root = resolveSimlockHome(process.env);
   const filesystem = new NodeFilesystem();
   const daemonHome = await resolveDaemonHome({ root, flag, filesystem });
-  const logPath = join(daemonHome.dataDirectory, "daemon.log");
+  const mainPath = join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js");
+  const serviceManager = productionServiceManager(process.platform, {
+    runner: new NodeProcessRunner(),
+    filesystem,
+    uid: process.getuid?.() ?? 0,
+  });
   return buildCliEnvironment(
     {
       filesystem,
       clock: new SystemClock(),
       systemStats: new NodeSystemStats(),
       ipc: new NodeIpcTransport(),
-      launcher: new NodeDaemonLauncher({
-        args: [
-          join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
-          ...(daemonHome.role === "gateway" ? ["--gateway"] : []),
-        ],
-        command: process.execPath,
-        logPath,
-        simlockHome: root,
+      launcher: launcherFor({
+        role: daemonHome.role,
+        root,
+        dataDirectory: daemonHome.dataDirectory,
+        mainPath,
+        serviceManager,
+        notify: (line) => process.stderr.write(`${line}\n`),
       }),
       daemonHome,
+      service: {
+        manager: serviceManager,
+        platform: process.platform,
+        home: homedir(),
+        user: () => userInfo().username,
+        root,
+        nodePath: process.execPath,
+        mainPath,
+      },
     },
     process.env,
   );
@@ -137,6 +159,8 @@ function isHelp(value: string | undefined): boolean {
 
 const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["daemon", "start"],
+  ["daemon", "install"],
+  ["daemon", "uninstall"],
   ["config", "set"],
   ["mcp"],
 ];

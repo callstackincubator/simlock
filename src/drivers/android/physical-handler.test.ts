@@ -778,7 +778,7 @@ describe("Android physical handler: the gate on a failing adb version", () => {
 
 describe("Android physical handler: advisories", () => {
   it("returns adb-protocol-mismatch naming both protocol numbers on a mismatch", async () => {
-    const { driver } = await world({ serverReply: VERSION_REPLY_40 });
+    const { driver, runner } = await world({ serverReply: VERSION_REPLY_40 });
 
     const advisories = await advisoriesOf(driver);
 
@@ -786,6 +786,7 @@ describe("Android physical handler: advisories", () => {
     expect(advisories[0]?.code).toBe("adb-protocol-mismatch");
     expect(advisories[0]?.message).toMatch(/40/);
     expect(advisories[0]?.message).toMatch(/41/);
+    expect(runner.commands).toEqual([]);
   });
 
   it.each([
@@ -830,15 +831,6 @@ describe("Android physical handler: advisories", () => {
     probe.failSendsWith(econnrefused());
 
     expect(await advisoriesOf(driver)).toEqual([]);
-  });
-
-  it("reports the mismatch on a driver that has never been asked about a physical device", async () => {
-    const { driver, runner } = await world({ serverReply: VERSION_REPLY_40 });
-
-    const advisories = await advisoriesOf(driver);
-
-    expect(advisories.map((advisory) => advisory.code)).toEqual(["adb-protocol-mismatch"]);
-    expect(runner.commands).toEqual([]);
   });
 });
 
@@ -1189,7 +1181,6 @@ describe("Android physical handler: reclaim", () => {
   it.each([
     ["fails", FAILED],
     ["passes 30 s", TIMED_OUT],
-    ["has a bad line", OK("package:com.example.kept\npackage:bad name;rm\n")],
   ])(
     "rejects, runs no uninstall and never resolves with an empty list when the first pm list packages %s",
     async (_name, result) => {

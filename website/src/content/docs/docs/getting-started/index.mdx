@@ -1,0 +1,80 @@
+---
+title: Install and check your machine
+description: Install the simlock CLI from npm and use simlock doctor to confirm your machine can run simulators and emulators.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+You need Node.js 22.13 or later, plus Xcode for iOS or the Android SDK for Android. The full list is in [Requirements](/simlock/docs/introduction/requirements).
+
+## Install
+
+<Steps>
+
+1. Install the CLI globally:
+
+   ```sh
+   npm i -g simlock
+   ```
+
+2. Check that it runs:
+
+   ```sh
+   simlock --help
+   ```
+
+</Steps>
+
+There is no setup step. The daemon, the background process that owns your devices, starts on demand the first time a command needs it. Simlock keeps its data, devices and configuration under `~/.simlock`.
+
+Simlock does not register itself to start at login. Nothing needs to run before your first command, and the daemon keeps running after it starts.
+
+## Check your machine
+
+Run:
+
+```sh
+simlock doctor
+```
+
+`simlock doctor` checks the tools each platform needs and looks for problems with the devices Simlock manages. It prints a JSON report on stdout and a line on stderr for each thing you need to act on.
+
+### A healthy machine
+
+When nothing is wrong, stderr is empty and the report has no findings:
+
+```json
+{"findings":[]}
+```
+
+### A missing tool
+
+On a Mac with Xcode set up and no Android SDK, doctor reports Android as missing and iOS works as normal:
+
+```text
+Missing [android] android-sdk: No Android SDK found; searched: /Users/dana/Library/Android/sdk. Install Android Studio (https://developer.android.com/studio), or the command-line tools (https://developer.android.com/studio#command-line-tools-only), and set ANDROID_HOME to the SDK directory.
+```
+
+Each line names the platform, what is missing, and the command or download that fixes it. If you only want iOS, you can ignore the Android lines.
+
+<Aside type="caution" title="Restart the daemon after you install a tool">
+The daemon looks for each platform's tools only when it starts. After you install Xcode, the Android SDK or a JDK, run `simlock daemon stop`, then run `simlock doctor` again. The next command starts the daemon with the new tools.
+</Aside>
+
+## Fix what doctor finds
+
+```sh
+simlock doctor --fix
+```
+
+`--fix` corrects Simlock's own records when they no longer match the machine. For example, it forgets a device that was deleted outside Simlock, and ends a lease whose TTL ran out but is still marked active. It never touches a device that is leased.
+
+`--fix` does not install Xcode, the Android SDK or a JDK. Install those yourself, using the commands doctor prints.
+
+Doctor can also report **orphans**: devices inside Simlock's own folders that it has no record of, usually left by a daemon that stopped while creating one. `--fix` leaves them alone. To delete them, run `simlock doctor --purge-orphans`, which asks you to confirm first.
+
+`simlock doctor` runs on a worker. On a gateway it fails with `UNSUPPORTED_IN_GATEWAY_MODE`; run it on each worker instead.
+
+## Next
+
+[Lease your first device](/simlock/docs/getting-started/first-lease).

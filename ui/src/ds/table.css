@@ -10,6 +10,28 @@
   table-layout: fixed;
 }
 
+/* A table and its pager sit on a card. Outside a panel the card is drawn; as a page's last part it
+ * fills the page's height, so one row still reads as a list. In a panel the panel is the card. */
+.table-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.page > .table-card:last-child {
+  flex: 1;
+}
+
+.table-card > .pager {
+  margin-top: auto;
+}
+
+.panel .table-card {
+  border: 0;
+  background: none;
+}
+
 .table th,
 .table td {
   padding: var(--space-4) var(--space-3);
@@ -179,4 +201,22 @@
   font-weight: 500;
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
+}
+
+.table-row-link {
+  cursor: pointer;
+}
+
+.table-row-link:hover {
+  background: var(--surface);
+}
+
+.table .table-menu {
+  width: 3.5rem;
+  text-align: right;
+}
+
+.table-empty {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
 }

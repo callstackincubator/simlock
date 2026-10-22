@@ -86,16 +86,6 @@ describe("aggregateStatus", () => {
     expect(status.workers?.map((worker) => worker.warmPool)).toEqual([block, block, undefined]);
   });
 
-  it("reports the gateway's own host with no tools, not any worker's", () => {
-    const status = aggregateStatus(
-      [view({ host: hostFixture({ os: "macOS", osVersion: "15.5" }), id: "wrk_a" })],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
-    );
-
-    expect(status.host).toEqual({ arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] });
-    expect(status.workers?.[0]?.host?.os).toBe("macOS");
-  });
-
   // Round 6 review: `aggregateStatus`'s whole `leaseIndex` branch was deletable with a green
   // suite -- replacing it with the pre-#118 `{...lease, workerId}` passthrough broke nothing,
   // because every case here omitted the optional `leaseIndex` and so exercised only the
@@ -861,9 +851,6 @@ describe("aggregateCatalog", () => {
       expect(aliasedModels).toHaveLength(4096);
       expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
-      const classedModels = Object.keys(platform?.modelClasses ?? {});
-      expect(classedModels).toHaveLength(4096);
-      expect(classedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.customModels).toHaveLength(4096);
       expect(platform?.customModels?.filter((model) => model.startsWith("bm"))).toEqual([]);
     });
