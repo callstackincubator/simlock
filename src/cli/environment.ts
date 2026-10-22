@@ -269,6 +269,7 @@ export function buildCliEnvironment(
             definition: async () => {
               const { serviceDefinition } = await import("../ports/index.js");
               return serviceDefinition({
+                ...(service.manager === undefined ? {} : { manager: service.manager.manager }),
                 role: daemonHome.role,
                 root: service.root,
                 dataDirectory,

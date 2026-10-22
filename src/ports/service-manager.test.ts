@@ -474,7 +474,7 @@ describe("SystemdServiceManager (#832)", () => {
 
       expect(await filesystem.exists(definition.path), `${testCase.label}: unit exists`).toBe(true);
       expect(parseUnit(await filesystem.readFile(definition.path)), testCase.label).toEqual({
-        Unit: { Description: ["simlock worker daemon"], StartLimitIntervalSec: ["0"] },
+        Unit: { Description: [`simlock ${testCase.role} daemon`], StartLimitIntervalSec: ["0"] },
         Service: {
           ExecStart: [testCase.execStart],
           Environment: testCase.environment,

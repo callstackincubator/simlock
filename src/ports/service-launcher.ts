@@ -35,6 +35,7 @@ export function launcherFor(options: LauncherForOptions): DaemonLauncher {
   const { serviceManager } = options;
   if (serviceManager === undefined) return spawner;
   const definition = serviceDefinition({
+    manager: serviceManager.manager,
     role: options.role,
     root: options.root,
     dataDirectory: options.dataDirectory,
