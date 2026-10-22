@@ -1,6 +1,6 @@
 # 0023. agent-device is served by an optional edge module, and the simlock lease is the only clock
 
-- **Status:** Accepted
+- **Status:** Accepted; §3–4 superseded in part by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md)
 - **Date:** 2026-10-12
 - **Issue:** [#466](https://github.com/callstackincubator/simlock/issues/466)
 - **Supersedes:** nothing. Builds on [ADR 0020](0020-a-requester-may-choose-its-lease-id.md)
