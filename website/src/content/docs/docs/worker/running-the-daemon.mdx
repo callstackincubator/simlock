@@ -203,7 +203,9 @@ From the moment you run it, the daemon takes no new leases: a request gets `DAEM
 
 The same update runs over HTTP as `POST /v1/update` with an admin token. A daemon older than the version that adds this command answers `PROTOCOL_VERSION_UNSUPPORTED`; upgrade it by hand, as below.
 
-## Upgrade Simlock by hand
+## Upgrade Simlock
+
+To upgrade by hand instead of with `simlock update`:
 
 <Steps>
 

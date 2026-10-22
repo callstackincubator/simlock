@@ -180,8 +180,8 @@ as `incompatible` in `simlock --gateway worker list`.
 | Event | When it fires | Payload | Gateway |
 | --- | --- | --- | --- |
 | `daemon.started` | The daemon finished starting. | `version`, `configSnapshot` (tokens, alert URLs and secrets shown as `[redacted]`) | Own (a worker records its own before the gateway starts listening to it, so it is not relayed) |
-| `daemon.update-started` | An update began: the daemon resolved the version and now waits for its leases to end or installs. | `from`, `to`, `forced` | Own and relayed |
-| `daemon.update-failed` | An update ended without a new daemon: the install failed and this daemon serves again, or the new version did not start and the old one was started again. | `stage` (`installing` or `restarting`), `from`, `to`, `message` | Own and relayed |
+| `daemon.update-started` | An update began: the daemon resolved the version and now waits for its leases to end or installs. | `from`, `to`, `forced` | Relayed |
+| `daemon.update-failed` | An update ended without a new daemon: the install failed and this daemon serves again, or the new version did not start and the old one was started again. | `stage` (`installing` or `restarting`), `from`, `to`, `message` | Relayed |
 | `daemon.stopping` | The daemon began to stop. | `reason` (`signal` when the daemon process received SIGTERM) | Own and relayed |
 | `doctor.reconciled` | Simlock compared its records with the devices on disk (at start and on `simlock doctor`). | `driftFindings` | Relayed |
 | `cleanup.executed` | Cleanup shut down or deleted an idle device. | `ruleName` (`idle-shutdown` or `idle-destroy`), `action` (`shutdown` or `destroy`), `target`, `reason` | Relayed |
