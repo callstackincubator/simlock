@@ -47,7 +47,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/AGENTS.md) · [routing](../../src/gateway/routing/AGENTS.md) |
 | alerts | Gateway only: chosen fleet events POSTed to webhook destinations | [alerts](../../src/alerts/AGENTS.md) |
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
-| agent-device | Optional edge: the agent-device daemon beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
+| agent-device | Optional edge: the two agent-device daemons (simulators, phones) beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
 | stream | Optional edge: a leased device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
 | auth | Credential → identity: tokens, admin secret, `hello`, uplink join token, HTTP strategies | [auth](../../src/auth/AGENTS.md) |
 | http | HTTP frontend: routes, SSE | [http](../../src/http/AGENTS.md) |

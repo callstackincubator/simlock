@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 [agent-device](https://github.com/callstack/agent-device) is Callstack's command-line tool for driving mobile apps: it opens an app, reads the screen as a tree of elements, taps, types and takes screenshots. With Simlock, `agent-device open` leases a simulator or emulator from Simlock, and every later command goes to that device. Each agent gets its own device, and a device is wiped when the agent closes it.
 
-Simlock runs one agent-device daemon on each worker and watches it. Agents reach it over HTTP, on the worker or through a gateway, with a Simlock agent token.
+Simlock runs two agent-device daemons on each worker and watches both: one over the simulators and emulators Simlock leases, and a phone daemon beside it that sees the phones plugged into the host. For an iPhone the phone daemon needs `teamId` and `bundleId`, set with `simlock config set capabilities.agent-device.ios.teamId <id>` (and `bundleId`). `provisioningProfile` and `signingIdentity` are for manual signing only: setting a provisioning profile switches agent-device to manual signing, which an Xcode-managed profile fails. The setting takes effect on daemon restart. If it cannot start, `simlock doctor` prints a line starting `phone daemon:`; the simulator daemon and the worker's agent-device status are not affected. Agents lease a phone through it with `--physical`. Agents reach agent-device over HTTP, on the worker or through a gateway, with a Simlock agent token.
 
 ## Before you start
 
@@ -21,7 +21,9 @@ On each agent's machine:
 - agent-device 0.21.28 or later. An older CLI is refused with `refused: this agent-device is too old for simlock; upgrade it`.
 - Its own Simlock agent token. Simlock tells agents apart by token: two agents that share a token share one agent-device session and see each other's devices.
 
-agent-device through Simlock drives simulators and emulators. It does not lease physical devices.
+agent-device through Simlock drives simulators, emulators and, with `--physical`, phones enrolled in Simlock (see [Physical devices](/simlock/docs/using-devices/physical-devices)). `open --physical` leases an enrolled phone: the command goes to the phone daemon and the reply names the device with `physical: true`. Simlock picks the phone, so name no `--udid` or `--serial`.
+
+The phone daemon runs `adb` without Simlock's version check, so its `adb` must come from the same Android SDK (platform-tools) as Simlock's.
 
 ## Turn it on
 
@@ -124,12 +126,13 @@ Restarting a worker's daemon ends every agent-device lease on that worker, even 
 | `refused: name --platform ios or android` | `open` needs `--platform`. |
 | `refused: simlock picks the device` | A `--udid`, `--serial` or `--device` names a device that is not the one Simlock leased to you. |
 | `refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set` | Simlock decides which devices agent-device sees. |
-| `refused: physical devices are not available through agent-device` | `open` asked for a physical device; agent-device leases only simulators and emulators through Simlock. |
+| `refused: malformed physical` | `physical` was not true or false. |
 | `refused: unknown --target <value>; use mobile, tv or desktop` | `--target` named a device class Simlock does not map. |
 | `refused: malformed osVersion`, `refused: malformed imageTag` | `--os` or `--image-tag` was not a string. |
 | `refused by simlock: <message>` | Simlock refused the lease, for example a model it does not know, an OS range it cannot read, or an image tag on iOS. |
 | `refused: this agent-device is too old to use through a gateway; update it` | Upgrade the agent's agent-device. |
 | `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. |
+| `agent-device is not available on this simlock: phone daemon: <message>` | `open --physical`, or a command on a phone lease, found the phone daemon starting or down. Simulator leases keep working; `simlock doctor` prints the phone daemon's finding. |
 
 ## Related
 

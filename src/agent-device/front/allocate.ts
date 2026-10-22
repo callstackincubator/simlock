@@ -52,6 +52,7 @@ interface Plan {
   readonly class?: "phone" | "tv" | "desktop";
   readonly imageTag?: string;
   readonly osVersion?: string;
+  readonly physical?: true;
   readonly ttlMs?: number;
 }
 
@@ -85,13 +86,7 @@ function deviceRefusal(fields: ReturnType<typeof leaseCallFields>): FrontReply |
   return undefined;
 }
 
-function unsupportedSelector(
-  params: Record<string, unknown>,
-  fields: ReturnType<typeof leaseCallFields>,
-): FrontReply | undefined {
-  if (params["physical"] === true) {
-    return refusal("refused: physical devices are not available through agent-device");
-  }
+function unsupportedSelector(fields: ReturnType<typeof leaseCallFields>): FrontReply | undefined {
   if (typeof fields.target === "string" && !Object.hasOwn(CLASS_OF_TARGET, fields.target)) {
     return refusal(`refused: unknown --target ${fields.target}; use mobile, tv or desktop`);
   }
@@ -105,7 +100,7 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
     return refusal("refused: this agent-device is too old for simlock; upgrade it");
   }
   if (notPlain(params)) return refusal("refused: simlock leases only plain devices");
-  const unsupported = unsupportedSelector(params, fields);
+  const unsupported = unsupportedSelector(fields);
   if (unsupported !== undefined) return unsupported;
   const device = deviceRefusal(fields);
   if (device !== undefined) return device;
@@ -138,6 +133,7 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
     platform: fields.platform as "ios" | "android",
     ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
     ...stringFields(fields),
+    ...(params["physical"] === true ? { physical: true as const } : {}),
     ...(ttlMs === undefined ? {} : { ttlMs }),
   };
 }
@@ -274,6 +270,7 @@ function forwardedBody(
     deviceKey: _deviceKey,
     imageTag: _imageTag,
     osVersion: _osVersion,
+    physical: _physical,
     target: _target,
     ...rest
   } = call.params;
@@ -318,7 +315,7 @@ export async function allocate(
   if (outcome.kind === "gone") return undefined;
   if (outcome.kind === "failed") return frontReply(outcome.reply, call);
   const { grant } = outcome;
-  const address = grant.device.address;
+  const address = grant.device.spec.physical ? grant.device.driverDeviceId : grant.device.address;
   if (request.signal.aborted || address === undefined || address === "") {
     await releaseSimlock(context, identity, plan.leaseId);
     return request.signal.aborted
@@ -407,6 +404,7 @@ function withGrantedDevice<T extends { text: string | undefined }>(
   lease["device"] = {
     model: spec.model,
     osVersion: spec.osVersion,
+    physical: spec.physical,
     ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
   };
   return { ...reply, text: JSON.stringify(body) };

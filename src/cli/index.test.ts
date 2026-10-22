@@ -3078,6 +3078,47 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(written).toEqual({ lease: { defaultTtlMs: 2400000 } });
   });
 
+  it.each(["teamId", "bundleId", "provisioningProfile", "signingIdentity"])(
+    "simlock config set capabilities.agent-device.ios.%s stores a non-empty string and refuses an empty string or a number with the usage error",
+    async (key) => {
+      const path = `capabilities.agent-device.ios.${key}`;
+      const set = async (value: string) => {
+        const output = outputCapture(realCliEnvironmentPorts());
+        let written: Record<string, unknown> | undefined;
+        const exitCode = await runCli(
+          ["config", "set", path, value],
+          output.environmentWith({
+            readConfigFile: async () => ({}),
+            writeConfigFile: async (contents) => {
+              written = contents;
+            },
+          }),
+        );
+        return { exitCode, output, written };
+      };
+
+      const stored = await set("ABCDE12345");
+      expect(stored.exitCode).toBe(0);
+      expect(stored.output.stdout).toBe(
+        `Updated ${path} in /simlock/config.json; takes effect on daemon restart.\n`,
+      );
+      expect(stored.written).toEqual({
+        capabilities: { "agent-device": { ios: { [key]: "ABCDE12345" } } },
+      });
+      for (const value of ["", "42"]) {
+        const refused = await set(value);
+        expect(refused.exitCode).toBe(2);
+        expect(JSON.parse(refused.output.stderr)).toEqual({
+          error: {
+            code: "USAGE",
+            message: `Invalid config after setting ${path}: Invalid config value for "${path}": expected a non-empty string`,
+          },
+        });
+        expect(refused.written).toBeUndefined();
+      }
+    },
+  );
+
   it("does not let a stray file at the scratch validation path change the outcome", async () => {
     // why: Guards against B9's second bug: the validation scratch path must never be able to read a
     // real file, whether one happens to already exist there or not.

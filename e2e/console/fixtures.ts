@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   createServer,
@@ -51,7 +52,7 @@ export interface RunningDaemon extends ConsoleDaemon {
   /** `simlock daemon start` on the same home, port and tokens. */
   start(): Promise<void>;
   /** Stops the daemon and deletes its home. */
-  dispose(): Promise<void>;
+  dispose(options?: { readonly preservePages?: readonly Page[] }): Promise<void>;
 }
 
 export interface StartOptions {
@@ -61,6 +62,152 @@ export interface StartOptions {
 }
 
 const FAKE_DRIVER_MODULE = join(REPO_ROOT, "dist/e2e/index.js");
+const activePages = new Set<Page>();
+
+async function isProcessAlive(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
+  if (!existsSync(socketPath)) return [];
+  return new Promise((resolve, reject) => {
+    execFile("lsof", ["-t", socketPath], (error, stdout) => {
+      if (error) {
+        const failure = error as NodeJS.ErrnoException & { stderr?: string };
+        if (
+          String(failure.code) !== "1" ||
+          (failure.stderr?.trim() && !failure.stderr.includes("No such file or directory"))
+        ) {
+          reject(error);
+          return;
+        }
+      }
+      resolve(
+        stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== "")
+          .map(Number)
+          .filter((pid) => Number.isInteger(pid)),
+      );
+    });
+  });
+}
+
+async function discoverDaemonPids(
+  socketPath: string,
+): Promise<{ error?: unknown; pids: number[] }> {
+  try {
+    return { pids: await pidsHoldingSocket(socketPath) };
+  } catch (error: unknown) {
+    return { error, pids: [] };
+  }
+}
+
+async function requestDaemonStop(
+  socketPath: string,
+  gatewayFlag: readonly string[],
+  env: NodeJS.ProcessEnv,
+  daemonStarted: boolean,
+  discovery: { readonly error?: unknown; readonly pids: readonly number[] },
+): Promise<unknown> {
+  if (!existsSync(socketPath)) return undefined;
+  if (discovery.pids.length === 0 && discovery.error === undefined) return undefined;
+  try {
+    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+    if (daemonStarted && stopped.code !== 0)
+      return new Error(`daemon stop failed: ${stopped.stderr}`);
+  } catch (error: unknown) {
+    return error;
+  }
+  try {
+    await waitFor(() => !existsSync(socketPath), {
+      timeout: 10_000,
+      label: "daemon socket removed",
+    });
+  } catch (error: unknown) {
+    return error;
+  }
+  return undefined;
+}
+
+async function captureCleanupError(
+  current: unknown,
+  action: () => Promise<unknown>,
+): Promise<unknown> {
+  try {
+    await action();
+    return current;
+  } catch (error: unknown) {
+    return current ?? error;
+  }
+}
+
+async function stopBackgroundProcesses(handles: readonly CliBackgroundHandle[]): Promise<void> {
+  await Promise.all(
+    handles.map(async (handle) => {
+      handle.kill("SIGTERM");
+      try {
+        await handle.waitForExit(10_000);
+      } catch {
+        handle.kill("SIGKILL");
+        await handle.waitForExit(10_000);
+      }
+    }),
+  );
+}
+
+async function waitForDaemonPidsToExit(pids: ReadonlySet<number>): Promise<void> {
+  const alive = async () =>
+    (await Promise.all([...pids].map((pid) => isProcessAlive(pid)))).some(Boolean);
+  try {
+    await waitFor(async () => !(await alive()), {
+      timeout: 5_000,
+      interval: 100,
+      label: "daemon process exited",
+    });
+  } catch {
+    for (const pid of pids) {
+      if (!(await isProcessAlive(pid))) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    await waitFor(async () => !(await alive()), {
+      timeout: 10_000,
+      interval: 100,
+      label: "daemon process exited after SIGKILL",
+    });
+  }
+}
+
+async function closeActivePages(preserved: ReadonlySet<Page>): Promise<unknown> {
+  let firstError: unknown;
+  for (const page of activePages) {
+    if (preserved.has(page)) continue;
+    if (!page.isClosed()) {
+      try {
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      } catch (error: unknown) {
+        firstError ??= error;
+      }
+      try {
+        await page.close();
+      } catch (error: unknown) {
+        firstError ??= error;
+      }
+    }
+    activePages.delete(page);
+  }
+  return firstError;
+}
 
 /**
  * Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
@@ -120,19 +267,42 @@ export async function startDaemon(
   };
   const socketPath = join(dataDirectory, "daemon.sock");
   const background = new Set<CliBackgroundHandle>();
+  const daemonPids = new Set<number>();
+  let daemonStarted = false;
+  let daemonMayBeRunning = false;
+  let daemonPidDiscoveryFailed = false;
   const stop = async () => {
-    await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
-    await waitFor(() => !existsSync(socketPath), { timeout: 10_000 }).catch(() => undefined);
+    if (!daemonMayBeRunning) return;
+    const discovery = await discoverDaemonPids(socketPath);
+    for (const pid of discovery.pids) daemonPids.add(pid);
+    daemonPidDiscoveryFailed ||= discovery.error !== undefined;
+    const stopError = await requestDaemonStop(
+      socketPath,
+      gatewayFlag,
+      env,
+      daemonStarted,
+      discovery,
+    );
+    if (!existsSync(socketPath)) {
+      daemonStarted = false;
+      daemonMayBeRunning = false;
+    }
+    if (discovery.error !== undefined) throw discovery.error;
+    if (stopError !== undefined) throw stopError;
   };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
     const before = (await readLog()).length;
+    daemonMayBeRunning = true;
     const started = await cli([...gatewayFlag, "daemon", "start"], env, { timeout: 30_000 });
     // why: `daemon start` exits 0 once the daemon answers from its socket, which can come before
     // the daemon fails to bind its HTTP port and stops (#553). So a clean exit is not yet a start:
     // wait for this start's own "HTTP gateway listening" or `EADDRINUSE` line (the log keeps the
     // earlier starts' lines), and fail on the latter.
-    if (started.code === 0 && !httpConfig.enabled) return;
+    if (started.code === 0 && !httpConfig.enabled) {
+      daemonStarted = true;
+      return;
+    }
     if (started.code === 0) {
       await waitFor(
         async () => {
@@ -141,7 +311,10 @@ export async function startDaemon(
         },
         { label: "the daemon's HTTP listener" },
       );
-      if (!(await readLog()).slice(before).includes("EADDRINUSE")) return;
+      if (!(await readLog()).slice(before).includes("EADDRINUSE")) {
+        daemonStarted = true;
+        return;
+      }
     }
     // why: a failed start reports only what the CLI saw while polling the socket, and `dispose`
     // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.
@@ -149,10 +322,31 @@ export async function startDaemon(
     const tail = (await readLog()).split("\n").slice(-20).join("\n");
     expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
   };
-  const dispose = async () => {
-    for (const handle of background) handle.kill("SIGTERM");
-    await stop();
+  const dispose = async (options: { readonly preservePages?: readonly Page[] } = {}) => {
+    const preserved = new Set(options.preservePages ?? []);
+    let cleanupError = await closeActivePages(preserved);
+    cleanupError = await captureCleanupError(cleanupError, () =>
+      stopBackgroundProcesses([...background]),
+    );
+    let stopError: unknown;
+    try {
+      await stop();
+    } catch (error: unknown) {
+      stopError = error;
+    }
+    await waitForDaemonPidsToExit(daemonPids);
+    if (daemonPidDiscoveryFailed) {
+      throw cleanupError ?? new Error(`cannot verify daemon exit for ${socketPath}`);
+    }
+    if (stopError !== undefined && daemonPids.size === 0) throw stopError;
+    // why: disposal can remove the home after a forced stop only once every discovered daemon PID
+    // has exited; explicit stop() callers still receive the graceful-stop error above.
+    if (daemonPids.size > 0) {
+      daemonStarted = false;
+      daemonMayBeRunning = false;
+    }
     await rm(home, { force: true, recursive: true });
+    if (cleanupError !== undefined) throw cleanupError;
   };
   try {
     await start();
@@ -263,9 +457,12 @@ export async function startFleet(
   }
 }
 
-export async function disposeFleet(fleet: Fleet): Promise<void> {
-  await Promise.all(fleet.workers.map((worker) => worker.dispose()));
-  await fleet.gateway.dispose();
+export async function disposeFleet(
+  fleet: Fleet,
+  options: { readonly preservePages?: readonly Page[] } = {},
+): Promise<void> {
+  await Promise.all(fleet.workers.map((worker) => worker.dispose(options)));
+  await fleet.gateway.dispose(options);
 }
 
 /** The protocol range the stand-in below claims: older than any this gateway speaks. */
@@ -470,6 +667,16 @@ export const test = base.extend<
   { proxied: ProxiedDaemon },
   { daemon: RunningDaemon; gateway: RunningDaemon; proxiedDaemon: ProxiedDaemon }
 >({
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    activePages.add(page);
+    try {
+      await use(page);
+    } finally {
+      activePages.delete(page);
+      await page.close();
+    }
+  },
   proxiedDaemon: [
     // oxlint-disable-next-line no-empty-pattern -- as below.
     async ({}, use) => {

@@ -4,6 +4,12 @@ import type { OptionalModuleDefinition } from "../modules/index.js";
 export interface AgentDeviceModuleConfig {
   readonly command: string;
   readonly leaseTtlCapMs?: number;
+  readonly ios?: {
+    readonly teamId?: string;
+    readonly bundleId?: string;
+    readonly provisioningProfile?: string;
+    readonly signingIdentity?: string;
+  };
 }
 
 /** why: agent-device's shortest lease window, so a cap below it would shorten leases past what agent-device keeps. */
@@ -21,6 +27,12 @@ export const agentDeviceModule: OptionalModuleDefinition<AgentDeviceModuleConfig
     gatewayKeys: ["leaseTtlCapMs"],
     validator: objectValidator({
       command: nonEmptyString,
+      ios: objectValidator({
+        bundleId: nonEmptyString,
+        provisioningProfile: nonEmptyString,
+        signingIdentity: nonEmptyString,
+        teamId: nonEmptyString,
+      }),
       leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
     }),
   },
