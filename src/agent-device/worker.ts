@@ -82,6 +82,7 @@ function agentDeviceCapabilitySource(parts: AgentDeviceEdgeParts): {
 
 export interface AgentDeviceFakes {
   readonly upstream?: AgentDeviceUpstream;
+  readonly phoneUpstream?: AgentDeviceUpstream;
   readonly health?: AgentDeviceHealthProbe;
 }
 

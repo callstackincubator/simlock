@@ -75,6 +75,7 @@ interface SetUpOptions {
   readonly maxRunning?: number;
   readonly slowStart?: boolean;
   readonly upstream?: FakeAgentDevice;
+  readonly phoneUpstream?: FakeAgentDevice;
 }
 
 interface Rig {
@@ -82,6 +83,7 @@ interface Rig {
   readonly daemon: DaemonServer;
   readonly driver: FakeDriver;
   readonly fake: FakeAgentDevice;
+  readonly phone: FakeAgentDevice;
   readonly filesystem: MemoryFilesystem;
   readonly logs: MemoryLogSink;
   readonly origin: string;
@@ -165,6 +167,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   ]);
   const port = await freeLoopbackPort();
   const fake = options.upstream ?? new FakeAgentDevice();
+  const phone = options.phoneUpstream ?? new FakeAgentDevice();
   const drivers = options.drivers?.(clock) ?? [iosDriver(clock)];
   const stateDbPath = join(directory, "state.db");
   const logs = new MemoryLogSink();
@@ -199,7 +202,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       drivers,
       filesystem,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
-      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
+      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -214,6 +217,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       daemon: undefined as never,
       driver: drivers[0] as FakeDriver,
       fake,
+      phone,
       filesystem,
       logs,
       origin,
@@ -227,6 +231,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     daemon,
     driver: drivers[0] as FakeDriver,
     fake,
+    phone,
     filesystem,
     logs,
     origin,
@@ -790,16 +795,48 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(installs()).toBe(1);
   });
 
-  it("allocate with `physical: true` answers `refused: physical devices are not available through agent-device` and leaves no lease; `physical: false` and `physical: null` are granted", async () => {
+  it("allocate with `physical: true` leases an enrolled phone through the phone daemon, and the reply names the device with `physical: true` (`false` for a virtual one)", async () => {
+    const cases = [
+      {
+        extra: { platform: "android" },
+        id: "R58Y61A60HN",
+        platform: "android",
+        phone: { class: "phone", model: "Pixel 8", osVersion: "15" },
+        physical: true,
+      },
+    ] as const;
+    for (const { extra, id, phone, physical, platform } of cases) {
+      const rig = await setUp({
+        drivers: (clock) => [
+          new FakeDriver({
+            availableOsVersions: ["35"],
+            clock,
+            knownModels: ["Pixel 8"],
+            physicalDevices: [{ ids: [id], ...phone }],
+            platform,
+          }),
+        ],
+      });
+      await rig.daemon.dispatch("device.add", { id, platform }, adminSession);
+
+      const answer = await envelopeOf(await allocate(rig, 1, { ...extra, physical }));
+
+      expect(answer.result).toMatchObject({
+        data: {
+          lease: { device: { model: phone.model, osVersion: phone.osVersion, physical } },
+        },
+        ok: true,
+      });
+      expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toMatchObject([
+        { params: { leaseId: hex(1), serial: id } },
+      ]);
+      expect(allocatesReceived(rig)).toEqual([]);
+    }
+  });
+
+  it("allocate with `physical: false` and `physical: null` are granted", async () => {
     const rig = await setUp({ maxRunning: 8 });
 
-    const answer = await envelopeOf(await allocate(rig, 1, { physical: true }));
-
-    expect(answer.error).toMatchObject(
-      refusal("refused: physical devices are not available through agent-device"),
-    );
-    expect(await leases(rig)).toEqual([]);
-    expect(allocatesReceived(rig)).toEqual([]);
     await granted(rig, 2, { physical: false });
     await granted(rig, 3, { physical: null });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2), hex(3)]);
