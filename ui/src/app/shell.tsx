@@ -55,11 +55,16 @@ export function Shell() {
   );
 }
 
+export function UpdateNotice(_props: { readonly collapsed: boolean }) {
+  return null;
+}
+
 function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
   const signedIn = useSignedIn();
   const signOut = useSignOut();
   return (
     <>
+      <UpdateNotice collapsed={collapsed} />
       <ConnectionStatus collapsed={collapsed} />
       {signedIn.name === undefined || collapsed ? null : (
         <p className="signed-in-as">Signed in as {signedIn.name}</p>

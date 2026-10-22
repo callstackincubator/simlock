@@ -9,7 +9,7 @@ import { ConsoleProvider } from "./services";
 
 // why: a screen rendered for a claim about its markup never talks to a daemon, so the services it
 // reads are there to satisfy the context, and a call into any of them would be the finding.
-export function inConsole(node: ReactNode): string {
+export function inConsole(node: ReactNode, mode?: Partial<Live["mode"]>): string {
   const services = {
     api: {} as unknown as ApiClient,
     confirm: () => Promise.resolve(),
@@ -19,7 +19,12 @@ export function inConsole(node: ReactNode): string {
     session: {} as unknown as Session,
   };
   const live = {
-    mode: { mode: () => undefined, subscribe: () => () => undefined },
+    mode: {
+      daemon: () => ({ latestVersion: null }),
+      mode: () => undefined,
+      subscribe: () => () => undefined,
+      ...mode,
+    },
   } as unknown as Live;
   return renderToStaticMarkup(
     <ConsoleProvider {...services}>

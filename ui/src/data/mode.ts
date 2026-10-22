@@ -3,8 +3,16 @@ import type { LiveConnection } from "./live/connection";
 
 export type DaemonMode = "gateway" | "worker";
 
+// why: what the footer reads of the daemon beside its mode: the version it runs and the latest the
+// gateway knows (`null` when it knows none).
+export interface DaemonFacts {
+  readonly version?: string;
+  readonly latestVersion: string | null;
+}
+
 export interface ModeStore {
   readonly mode: () => DaemonMode | undefined;
+  readonly daemon: () => DaemonFacts;
   readonly subscribe: (listener: () => void) => () => void;
 }
 
@@ -45,6 +53,7 @@ export function watchMode(options: {
   });
   return {
     mode: () => current,
+    daemon: () => ({ latestVersion: null }),
     subscribe(listener) {
       listeners.add(listener);
       return () => {
