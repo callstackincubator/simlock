@@ -237,6 +237,7 @@ function harness(
         });
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
+    latestVersion: () => null,
     clock,
     closeUplinksForToken: async (tokenId) => {
       closedUplinkTokens.push(tokenId);

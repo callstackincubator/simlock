@@ -46,6 +46,7 @@ const EMPTY_GLOBAL_CAPACITY = {
 export interface AggregateStatusOptions {
   readonly health: StatusOutput["daemon"]["health"];
   readonly version: string;
+  readonly latestVersion?: string | null;
   readonly host: StatusOutput["host"];
   readonly load?: StatusOutput["load"];
   readonly queueDepth: number;
@@ -71,7 +72,7 @@ export function aggregateStatus(
       version: options.version,
       update: null,
       lastUpdateFailure: null,
-      latestVersion: null,
+      latestVersion: options.latestVersion ?? null,
     },
     host: options.host,
     ...(options.load === undefined ? {} : { load: options.load }),

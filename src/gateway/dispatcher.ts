@@ -125,6 +125,7 @@ export interface GatewayDispatcherOptions {
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly health: () => "starting" | "running" | "failed";
   readonly version: string;
+  readonly latestVersion: () => string | null;
   readonly host: AggregateStatusOptions["host"];
   readonly load?: () => AggregateStatusOptions["load"];
   readonly awaitReady: () => Promise<void>;
@@ -327,7 +328,7 @@ export class GatewayDispatcher {
           version: this.options.version,
           update: null,
           lastUpdateFailure: null,
-          latestVersion: null,
+          latestVersion: this.options.latestVersion(),
           ...consoleUrl,
         },
         history,
@@ -338,6 +339,7 @@ export class GatewayDispatcher {
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
       version: this.options.version,
+      latestVersion: this.options.latestVersion(),
       host: this.options.host,
       ...(load === undefined ? {} : { load }),
       physicalQueueDepth: this.options.coordinator.physicalQueueDepth,

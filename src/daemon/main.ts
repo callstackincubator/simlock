@@ -136,7 +136,7 @@ import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { socketHeld } from "../updater/index.js";
 import { createUpdateCoordinator } from "./update-coordinator.js";
-import { startVersionCheck } from "./version-check.js";
+import { startVersionCheck, type VersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
   DaemonEndpointHost,
@@ -294,6 +294,14 @@ async function composeDaemon(
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
   // through the worker's composition below.
+  const npm =
+    options.npm ?? new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory });
+  const versionCheck = startVersionCheck({
+    npm,
+    clock,
+    logger: logger.child("version-check"),
+    enabled: config.update.check,
+  });
   if (role === "gateway") {
     return startGatewayDaemon({
       auth,
@@ -314,6 +322,7 @@ async function composeDaemon(
       socketPath,
       state,
       version: version,
+      versionCheck,
       ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
     });
   }
@@ -447,14 +456,6 @@ async function composeDaemon(
     role: "worker",
   });
   // Builds leasing on top of core (ADR 0018 §2).
-  const npm =
-    options.npm ?? new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory });
-  const versionCheck = startVersionCheck({
-    npm,
-    clock,
-    logger: logger.child("version-check"),
-    enabled: config.update.check,
-  });
   const leasing = createLeasing({
     clock,
     components,
@@ -802,6 +803,7 @@ interface GatewayDaemonOptions {
   readonly socketPath: string;
   readonly state: StateDatabase;
   readonly version: string;
+  readonly versionCheck: VersionCheck;
   readonly webhookPoster?: WebhookPoster;
 }
 
@@ -951,6 +953,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     host: fitHostFacts({ ...options.hostSystem, tools: [] }),
     ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
     leaseIndex,
+    latestVersion: () => options.versionCheck.latest(),
     logger: logger.child("gateway"),
     // why: `alerts` is built after this dispatcher but before start(), and only with destinations; without any, the option stays out.
     ...(config.gateway.alerts.destinations.length === 0
@@ -995,6 +998,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       fleetCoordinator.start();
     },
     dispose: async () => {
+      options.versionCheck.dispose();
       gatewayDispatcher.dispose();
       fleetCoordinator.dispose();
       gatewayOwnerRoutedFacts.dispose();
