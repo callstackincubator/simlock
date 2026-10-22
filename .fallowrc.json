@@ -57,7 +57,9 @@
     "@tanstack/react-table",
     "@tanstack/react-virtual",
     // Recharts' peer dependency: installed for it, never imported by the console itself.
-    "react-is"
+    "react-is",
+    // The update e2e (e2e/update/update.e2e.test.ts) runs its binary as a local npm registry.
+    "verdaccio"
   ],
   "ignoreDependencyOverrides": [
     // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.

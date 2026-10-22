@@ -106,6 +106,7 @@
     "recharts": "^3.10.1",
     "release-it": "^20.2.1",
     "typescript": "^7.0.2",
+    "verdaccio": "^6.10.6",
     "vite": "^8.3.2",
     "vitest": "^4.1.10"
   },

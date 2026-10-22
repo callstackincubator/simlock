@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
+import { Socket } from "node:net";
 import { createInterface } from "node:readline";
 
 import type { DaemonRole } from "./paths.js";
@@ -56,6 +57,8 @@ export class NodeUpdaterLauncher implements UpdaterLauncher {
       });
       child.unref();
       if (child.stdout === null) throw new Error("the updater has no stdout pipe");
+      // why: the updater waits for this process to exit, so its pipe must not keep the event loop alive.
+      if (child.stdout instanceof Socket) child.stdout.unref();
       return { lines: createInterface({ input: child.stdout }), exited };
     } finally {
       await log.close();
