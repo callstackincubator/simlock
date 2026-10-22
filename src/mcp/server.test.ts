@@ -196,18 +196,41 @@ describe("MCP server (smoke)", () => {
     }
   });
 
-  it("rejects invalid tool arguments through the registered schema before touching the client", async () => {
-    const client = new FakeSimlockClient();
-    const { mcpClient, close } = await connectedServer(client);
-    try {
-      const result = await call(mcpClient, "lease_simulator", { model: "", platform: "desktop" });
-      expect(result.isError).toBe(true);
-      expect(text(result)).toContain("Input validation error");
-      expect(client.calls).toEqual([]);
-    } finally {
-      await close();
-    }
-  });
+  it.each([
+    [
+      "lease_simulator",
+      { model: "iPhone 17 Pro", platform: "ios" },
+      { model: 7, platform: "ios" },
+      "requestLease",
+    ],
+    ["list_devices", {}, { platform: 7 }, "getCatalog"],
+    ["release_simulator", { leaseId: "lease-1" }, { leaseId: 7 }, "releaseLease"],
+    ["lease_status", {}, undefined, "listLeases"],
+  ] as const)(
+    "%s reaches the client with a valid input, and a wrong-type input is refused through the registered schema before touching the client",
+    async (tool, valid, wrong, method) => {
+      const client = new FakeSimlockClient();
+      client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+      client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+      client.listLeasesImpl = () => Promise.resolve({ leases: [] });
+      const { mcpClient, close } = await connectedServer(client);
+      try {
+        const ok = await call(mcpClient, tool, valid);
+        expect(ok.isError).not.toBe(true);
+        expect(client.calls.map((entry) => entry.method)).toEqual([method]);
+
+        if (wrong === undefined) return;
+        client.calls.length = 0;
+        const refused = await call(mcpClient, tool, wrong);
+        expect(refused.isError).toBe(true);
+        expect(text(refused)).toContain("Input validation error");
+        expect(client.calls).toEqual([]);
+      } finally {
+        await close();
+      }
+    },
+  );
 
   it("relays a lease-lost push as an MCP logging notification (MCP-only relay)", async () => {
     const client = new FakeSimlockClient();

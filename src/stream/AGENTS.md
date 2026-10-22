@@ -9,21 +9,22 @@ Off unless `capabilities.stream.enabled` (false). Off: nothing loaded, and the `
 
 ## Files
 
-| File                      | Role                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------- |
-| `definition.ts`           | `streamModule`: name `stream`, config section, the two loaders                  |
-| `worker.ts`, `gateway.ts` | The module's two sides, built from the host's context                           |
-| `create.ts`               | The two factories; the `stream` capability read from each driver's availability |
-| `worker-link.ts`          | Worker: lease check, open through the driver, register, re-check after frame 1  |
-| `gateway-link.ts`         | Gateway: fleet ownership, relay to the holding worker, refusal and header check |
-| `feed.ts`                 | `readScreenFeed`: meta frame first, start and silence bounds, close on any end  |
-| `framing.ts`              | `MetaFrameScanner`, `checkedMeta`: codec and size a picture may claim           |
-| `captures.ts`             | Captures per lease; the lease-end participant that stops them                   |
-| `service.ts`              | One request either door: method, refusal body, response headers, log line       |
-| `mounts.ts`               | The HTTP mount and the relay target                                             |
-| `refusal.ts`              | `StreamRefusalError`, each refusal's status and code, a relayed refusal checked |
-| `caller.ts`               | Who asks                                                                        |
-| `test-fixtures.ts`        | `TestRegistry`, `ScriptedFeed` for tests                                        |
+| File                      | Role                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `definition.ts`           | `streamModule`: name `stream`, config section, `http` route data, the two loaders |
+| `worker.ts`, `gateway.ts` | The module's two sides, built from the host's context                             |
+| `create.ts`               | The two factories; the `stream` capability read from each driver's availability   |
+| `worker-link.ts`          | Worker: lease check, open through the driver, register, re-check after frame 1    |
+| `gateway-link.ts`         | Gateway: fleet ownership, relay to the holding worker, refusal and header check   |
+| `feed.ts`                 | `readScreenFeed`: meta frame first, start and silence bounds, close on any end    |
+| `framing.ts`              | `MetaFrameScanner`, `checkedMeta`: codec and size a picture may claim             |
+| `captures.ts`             | Captures per lease; the lease-end participant that stops them                     |
+| `service.ts`              | One request either door: method, refusal body, response headers, log line         |
+| `mounts.ts`               | The HTTP mount and the relay target                                               |
+| `refusal.ts`              | `StreamRefusalError`, each refusal's status and code, a relayed refusal checked   |
+| `caller.ts`               | Who asks                                                                          |
+| `test-fixtures.ts`        | `TestRegistry`, `ScriptedFeed` for tests                                          |
+| `testing.ts`              | What other components' tests may import: `createStreamMount`                      |
 
 ## How it works
 

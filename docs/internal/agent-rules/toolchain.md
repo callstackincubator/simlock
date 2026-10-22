@@ -12,9 +12,13 @@ command of their own: they take every command from here.
 | One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
 | Console lane, Chromium only (1)                | `pnpm test:console --project=chromium`       |
+| Website build and its HTTP API check (2)       | `pnpm --dir website install && pnpm --dir website build && node website/scripts/check-openapi.mjs` |
 
 (1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
 `src/contract/`.
+
+(2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
+`src/modules/` or a module's `definition.ts`.
 
 ## Checks agents never run
 
