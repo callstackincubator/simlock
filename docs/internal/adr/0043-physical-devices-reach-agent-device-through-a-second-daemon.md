@@ -38,9 +38,12 @@ changes than the problem.
 Beside the daemon of ADR 0023 §3 (the **simulator daemon**), the host's
 supervisor runs a second one, the **phone daemon**, with:
 
-- no simulator set and no `ANDROID_ADB_SERVER_PORT`, so agent-device lists
-  the host's physical devices as it would for an operator: iPhones through
-  `devicectl` and `xctrace`, Android phones on the default adb server;
+- no simulator set, and `ANDROID_ADB_SERVER_PORT` set to 5037, the host's
+  default adb server, as Simlock's own physical path sets it (the inherited
+  adb keys are dropped first, so an operator shell cannot point it at the
+  emulator server), so agent-device lists the host's physical devices as it
+  would for an operator: iPhones through `devicectl` and `xctrace`, Android
+  phones on the default adb server;
 - its own state directory, pid record and process marker, so the two are
   reaped and stopped apart;
 - the same policy file (no `boot`, no `shutdown`), lease ceiling, tenant
