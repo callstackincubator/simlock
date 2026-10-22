@@ -654,6 +654,32 @@ describe("GatewayDispatcher", () => {
     }
   });
 
+  it("worker.update gives up on a worker that does not answer within 90 s with WORKER_NOT_CONNECTED", async () => {
+    const { clock, dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    client.hangingCalls.add("daemon.update");
+    directory.add("wrk_1", client);
+
+    let outcome: unknown = "pending";
+    void dispatcher.dispatch("worker.update", { workerId: "wrk_1" }, session()).then(
+      (answer) => (outcome = answer),
+      (error: unknown) => (outcome = error),
+    );
+    await vi.waitFor(() => expect(client.updateInputs).toHaveLength(1));
+    clock.advance(89_999);
+    await Promise.resolve();
+    expect(outcome).toBe("pending");
+    clock.advance(1);
+
+    await vi.waitFor(() => expect(outcome).not.toBe("pending"));
+    expect(outcome).toMatchObject({
+      code: "WORKER_NOT_CONNECTED",
+      details: { workerId: "wrk_1" },
+      message: "worker wrk_1 did not answer within 90 s; check simlock worker list",
+    });
+  });
+
   it("an operator-drained worker stays drained through its update, and a drain during an update leaves the update alone", async () => {
     const { dispatcher, directory, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");

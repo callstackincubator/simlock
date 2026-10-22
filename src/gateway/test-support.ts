@@ -420,6 +420,7 @@ export class ScriptedWorkerClient {
   async updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
     this.calls.push("daemon.update");
     this.updateInputs.push(input);
+    if (this.hangingCalls.has("daemon.update")) return new Promise<never>(() => {});
     if (this.updateFailWith !== undefined) throw this.updateFailWith;
     return this.updateAnswer;
   }
