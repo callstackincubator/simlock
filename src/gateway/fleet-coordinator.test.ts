@@ -2193,6 +2193,38 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     },
   );
 
+  it("Gateway routes a lease while a worker is updating: it skips the worker with reason updating, the request waits, and the worker is picked once the update ends", async () => {
+    const fleetHarness = harness();
+    const { coordinator, directory, workers } = fleetHarness;
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", {
+      update: {
+        forced: false,
+        from: "0.3.0",
+        stage: "installing",
+        startedAt: 1,
+        to: "0.4.0",
+      },
+    });
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+
+    expect(state.state).toBe("pending");
+    expect(coordinator.waitingRequests()[0]).toMatchObject({
+      workers: [{ reason: "updating", workerId: "wrk_a" }],
+    });
+    expect(leaseRequests(client)).toEqual([]);
+
+    workers.refresh("wrk_a", { update: null });
+    await tick();
+
+    expect((await outcome).lease.worker?.id).toBe("wrk_a");
+  });
+
   it.each([
     {
       change: (workers: WorkerRegistry) => workers.disconnected("wrk_a"),

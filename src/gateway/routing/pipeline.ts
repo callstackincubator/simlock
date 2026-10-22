@@ -25,6 +25,7 @@ export type WorkerReasonCode =
   | "not-ready"
   | "unhealthy"
   | "drained"
+  | "updating"
   | "busy"
   | "no-driver"
   | "unknown-model"
