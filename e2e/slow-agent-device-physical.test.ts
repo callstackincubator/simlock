@@ -52,8 +52,19 @@ interface RpcAnswer {
   readonly error?: { readonly message: string };
 }
 
+function deviceKeyOf(allocated: RpcAnswer): string | undefined {
+  const lease = allocated.result?.data?.["lease"] as { deviceKey?: string } | undefined;
+  return lease?.deviceKey;
+}
+
+function writtenPath(shot: RpcAnswer, requested: string): string {
+  const named = shot.result?.data?.["path"];
+  return existsSync(requested) || typeof named !== "string" ? requested : named;
+}
+
 function defineSuite(platform: Platform, id: string): void {
   const tag = platform === "android" ? "Android" : "iOS";
+  const addressKey = platform === "android" ? "serial" : "udid";
   describe.skipIf(missing[platform] !== undefined)(
     missing[platform] === undefined
       ? `agent-device with a physical ${tag} phone (real agent-device)`
@@ -125,7 +136,7 @@ function defineSuite(platform: Platform, id: string): void {
       }, 2 * MINUTE);
 
       it(
-        `a raw agent_device.lease.allocate with physical: true and platform: "${platform}" is granted that ${platform === "android" ? "serial" : "udid"}, a screenshot on the lease answers a PNG, and agent_device.lease.release releases the Simlock lease`,
+        `a raw agent_device.lease.allocate with physical: true and platform: "${platform}" is granted that ${addressKey}, a screenshot on the lease answers a PNG, and agent_device.lease.release releases the Simlock lease`,
         { timeout: 15 * MINUTE },
         async () => {
           const leaseId = randomBytes(16).toString("hex");
@@ -150,13 +161,13 @@ function defineSuite(platform: Platform, id: string): void {
           expect(devices.find((device) => device.id === lease?.deviceId)?.driverDeviceId).toBe(id);
 
           // why: like the CLI, a command carries the scope the lease was allocated under plus the device key agent-device's reply named; without all of them agent-device refuses the lease's owner.
-          const granted = allocated.result?.data?.["lease"] as { deviceKey?: string } | undefined;
+          const deviceKey = deviceKeyOf(allocated);
           const dir = await mkdtemp(join(tmpdir(), "simlock-ad-phone-"));
           onTestFinished(() => rm(dir, { force: true, recursive: true }));
           const png = join(dir, "shot.png");
           // why: the CLI addresses the leased phone by its serial or udid on each command; with 26 devices known to agent-device none is picked for it.
-          const flags = { platform, [platform === "android" ? "serial" : "udid"]: id };
-          const meta = { ...scope, deviceKey: granted?.deviceKey, leaseId };
+          const flags = { platform, [addressKey]: id };
+          const meta = { ...scope, deviceKey, leaseId };
           const opened = await call("agent_device.command", {
             command: "open",
             flags,
@@ -171,13 +182,13 @@ function defineSuite(platform: Platform, id: string): void {
             positionals: [png],
           });
           expect(shot.error, JSON.stringify(shot)).toBeUndefined();
-          const named = shot.result?.data?.["path"];
-          const written = existsSync(png) ? png : typeof named === "string" ? named : png;
-          expect((await readFile(written)).subarray(0, 8).toString("hex")).toBe(PNG_MAGIC);
+          expect((await readFile(writtenPath(shot, png))).subarray(0, 8).toString("hex")).toBe(
+            PNG_MAGIC,
+          );
 
           const released = await call("agent_device.lease.release", {
             ...scope,
-            deviceKey: granted?.deviceKey,
+            deviceKey,
             leaseId,
           });
           expect(released.error, JSON.stringify(released)).toBeUndefined();
