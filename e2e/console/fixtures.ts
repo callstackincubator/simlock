@@ -430,7 +430,7 @@ export interface Fleet {
 }
 
 /** why: a gateway pins a join token to the first worker that joins with it, so each worker needs its own. */
-async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
+export async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);
   return (minted.json as { secret: string }).secret;
