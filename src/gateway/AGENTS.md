@@ -11,25 +11,25 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 ## Files
 
-| File                          | Role                                                                                                                      |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `service.ts`                  | `GatewayService`: uplink listener, one `WorkerLink` per worker, 30 s tick                                                 |
-| `worker-link.ts`              | One uplink, gateway side: admin client, view reads, event relay                                                           |
-| `worker-registry.ts`          | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                              |
-| `drain-store.ts`              | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                    |
-| `dispatcher.ts`               | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through the `testDestination` option |
-| `fleet-coordinator.ts`        | `FleetLeaseCoordinator`: admit, dispatch, retry, forward renew/release/exec                                               |
-| `queue.ts`                    | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                            |
-| `lease-index.ts`              | `FleetLeaseIndex`: gateway lease id → worker, worker lease id, owner                                                      |
-| `routing.ts`, `routing/`      | `createRoutingPolicy`: `assess` and the stage list                                                                        |
-| `owner-routed-facts.ts`       | Relayed lease facts → `lease-lost` and device pushes to the owner                                                         |
-| `aggregate.ts`                | `aggregateStatus`, `aggregateCatalog`: pure, over views                                                                   |
-| `component-relay.ts`          | `relayComponentInstall`: `worker.install-component` fan-out                                                               |
-| `relay.ts`                    | `GatewayRelay`: one HTTP exchange to a worker's relay target                                                              |
-| `fleet-ports.ts`              | `WorkerDirectory`, `FleetViews`, `liveClient`, `isUplinkLost`                                                             |
-| `../daemon/gateway-uplink.ts` | Worker: `GatewayUplink`, dial and redial                                                                                  |
-| `../daemon/relay.ts`          | Worker: `RelayConnection`, serves `relay.request`                                                                         |
-| `../link/`                    | Both ends: text messages plus byte channels on one WebSocket                                                              |
+| File                          | Role                                                                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `service.ts`                  | `GatewayService`: uplink listener, one `WorkerLink` per worker, 30 s tick                                                                        |
+| `worker-link.ts`              | One uplink, gateway side: admin client, view reads, event relay                                                                                  |
+| `worker-registry.ts`          | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                                                     |
+| `drain-store.ts`              | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                                           |
+| `dispatcher.ts`               | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through `testDestination`, `daemon.update` through `update` |
+| `fleet-coordinator.ts`        | `FleetLeaseCoordinator`: admit, dispatch, retry, forward renew/release/exec                                                                      |
+| `queue.ts`                    | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                                                   |
+| `lease-index.ts`              | `FleetLeaseIndex`: gateway lease id → worker, worker lease id, owner                                                                             |
+| `routing.ts`, `routing/`      | `createRoutingPolicy`: `assess` and the stage list                                                                                               |
+| `owner-routed-facts.ts`       | Relayed lease facts → `lease-lost` and device pushes to the owner                                                                                |
+| `aggregate.ts`                | `aggregateStatus`, `aggregateCatalog`: pure, over views                                                                                          |
+| `component-relay.ts`          | `relayComponentInstall`: `worker.install-component` fan-out                                                                                      |
+| `relay.ts`                    | `GatewayRelay`: one HTTP exchange to a worker's relay target                                                                                     |
+| `fleet-ports.ts`              | `WorkerDirectory`, `FleetViews`, `liveClient`, `isUplinkLost`                                                                                    |
+| `../daemon/gateway-uplink.ts` | Worker: `GatewayUplink`, dial and redial                                                                                                         |
+| `../daemon/relay.ts`          | Worker: `RelayConnection`, serves `relay.request`                                                                                                |
+| `../link/`                    | Both ends: text messages plus byte channels on one WebSocket                                                                                     |
 
 ## How it works
 
@@ -52,11 +52,12 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch →
    view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
-5. Refresh: `status.get`; a `starting` worker stops there. Else `list.get` devices, plus
+5. Refresh: an `incompatible` worker is asked `daemon.update {query}` only (its `update`, `lastUpdateFailure` and
+   `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus
    `catalog.get` and `config.get` on the tick, after `component.installed`, or with no catalog yet.
    One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
 6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*`
-   trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped.
+   trigger a refresh, and so do `daemon.update-started` and `daemon.update-failed`. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped.
 
 **Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's
 `assess` and nine stages are in [routing](routing/AGENTS.md)):
@@ -79,7 +80,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
    → exclude that worker for this request, refresh its catalog, walk again. `PROVISION_FAILED` →
    a refusal; every worker that could take it failed so (one that is full, busy, not ready or unhealthy could, later) → reject
    with the last. After a progress push it is relayed as a failure after progress. Anything else,
-   or a failure after progress → `lease.rejected` `worker-failed`.
+   or a failure after progress → `lease.rejected` `worker-failed`. `DAEMON_UPDATING` is handled as `NO_CAPACITY` (the worker began an update the view did not show yet).
 7. Grant: a lease id unlike the forwarded `leaseId` → release it on the worker, retry. Gateway
    lease id = the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. `leaseIndex.add`, then
    `request.granted`; a clash → release on worker, `LEASE_ID_TAKEN`.
@@ -100,6 +101,12 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
 
+**Updates.** `worker.update` sends `daemon.update` over that worker's uplink, bounded at 90 s (`WORKER_NOT_CONNECTED` at the limit), then
+refreshes the view. An unknown id → `UNKNOWN_WORKER`; a disconnected one → `WORKER_NOT_CONNECTED`. An `incompatible` worker gets the same frozen call.
+A view with `update` set is skipped by routing (`updating`; the request waits, it does not end `NO_CAPACITY`). The update and the drain set are separate:
+an update never calls `setDrained`, and `update: null` from the next status clears the view. `daemon.update` on the gateway itself goes through
+the `update` option (`../daemon/update-coordinator.ts`): no lease wait, straight to installing.
+
 **Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) answer from
 views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`,
 `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
@@ -112,6 +119,7 @@ views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.r
 | -------------------------------------- | ---------------------------------------- | ----------------------------------------------------- |
 | View refresh tick (+ prune)            | 30 s                                     | `WORKER_VIEW_REFRESH_INTERVAL_MS`                     |
 | One view read                          | 10 s                                     | `WORKER_CALL_TIMEOUT_MS`                              |
+| `worker.update` over the uplink        | 90 s                                     | `UPDATE_UPLINK_BOUND_MS` (`dispatcher.ts`)            |
 | Forwarded `lease.request`              | 5 min                                    | `gateway.leaseRequestTimeoutMs`                       |
 | Forwarded `device.exec`                | 11 min                                   | `gateway.execTimeoutMs`                               |
 | Disconnected view kept                 | 24 h, held while a gateway lease is live | `gateway.disconnectedRetentionMs`                     |

@@ -2615,17 +2615,6 @@ describe("POST /v1/update", () => {
       expect({ body, status: refused.status }).toEqual({ body, status: 400 });
     }
     expect(dispatcher.calls).toHaveLength(callsBefore);
-
-    dispatcher.handlers["daemon.update"] = () => {
-      throw new DispatchError("UNSUPPORTED_IN_GATEWAY_MODE", "daemon.update is refused", {
-        operation: "daemon.update",
-      });
-    };
-    const onGateway = await post(app, {});
-    expect(onGateway.status).toBe(501);
-    expect(await onGateway.json()).toMatchObject({
-      error: { code: "UNSUPPORTED_IN_GATEWAY_MODE", operation: "daemon.update" },
-    });
   });
 });
 

@@ -195,6 +195,8 @@ const answer = await admin.updateDaemon({ version: "0.4.0" });
 - `{ query: true }` starts nothing and returns the same answer: poll it to follow the update. It works while the daemon restarts only by reconnecting, and across a protocol change: like `stopDaemon()`, `updateDaemon()` is accepted by a daemon on another protocol version, so a client that fails every other call with `PROTOCOL_VERSION_UNSUPPORTED` can still update it.
 - Refusals: `UPDATE_RESOLVE_FAILED`, `UPDATE_UNSUPPORTED_INSTALL` and `UPDATE_SHARED_INSTALL` (see [Errors](/simlock/docs/reference/errors#updating-simlock)). `version` must be an exact version such as `0.4.0` or `0.4.0-rc.1`.
 
+On a gateway, `admin.updateDaemon()` updates the gateway itself: it holds no leases, so it does not wait and goes straight to installing. `admin.updateWorker({ workerId, version?, force? })` asks the gateway to update one of its workers, `simlock worker update` does. It answers like `updateDaemon()`, plus the `workerId`. A worker that is not connected, or that does not answer within 90 seconds, fails it with `WORKER_NOT_CONNECTED`. Poll `admin.listWorkers()` to follow it: the worker's `version`, `latestVersion`, `update` and `lastUpdateFailure` show the update, and `update` is `null` once it ends. On a worker, `updateWorker()` fails with `UNSUPPORTED_IN_WORKER_MODE`.
+
 ## Related
 
 - How leases and TTLs work: [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).

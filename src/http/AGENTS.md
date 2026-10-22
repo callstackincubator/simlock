@@ -88,7 +88,8 @@ agent-device front and the stream (`/v1/stream`).
   subscribes to the `EventBus` itself.
 - `GET /v1/events` — reads `since`, `before` and `limit` through `eventsPageQuery` (contract), refused as 400 before dispatching `events.replay`; `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503 here too.
 - `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).
-- `POST /v1/update` (optional body `{version, force}`, strict) → `daemon.update`: 202 when the call began the update (`started`), 200 when it followed one or found nothing to do (`upToDate`). The route declares both (`alsoStatus`). The role check is the dispatcher's; a gateway answers 501.
+- `POST /v1/update` (optional body `{version, force}`, strict) → `daemon.update`: 202 when the call began the update (`started`), 200 when it followed one or found nothing to do (`upToDate`). The route declares both (`alsoStatus`). The role check is the dispatcher's; on a gateway it updates the gateway itself, with no lease wait.
+- `POST /v1/workers/{id}/update` (optional body `{version, force}`, strict) → `worker.update`: the same 202 and 200; `UNKNOWN_WORKER` 404, `WORKER_NOT_CONNECTED` 409, and a worker daemon answers 501.
 - `GET /v1/leases/{id}/events` — the lease's notices; ends on `lease_lost`.
 - `POST /v1/leases/{id}/exec` → `device.exec`. The stream opens on `onStarted`; a failure
   before that is a plain error response. Events: `output`, then `exit` or `error`.

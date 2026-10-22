@@ -1,6 +1,6 @@
 ---
 title: Manage workers
-description: List the workers behind a gateway, take one out of service and bring it back, forget one that is gone, install runtimes on many workers at once, and cut a worker off.
+description: List the workers behind a gateway, take one out of service and bring it back, update one, forget one that is gone, install runtimes on many workers at once, and cut a worker off.
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
@@ -14,7 +14,7 @@ simlock --gateway worker list
 ```
 
 ```text
-4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68 (mac-mini-2): connected -- ios 2/4, android 1/2, 3 lease(s) -- macOS 15.6 arm64; xcode 16.4 (16F6), emulator 35.4.9 -- agent-device off -- stream off
+4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68 (mac-mini-2): connected -- ios 2/4, android 1/2, 3 lease(s) -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: waiting for 2 leases -- macOS 15.6 arm64; xcode 16.4 (16F6), emulator 35.4.9 -- agent-device off -- stream off
   Load: CPU 34% busy (10 cores) · memory 12.3 GiB of 32.0 GiB available · swap 0 B used · pressure normal · disk 210.4 GiB of 926.4 GiB free · read 12s ago
 9e3a7c1f-0b5d-4c2e-8f6a-1d4b7e9c2a50 (mac-studio-1): disconnected, drained -- ios 0/8, android 0/4, 0 lease(s) -- macOS 15.6 arm64; xcode 16.4 (16F6)
   Load: no reading while disconnected
@@ -25,6 +25,7 @@ Each worker shows:
 - its id and, in brackets, its label;
 - its state: `connected`, `disconnected` or `incompatible`, then `starting` while it starts up and `drained` when it takes no new leases from the gateway;
 - devices running of the limit per platform, and how many leases it holds;
+- its Simlock version, with the newest release in brackets when npm has a newer one, and `updating to <version>: <stage>` while it updates (the stage is `waiting for <n> leases`, `installing` or `restarting`);
 - its operating system, platform tools and optional modules;
 - under it, the last load reading, and any runtime or system image being installed.
 
@@ -70,6 +71,28 @@ What to know about draining:
 - **Draining twice is fine.** Draining a drained worker, or undraining one that is not drained, changes nothing.
 
 An id the gateway does not show fails with `UNKNOWN_WORKER` (exit 12).
+
+## Update a worker
+
+Update one worker's Simlock from the gateway, and follow it:
+
+```sh
+simlock --gateway worker update 3f81a2c4
+```
+
+```text
+mac-studio-2 (3f81a2c4) is running 0.4.0
+```
+
+The worker waits for its leases to end, then installs and restarts, as `simlock update` does on a single machine. While it waits or installs, the gateway sends it no new leases: a request only this worker could serve stays in the queue until the worker is back, and `worker list` shows `updating`. A drain is left alone. A worker you drained stays drained after its update, and only `undrain` ends it.
+
+- `--version <version>` installs that exact version, `--force` does not wait for the leases, and `--detach` returns at once with `Updating mac-studio-2 (3f81a2c4) 0.3.0 → 0.4.0. Follow it with simlock worker list.`
+- A worker already on the newest release answers `mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)`.
+- A failed update ends with `Update failed (<stage>): <message>` and exit 1. The worker goes on with its old version.
+- A worker shown as `incompatible` can be updated too. That is the way to bring a worker with an older protocol back into the fleet.
+- A worker that is not connected fails with `WORKER_NOT_CONNECTED`. The gateway does not queue an update for it.
+
+To update the gateway itself, run `simlock update --gateway` on its machine. It installs and restarts at once, with no wait.
 
 ## Forget a worker that is gone
 

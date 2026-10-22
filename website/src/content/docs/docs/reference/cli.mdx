@@ -392,7 +392,7 @@ simlock 0.4.0 is running
 - The daemon does not answer within 15 minutes after it restarts: `The daemon did not come back; run simlock status.`, exit 1.
 - Simlock must be installed with `npm i -g simlock`. Otherwise the command stops with `UPDATE_UNSUPPORTED_INSTALL`. A worker and a gateway of one user share the install, so while the other runs it stops with `UPDATE_SHARED_INSTALL`. npm failing to find the version is `UPDATE_RESOLVE_FAILED`. See [Errors](/simlock/docs/reference/errors#updating-simlock).
 
-`POST /v1/update` does the same over HTTP. A gateway refuses `update` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+`POST /v1/update` does the same over HTTP. On a machine that runs a gateway, `simlock update --gateway` updates the gateway itself. A gateway holds no leases of its own, so it does not wait: it installs and restarts at once, and a request in that gap fails as in any gateway restart. To update a worker from a gateway, use [`simlock worker update`](#simlock-worker).
 
 ## simlock nuke
 
@@ -499,16 +499,35 @@ simlock worker list [--json]
 simlock worker drain <worker-id>
 simlock worker undrain <worker-id>
 simlock worker remove <worker-id>
+simlock worker update <worker-id> [--version <version>] [--force] [--detach]
 ```
 
 | Subcommand | What it does |
 | --- | --- |
-| `list` | Show each worker: connection, devices, capacity and installs. On a single machine it shows the machine itself. `--json` prints one JSON line in place of the text view. |
+| `list` | Show each worker: connection, devices, capacity and installs. A worker's line also shows its Simlock version, with `(<latest> available)` when npm has a newer release, and `updating to <version>: <stage>` while it updates. On a single machine it shows the machine itself. `--json` prints one JSON line in place of the text view. |
 | `drain` | Stop sending new requests to the worker. Its leases run on. |
 | `undrain` | Send new requests to the worker again. |
 | `remove` | Forget a worker that is not connected. A connected worker is refused with `WORKER_CONNECTED`: drain it and let it disconnect first. |
+| `update` | Update one worker's Simlock from the gateway and follow it. The worker takes no new leases while it updates. A drain stays as it is. |
 
-All four need the admin role. `drain`, `undrain` and `remove` print one JSON line, and on a worker they fail with `UNSUPPORTED_IN_WORKER_MODE` (exit 2).
+All five need the admin role. `drain`, `undrain` and `remove` print one JSON line, and on a worker all but `list` fail with `UNSUPPORTED_IN_WORKER_MODE` (exit 2).
+
+`update` takes the flags of [`simlock update`](#simlock-update) and one more:
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--version <version>` | Install this exact version on the worker. | The newest release |
+| `--force` | The worker does not wait for its leases to end. | Off |
+| `--detach` | Print where the update started and return. Follow it with `simlock worker list`. | Off |
+
+It follows the worker's line in the list and ends with one of these:
+
+- `mac-studio-2 (3f81a2c4) is running 0.4.0`
+- `Update failed (installing): <message>`, exit 1. The worker keeps running its old version and takes leases again.
+- `mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)`.
+- With `--detach`: `Updating mac-studio-2 (3f81a2c4) 0.3.0 → 0.4.0. Follow it with simlock worker list.`
+
+A worker that shows `incompatible` can be updated this way too. A worker that is not connected fails with `WORKER_NOT_CONNECTED`; one that does not answer within 90 seconds fails with the same code. `POST /v1/workers/{id}/update` does the same over HTTP.
 
 ## simlock alerts
 
