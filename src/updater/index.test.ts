@@ -57,6 +57,11 @@ interface Scenario {
     readonly signals: readonly string[];
     readonly waitedAtLeastMs: number;
     readonly stderr?: readonly string[];
+    readonly database?: {
+      readonly copiedBeforeStart: string;
+      readonly restoredBeforeRollbackStart?: string;
+      readonly backupLeft: boolean;
+    };
     readonly resultFile?: { readonly message: string; readonly mode: number };
   };
 }
@@ -74,6 +79,7 @@ const SCENARIOS: readonly Scenario[] = [
       startArgs: [started()],
       signals: [],
       waitedAtLeastMs: 0,
+      database: { copiedBeforeStart: "original", backupLeft: false },
     },
   },
   {
@@ -196,6 +202,25 @@ const SCENARIOS: readonly Scenario[] = [
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
+  {
+    name: "rollback restores the database copy",
+    starts: [{ daemon: null }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      database: {
+        copiedBeforeStart: "original",
+        restoredBeforeRollbackStart: "original",
+        backupLeft: false,
+      },
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
 ];
 
 async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
@@ -220,6 +245,12 @@ describe("runUpdater", () => {
       await filesystem.mkdirp(dataDirectory);
       const resultPath = `${dataDirectory}/update-result.json`;
       const fileAtRollbackStart: boolean[] = [];
+      const statePath = `${dataDirectory}/state.db`;
+      const backupPath = `${dataDirectory}/update-backup`;
+      await filesystem.writeFileAtomic(statePath, "original");
+      await filesystem.writeFileAtomic(`${dataDirectory}/history.db`, "history");
+      const copiedBeforeStart: string[] = [];
+      const liveAtStart: string[] = [];
       const npm = new FakeNpmCli(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
       const processes = new ScriptedProcessRunner(
@@ -233,6 +264,17 @@ describe("runUpdater", () => {
                 ? { health: "running", version: index === 0 ? "0.4.0" : "0.3.0" }
                 : (spec.daemon ?? undefined);
             void filesystem.exists(resultPath).then((exists) => fileAtRollbackStart.push(exists));
+            void (async () => {
+              liveAtStart.push(await filesystem.readFile(statePath));
+              if (index === 0) {
+                copiedBeforeStart.push(
+                  (await filesystem.exists(`${backupPath}/state.db`))
+                    ? await filesystem.readFile(`${backupPath}/state.db`)
+                    : "missing",
+                );
+                await filesystem.writeFileAtomic(statePath, "migrated");
+              }
+            })();
           },
         })),
       );
@@ -272,6 +314,13 @@ describe("runUpdater", () => {
         expected.signals,
       );
       expect(clock.now()).toBeGreaterThanOrEqual(EPOCH + expected.waitedAtLeastMs);
+      if (expected.database !== undefined) {
+        expect(copiedBeforeStart).toEqual([expected.database.copiedBeforeStart]);
+        expect(await filesystem.exists(backupPath)).toBe(expected.database.backupLeft);
+        if (expected.database.restoredBeforeRollbackStart !== undefined) {
+          expect(liveAtStart[1]).toBe(expected.database.restoredBeforeRollbackStart);
+        }
+      }
       if (expected.resultFile === undefined) {
         expect(await filesystem.exists(resultPath)).toBe(false);
       } else {
