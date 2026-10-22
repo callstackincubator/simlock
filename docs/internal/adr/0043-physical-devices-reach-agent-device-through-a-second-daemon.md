@@ -76,8 +76,11 @@ id to daemon. The link decides from the request alone, so a request relayed
 from a gateway, which never passes the worker's front, is routed the same
 way: an allocate whose `serial` or `udid` names an enrolled physical device
 in the worker's registry goes to the phone daemon, and its lease id is
-remembered; every later call names its lease, in the RPC body or in the
-`x-agent-device-lease-id` header, and goes to that lease's daemon. The link
+remembered; every later call names its lease, as the front's or the relay's
+argument, in the RPC body or in the `x-agent-device-lease-id` header, and
+goes to that lease's daemon. A request routed to the phone daemon while it
+is not running is answered by the link with the not-available reply, so a
+worker and a gateway give the agent the same reason. The link
 declares that it reads the lease header, so the front's existing many-hosts
 path (ADR 0026) routes non-RPC requests and fans out `devices` per lease; the
 front itself changes nowhere for routing. A request naming no lease goes to
@@ -97,12 +100,13 @@ sequenceDiagram
   F->>F: lease.request {physical: true, …}
   alt refused by simlock
     F-->>CLI: refused by simlock: <message>
-  else granted, address = serial | udid
+  else granted, driverDeviceId = serial | udid
     F->>L: allocate {serial | udid, ttlMs}
     L->>L: address is an enrolled phone → phones; remember lease id
     alt phone daemon not running
-      L-->>CLI: agent-device is not available on this simlock: <reason>
+      L-->>F: agent-device is not available on this simlock: phone daemon: <reason>
       F->>F: lease.release
+      F-->>CLI: that reply
     else
       L->>PD: allocate
       PD-->>CLI: lease {deviceKey}; front adds data.lease.device {…, physical: true}
@@ -128,15 +132,17 @@ on every enrolment.
 The worker's `agent-device` capability follows the simulator daemon, as
 today, so a phone daemon that cannot start never blocks simulator leases. A
 physical allocate while the phone daemon is not running is refused with the
-reason, and `simlock doctor` prints one line per daemon.
+reason, and `simlock doctor` prints one line per daemon. The other direction
+stays as today: a simulator daemon that is not running makes the worker
+unavailable for agent-device, phones included.
 
 ## Consequences
 
 - An Android phone leased through agent-device is driven by a daemon whose
   adb calls run without Simlock's protocol-version gate (ADR 0022 §5). A
   platform-tools version differing from Simlock's would restart the
-  operator's server. The daemon gets Simlock's `ANDROID_HOME`; the docs say
-  to use one SDK.
+  operator's server. The daemon finds adb as agent-device does, through the
+  operator's SDK roots and `PATH`; the docs say to install one SDK.
 - The phone daemon lists the operator's simulators and every phone on the
   host. An operator who reads agent-device's own files on the worker sees
   them; an agent never does.
