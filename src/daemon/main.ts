@@ -24,6 +24,7 @@ import {
   type Platform,
   type ModelPreferences,
   type PrerequisiteCheck,
+  type ServiceCheck,
   CleanupReaper,
   ComponentInstaller,
   DEVICE_CLASSES,
@@ -88,6 +89,10 @@ import {
   NodeHostInfo,
   NodeIpcTransport,
   NodeProcessRunner,
+  productionServiceManager,
+  serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
   NodeProcessSupervisor,
   NodeSystemStats,
   NodeBytePipeLauncher,
@@ -126,7 +131,11 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
-import { DaemonEndpointHost, refuseWhenDaemonAnswers } from "./connection-host.js";
+import {
+  DaemonAlreadyRunningError,
+  DaemonEndpointHost,
+  refuseWhenDaemonAnswers,
+} from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
@@ -143,11 +152,14 @@ export interface StartDaemonOptions {
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
+  /** why: the entry removes the credential when SIGTERM lands after it was written but before the daemon is up; called only once this daemon owns the file. */
+  readonly onAdminSecretWritten?: (remove: () => Promise<void>) => void;
   /** why: test-only, replaces the registry of optional modules. */
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
   readonly role?: DaemonMode;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  readonly serviceCheck?: ServiceCheck;
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
   readonly hostLoadProbe?: HostLoadProbe | null;
@@ -258,7 +270,7 @@ async function composeDaemon(
   });
   onStateOpened(state);
   // why: both modes check the same credentials, so the checks are built once, before the mode branch.
-  const auth = createAuth({
+  const created = createAuth({
     clock,
     config: config.http,
     database: state.database,
@@ -269,6 +281,7 @@ async function composeDaemon(
     logger: logger.child("auth"),
     secrets: new CryptoTokenSecrets(),
   });
+  const auth = { ...created, adminSecret: reportingAdminSecret(created.adminSecret, options) };
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
@@ -386,6 +399,7 @@ async function composeDaemon(
     modelPreferences,
     optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
+    ...(options.serviceCheck === undefined ? {} : { serviceCheck: options.serviceCheck }),
     registry,
     state,
     systemStats,
@@ -1545,15 +1559,27 @@ export function parseDaemonArgv(argv: readonly string[]): DaemonMode | undefined
  * daemon's own `Config` — that is exactly what may have failed to load — so it always
  * writes to the daemon's own folder at a fixed level.
  */
-function createFatalLogger(role: DaemonMode | undefined): Logger {
+function createFatalLogger(
+  role: DaemonMode | undefined,
+  level: "error" | "info" = "error",
+): Logger {
   return new JsonLinesLogger({
     clock: new SystemClock(),
-    level: "error",
+    level,
     module: "daemon",
     sink: new NodeFileLogSink({
       path: join(daemonDataDirectory(resolveSimlockHome(), role ?? "worker"), "daemon.log"),
     }),
   });
+}
+
+function logAlreadyRunning(role: DaemonMode, error: DaemonAlreadyRunningError): void {
+  try {
+    createFatalLogger(role, "info").info("Daemon already running", { socket: error.endpoint });
+  } catch {
+    // why: logging itself failed, so the line goes to the console rather than being swallowed.
+    console.error(error.message);
+  }
 }
 
 function logFatalStart(role: DaemonMode | undefined, message: string, extra: object): void {
@@ -1566,6 +1592,69 @@ function logFatalStart(role: DaemonMode | undefined, message: string, extra: obj
   process.exitCode = 1;
 }
 
+/** why: only a worker has a service check; a gateway and an unsupported platform (no manager) have none. */
+export function serviceCheckFor(
+  role: DaemonMode,
+  manager: ServiceManager | undefined,
+  definition: () => ServiceDefinition,
+): { readonly serviceCheck?: ServiceCheck } {
+  if (manager === undefined || role !== "worker") return {};
+  const { name } = definition();
+  return {
+    serviceCheck: {
+      manager: manager.manager,
+      name,
+      check: async () => {
+        const state = await manager.state(definition());
+        return state.state === "broken" ? state.missing : [];
+      },
+    },
+  };
+}
+
+/** why: the process facts the production service check reads, injectable so a test can prove the definition it builds. */
+export interface ServiceCheckHost {
+  readonly manager: ServiceManager | undefined;
+  readonly root: string;
+  readonly home: string;
+  readonly nodePath: string;
+  readonly mainPath: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+function currentServiceCheckHost(): ServiceCheckHost {
+  return {
+    manager: productionServiceManager(process.platform, {
+      runner: new NodeProcessRunner(),
+      filesystem: new NodeFilesystem(),
+      uid: process.getuid?.() ?? 0,
+    }),
+    root: resolveSimlockHome(),
+    home: homedir(),
+    nodePath: process.execPath,
+    mainPath: fileURLToPath(import.meta.url),
+    env: process.env,
+  };
+}
+
+export function productionServiceCheck(
+  role: DaemonMode,
+  host: ServiceCheckHost = currentServiceCheckHost(),
+): { readonly serviceCheck?: ServiceCheck } {
+  return serviceCheckFor(role, host.manager, () =>
+    serviceDefinition({
+      ...(host.manager === undefined ? {} : { manager: host.manager.manager }),
+      role,
+      root: host.root,
+      dataDirectory: daemonDataDirectory(host.root, role),
+      home: host.home,
+      nodePath: host.nodePath,
+      mainPath: host.mainPath,
+      env: host.env,
+    }),
+  );
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   filterSqliteExperimentalWarning();
   const argv = process.argv.slice(2);
@@ -1573,12 +1662,51 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (role === undefined) {
     logFatalStart(undefined, "Unknown daemon arguments", { argv });
   } else {
-    void startDaemon({ role }).catch((error: unknown) => {
-      logFatalStart(role, error instanceof Error ? error.message : String(error), {
-        stack: error instanceof Error ? error.stack : undefined,
+    // why: one SIGTERM handler for both phases: before the daemon is up there is nothing to stop, so it exits 0 at once; after, it stops with reason `signal` and exits 0.
+    let running: Awaited<ReturnType<typeof startDaemon>> | undefined;
+    let removeAdminSecret: (() => Promise<void>) | undefined;
+    void startDaemon({
+      role,
+      ...productionServiceCheck(role),
+      onAdminSecretWritten: (remove) => {
+        removeAdminSecret = remove;
+      },
+    })
+      .then((daemon) => {
+        running = daemon;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DaemonAlreadyRunningError) {
+          logAlreadyRunning(role, error);
+          return;
+        }
+        logFatalStart(role, error instanceof Error ? error.message : String(error), {
+          stack: error instanceof Error ? error.stack : undefined,
+        });
       });
+    process.once("SIGTERM", () => {
+      if (running === undefined) {
+        // why: the credential is written before startup finishes; a daemon exiting now must not leave it behind.
+        void (removeAdminSecret?.() ?? Promise.resolve()).finally(() => process.exit(0));
+        return;
+      }
+      void running.stop("signal").finally(() => process.exit(0));
     });
   }
+}
+
+/** why: hands the entry a way to remove the credential only after this daemon wrote it, so a start that lost the race never removes the winner's file. */
+function reportingAdminSecret(
+  secret: Auth["adminSecret"],
+  options: StartDaemonOptions,
+): Auth["adminSecret"] {
+  return {
+    persist: async () => {
+      await secret.persist();
+      options.onAdminSecretWritten?.(() => secret.remove());
+    },
+    remove: () => secret.remove(),
+  };
 }
 
 /** why: a root's staging directory sits beside it, so the sweep looks there for leftovers. */

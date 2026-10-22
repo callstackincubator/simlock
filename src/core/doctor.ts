@@ -109,6 +109,17 @@ export type DoctorFinding =
       readonly remedy: string;
     }
   | {
+      /**
+       * why: the worker's login service names a Node or `main.js` that is gone. Like
+       * `driver-advisory` it is not drift: `--fix` never acts on it, and `doctor.reconciled` does not carry it.
+       */
+      readonly kind: "service-broken";
+      readonly manager: "launchd" | "systemd";
+      readonly name: string;
+      readonly missing: readonly string[];
+      readonly remedy: string;
+    }
+  | {
       readonly kind: "warm-pool-target-unreachable";
       readonly platform?: Platform;
       readonly target: string;
@@ -122,6 +133,16 @@ export type DoctorFinding =
       readonly message: string;
       readonly remedy: string;
     };
+
+/**
+ * why: the service manager's answer for this role's service, injected so the core checks no path
+ * itself; `check` returns the paths the service names that are gone, none when whole or absent.
+ */
+export interface ServiceCheck {
+  readonly manager: "launchd" | "systemd";
+  readonly name: string;
+  readonly check: () => Promise<readonly string[]>;
+}
 
 export type OptionalModuleFinding = Extract<DoctorFinding, { readonly kind: "module-unavailable" }>;
 
@@ -158,6 +179,7 @@ export interface DoctorOptions {
     readonly runningCapacity: () => CapacityReader["runningCapacity"];
   };
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  readonly serviceCheck?: ServiceCheck;
   readonly runningPlatforms?: () => readonly Platform[];
   readonly registry: Registry;
 }
@@ -252,6 +274,7 @@ export class Doctor {
     const remaining = [
       ...(purgeOrphans ? await this.#purgeOrphans(findings, driversByPlatform) : findings),
       ...(await this.#collectPrerequisites(prerequisites)),
+      ...(await this.#serviceFindings()),
       ...(await this.#warmPoolFindings()),
       ...this.#optionalModuleFindings(),
     ];
@@ -566,6 +589,32 @@ export class Doctor {
     return perCheck.flat();
   }
 
+  /** why: a check that rejects could not tell, so it is logged and contributes nothing. */
+  async #serviceFindings(): Promise<DoctorFinding[]> {
+    const { serviceCheck } = this.options;
+    if (serviceCheck === undefined) return [];
+    let missing: readonly string[];
+    try {
+      missing = await serviceCheck.check();
+    } catch (error: unknown) {
+      this.#logger.warn("Could not check the login service", {
+        name: serviceCheck.name,
+        reason: errorMessage(error),
+      });
+      return [];
+    }
+    if (missing.length === 0) return [];
+    return [
+      {
+        kind: "service-broken",
+        manager: serviceCheck.manager,
+        name: serviceCheck.name,
+        missing,
+        remedy: "Run `simlock daemon install` again.",
+      },
+    ];
+  }
+
   #optionalModuleFindings(): readonly OptionalModuleFinding[] {
     try {
       return this.options.optionalModules?.() ?? [];
@@ -750,6 +799,9 @@ export class Doctor {
         break;
       case "prerequisite-missing":
         // Simlock installs no prerequisite (safety rule 4), `--fix` included.
+        break;
+      case "service-broken":
+        // why: installing again is the operator's call: `--fix` never rewrites the service.
         break;
     }
   }
@@ -1196,6 +1248,7 @@ function isDrift(finding: DoctorFinding): boolean {
   return (
     finding.kind !== "driver-advisory" &&
     finding.kind !== "prerequisite-missing" &&
+    finding.kind !== "service-broken" &&
     finding.kind !== "warm-pool-target-unreachable" &&
     finding.kind !== "module-unavailable"
   );

@@ -53,7 +53,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
    Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
    Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 53, max: 53 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 54, max: 54 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
@@ -135,7 +135,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   `eventLog.maxBytes` (256 MiB); usage rows are kept `metrics.retention` (90 days). `onSocketClaimed`
   starts it in both modes with the role and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
   failed migration) stops the daemon with reason `history-refused` and exit 1. `status.get` carries its `history`, also while starting. `usage.get` (both dispatchers, `usageAnswer` in `dispatch.ts`) reads the same file's usage rows through `core/usage` on a read thread; `main.ts` passes `historyPath` in both modes, and `dispose` stops the thread. `history.status().opened` false → `HISTORY_UNAVAILABLE`; a window ending before the oldest row → `HISTORY_NOT_KEPT`.
-- A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
+- SIGTERM to a running daemon runs `stop("signal")` and exits 0; one that arrives before the start finishes exits 0 at once (one handler in `main.ts`, the entry). A start that finds a daemon answering logs `Daemon already running` at `info` to the role's `daemon.log` and exits 0. A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
 
 ## Rules
 

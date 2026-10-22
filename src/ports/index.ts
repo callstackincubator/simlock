@@ -23,6 +23,7 @@ export {
   type LaunchedDaemon,
   NodeDaemonLauncher,
   startErrorFrom,
+  startTimeoutMessage,
 } from "./daemon-launcher.js";
 export {
   type IpcConnection,
@@ -36,6 +37,18 @@ export {
 export type { IpcErrorCode } from "./ipc.js";
 // fallow-ignore-next-line unused-type -- public listener lifecycle contract.
 export type { IpcListener } from "./ipc.js";
+export { launcherFor } from "./service-launcher.js";
+export {
+  FakeServiceManager,
+  LaunchdServiceManager,
+  productionServiceManager,
+  ServiceFailedError,
+  type ServiceDefinition,
+  type ServiceManager,
+  serviceDefinition,
+  type ServiceManagerName,
+  type ServiceState,
+} from "./service-manager.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
  * ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are

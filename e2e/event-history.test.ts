@@ -77,7 +77,7 @@ describe("event history", () => {
     expect(grantOf(parseLines(stopped.stdout), leaseId)).toEqual(before);
     expect(existsSync(env.socketPath)).toBe(false);
     const status = await env.cli(["daemon", "status", "--json"]);
-    expect(status.json).toEqual({ status: "stopped" });
+    expect(status.json).toMatchObject({ status: "stopped" });
   });
 
   it("simlock events --since 1h after a daemon restart prints each event with the id it had before the restart", async () => {

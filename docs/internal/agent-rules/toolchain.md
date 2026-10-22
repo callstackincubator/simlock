@@ -40,7 +40,8 @@ list and this one the same.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the timing
   tests, the e2e lane in three shards); the Quality check passes only when all of them
-  do. The console lane runs on
+  do. The console lane runs in four shards
+  (the required Console check passes only when they all do) on
   every push to `main`, and on a pull request when it changes a source, UI,
   console spec or build file: in every browser when it changes `ui/` or the
   console specs, else in Chromium only.
@@ -173,6 +174,8 @@ the tool's docs alone.
 | agent-device | the version `package.json` pins for `@agent-device/proxy` (tag `v<version>`) | `git -C <checkout> show v<version>:<path>` in a clone of `callstack/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstack/agent-device/contents/<path>?ref=v<version>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
 | Android SDK tools, Xcode tools | the installed ones | run them: `<tool> --help`, or the command itself |
 | simlock's own CLI | `main` | `pnpm build`, then `node dist/cli/main.js <command> --help` or the command itself |
+| systemd (Linux service units) | tag `v255` (Ubuntu 24.04 LTS); CI's fast lane runs on Linux (`ubuntu-24.04`), the slow lane does not | `gh api 'repos/systemd/systemd/contents/<path>?ref=v255' -H 'Accept: application/vnd.github.raw'` |
+| launchd, launchctl, plutil (macOS) | the installed ones | run them: a throwaway LaunchAgent under a `com.callstack.simlock.probe*` label, booted out afterwards |
 
 ## Project checks
 

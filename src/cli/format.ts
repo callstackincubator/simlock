@@ -1,6 +1,7 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
 import type { StatusGetOutput, WorkerView } from "../admin/index.js";
+import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 
 export function formatWorkers(
   workers: WorkerView[],
@@ -165,6 +166,23 @@ function formatLocalMinute(epochMs: number): string {
 
 export function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
   return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
+}
+
+/** why: the role's service as `daemon status --json` prints it, and `serviceLine` renders it. */
+export type ServiceReport = ServiceState & {
+  readonly manager: ServiceManagerName;
+  readonly name: string;
+};
+
+export function serviceLine(service: ServiceReport): string {
+  if (service.state === "not-installed") return "Service: not installed";
+  const who = `(${service.manager}, ${service.name})`;
+  if (service.state === "broken") {
+    const verb = service.missing.length === 1 ? "is" : "are";
+    return `Service: broken ${who}: ${service.missing.join(", ")} ${verb} gone; run simlock daemon install`;
+  }
+  if (service.state === "installed") return `Service: installed ${who}`;
+  return `Service: not loaded ${who}: commands start the daemon without it`;
 }
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.

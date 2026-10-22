@@ -38,6 +38,12 @@ import {
   FakeHostLoadProbe,
   type HostLoadCounters,
   FakeProcessSupervisor,
+  daemonDataDirectory,
+  FakeServiceManager,
+  serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
+  type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
   JsonLinesLogger,
@@ -57,6 +63,8 @@ import {
   emitSlimDiagnostic,
   parseDaemonArgv,
   processRunnerFor,
+  productionServiceCheck,
+  serviceCheckFor,
   startDaemon,
   type DriverDiscoveryContext,
   type StartDaemonOptions,
@@ -554,6 +562,136 @@ describe("startDaemon", () => {
 
     await daemon.dispatch("doctor.run", {}, admin);
     expect(runs).toEqual({ android: 2, ios: 2 });
+  });
+
+  it("a worker's doctor reports service-broken for each service whose paths are gone", async () => {
+    const gone = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const mainGone = "/Users/me/simlock/dist/daemon/main.js";
+    const name = "com.callstack.simlock.worker";
+    const remedy = "Run `simlock daemon install` again.";
+    const admin = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "operator",
+      role: "admin",
+    } as const;
+    for (const testCase of [
+      { label: "not installed", missing: [], expected: [] },
+      { label: "installed and whole", missing: [], expected: [] },
+      {
+        label: "one path gone",
+        missing: [gone],
+        expected: [{ kind: "service-broken", manager: "launchd", name, missing: [gone], remedy }],
+      },
+      {
+        label: "both gone",
+        missing: [gone, mainGone],
+        expected: [
+          { kind: "service-broken", manager: "launchd", name, missing: [gone, mainGone], remedy },
+        ],
+      },
+    ]) {
+      const { daemon } = await start({
+        serviceCheck: { manager: "launchd", name, check: async () => testCase.missing },
+      });
+      const report = (await daemon.dispatch("doctor.run", {}, admin)) as {
+        readonly findings: readonly { readonly kind: string }[];
+      };
+      expect(
+        report.findings.filter((finding) => finding.kind === "service-broken"),
+        testCase.label,
+      ).toEqual(testCase.expected);
+    }
+  });
+
+  it("serviceCheckFor reads the worker's service state through the manager: the missing paths when broken, none otherwise, and no check on a gateway or without a manager", async () => {
+    const definition = () =>
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: "/simlock",
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: {},
+      });
+    const name = "com.callstack.simlock.worker";
+    const states: readonly { readonly state: ServiceState; readonly missing: readonly string[] }[] =
+      [
+        { state: { state: "not-installed" }, missing: [] },
+        { state: { state: "installed", path: "/p" }, missing: [] },
+        { state: { state: "not-loaded", path: "/p" }, missing: [] },
+        {
+          state: { state: "broken", path: "/p", missing: ["/gone/node", "/gone/main.js"] },
+          missing: ["/gone/node", "/gone/main.js"],
+        },
+      ];
+    for (const testCase of states) {
+      const { serviceCheck } = serviceCheckFor(
+        "worker",
+        new FakeServiceManager({ state: testCase.state }),
+        definition,
+      );
+      expect(serviceCheck?.manager).toBe("launchd");
+      expect(serviceCheck?.name).toBe(name);
+      expect(await serviceCheck?.check(), testCase.state.state).toEqual(testCase.missing);
+    }
+    expect(
+      serviceCheckFor("worker", new FakeServiceManager({ manager: "systemd" }), definition)
+        .serviceCheck?.manager,
+    ).toBe("systemd");
+    expect(serviceCheckFor("gateway", new FakeServiceManager(), definition)).toEqual({});
+    expect(serviceCheckFor("worker", undefined, definition)).toEqual({});
+  });
+
+  it("productionServiceCheck builds the service definition from the process facts and reads its state: the worker's missing paths, and no check on a gateway", async () => {
+    const seen: ServiceDefinition[] = [];
+    const manager: ServiceManager = {
+      manager: "launchd",
+      state: async (definition) => {
+        seen.push(definition);
+        return { state: "broken", path: definition.path, missing: [definition.command] };
+      },
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      start: async () => undefined,
+    };
+    const host = {
+      manager,
+      root: "/Users/me/.simlock",
+      home: "/Users/me",
+      nodePath: "/gone/node",
+      mainPath: "/gone/main.js",
+      env: { PATH: "/usr/bin" },
+    };
+
+    const { serviceCheck } = productionServiceCheck("worker", host);
+
+    expect(serviceCheck?.name).toBe("com.callstack.simlock.worker");
+    expect(await serviceCheck?.check()).toEqual(["/gone/node"]);
+    expect(seen).toEqual([
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: daemonDataDirectory("/Users/me/.simlock", "worker"),
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: { PATH: "/usr/bin" },
+      }),
+    ]);
+    expect(productionServiceCheck("gateway", host)).toEqual({});
+
+    const systemd = productionServiceCheck("worker", {
+      ...host,
+      manager: { ...manager, manager: "systemd" },
+      home: "/home/me",
+      root: "/home/me/.simlock",
+    });
+    await systemd.serviceCheck?.check();
+    expect(seen.at(-1)?.path).toBe(
+      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+    );
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {

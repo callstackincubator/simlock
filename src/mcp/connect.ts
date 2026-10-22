@@ -18,6 +18,7 @@ import {
   DAEMON_STARTUP_TIMEOUT_MS,
   IpcError,
   startErrorFrom,
+  startTimeoutMessage,
   type Clock,
   type DaemonExit,
   type DaemonLauncher,
@@ -73,10 +74,11 @@ export async function connectWithAutoLaunch(
       await delay(options.clock, options.retryIntervalMs ?? 50);
     }
   }
+  const output = await launched.readOutput().catch(() => "");
   throw new SimlockError(
     "DAEMON_STARTUP_FAILED",
     "transport",
-    `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+    startTimeoutMessage(errorMessage(lastError), output),
     {},
   );
 }

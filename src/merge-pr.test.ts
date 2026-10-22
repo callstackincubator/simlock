@@ -388,6 +388,11 @@ describe("merge-pr.sh re-run of red CI", { timeout: 20_000 }, () => {
       runsAfterRerun: [run("success", "E2E (2/3)"), run("success")],
     },
     {
+      name: "a console shard, though the Console check that needs it failed,",
+      runs: [run("cancelled", "Console (2/4)"), run("failure", "Console")],
+      runsAfterRerun: [run("success", "Console (2/4)"), run("success", "Console")],
+    },
+    {
       name: "a Quality check, while every job it needs passed,",
       runs: [run("success", "E2E (2/3)"), run("cancelled")],
       runsAfterRerun: [run("success", "E2E (2/3)"), run("success")],

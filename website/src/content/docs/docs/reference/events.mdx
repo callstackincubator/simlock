@@ -180,7 +180,7 @@ as `incompatible` in `simlock --gateway worker list`.
 | Event | When it fires | Payload | Gateway |
 | --- | --- | --- | --- |
 | `daemon.started` | The daemon finished starting. | `version`, `configSnapshot` (tokens, alert URLs and secrets shown as `[redacted]`) | Own (a worker records its own before the gateway starts listening to it, so it is not relayed) |
-| `daemon.stopping` | The daemon began to stop. | `reason` | Own and relayed |
+| `daemon.stopping` | The daemon began to stop. | `reason` (`signal` when the daemon process received SIGTERM) | Own and relayed |
 | `doctor.reconciled` | Simlock compared its records with the devices on disk (at start and on `simlock doctor`). | `driftFindings` | Relayed |
 | `cleanup.executed` | Cleanup shut down or deleted an idle device. | `ruleName` (`idle-shutdown` or `idle-destroy`), `action` (`shutdown` or `destroy`), `target`, `reason` | Relayed |
 | `disk.pressure-detected` | Free disk space fell below `diskPressure.freeBytesThreshold`. Once per crossing. | `freeBytes`, `threshold` | Relayed |

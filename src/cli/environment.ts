@@ -61,11 +61,13 @@ class AutoLaunchAdminConnector {
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
+    const output = await launched.readOutput().catch(() => "");
     const { SimlockError } = await import("../contract/index.js");
+    const { startTimeoutMessage } = await import("../ports/index.js");
     throw new SimlockError(
       "DAEMON_STARTUP_FAILED",
       "transport",
-      `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+      startTimeoutMessage(errorMessage(lastError), output),
       {},
     );
   }
@@ -253,13 +255,40 @@ export function buildCliEnvironment(
     checkConfig,
   );
 
+  const service = ports.service;
   return {
     clock,
     configPath,
     daemonHome,
+    ...(service === undefined
+      ? {}
+      : {
+          service: {
+            manager: service.manager,
+            platform: service.platform,
+            user: service.user,
+            definition: async () => {
+              const { serviceDefinition } = await import("../ports/index.js");
+              return serviceDefinition({
+                ...(service.manager === undefined ? {} : { manager: service.manager.manager }),
+                role: daemonHome.role,
+                root: service.root,
+                dataDirectory,
+                home: service.home,
+                nodePath: service.nodePath,
+                mainPath: service.mainPath,
+                env,
+              });
+            },
+          },
+        }),
     requesterId,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
+    daemonEndpointPresent: async () => {
+      const { resolveDaemonSocketPath } = await import("../ports/index.js");
+      return filesystem.exists(resolveDaemonSocketPath(dataDirectory));
+    },
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
       : { adminTokenFromEnv: env.SIMLOCK_ADMIN_TOKEN }),

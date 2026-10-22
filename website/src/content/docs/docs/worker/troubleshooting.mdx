@@ -42,6 +42,7 @@ simlock doctor
 
 ```text
 Missing [android] android-emulator: The Android emulator package is not installed in /Users/dana/Library/Android/sdk. Run `sdkmanager --install emulator`.
+Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana/.nvm/versions/node/v22.13.0/bin/node. Run `simlock daemon install` again.
 ```
 
 `simlock doctor --fix` applies the corrections that are safe. It never touches a leased device, never installs anything, and never deletes a device Simlock has no record of.
@@ -49,6 +50,7 @@ Missing [android] android-emulator: The Android emulator package is not installe
 | Finding | What it means | What `--fix` does |
 | --- | --- | --- |
 | `prerequisite-missing` | A tool a platform needs is missing, such as Xcode, its licence, the Android SDK, the emulator, `adb` or a JDK. The message names it and the remedy says how to install it. | Nothing. Install it yourself, then restart the daemon. |
+| `service-broken` | The worker's login service names a Node or `main.js` that is gone, so the daemon will not start at login. The finding carries `manager`, `name`, the `missing` paths and the remedy. | Nothing. Run `simlock daemon install` again. |
 | `registry-device-missing` | Simlock has a record of a device that no longer exists, for example one you deleted with `simctl delete`. | Marks the device deleted, unless it is leased. |
 | `foreign-state-change` | A device was booted or shut down outside Simlock. | Updates the record to match, unless the device is leased. |
 | `expired-live-lease` | A lease ran out but its device is still marked leased. | Ends the lease. |

@@ -120,9 +120,9 @@ flowchart TD
   `~/.simlock/gateway/config.json` exists. The gateway writes the first on
   its first start; `simlock --gateway config set` writes the second before
   that. An empty `gateway` folder is not a gateway.
-- A gateway becomes present only through `simlock --gateway daemon start`
-  or `simlock --gateway config set`. On a machine where no gateway is
-  present, every other `--gateway` command fails before it does anything, with the new error code
+- A gateway becomes present only through `simlock --gateway daemon start`,
+  `simlock --gateway daemon install` (ADR 0041) or `simlock --gateway config set`. On a machine where no gateway is
+  present, every other `--gateway` command except `daemon uninstall` (ADR 0041) fails before it does anything, with the new error code
   `GATEWAY_NOT_PRESENT` and a message that says to run
   `simlock --gateway daemon start`. An MCP tool call fails the same way; MCP
   checks again on every call, so a gateway started mid-session is found. A

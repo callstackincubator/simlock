@@ -510,6 +510,8 @@ test.describe("the Overview's five numbers", () => {
         .toBe(`Wait p95 | ${waitText(stats.totals.wait.p95)} | last hour`);
       await expect.poll(() => tileText(page, "Ending soon")).toBe("Ending soon | 1 | under 5 min");
     } finally {
+      // why: a console request still in flight when the gateway stops would make a handler's route.fetch() throw ECONNREFUSED.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       await disposeFleet(fleet);
     }
   });
