@@ -46,7 +46,11 @@ function writeLine(options: RunUpdaterOptions, line: unknown): void {
 export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
   const { clock, npm, probe, processes, to } = options;
   writeLine(options, { stage: "installing" });
-  await npm.install(`simlock@${to}`);
+  const installed = await npm.install(`simlock@${to}`);
+  if (!installed.ok) {
+    writeLine(options, { failed: { stage: "installing", message: installed.message } });
+    return 1;
+  }
   writeLine(options, { stage: "restarting" });
   await probe.stop();
   while (await probe.answers()) {
