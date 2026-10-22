@@ -78,6 +78,26 @@ export const updateRoute = declareRoute({
   },
 });
 
+export const workerUpdateRoute = declareRoute({
+  method: "post",
+  path: "/v1/workers/{id}/update",
+  tag: "Workers",
+  summary: "Update one worker to a Simlock version",
+  role: "admin",
+  notes:
+    "The body is optional, as for `POST /v1/update`. The gateway asks the worker to update; the worker takes no new leases while it waits for its leases to end. 202 when this call began the update; 200 when it followed one that was running, or nothing needed updating (`upToDate`). A worker that shows `incompatible` can be updated too. The gateway's drain set is not touched. Gateway only: a worker answers 501 UNSUPPORTED_IN_WORKER_MODE.",
+  request: { params: workerParamsSchema, optionalJson: updateBodySchema },
+  reply: OPERATIONS["worker.update"].output,
+  status: 202,
+  alsoStatus: 200,
+  errors: {
+    404: ["UNKNOWN_WORKER"],
+    409: ["WORKER_NOT_CONNECTED", "UPDATE_UNSUPPORTED_INSTALL", "UPDATE_SHARED_INSTALL"],
+    502: ["UPDATE_RESOLVE_FAILED"],
+    501: ["UNSUPPORTED_IN_WORKER_MODE"],
+  },
+});
+
 export const componentListRoute = declareRoute({
   method: "get",
   path: "/v1/components",
@@ -205,6 +225,7 @@ export const ADMIN_ROUTES = [
   workerListRoute,
   workerDrainRoute,
   workerUndrainRoute,
+  workerUpdateRoute,
   workerRemoveRoute,
   componentListRoute,
   componentRemoveRoute,
