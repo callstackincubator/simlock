@@ -10,6 +10,10 @@
   (phones stay on the host's default adb server) and
   [ADR 0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md)
   (a host link that serves many hosts routes by the lease).
+- **Narrows:** [ADR 0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md)
+  §3's line "In-process link (worker mode): ignores the lease id; one host,
+  as today": the worker's in-process link now holds one host per daemon and
+  routes by the lease id (§2).
 
 ## Context
 
@@ -89,6 +93,11 @@ path (ADR 0026) routes non-RPC requests and fans out `devices` per lease; the
 front itself changes nowhere for routing. A request naming no lease goes to
 the simulator daemon.
 
+The lease-end release follows the same map. When a simlock lease ends
+(ADR 0024), the edge sends `agent_device.lease.release` to the daemon whose
+scope record holds the lease, so a phone lease's release reaches the phone
+daemon and never the simulator daemon.
+
 The gateway's routing does not change. Simlock's own routing already places
 a physical lease on the worker that holds the enrolled phone, and the
 gateway relays every call to the lease's worker, whose link picks the
@@ -146,8 +155,9 @@ unavailable for agent-device, phones included.
 
 - An Android phone leased through agent-device is driven by a daemon whose
   adb calls run without Simlock's protocol-version gate (ADR 0022 §5). A
-  platform-tools version differing from Simlock's would restart the
-  operator's server. The daemon finds adb as agent-device does, through the
+  different adb protocol version from Simlock's would restart the
+  operator's server; a different platform-tools version with the same
+  protocol does not. The daemon finds adb as agent-device does, through the
   operator's SDK roots and `PATH`; the docs say to install one SDK.
 - The phone daemon lists the operator's simulators and every phone on the
   host. An operator who reads agent-device's own files on the worker sees
