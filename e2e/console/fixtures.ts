@@ -79,7 +79,10 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
     execFile("lsof", ["-t", socketPath], (error, stdout) => {
       if (error) {
         const failure = error as NodeJS.ErrnoException & { stderr?: string };
-        if (failure.code !== "1" || failure.stderr?.trim()) {
+        if (
+          String(failure.code) !== "1" ||
+          (failure.stderr?.trim() && !failure.stderr.includes("No such file or directory"))
+        ) {
           reject(error);
           return;
         }

@@ -670,7 +670,12 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
       .filter((pid) => Number.isInteger(pid));
   } catch (error: unknown) {
     const failure = error as NodeJS.ErrnoException & { stderr?: string };
-    if (failure.code === "1" && !failure.stderr?.trim()) return [];
+    if (
+      String(failure.code) === "1" &&
+      (!failure.stderr?.trim() || failure.stderr.includes("No such file or directory"))
+    ) {
+      return [];
+    }
     throw error;
   }
 }
