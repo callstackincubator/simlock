@@ -63,6 +63,20 @@ const SCENARIOS: readonly Scenario[] = [
       startArgs: [started()],
     },
   },
+  {
+    name: "npm fails",
+    install: [{ ok: false, message: "npm error 404 simlock@0.4.0 is not in this registry" }],
+    expected: {
+      stdout: [
+        '{"stage":"installing"}',
+        '{"failed":{"stage":"installing","message":"npm error 404 simlock@0.4.0 is not in this registry"}}',
+      ],
+      exit: 1,
+      installs: ["simlock@0.4.0"],
+      stops: 0,
+      startArgs: [],
+    },
+  },
 ];
 
 async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
@@ -83,15 +97,15 @@ describe("runUpdater", () => {
       const clock = new FakeClock();
       const npm = new FakeNpmCli(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
-      const processes = new ScriptedProcessRunner([
-        {
-          match: { command: process.execPath, args: expected.startArgs[0] ?? [] },
+      const processes = new ScriptedProcessRunner(
+        expected.startArgs.map((args) => ({
+          match: { command: process.execPath, args },
           result: { code: 0, stdout: "", stderr: "" },
           onSpawn: () => {
             probe.newDaemon = { health: "running", version: "0.4.0" };
           },
-        },
-      ]);
+        })),
+      );
       const supervisor = new FakeProcessSupervisor([PID]);
       const lines: string[] = [];
 
