@@ -96,14 +96,16 @@ function describeDevice(
   device: ReturnType<Context["grantedDevices"]>[number],
 ): FleetLeaseFacts["listed"] {
   const { platform, model } = device.spec;
-  if (device.address === undefined || (platform !== "ios" && platform !== "android")) {
+  // why: a phone is reached by the id it was enrolled with, since it has no address of its own.
+  const address = device.spec.physical ? device.driverDeviceId : device.address;
+  if (address === undefined || (platform !== "ios" && platform !== "android")) {
     return undefined;
   }
   const deviceClass = view.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
     model
   ];
   return {
-    address: device.address,
+    address,
     model,
     platform,
     ttlDeadline: record.ttlDeadline,
