@@ -352,6 +352,43 @@ describe("the Update now dialog", () => {
   });
 });
 
+describe("the toast an update earns", () => {
+  it("words the daemon's answer: started, following, upToDate and Update now accepted, and a refusal's title", () => {
+    const running = { ...STARTED, stage: "installing" } as const;
+    const offered = (updateFacts: UpdateFacts) =>
+      workerActions(
+        { connection: "connected", drained: false, id: "wrk_1", name: "mac-mini-1", updateFacts },
+        "gateway",
+      )[0];
+    const update = offered(facts());
+    const answers: readonly [string, unknown, string][] = [
+      [
+        "started",
+        { started: true, update: running, upToDate: false, version: "0.3.0" },
+        "Updating mac-mini-1 to 0.4.0",
+      ],
+      [
+        "following",
+        { started: false, update: running, upToDate: false, version: "0.3.0" },
+        "mac-mini-1 is already updating to 0.4.0",
+      ],
+      [
+        "upToDate",
+        { started: false, update: null, upToDate: true, version: "0.3.0" },
+        "mac-mini-1 already runs 0.3.0",
+      ],
+    ];
+    for (const [name, answer, title] of answers) {
+      expect(update?.outcome?.(answer), name).toEqual({ title });
+    }
+    const force = offered(facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }));
+    expect(force?.id).toBe("force-update");
+    expect(force?.success).toEqual({ title: "mac-mini-1 installs 0.4.0 now" });
+    expect(update?.failure).toBe("Couldn't update mac-mini-1");
+    expect(force?.failure).toBe("Couldn't update mac-mini-1");
+  });
+});
+
 describe("the actions each kind of item offers", () => {
   it("offers exactly the table's actions: dangerous ones last and marked, worker actions only on a gateway, and the Inbox's one fix", () => {
     checksLease();
