@@ -202,7 +202,7 @@ describe("the update actions a worker offers", () => {
       {
         name: "waiting",
         facts: facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }),
-        offered: ["force-update", "drain"],
+        offered: ["drain", "force-update"],
       },
       {
         name: "disconnected and waiting",
@@ -224,9 +224,9 @@ describe("the update actions a worker offers", () => {
         name: "incompatible whatever the latest",
         connection: "incompatible",
         facts: facts({ latestVersion: null }),
-        offered: ["update-worker", "drain"],
+        offered: ["drain", "update-worker"],
       },
-      { name: "newer", facts: facts(), offered: ["update-worker", "drain"] },
+      { name: "newer", facts: facts(), offered: ["drain", "update-worker"] },
       { name: "equal", facts: facts({ latestVersion: "0.3.0" }), offered: ["drain"] },
       { name: "older", facts: facts({ latestVersion: "0.2.0" }), offered: ["drain"] },
       { name: "no latest", facts: facts({ latestVersion: null }), offered: ["drain"] },
@@ -253,7 +253,7 @@ describe("the update actions a worker offers", () => {
       { connection: "connected", drained: true, id: "wrk_1", name: "m", updateFacts: facts() },
       "gateway",
     );
-    expect(drained.map((action) => action.id)).toEqual(["update-worker", "undrain"]);
+    expect(drained.map((action) => action.id)).toEqual(["undrain", "update-worker"]);
   });
 });
 
@@ -359,7 +359,7 @@ describe("the toast an update earns", () => {
       workerActions(
         { connection: "connected", drained: false, id: "wrk_1", name: "mac-mini-1", updateFacts },
         "gateway",
-      )[0];
+      ).find((action) => action.id !== "drain");
     const update = offered(facts());
     const answers: readonly [string, unknown, string][] = [
       [

@@ -406,6 +406,29 @@ function loadFigures(worker: WorkerView): readonly FigureCard[] {
 
 // why: a worker that is gone or drained is the first thing an operator should read on its page, so it
 // says so above everything else.
+function failureBanner(worker: WorkerView): readonly WorkerBanner[] {
+  const failure = worker.lastUpdateFailure;
+  if (failure === undefined || failure === null) return [];
+  return [
+    {
+      failure: true,
+      text: `Update to ${failure.to} failed (${failure.stage}): ${failure.message}`,
+      tone: "error",
+    },
+  ];
+}
+
+function updatingBanner(worker: WorkerView): readonly WorkerBanner[] {
+  const { update } = worker;
+  if (update === undefined || update === null) return [];
+  return [
+    {
+      text: `Updating to ${update.to} · ${stageLine(update)}. It takes no new leases.`,
+      tone: "warn",
+    },
+  ];
+}
+
 function bannersOf(worker: WorkerView, now: number): readonly WorkerBanner[] {
   return [
     ...(worker.connection === "disconnected"
@@ -416,6 +439,8 @@ function bannersOf(worker: WorkerView, now: number): readonly WorkerBanner[] {
           },
         ]
       : []),
+    ...failureBanner(worker),
+    ...updatingBanner(worker),
     ...(worker.drained ? [{ text: "Drained", tone: "warn" as const }] : []),
   ];
 }

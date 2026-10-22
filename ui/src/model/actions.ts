@@ -258,7 +258,7 @@ export function workerActions(
   };
   const actions: ItemAction[] = [worker.drained ? undrain : drain];
   const entry = updateEntry(worker);
-  if (entry !== undefined) actions.unshift(entry);
+  if (entry !== undefined) actions.push(entry);
   if (worker.connection === "disconnected") {
     actions.push({
       confirm: {
