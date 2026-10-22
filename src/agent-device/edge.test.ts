@@ -722,7 +722,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion }` on iOS and on Android without a tag, and `{ model, osVersion, imageTag }` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({
@@ -738,14 +738,14 @@ describe("the agent-device front, through the whole worker daemon", () => {
       maxRunning: 8,
     });
     const cases = [
-      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0" }],
-      [2, {}, { model: "iPhone 16", osVersion: "27.0" }],
+      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0", physical: false }],
+      [2, {}, { model: "iPhone 16", osVersion: "27.0", physical: false }],
       [
         3,
         { imageTag: "google_apis_playstore", platform: "android" },
-        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34" },
+        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34", physical: false },
       ],
-      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35" }],
+      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35", physical: false }],
     ] as const;
 
     for (const [n, extra, device] of cases) {
@@ -818,6 +818,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
         ],
       });
       await rig.daemon.dispatch("device.add", { id, platform }, adminSession);
+      rig.driver.setPhysicalPresence(id, true);
 
       const answer = await envelopeOf(await allocate(rig, 1, { ...extra, physical }));
 
@@ -1618,7 +1619,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
   });
 
-  it("on a worker, an `x-agent-device-lease-id` header naming another token's lease, a malformed one and no header are each forwarded, as today", async () => {
+  it("on a worker, an `x-agent-device-lease-id` header naming another token's lease or no header is forwarded, and a malformed one is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
     const rig = await setUp();
     await granted(rig, 1);
     const other = { "x-agent-device-lease-id": hex(1) };
@@ -1627,7 +1628,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
       rig.fake.requests.filter((request) => request.path === "/upload/preflight").length;
 
     const answers: Response[] = [];
-    for (const headers of [other, malformed, {}]) {
+    for (const [headers, reaches] of [
+      [other, 1],
+      [malformed, 0],
+      [{}, 1],
+    ] as const) {
       const before = preflights();
       const answer = await send(rig, "/upload/preflight", {
         body: "{}",
@@ -1635,10 +1640,13 @@ describe("the agent-device front, through the whole worker daemon", () => {
         token: secrets.two,
       });
       answers.push(answer);
-      expect(preflights()).toBe(before + 1);
+      expect(preflights()).toBe(before + reaches);
     }
 
-    expect(answers.map((answer) => answer.status)).toEqual([200, 200, 200]);
+    expect(answers.map((answer) => answer.status)).toEqual([200, 400, 200]);
+    expect(await answers[1]?.text()).toContain(
+      "the x-agent-device-lease-id header is not a lease id",
+    );
   });
 
   it("an `/rpc` body over 1 MiB, one that is not JSON, a JSON array, and an object with no `method` are each refused with their message and `id: null`, also while agent-device is unavailable, and neither simlock nor the agent-device daemon sees them", async () => {
@@ -3764,7 +3772,7 @@ describe("the agent-device front's request rules", () => {
       const before = commandsReceived(rig).length;
 
       expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([]);
-      expect(commandsReceived(rig)).toHaveLength(before + 1);
+      expect(commandsReceived(rig)).toHaveLength(before);
       await granted(rig, 1);
       rig.fake.listDevices([...three, { id: idOf(rig, 2) }, { id: idOf(rig, 1) }]);
 
@@ -3786,7 +3794,7 @@ describe("the agent-device front's request rules", () => {
       expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([idOf(rig, 2)]);
     });
 
-    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer an empty list; `devices` with `meta.requestProgress` is refused", async () => {
+    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer `could not read the device list from the worker holding lease <id>`; `devices` with `meta.requestProgress` is refused", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       rig.fake.listDevices([{ id: idOf(rig, 1) }]);
@@ -3824,7 +3832,11 @@ describe("the agent-device front's request rules", () => {
       ];
       for (const body of unusable) {
         rig.fake.answerDevicesWith(body);
-        expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([]);
+        expect((await envelopeOf(await runCommand(rig, "devices", 1))).error).toMatchObject({
+          data: {
+            message: `could not read the device list from the worker holding lease ${hex(1)}`,
+          },
+        });
       }
       await refused(
         rig,

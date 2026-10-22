@@ -1,6 +1,9 @@
 import type { Identity } from "../../auth/index.js";
+import type { ModuleRegistryView } from "../../modules/index.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
 import type { AgentDeviceHost } from "../host/host.js";
+import { FRONT_PREFIX } from "../shared/paths.js";
+import { classifyCall, readRpcBody } from "../shared/rpc.js";
 
 export type LinkStatus =
   | {
@@ -51,5 +54,55 @@ export class InProcessHostLink implements HostLink {
 
   forward(request: Request, identity: Identity): Promise<Response> {
     return this.host.forward(request, identity);
+  }
+}
+
+interface RoutedHosts {
+  readonly simulators: AgentDeviceHost;
+  readonly phones: AgentDeviceHost;
+}
+
+type Role = keyof RoutedHosts;
+
+// why: a worker runs one agent-device daemon for simulators and one for phones; this link holds a host for each and remembers which daemon each lease was allocated on.
+export class RoutedHostLink implements HostLink {
+  readonly readsLeaseHeader = true;
+  readonly #roles = new Map<string, Role>();
+
+  constructor(
+    private readonly hosts: RoutedHosts,
+    private readonly registry: ModuleRegistryView,
+  ) {}
+
+  status(leaseId?: string): ReturnType<HostLink["status"]> {
+    return this.#host(leaseId === undefined ? undefined : this.#roles.get(leaseId)).status();
+  }
+
+  async forward(request: Request, identity: Identity, leaseId?: string): Promise<Response> {
+    const role = await this.#roleOf(request, leaseId);
+    return this.hosts[role].forward(request, identity);
+  }
+
+  #host(role: Role | undefined): AgentDeviceHost {
+    return this.hosts[role ?? "simulators"];
+  }
+
+  async #roleOf(request: Request, leaseId: string | undefined): Promise<Role> {
+    const known = leaseId === undefined ? undefined : this.#roles.get(leaseId);
+    if (known !== undefined) return known;
+    if (request.method !== "POST" || new URL(request.url).pathname !== `${FRONT_PREFIX}/rpc`) {
+      return "simulators";
+    }
+    const read = await readRpcBody(request.clone());
+    if (read.kind !== "request" || classifyCall(read.method, read.params) !== "allocate") {
+      return "simulators";
+    }
+    const address = read.params["serial"] ?? read.params["udid"];
+    const phone = this.registry.snapshot.devices.some(
+      (device) => device.physical && device.driverDeviceId === address,
+    );
+    if (!phone) return "simulators";
+    if (leaseId !== undefined) this.#roles.set(leaseId, "phones");
+    return "phones";
   }
 }

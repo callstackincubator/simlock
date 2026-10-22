@@ -1,10 +1,10 @@
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import type { Identity } from "../auth/index.js";
 import type { Clock } from "../ports/index.js";
-import type { WorkerContext, WorkerModule } from "../modules/index.js";
+import type { ModuleRegistryView, WorkerContext, WorkerModule } from "../modules/index.js";
 import type { AgentDeviceModuleConfig } from "./definition.js";
 import { FrontMap } from "./front/front-map.js";
-import { InProcessHostLink, type LinkStatus } from "./front/host-link.js";
+import { RoutedHostLink, type LinkStatus } from "./front/host-link.js";
 import { Renewals } from "./front/renewals.js";
 import {
   AgentDeviceSupervisor,
@@ -30,13 +30,21 @@ interface AgentDeviceEdgeParts extends AgentDeviceFrontParts {
 
 function createAgentDeviceEdgeParts(
   upstream: AgentDeviceUpstream,
+  phoneUpstream: AgentDeviceUpstream,
   clock: Clock,
   platforms: readonly AgentDevicePlatform[],
+  registry: ModuleRegistryView,
 ): AgentDeviceEdgeParts {
   const record = new ReleaseScopeRecord();
   return {
     leaseEnd: new AgentDeviceLeaseEnd(upstream, record),
-    link: new InProcessHostLink(new AgentDeviceHost(upstream, platforms, record)),
+    link: new RoutedHostLink(
+      {
+        phones: new AgentDeviceHost(phoneUpstream, platforms),
+        simulators: new AgentDeviceHost(upstream, platforms, record),
+      },
+      registry,
+    ),
     map: new FrontMap(clock),
     renewals: new Renewals(clock),
   };
@@ -115,8 +123,10 @@ export function createWorkerWith(
     const phoneSupervisor = supervise("phones");
     const parts = createAgentDeviceEdgeParts(
       fakes.upstream ?? new SupervisorAgentDeviceUpstream(supervisor),
+      fakes.phoneUpstream ?? new SupervisorAgentDeviceUpstream(phoneSupervisor),
       ctx.clock,
       ctx.platforms,
+      ctx.registry,
     );
     return {
       capability: agentDeviceCapabilitySource(parts),
