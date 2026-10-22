@@ -147,9 +147,9 @@ export interface StartDaemonOptions {
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
-  /** why: test-only, replaces the registry of optional modules. */
   /** why: the entry removes the credential when SIGTERM lands after it was written but before the daemon is up; called only once this daemon owns the file. */
   readonly onAdminSecretWritten?: (remove: () => Promise<void>) => void;
+  /** why: test-only, replaces the registry of optional modules. */
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
   readonly role?: DaemonMode;
