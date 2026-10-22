@@ -3296,7 +3296,7 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
-    it("lists agent-device's module-unavailable finding before a module's own", async () => {
+    it("lists agent-device's module-unavailable findings, one per daemon, before a module's own", async () => {
       const setup = await setUp({
         capabilities: {
           "agent-device": { command: "/opt/missing/agent-device", enabled: true },
@@ -3326,7 +3326,7 @@ describe("startDaemon with the agent-device edge", () => {
               .map((finding) => finding.module),
           { timeout: 4_000 },
         )
-        .toEqual(["agent-device", "alpha"]);
+        .toEqual(["agent-device", "agent-device", "alpha"]);
     });
 
     it.each([
@@ -3434,7 +3434,9 @@ describe("startDaemon with the agent-device edge", () => {
 
         expect(await labelled()).toEqual(findings);
         const status = await daemon.dispatch("status.get", {}, operator);
-        expect(status.capabilities).toMatchObject([{ name: "agent-device", state: capability }]);
+        expect(status.capabilities?.find((entry) => entry.name === "agent-device")?.state).toBe(
+          capability,
+        );
       },
       20_000,
     );

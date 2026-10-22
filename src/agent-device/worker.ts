@@ -120,10 +120,10 @@ export function createWorkerWith(
     return {
       capability: agentDeviceCapabilitySource(parts),
       findings: () =>
-        agentDeviceFindings(supervisor.availability()).map(({ message, remedy }) => ({
-          message,
-          remedy,
-        })),
+        [
+          ...agentDeviceFindings(supervisor.availability()),
+          ...agentDeviceFindings(phoneSupervisor.availability(), "phones"),
+        ].map(({ message, remedy }) => ({ message, remedy })),
       hooks: {
         // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost the socket race never gets here, so it reaps nothing.
         afterSocketClaimed: () => {
