@@ -12,10 +12,12 @@ export interface VersionCheckOptions {
   readonly npm: NpmCli;
   readonly clock: Clock;
   readonly logger: Logger;
+  readonly enabled: boolean;
 }
 
 export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
-  const { npm, clock, logger } = options;
+  const { npm, clock, logger, enabled } = options;
+  if (!enabled) return { latest: () => null, dispose: () => undefined };
   let latest: string | null = null;
   let timer: TimerHandle | undefined;
   let disposed = false;

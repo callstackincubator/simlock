@@ -1056,6 +1056,7 @@ export const configSchema = z.object({
     shutdownAfterMs: z.number(),
     deleteAfterMs: z.number(),
   }),
+  update: z.object({ check: z.boolean() }),
   warmPool: z.object({
     enabled: z.boolean(),
     reserveRunning: z.object({ ios: z.number(), android: z.number() }),

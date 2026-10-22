@@ -449,7 +449,12 @@ async function composeDaemon(
   // Builds leasing on top of core (ADR 0018 §2).
   const npm =
     options.npm ?? new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory });
-  const versionCheck = startVersionCheck({ npm, clock, logger: logger.child("version-check") });
+  const versionCheck = startVersionCheck({
+    npm,
+    clock,
+    logger: logger.child("version-check"),
+    enabled: config.update.check,
+  });
   const leasing = createLeasing({
     clock,
     components,

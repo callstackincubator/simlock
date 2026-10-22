@@ -1167,6 +1167,7 @@ describe("operation input/output round trips", () => {
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      update: { check: true },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 1,
@@ -1237,6 +1238,7 @@ describe("operation input/output round trips", () => {
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
