@@ -1201,7 +1201,7 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("reads an incompatible worker's update with daemon.update query on the tick", async () => {
+  it("reads an incompatible worker's update with daemon.update query on the tick and keeps the last view when the query fails", async () => {
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
@@ -1228,6 +1228,11 @@ describe("GatewayService", () => {
       }),
     );
     expect(worker.updateInputs).toEqual([{ query: true }]);
+
+    worker.updateFailWith = new Error("worker went quiet");
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(worker.updateInputs).toHaveLength(2));
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
 
     await harness.service.stop();
   });

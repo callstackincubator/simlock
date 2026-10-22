@@ -415,9 +415,12 @@ export class ScriptedWorkerClient {
   };
 
   // why: the degraded client lets `daemon.update` through (ADR 0042 §1), so this answers even when `failWith` is set.
+  updateFailWith: unknown;
+
   async updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
     this.calls.push("daemon.update");
     this.updateInputs.push(input);
+    if (this.updateFailWith !== undefined) throw this.updateFailWith;
     return this.updateAnswer;
   }
 
