@@ -23,6 +23,7 @@ export function inConsole(node: ReactNode, mode?: Partial<Live["mode"]>): string
   const live = {
     mode: {
       daemon: () => noFacts,
+      dispose: () => undefined,
       mode: () => undefined,
       subscribe: () => () => undefined,
       ...mode,

@@ -47,7 +47,7 @@ export function LiveProvider({ children }: { readonly children: ReactNode }) {
       whenLost: session.lost,
     });
     const ticker = createTicker(browserClock, () => connection.serverNow());
-    setLive({ connection, mode: watchMode({ api, connection }), ticker });
+    setLive({ connection, mode: watchMode({ api, clock: browserClock, connection }), ticker });
     return () => {
       ticker.dispose();
       connection.dispose();

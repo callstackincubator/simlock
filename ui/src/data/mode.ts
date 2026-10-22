@@ -1,5 +1,5 @@
 import type { ApiClient } from "./api";
-import type { LiveConnection } from "./live/connection";
+import type { Clock, LiveConnection } from "./live/connection";
 
 export type DaemonMode = "gateway" | "worker";
 
@@ -14,6 +14,7 @@ export interface ModeStore {
   readonly mode: () => DaemonMode | undefined;
   readonly daemon: () => DaemonFacts;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly dispose: () => void;
 }
 
 interface StatusBody {
@@ -31,6 +32,7 @@ function modeOf(body: StatusBody): DaemonMode | undefined {
 export function watchMode(options: {
   readonly api: Pick<ApiClient, "get">;
   readonly connection: Pick<LiveConnection, "onStreamOpened">;
+  readonly clock: Pick<Clock, "setTimeout" | "clearTimeout">;
 }): ModeStore {
   const { api, connection } = options;
   const listeners = new Set<() => void>();
@@ -54,6 +56,7 @@ export function watchMode(options: {
   return {
     mode: () => current,
     daemon: () => ({ latestVersion: null }),
+    dispose: () => undefined,
     subscribe(listener) {
       listeners.add(listener);
       return () => {
