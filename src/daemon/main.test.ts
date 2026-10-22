@@ -4139,41 +4139,64 @@ describe("startDaemon version check", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-"));
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: null,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
       npm,
       version: "0.3.0",
       ...overrides,
     } as StartDaemonOptions);
     runningDaemons.push(daemon);
-    return { clock, daemon };
+    return { clock, daemon, sink };
   }
 
   const latestOf = async (daemon: DaemonServer) =>
     ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
       .daemon.latestVersion;
 
-  it("a daemon runs the version check at start without delaying ready, and reports a newer latest in status.get and the daemon.update query", async () => {
-    let answer: (outcome: NpmOutcome) => void = () => undefined;
+  it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value", async () => {
+    const pending: ((outcome: NpmOutcome) => void)[] = [];
     const npm: NpmCli = {
-      view: () => new Promise<NpmOutcome>((resolve) => (answer = resolve)),
+      view: () => new Promise<NpmOutcome>((resolve) => pending.push(resolve)),
       install: () => Promise.reject(new Error("unused")),
       globalRoot: () => Promise.reject(new Error("unused")),
     };
+    const day = 24 * 60 * 60 * 1000;
 
-    const { daemon } = await startChecked(npm);
+    const { clock, daemon, sink } = await startChecked(npm);
 
+    expect(pending).toHaveLength(1);
     expect(await latestOf(daemon)).toBeNull();
-    answer({ ok: true, output: "0.4.0\n" });
+    pending[0]?.({ ok: true, output: "0.4.0\n" });
     await expect.poll(() => latestOf(daemon)).toBe("0.4.0");
     const query = (await daemon.dispatch("daemon.update", { query: true }, operator)) as {
       latestVersion: unknown;
     };
     expect(query.latestVersion).toBe("0.4.0");
+
+    clock.advance(day - 1);
+    expect(pending).toHaveLength(1);
+    const later: NpmOutcome[] = [
+      { ok: false, message: "npm did not finish within 30 seconds" },
+      { ok: true, output: "not a version\n" },
+      { ok: true, output: "0.5.0\n" },
+    ];
+    for (const [index, outcome] of later.entries()) {
+      clock.advance(index === 0 ? 1 : day);
+      await expect.poll(() => pending.length).toBe(index + 2);
+      pending[index + 1]?.(outcome);
+      const failed = index < 2;
+      if (failed) {
+        await expect
+          .poll(() => sink.records.filter((record) => record.level === "warn").length)
+          .toBe(index + 1);
+      }
+      await expect.poll(() => latestOf(daemon)).toBe(failed ? "0.4.0" : "0.5.0");
+    }
   });
 });
