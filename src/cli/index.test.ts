@@ -7195,6 +7195,308 @@ const EMPTY_STATUS = {
   queueDepth: 0,
 } satisfies StatusGetOutput;
 
+describe("simlock update and simlock status", () => {
+  type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateDaemon"]>>;
+  type Step = UpdateAnswer | SimlockError<"DAEMON_CONNECTION_LOST">;
+  const lost = () =>
+    new SimlockError("DAEMON_CONNECTION_LOST", "transport", "The daemon connection was lost", {});
+  const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+    ...overrides,
+  });
+  const state = (
+    stage: "waiting" | "installing" | "restarting",
+    leases = 0,
+  ): NonNullable<UpdateAnswer["update"]> => {
+    const base = { from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1_000 };
+    return stage === "waiting" ? { stage, leases, ...base } : { stage, ...base };
+  };
+  const failure = (stage: "installing" | "restarting", message: string) => ({
+    stage,
+    from: "0.3.0",
+    to: "0.4.0",
+    message,
+    at: 2_000,
+  });
+  const started = (update = state("installing")) =>
+    answer({ started: true, resolved: "0.4.0", update });
+  const running = (version = "0.4.0", overrides: Partial<UpdateAnswer> = {}) =>
+    answer({ version, ...overrides });
+
+  async function runUpdate(
+    argv: readonly string[],
+    script: {
+      readonly first: UpdateAnswer | SimlockError;
+      readonly polls?: readonly Step[];
+      readonly after?: readonly (Step | Error)[];
+      readonly onPoll?: (index: number, interrupt: () => void) => void;
+    },
+  ) {
+    const output = outputCapture();
+    const clock = new FakeClock(0);
+    const calls: unknown[] = [];
+    const polls = [...(script.polls ?? [])];
+    const after = [...(script.after ?? [])];
+    let pollCount = 0;
+    const signals = new EventEmitter();
+    const clientOver = (steps: Step[], first?: UpdateAnswer | SimlockError) =>
+      fakeClient({
+        updateDaemon: async (input) => {
+          calls.push(input);
+          const isFirst = first !== undefined && calls.length === 1;
+          if (!isFirst) script.onPoll?.(pollCount++, () => signals.emit("SIGINT"));
+          const step = isFirst ? first : steps.length > 1 ? steps.shift() : steps[0];
+          if (step === undefined) throw new Error("no scripted answer");
+          if (step instanceof Error) throw step;
+          return step;
+        },
+      });
+    const environment = output.environmentWith({
+      clock,
+      connectAdmin: async () => clientOver(polls, script.first),
+      connectExistingAdmin: async () => {
+        const step = after.length > 1 ? after.shift() : after[0];
+        if (step === undefined || step instanceof Error) throw step ?? new Error("refused");
+        return clientOver([step]);
+      },
+      sleep: async (milliseconds) => clock.advance(milliseconds),
+      signals: signals as unknown as CliEnvironment["signals"],
+    });
+    const code = await runCli(argv, environment);
+    return { code, calls, stdout: output.stdout, stderr: output.stderr };
+  }
+
+  it("follows an update to simlock <v> is running, reports a failure and a rollback, says when nothing is needed, stops following on Ctrl-C only, prints --json, refuses bad input, and shows the version, the update and the last failure in simlock status", async () => {
+    const header = "Updating simlock 0.3.0 → 0.4.0\n";
+    const wait =
+      "Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.\n";
+    const cases: readonly {
+      readonly name: string;
+      readonly argv: readonly string[];
+      readonly script: Parameters<typeof runUpdate>[1];
+      readonly code: number;
+      readonly stdout: string;
+      readonly calls?: readonly unknown[];
+    }[] = [
+      {
+        name: "follows to running",
+        argv: ["update"],
+        script: {
+          first: started(state("waiting", 2)),
+          polls: [
+            answer({ update: state("waiting", 2) }),
+            answer({ update: state("waiting", 1) }),
+            answer({ update: state("installing") }),
+            answer({ update: state("restarting") }),
+            lost(),
+          ],
+          after: [new Error("refused"), running()],
+        },
+        code: 0,
+        stdout: `${header}${wait}Waiting for 1 lease to end.\nInstalling simlock@0.4.0\nRestarting the daemon\nsimlock 0.4.0 is running\n`,
+        calls: [{}, ...Array.from({ length: 6 }, () => ({ query: true }))],
+      },
+      {
+        name: "follows an update that already runs, whatever version it names",
+        argv: ["update", "--version", "0.9.9"],
+        script: {
+          first: answer({ update: state("installing") }),
+          polls: [lost()],
+          after: [running()],
+        },
+        code: 0,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nsimlock 0.4.0 is running\n`,
+      },
+      {
+        name: "reports a failed install",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ lastUpdateFailure: failure("installing", "npm error code EACCES") })],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nUpdate failed (installing): npm error code EACCES\nsimlock 0.3.0 is still running and takes leases again.\n`,
+      },
+      {
+        name: "reports a version that did not start and the rollback",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ update: state("restarting") }), lost()],
+          after: [
+            answer({
+              lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
+            }),
+          ],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
+      },
+      {
+        name: "gives up when the daemon does not come back in 15 minutes",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ update: state("restarting") }), lost()],
+          after: [new Error("refused")],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nThe daemon did not come back; run simlock status.\n`,
+      },
+      {
+        name: "the latest version is the running one",
+        argv: ["update"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already the latest\n",
+        calls: [{}],
+      },
+      {
+        name: "the named version is the running one",
+        argv: ["update", "--version", "0.3.0"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already running\n",
+        calls: [{ version: "0.3.0" }],
+      },
+      {
+        name: "the running version is newer than the latest",
+        argv: ["update"],
+        script: { first: answer({ upToDate: true, resolved: "0.4.0", version: "0.5.0-rc.1" }) },
+        code: 0,
+        stdout:
+          "simlock 0.5.0-rc.1 is newer than the latest (0.4.0). Use --version to install another version.\n",
+      },
+      {
+        name: "sends force and the version",
+        argv: ["update", "--force", "--version", "0.4.0-rc.1"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already running\n",
+        calls: [{ force: true, version: "0.4.0-rc.1" }],
+      },
+      {
+        name: "--json prints the final answer only",
+        argv: ["update", "--json"],
+        script: { first: started(state("waiting", 1)), polls: [lost()], after: [running()] },
+        code: 0,
+        stdout: `${JSON.stringify(running())}\n`,
+      },
+      {
+        name: "--json with nothing to do prints the answer at once",
+        argv: ["update", "--json"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: `${JSON.stringify(answer({ upToDate: true, resolved: "0.3.0" }))}\n`,
+        calls: [{}],
+      },
+      {
+        name: "Ctrl-C stops following and sends nothing more",
+        argv: ["update"],
+        script: {
+          first: started(state("waiting", 2)),
+          polls: [answer({ update: state("waiting", 2) })],
+          onPoll: (_index, interrupt) => interrupt(),
+        },
+        code: 0,
+        stdout: `${header}${wait}Stopped following. The update goes on; run simlock status to see it.\n`,
+        calls: [{}, { query: true }],
+      },
+    ];
+    for (const { name, argv, script, code, stdout, calls } of cases) {
+      const result = await runUpdate(argv, script);
+      expect({ name, code: result.code, stdout: result.stdout }, name).toEqual({
+        name,
+        code,
+        stdout,
+      });
+      if (calls !== undefined) expect(result.calls, name).toEqual(calls);
+    }
+
+    const refusals: readonly [readonly string[], number, string][] = [
+      [["update", "--version", "latest"], 2, "--version takes a version, e.g. 0.4.0"],
+      [["update", "--version", "../x"], 2, "--version takes a version, e.g. 0.4.0"],
+      [["update", "--version", `1.0.0-${"a".repeat(59)}`], 2, "--version takes a version"],
+    ];
+    for (const [argv, code, message] of refusals) {
+      const result = await runUpdate(argv, { first: answer() });
+      expect({ argv, code, stderr: result.stderr.includes(message), calls: result.calls }).toEqual({
+        argv,
+        code,
+        stderr: true,
+        calls: [],
+      });
+    }
+
+    const refused = [
+      ["UPDATE_RESOLVE_FAILED", 1, "could not resolve simlock@9.9.9: No match found"],
+      ["UPDATE_UNSUPPORTED_INSTALL", 2, "simlock was not installed with npm i -g"],
+    ] as const;
+    for (const [codeName, exit, message] of refused) {
+      const result = await runUpdate(["update"], {
+        first: new SimlockError(codeName, "domain", message, {}),
+      });
+      expect({ code: result.code, stdout: result.stdout }).toEqual({ code: exit, stdout: "" });
+      expect(JSON.parse(result.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: codeName, message },
+      });
+    }
+
+    const statusLines = async (daemon: Partial<StatusGetOutput["daemon"]>) => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({ ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, ...daemon } }),
+            }),
+        }),
+      );
+      return output.stdout.split("\n").slice(0, 4);
+    };
+    const next = "Host: macOS 15.5 arm64";
+    expect(await statusLines({ version: "0.3.0" })).toEqual([
+      "Daemon: running (worker)",
+      "Simlock: 0.3.0",
+      next,
+      expect.stringMatching(/^Running global/),
+    ]);
+    for (const [update, line] of [
+      [state("waiting", 2), "Updating to 0.4.0: waiting for 2 leases"],
+      [state("waiting", 1), "Updating to 0.4.0: waiting for 1 lease"],
+      [state("installing"), "Updating to 0.4.0: installing"],
+      [state("restarting"), "Updating to 0.4.0: restarting"],
+    ] as const) {
+      expect((await statusLines({ version: "0.3.0", update })).slice(0, 3)).toEqual([
+        "Daemon: running (worker)",
+        "Simlock: 0.3.0",
+        line,
+      ]);
+    }
+    expect(
+      (
+        await statusLines({
+          version: "0.3.0",
+          lastUpdateFailure: failure("installing", "npm error code EACCES"),
+        })
+      ).slice(0, 3),
+    ).toEqual([
+      "Daemon: running (worker)",
+      "Simlock: 0.3.0",
+      "Last update failed (installing): npm error code EACCES",
+    ]);
+  });
+});
+
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
   const emptyDoctor: DoctorReport = { findings: [] };
