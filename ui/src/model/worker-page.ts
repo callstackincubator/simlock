@@ -404,8 +404,6 @@ function loadFigures(worker: WorkerView): readonly FigureCard[] {
   return worker.connection === "connected" ? figureCards(worker) : [];
 }
 
-// why: a worker that is gone or drained is the first thing an operator should read on its page, so it
-// says so above everything else.
 function failureBanner(worker: WorkerView): readonly WorkerBanner[] {
   const failure = worker.lastUpdateFailure;
   if (failure === undefined || failure === null) return [];
@@ -429,6 +427,8 @@ function updatingBanner(worker: WorkerView): readonly WorkerBanner[] {
   ];
 }
 
+// why: a worker that is gone, failed to update, updates or is drained is the first thing an operator
+// should read on its page, so it says so above everything else, in that order.
 function bannersOf(worker: WorkerView, now: number): readonly WorkerBanner[] {
   return [
     ...(worker.connection === "disconnected"

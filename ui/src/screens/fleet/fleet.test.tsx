@@ -170,6 +170,9 @@ describe("a worker's update on the Fleet screen", () => {
     expect(text(inConsole(<FleetBody page={fleet([WORKER])} />))).not.toContain("waiting for");
     const again = text(inConsole(<WorkerPageBody page={page(failed)} />, GATEWAY));
     expect(again).toContain("Update to 1.5.0 failed (installing): EACCES Update again");
+    expect(inConsole(<WorkerPageBody page={page(failed)} />)).toContain(
+      '<span class="page-note">simlock 1.4.0 · 1.5.0 available</span>',
+    );
     expect(text(idle)).not.toContain("Update again");
     expect(text(inConsole(<WorkerPageBody page={page(failed)} />))).not.toContain("Update again");
   });

@@ -132,7 +132,8 @@ interface UpdateAnswer {
 
 function updateToast(name: string): (answer: unknown) => ActionToast {
   return (raw) => {
-    const answer = raw as UpdateAnswer;
+    // why: the answer is the daemon's JSON, or nothing when it sent no body; either words a toast.
+    const answer = (typeof raw === "object" && raw !== null ? raw : {}) as UpdateAnswer;
     const to = answer.update?.to ?? "the latest version";
     if (answer.upToDate === true) return { title: `${name} already runs ${answer.version ?? ""}` };
     return {
@@ -209,7 +210,7 @@ function forceAction(
     // why: a worker that already runs the version answers upToDate, and the toast says so rather
     // than that something installs.
     outcome: (raw) =>
-      (raw as UpdateAnswer).upToDate === true
+      (raw as UpdateAnswer | undefined)?.upToDate === true
         ? updateToast(worker.name)(raw)
         : { title: `${worker.name} installs ${to} now` },
     success: { title: `${worker.name} installs ${to} now` },
@@ -299,9 +300,9 @@ export interface InboxActionContext {
   readonly workers: readonly WorkerView[];
 }
 
-// why: only a drained worker's item (its fix is Undrain) and a failed update's (Update…) has a fix button; every other action of
-// an item is in its menu. Device conditions (a quarantined or stalled device) are about a device, so
-// they offer no worker action.
+// why: only a drained worker's item (its fix is Undrain) and a failed update's (its fix is Update…)
+// have a fix button; every other action of an item is in its menu. Device conditions (a quarantined
+// or stalled device) are about a device, so they offer no worker action.
 export function inboxActions(
   item: InboxItem,
   context: InboxActionContext,

@@ -93,8 +93,24 @@ describe("the daemon's version facts", () => {
       reads: 3,
     });
 
+    const reading = (version: unknown) => () =>
+      Promise.resolve({
+        body: { daemon: { latestVersion: "0.4.0", mode: "gateway", version } },
+        date: null,
+      });
+    status = reading("0.4.0");
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(store.daemon()).toEqual({ latestVersion: "0.4.0", version: "0.4.0" });
+
+    status = reading(4);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect({ reads: statusReads, facts: store.daemon() }).toEqual({
+      facts: { latestVersion: "0.4.0" },
+      reads: 5,
+    });
+
     store.dispose();
     await vi.advanceTimersByTimeAsync(1_200_000);
-    expect(statusReads).toBe(3);
+    expect(statusReads).toBe(5);
   });
 });

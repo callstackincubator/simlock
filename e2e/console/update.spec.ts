@@ -38,6 +38,17 @@ test.describe("the console updates a worker", () => {
         update: null,
         version: "0.3.0",
       }));
+      await page.route(
+        (url) => url.pathname === "/v1/status",
+        async (route) => {
+          const response = await route.fetch();
+          const body = (await response.json()) as { daemon: Record<string, unknown> };
+          await route.fulfill({
+            json: { ...body, daemon: { ...body.daemon, latestVersion: "0.4.0", version: "0.3.0" } },
+            response,
+          });
+        },
+      );
       const posts: string[] = [];
       await page.route("**/v1/workers/*/update", async (route) => {
         posts.push(route.request().postData() ?? "");
@@ -54,6 +65,7 @@ test.describe("the console updates a worker", () => {
       await openFleet(page, fleet.gateway);
       const row = page.locator("main tbody tr").filter({ hasText: "upd-a" });
       await expect(row).toContainText("simlock 0.3.0 · 0.4.0 available");
+      await expect(page.locator(".update-notice")).toHaveText("simlock 0.3.0 · 0.4.0 available");
       await row.getByRole("button", { name: "Actions for upd-a" }).click();
       await page.getByRole("menuitem", { name: "Update…" }).click();
       const dialog = page.getByRole("alertdialog", { name: "Update upd-a from 0.3.0 to 0.4.0?" });

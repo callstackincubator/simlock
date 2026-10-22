@@ -136,6 +136,10 @@ function checksInbox(): void {
     worker({ connection: "incompatible", id: "wrk_old" }),
     worker({ connection: "incompatible", drained: true, id: "wrk_old_drained" }),
     worker({
+      devices: [
+        { id: "dev_a", spec: { model: "iPhone 16", platform: "ios" }, state: "leased" },
+        { id: "dev_b", spec: { model: "iPhone 16", platform: "ios" }, state: "ready" },
+      ] as unknown as WorkerView["devices"],
       id: "wrk_failed",
       lastUpdateFailure: { at: NOW, from: "0.3.0", message: "x", stage: "installing", to: "0.4.0" },
       latestVersion: "0.4.0",
@@ -177,6 +181,9 @@ function checksInbox(): void {
   expect(shape(of("wrk_old/incompatible").menu)).toEqual(["drain", "update-worker"]);
   const failed = of("wrk_failed/update-failed");
   expect(failed.fix?.id).toBe("update-worker");
+  expect(failed.fix?.confirm?.body).toBe(
+    "It takes no new leases and waits for its 1 lease to end. It restarts by itself.",
+  );
   expect(shape(failed.menu)).toEqual(["drain", "update-worker"]);
   expect(of("wrk_failed_gone/update-failed").fix).toBeUndefined();
   expect(of("request/req_1/waiting").fix).toBeUndefined();
@@ -399,6 +406,14 @@ describe("the toast an update earns", () => {
     const force = offered(facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }));
     expect(force?.id).toBe("force-update");
     expect(force?.success).toEqual({ title: "mac-mini-1 installs 0.4.0 now" });
+    expect(force?.outcome?.({ started: true, update: running, upToDate: false })).toEqual({
+      title: "mac-mini-1 installs 0.4.0 now",
+    });
+    expect(force?.outcome?.(answers[2]?.[1])).toEqual({ title: "mac-mini-1 already runs 0.3.0" });
+    expect(update?.outcome?.(undefined)).toEqual({
+      title: "Updating mac-mini-1 to the latest version",
+    });
+    expect([update?.timeoutMs, force?.timeoutMs]).toEqual([100_000, 100_000]);
     expect(update?.failure).toBe("Couldn't update mac-mini-1");
     expect(force?.failure).toBe("Couldn't update mac-mini-1");
   });
