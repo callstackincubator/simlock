@@ -36,6 +36,12 @@ const POLL_MS = 500;
 const STOP_LIMIT_MS = 10 * 60_000;
 const START_LIMIT_MS = 2 * 60_000;
 const RESULT_FILE = "update-result.json";
+const BACKUP_DIRECTORY = "update-backup";
+const DATABASE_FILES = ["state.db", "history.db"].flatMap((name) => [
+  name,
+  `${name}-wal`,
+  `${name}-shm`,
+]);
 
 function sleep(clock: Clock, milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
@@ -65,8 +71,12 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
     }
     await sleep(clock, POLL_MS);
   }
+  await backupDatabases(options);
   const reason = await startDaemon(options);
-  if (reason === undefined) return 0;
+  if (reason === undefined) {
+    await options.filesystem.rm(join(options.dataDirectory, BACKUP_DIRECTORY));
+    return 0;
+  }
   await options.filesystem.writeFileAtomic(
     join(options.dataDirectory, RESULT_FILE),
     JSON.stringify({
@@ -80,13 +90,44 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
     { mode: 0o600 },
   );
   const reinstalled = await npm.install(`simlock@${options.from}`);
-  const rollbackFailure = reinstalled.ok
-    ? await startDaemon({ ...options, to: options.from })
-    : reinstalled.message;
-  if (rollbackFailure !== undefined) {
+  let rollbackFailure: string | undefined;
+  if (reinstalled.ok) {
+    await restoreDatabases(options);
+    rollbackFailure = await startDaemon({ ...options, to: options.from });
+  } else {
+    rollbackFailure = reinstalled.message;
+  }
+  if (rollbackFailure === undefined) {
+    await options.filesystem.rm(join(options.dataDirectory, BACKUP_DIRECTORY));
+  } else {
     options.stderr.write(`rollback to ${options.from} failed: ${rollbackFailure}\n`);
   }
   return 1;
+}
+
+async function backupDatabases(options: RunUpdaterOptions): Promise<void> {
+  const { dataDirectory, filesystem } = options;
+  await filesystem.mkdirp(join(dataDirectory, BACKUP_DIRECTORY));
+  for (const name of DATABASE_FILES) {
+    if (await filesystem.exists(join(dataDirectory, name))) {
+      await filesystem.copyFile(
+        join(dataDirectory, name),
+        join(dataDirectory, BACKUP_DIRECTORY, name),
+      );
+    }
+  }
+}
+
+async function restoreDatabases(options: RunUpdaterOptions): Promise<void> {
+  const { dataDirectory, filesystem } = options;
+  for (const name of DATABASE_FILES) {
+    const copy = join(dataDirectory, BACKUP_DIRECTORY, name);
+    if (await filesystem.exists(copy)) {
+      await filesystem.copyFile(copy, join(dataDirectory, name));
+    } else {
+      await filesystem.rm(join(dataDirectory, name));
+    }
+  }
 }
 
 async function startDaemon(options: RunUpdaterOptions): Promise<string | undefined> {
