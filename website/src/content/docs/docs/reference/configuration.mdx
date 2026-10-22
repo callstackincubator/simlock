@@ -208,7 +208,7 @@ makes the next boot wipe the device once to take a new clean snapshot.
 
 | Key                          | Type                     | Default                               | Meaning                                                                                                    | Applies to |
 | ---------------------------- | ------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------- |
-| `http.enabled`               | boolean                  | `false` on a worker, `true` on a gateway | Serve the HTTP API and the web console. A gateway with `false` does not start.                          | Both       |
+| `http.enabled`               | boolean                  | `false` on a worker, `true` on a gateway | Serve the HTTP API and the web console. A gateway with `false` does not start; a worker with `gateway.url` set must be `false`.                        | Both       |
 | `http.host`                  | string                   | `127.0.0.1`                           | Address to listen on. Simlock does no TLS: put a reverse proxy in front for HTTPS.                          | Both       |
 | `http.port`                  | integer `1`–`65535`      | `4701` on a worker, `4700` on a gateway | Port to listen on.                                                                                       | Both       |
 | `http.proxyAuth`             | object                   | not set (proxy sign-in off)           | Treat a person your sign-in proxy (Cloudflare Access, for example) has signed in as an operator, with no Simlock token. Set `header`, `jwksUrl`, `issuer` and `audience` together, as one object. | Both       |
@@ -241,7 +241,7 @@ connection, so use `wss://`, or `ws://` only on loopback or inside your own tunn
 </Aside>
 
 Setting only one of `gateway.url` and `gateway.token` stops the worker from starting, naming the
-missing key. An `http://` or `https://` URL is refused too.
+missing key. An `http://` or `https://` URL is refused too. A worker with `gateway.url` set also refuses `http.enabled: true`: a joined worker is reached through the gateway.
 
 ## Gateway
 
@@ -298,9 +298,13 @@ A name Simlock does not know is warned about and ignored.
 
 | Key                                         | Type                                 | Default          | Meaning                                                                                                     | Applies to |
 | ------------------------------------------- | ------------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------- | ---------- |
-| `capabilities.agent-device.enabled`         | boolean                              | `false`          | On a worker: run an agent-device daemon that sees Simlock's devices. On a gateway: serve agent-device and send each agent to a worker that has it. | Both       |
+| `capabilities.agent-device.enabled`         | boolean                              | `false`          | On a worker: run an agent-device daemon that sees Simlock's devices, and a phone daemon beside it. On a gateway: serve agent-device and send each agent to a worker that has it. | Both       |
 | `capabilities.agent-device.command`         | non-empty string                     | `agent-device`   | The agent-device program: a name looked up on `PATH`, or a path.                                             | Worker     |
 | `capabilities.agent-device.leaseTtlCapMs`   | integer from `5000` to `lease.maxTtlMs` | not set (no cap) | Longest TTL for leases agent-device takes through Simlock. A longer TTL is lowered to it; a lease with none gets it. | Both       |
+| `capabilities.agent-device.ios.teamId`      | non-empty string                     | not set          | Apple developer team ID agent-device signs its iPhone runner with. Passed to the phone daemon.               | Worker     |
+| `capabilities.agent-device.ios.bundleId`    | non-empty string                     | not set          | Bundle ID of agent-device's iPhone runner. Passed to the phone daemon.                                       | Worker     |
+| `capabilities.agent-device.ios.provisioningProfile` | non-empty string             | not set          | Provisioning profile for manual signing of the iPhone runner. Setting it switches agent-device to manual signing. Passed to the phone daemon. | Worker     |
+| `capabilities.agent-device.ios.signingIdentity` | non-empty string                 | not set          | Code-signing identity for manual signing of the iPhone runner. Passed to the phone daemon.                  | Worker     |
 | `capabilities.stream.enabled`               | boolean                              | `false`          | Let people watch a leased device's screen. On a gateway: pass each stream through from the worker.           | Both       |
 | `capabilities.stream.fps`                   | integer `1`–`60`                     | `30`             | Highest frame rate. A still screen sends far fewer frames.                                                   | Worker     |
 | `capabilities.stream.maxDimension`          | integer `96`–`4096`                  | `720`            | Longest side of the picture, in pixels. The setting that changes bandwidth most.                             | Worker     |

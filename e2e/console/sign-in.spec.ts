@@ -44,17 +44,17 @@ test.describe("sign-in", () => {
 
     await expect(nav.locator("[aria-current='page']")).toHaveText("Overview");
     await expect(page).toHaveTitle("Overview · Simlock");
-    await nav.getByRole("link", { name: "Events" }).click();
+    await nav.getByRole("link", { name: "Activity" }).click();
 
-    await expect(nav.locator("[aria-current='page']")).toHaveText("Events");
-    await expect(page).toHaveTitle("Events · Simlock");
+    await expect(nav.locator("[aria-current='page']")).toHaveText("Activity");
+    await expect(page).toHaveTitle("Activity · Simlock");
 
     // The browser's back and forward move between the console's pages too.
     await page.goBack();
     await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
     await expect(nav.locator("[aria-current='page']")).toHaveText("Overview");
     await page.goForward();
-    await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
   });
 
   test("signing in with an empty field asks the daemon nothing", async ({ page }) => {
@@ -142,7 +142,7 @@ test.describe("sign-in", () => {
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 
     const tab = await context.newPage();
-    await tab.goto("/workers");
+    await tab.goto("/fleet");
 
     await expect(tab.getByLabel("Operator token")).toBeVisible();
     await expect(tab.getByRole("button", { name: "Sign out" })).toHaveCount(0);

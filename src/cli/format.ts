@@ -1,6 +1,7 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
 import type { StatusGetOutput, WorkerView } from "../admin/index.js";
+import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 
 export function formatWorkers(
   workers: WorkerView[],
@@ -167,6 +168,23 @@ export function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
   return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
 }
 
+/** why: the role's service as `daemon status --json` prints it, and `serviceLine` renders it. */
+export type ServiceReport = ServiceState & {
+  readonly manager: ServiceManagerName;
+  readonly name: string;
+};
+
+export function serviceLine(service: ServiceReport): string {
+  if (service.state === "not-installed") return "Service: not installed";
+  const who = `(${service.manager}, ${service.name})`;
+  if (service.state === "broken") {
+    const verb = service.missing.length === 1 ? "is" : "are";
+    return `Service: broken ${who}: ${service.missing.join(", ")} ${verb} gone; run simlock daemon install`;
+  }
+  if (service.state === "installed") return `Service: installed ${who}`;
+  return `Service: not loaded ${who}: commands start the daemon without it`;
+}
+
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 export function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
@@ -256,11 +274,11 @@ function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): str
   return [
     `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
     ...targets.map((target) => {
-      const name = [target.model, target.osVersion, target.mode]
+      const name = [target.model, target.osVersion, target.mode, target.imageTag]
         .filter((part) => part !== undefined)
         .join(" / ");
       const short = target.short === undefined ? "" : `  short: ${target.short}`;
-      return `  ${name}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
+      return `  ${name}   ${target.origin}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
     }),
   ];
 }

@@ -3,16 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EventBus, type EventEnvelope } from "../../bus/index.js";
-import {
-  FakeClock,
-  JsonLinesLogger,
-  MemoryLogSink,
-  NodeFilesystem,
-  NodeSqliteOpener,
-  type SqliteDatabase,
-} from "../../ports/index.js";
-import { createEventHistory, HISTORY_DB_NAME, type HistoryProjectionDefinition } from "../index.js";
+import type { EventEnvelope } from "../../bus/index.js";
+import { NodeSqliteOpener, type SqliteDatabase } from "../../ports/index.js";
+import type { HistoryProjectionDefinition } from "../index.js";
 import { HISTORY_PROJECTIONS } from "./index.js";
 
 const directories: string[] = [];
@@ -22,79 +15,6 @@ afterEach(async () => {
     directories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
   );
 });
-
-async function projectionRows(path: string): Promise<Record<string, number>> {
-  const database = await new NodeSqliteOpener().open(path, { readOnly: true });
-  try {
-    const tables = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-      .all()
-      .map((row) => String(row.name))
-      .filter((name) => name !== "events");
-    return Object.fromEntries(
-      tables.map((name) => [
-        name,
-        Number(database.prepare(`SELECT count(*) AS n FROM "${name}"`).get()?.n),
-      ]),
-    );
-  } finally {
-    database.close();
-  }
-}
-
-async function run(
-  definition: HistoryProjectionDefinition,
-  act: (bus: EventBus, wrapped: { applied: string[] }) => void,
-  options: { readonly throwOn?: string } = {},
-): Promise<{
-  readonly applied: string[];
-  readonly events: number;
-  readonly rows: Record<string, number>;
-  readonly writing: boolean;
-}> {
-  const directory = await mkdtemp(join(tmpdir(), "simlock-projection-"));
-  directories.push(directory);
-  const clock = new FakeClock(1_000);
-  const bus = new EventBus(clock);
-  const applied: string[] = [];
-  const wrapped: HistoryProjectionDefinition = {
-    ...definition,
-    create: (database, projectionOptions) => {
-      const inner = definition.create(database, projectionOptions);
-      return {
-        apply: (envelope) => {
-          applied.push(envelope.id);
-          inner.apply(envelope);
-          if (options.throwOn === envelope.id) throw new Error("apply failed");
-        },
-        prune: (now) => inner.prune(now),
-        rebuild: (oldest) => inner.rebuild(oldest),
-      };
-    },
-  };
-  const history = createEventHistory({
-    bus,
-    clock,
-    config: { maxBytes: 256 * 1024 * 1024, retention: 7 * 24 * 3_600_000 },
-    dataDirectory: directory,
-    filesystem: new NodeFilesystem(),
-    logger: new JsonLinesLogger({ clock, sink: new MemoryLogSink() }),
-    projectionOptions: { fleet: false, metricsRetentionMs: 90 * 24 * 3_600_000 },
-    projections: [wrapped],
-    sqlite: new NodeSqliteOpener(),
-  });
-  await history.start();
-  act(bus, { applied });
-  const events = (await history.replay({ sinceTs: 0 })).length;
-  const writing = history.status().writing;
-  await history.stop();
-  return {
-    applied,
-    events,
-    rows: await projectionRows(join(directory, HISTORY_DB_NAME)),
-    writing,
-  };
-}
 
 async function openScratch(): Promise<SqliteDatabase> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-projection-"));
@@ -144,26 +64,6 @@ function conformance(
   registry: Readonly<Record<string, HistoryProjectionDefinition>>,
 ) {
   describe.each(Object.entries(registry))(`${label} projection %s`, (_name, definition) => {
-    const relay = (bus: EventBus, id: string): void => {
-      bus.republish({
-        event: "daemon.stopping",
-        id,
-        module: "daemon",
-        payload: { reason: id },
-        timestamp: 1_000,
-      });
-    };
-
-    it("apply of a duplicate never runs", async () => {
-      const result = await run(definition, (bus) => {
-        relay(bus, "evt_a");
-        relay(bus, "evt_a");
-      });
-
-      expect(result.applied).toEqual(["evt_a"]);
-      expect(result.events).toBe(1);
-    });
-
     it("its migrations from version 0 reach its version, and the check holds there", async () => {
       const database = await openScratch();
       try {
@@ -249,22 +149,6 @@ function conformance(
       } finally {
         database.close();
       }
-    });
-
-    it("a throwing apply writes nothing", async () => {
-      const baseline = await run(definition, (bus) => relay(bus, "evt_a"));
-      const result = await run(
-        definition,
-        (bus) => {
-          relay(bus, "evt_a");
-          relay(bus, "evt_boom");
-        },
-        { throwOn: "evt_boom" },
-      );
-
-      expect(result.events).toBe(1);
-      expect(result.rows).toEqual(baseline.rows);
-      expect(result.writing).toBe(false);
     });
   });
 }

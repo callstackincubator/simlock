@@ -1,34 +1,27 @@
 import "./overview.css";
 
 import {
+  ChartPanel,
   ChoiceChips,
-  Empty,
   Link,
   Loaded,
-  Meter,
-  MinuteChart,
-  MinuteTable,
   Page,
   Panel,
   Refusal,
   Row,
   ShareBar,
-  SlotLegend,
-  Slots,
   StatRow,
   StatTile,
   Status,
-  StatusDot,
+  Toolbar,
 } from "../../ds";
-import type { FigureChart, FiguresState } from "../../state/figures";
+import { WorkersTable } from "../fleet";
+import type { FiguresState } from "../../state/figures";
 import { type ConsoleRange, RANGE_CHOICES, useRange } from "../../state/range";
 import {
-  type Gauge,
   type Overview,
-  type OverviewActivity,
-  type OverviewItem,
-  type OverviewWorker,
-  type PlatformUse,
+  type OverviewInbox,
+  type PlatformCapacity,
   useOverview,
 } from "../../state/overview";
 
@@ -37,9 +30,13 @@ export function OverviewScreen() {
   const view = useOverview(range);
   return (
     <Page title="Overview">
-      <Loaded view={view}>
-        {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
-      </Loaded>
+      {view.kind === "refused" ? (
+        <p className="muted">Could not check: workers</p>
+      ) : (
+        <Loaded view={view}>
+          {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
+        </Loaded>
+      )}
     </Page>
   );
 }
@@ -50,16 +47,6 @@ function FigureNote({ figures }: { readonly figures: FiguresState }) {
   return null;
 }
 
-function FigureChartPanel({ chart }: { readonly chart: FigureChart }) {
-  return (
-    <Panel title={chart.title}>
-      <MinuteChart kind="area" title={chart.title} unit={chart.unit} minutes={chart.points} />
-      <p className="chart-summary">{chart.summary}</p>
-      <MinuteTable minutes={chart.points} heading={chart.heading} bucketMs={chart.bucketMs} />
-    </Panel>
-  );
-}
-
 export function OverviewBody(props: {
   readonly overview: Overview;
   readonly range?: ConsoleRange;
@@ -68,184 +55,122 @@ export function OverviewBody(props: {
   const { overview, range = "1h", onRange = () => undefined } = props;
   const { figures } = overview;
   const ready = figures.kind === "ready" ? figures : undefined;
-  const [leases, ...others] = ready?.data.charts ?? [];
+  // why: Device slots in use is drawn on Usage; the Overview keeps the two charts of load.
+  const [leases, ...others] = (ready?.data.charts ?? []).filter(
+    (chart) => chart.key !== "slotsUsed",
+  );
   return (
     <>
-      <div className="overview-range">
-        <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
-        {ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
-      </div>
+      <Toolbar
+        start={
+          <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
+        }
+        end={ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
+      />
       {ready?.refusal === undefined ? null : <Refusal message={ready.refusal} />}
       <StatRow label="Fleet at a glance">
         {overview.tiles.map((tile) => (
           <StatTile key={tile.label} {...tile} />
         ))}
-        {ready === undefined ? (
+        {overview.wait === undefined ? (
           <li className="stat">
             <div className="stat-body">
               <FigureNote figures={figures} />
             </div>
           </li>
-        ) : null}
+        ) : (
+          <StatTile {...overview.wait} />
+        )}
+        <StatTile {...overview.ending} />
       </StatRow>
       <Row>
+        <NeedsYou inbox={overview.inbox} />
+        <Panel title="Capacity · all workers">
+          <div className="capacity">
+            {overview.capacity.map((platform) => (
+              <PlatformBar key={platform.name} platform={platform} />
+            ))}
+          </div>
+        </Panel>
+      </Row>
+      <Row even>
         {leases === undefined ? (
           <Panel title="Figures">
             <FigureNote figures={figures} />
           </Panel>
         ) : (
-          <FigureChartPanel chart={leases} />
+          <ChartPanel chart={leases} />
         )}
-        <Panel title="Capacity">
-          <div className="capacity">
-            {overview.platforms.map((platform) => (
-              <PlatformBar key={platform.name} platform={platform} />
-            ))}
-            <SlotLegend />
-          </div>
-        </Panel>
+        {others.map((chart) => (
+          <ChartPanel key={chart.key} chart={chart} />
+        ))}
       </Row>
-      {others.length === 0 ? null : (
-        <Row even>
-          {others.map((chart) => (
-            <FigureChartPanel key={chart.key} chart={chart} />
-          ))}
-        </Row>
-      )}
-      <Row>
-        <Panel
-          title="Workers"
-          flush
-          actions={<Link to="/workers">All {overview.workers.length}</Link>}
-        >
-          <WorkerTable workers={overview.workers} />
-        </Panel>
-        <div className="overview-side">
-          <Panel title="Attention" flush>
-            <AttentionList items={overview.attention} />
-          </Panel>
-          <Panel title="Activity" flush actions={<Link to="/events">All events</Link>}>
-            <ActivityList rows={overview.activity} />
-          </Panel>
-        </div>
-      </Row>
+      <Panel title="Workers" flush actions={<Link to="/fleet">Open Fleet</Link>}>
+        <WorkersTable rows={overview.workers} empty="No workers have connected." />
+      </Panel>
     </>
   );
 }
 
-function PlatformBar({ platform }: { readonly platform: PlatformUse }) {
-  const known = platform.running !== undefined && platform.limit !== undefined;
+function PlatformBar({ platform }: { readonly platform: PlatformCapacity }) {
+  const words = platform.parts.map((part) => `${part.count} ${part.word}`).join(", ");
+  const notRead =
+    platform.notRead === 0
+      ? null
+      : platform.notRead === 1
+        ? "1 worker not read yet"
+        : `${platform.notRead} workers not read yet`;
   return (
     <div className="platform">
       <p className="platform-head">
         <span>{platform.name}</span>
-        <span className="mono">
-          {!known ? (
-            <span className="muted">—</span>
-          ) : (
-            <>
-              {platform.running} <span className="muted">of {platform.limit} running</span>
-            </>
-          )}
-        </span>
+        {notRead === null ? null : <span className="muted">{notRead}</span>}
       </p>
-      {known ? (
-        <ShareBar
-          shares={[
-            { kind: "leased", percent: platform.leasedPercent },
-            { kind: "ready", percent: platform.readyPercent },
-            { kind: "busy", percent: platform.busyPercent },
-          ]}
-        />
-      ) : null}
+      <span role="img" aria-label={`${platform.name}: ${words === "" ? "no devices" : words}`}>
+        <ShareBar shares={platform.parts} />
+      </span>
+      <ul className="platform-parts">
+        {platform.parts.map((part) => (
+          <li key={part.kind}>
+            <span className={`slot slot-${part.kind}`} aria-hidden="true" />
+            <span className="mono">{part.count}</span> {part.word}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
 
-function GaugeCell({ gauge }: { readonly gauge: Gauge | undefined }) {
-  if (gauge === undefined) return <span className="gauge muted">—</span>;
+function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
+  const unchecked =
+    inbox.couldNotCheck.length === 0 ? null : (
+      <p className="muted">{`Could not check: ${inbox.couldNotCheck.join(", ")}`}</p>
+    );
+  if (inbox.problems === 0) {
+    return (
+      <Panel title="Needs you">
+        {unchecked ?? <p className="muted needs-you-none">Nothing needs you</p>}
+      </Panel>
+    );
+  }
   return (
-    <span className="gauge">
-      <Meter percent={gauge.percent} tone={gauge.tone} size="thin" />
-      <span className="mono">{gauge.text}</span>
-    </span>
-  );
-}
-
-function WorkerTable({ workers }: { readonly workers: readonly OverviewWorker[] }) {
-  if (workers.length === 0) return <Empty>No workers have connected.</Empty>;
-  return (
-    <table className="table worker-table">
-      <thead>
-        <tr>
-          <th scope="col">Worker</th>
-          <th scope="col">Devices</th>
-          <th scope="col">CPU</th>
-          <th scope="col">Memory</th>
-          <th scope="col" className="num">
-            Leases
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {workers.map((worker) => (
-          <tr key={worker.id}>
-            <td data-label="Worker">
-              <span className="worker-name">
-                <StatusDot tone={worker.health.tone} label={worker.health.word} />
-                <Link to={worker.to}>{worker.name}</Link>
-              </span>
-            </td>
-            <td data-label="Devices">
-              <Slots slots={worker.slots} label={worker.slotsLabel} />
-            </td>
-            <td data-label="CPU">
-              <GaugeCell gauge={worker.cpu} />
-            </td>
-            <td data-label="Memory">
-              <GaugeCell gauge={worker.memory} />
-            </td>
-            <td data-label="Leases" className="num">
-              {worker.leases ?? <span className="muted">—</span>}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function AttentionList({ items }: { readonly items: readonly OverviewItem[] }) {
-  if (items.length === 0) return <Empty>Nothing needs attention.</Empty>;
-  return (
-    <ul className="overview-list">
-      {items.map((item) => (
-        <li key={item.key}>
-          <Link to={item.to} className="overview-row">
-            <Status tone={item.tone}>{item.word}</Status>
-            <span className="overview-row-aside">{item.subject}</span>
-          </Link>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ActivityList({ rows }: { readonly rows: readonly OverviewActivity[] }) {
-  if (rows.length === 0) return <Empty>No events in the last hour.</Empty>;
-  return (
-    <ul className="overview-list">
-      {rows.map((row) => (
-        <li key={row.key}>
-          <Link to={row.to} className="overview-row activity-row">
-            <span className="mono muted">{row.time}</span>
-            <span className={row.tone === undefined ? "mono" : `mono event-${row.tone}`}>
-              {row.name}
-            </span>
-            <span className="activity-text">{row.text}</span>
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <div className="overview-side">
+      <Panel title="Needs you" flush>
+        <ul className="overview-list">
+          {inbox.needsYou.map((item) => (
+            <li key={item.key}>
+              <Link to={item.to} className="overview-row">
+                <Status tone={item.tone}>{item.word}</Status>
+                <span className="overview-row-aside">{item.subject}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <p className="overview-all">
+          <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
+        </p>
+      </Panel>
+      {unchecked}
+    </div>
   );
 }

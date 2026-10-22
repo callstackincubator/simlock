@@ -43,7 +43,7 @@ the status is stale.
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
-| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034 |
+| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by 0039 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted; §2 narrowed by 0032 (the event record is a database) |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted |
 | [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android |
@@ -61,10 +61,10 @@ the status is stale.
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — partly implemented: §5 (usage figures) is not built |
 | [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Proposed; amends 0001 §3 and §5, 0015 §3 and 0019 §1–2 for physical devices |
-| [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off) |
+| [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by 0043 |
 | [0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) | Leasing calls lease-end participants before it reclaims a device | Accepted |
 | [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted |
-| [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies |
+| [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies; §3's in-process link narrowed by 0043 |
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
@@ -75,4 +75,9 @@ the status is stale.
 | [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted — not yet implemented |
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
+| [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
 | [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented |
+| [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented |
+| [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented |
+| [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
+| [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part |

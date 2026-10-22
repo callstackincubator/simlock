@@ -1,6 +1,7 @@
 import "./usage.css";
 
 import {
+  ChartPanel,
   ChoiceChips,
   type Column,
   DataTable,
@@ -10,6 +11,7 @@ import {
   Refusal,
   StatRow,
   StatTile,
+  Toolbar,
 } from "../../ds";
 import { type ConsoleRange, RANGE_CHOICES } from "../../state/range";
 import {
@@ -116,10 +118,12 @@ export function UsageBody(props: {
   const ready = state.kind === "ready" ? state : undefined;
   return (
     <>
-      <div className="usage-range">
-        <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
-        {ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
-      </div>
+      <Toolbar
+        start={
+          <ChoiceChips legend="Range" choices={RANGE_CHOICES} value={range} onChange={onRange} />
+        }
+        end={ready?.data.note === undefined ? null : <p className="muted">{ready.data.note}</p>}
+      />
       {state.kind === "loading" ? <p className="muted loaded-note">Loading…</p> : null}
       {state.kind === "refused" ? <Refusal message={state.message} /> : null}
       {ready === undefined ? null : (
@@ -144,6 +148,7 @@ function Figures(props: {
           <StatTile key={tile.label} {...tile} />
         ))}
       </StatRow>
+      {view.slots === undefined ? null : <ChartPanel chart={view.slots} />}
       <div className="usage-stack">
         <div className="usage-panels">
           <Counts
@@ -152,7 +157,7 @@ function Figures(props: {
             rows={view.bySource}
             empty="No grants in this range."
           />
-          <Panel title="Durations">
+          <Panel title="Durations" className="usage-span">
             <DataTable
               label="Durations"
               rows={view.durations}
@@ -160,7 +165,6 @@ function Figures(props: {
               rowId={(row) => row.name}
               empty="No durations."
               paging={wholePage(view.durations.length)}
-              wide
             />
           </Panel>
           <Counts
@@ -169,7 +173,7 @@ function Figures(props: {
             rows={view.rejections}
             empty="No requests were rejected."
           />
-          <Panel title="Use over the range">
+          <Panel title="Use over the range" className="usage-span">
             <DataTable
               label="Use over the range"
               rows={view.use}

@@ -118,6 +118,7 @@ export {
   Doctor,
   isStalledTransition,
   type OptionalModuleFinding,
+  type ServiceCheck,
   type StallInput,
 } from "./doctor.js";
 export { StartupRead } from "./startup-read.js";

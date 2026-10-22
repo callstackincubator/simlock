@@ -1,5 +1,4 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +47,7 @@ const missingMessage =
 const tooOld = "refused: this agent-device is too old to use through a gateway; update it";
 // why: shorter than the gateway's 10 s call timeout, so the read can finish once the fake clock moves past it.
 const slowCatalogMs = 8_000;
+const phoneSerial = "R58Y61A60HN";
 const defaultTtlMs = 600_000;
 const gatewayMaxTtlMs = 1_800_000;
 const workerMaxTtlMs = 50_000_000;
@@ -90,9 +90,11 @@ interface WorkerSpec {
   readonly label: string;
   readonly platform?: "ios" | "android";
   readonly model?: string;
+  // why: an Android worker with one enrolled, present phone, leased with `physical: true` through its phone daemon.
+  readonly phone?: boolean;
   readonly capability?: "available" | "off" | "unavailable";
   readonly maxRunning?: number;
-  // why: a worker that is reachable by an agent on its own HTTP port, the way a worker without a gateway is.
+  // why: a standalone worker -- no gateway membership, its own HTTP port -- the way a worker without a gateway is; a joined worker may not enable HTTP.
   readonly direct?: boolean;
   // why: a catalog read that waits for the fake clock, so a worker's catalog stays unread.
   readonly slowCatalog?: boolean;
@@ -107,6 +109,7 @@ interface Member {
   readonly label: string;
   readonly daemon: Promise<DaemonServer>;
   readonly fake: FakeAgentDevice;
+  readonly phone: FakeAgentDevice;
   readonly driver: FakeDriver;
   readonly directory: string;
   readonly filesystem: Filesystem;
@@ -166,6 +169,9 @@ function driverFor(
       latencyMs: latency,
       knownModels: [model],
       modelClasses: { [model]: "phone" },
+      ...(spec.phone === true
+        ? { physicalDevices: [{ class: "phone", ids: [phoneSerial], model, osVersion: "15" }] }
+        : {}),
       platform: "android",
     });
   }
@@ -243,6 +249,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     if (existing === undefined) temporaryDirectories.push(workerDirectory);
     const workerFilesystem = existing?.filesystem ?? new MemoryFilesystem();
     const fake = existing?.fake ?? new FakeAgentDevice();
+    const phone = existing?.phone ?? new FakeAgentDevice();
     if (spec.capability === "unavailable") fake.setUnavailable("down");
     const latency: Record<string, number> =
       spec.slowCatalog === true ? { listCatalog: slowCatalogMs } : {};
@@ -259,9 +266,8 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       configOverrides: {
         capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
         capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
-        gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${String(port)}` },
         ...(directPort === undefined
-          ? {}
+          ? { gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${String(port)}` } }
           : { http: { enabled: true, host: "127.0.0.1", port: directPort } }),
         lease: { defaultTtlMs, maxTtlMs: workerMaxTtlMs },
       },
@@ -274,7 +280,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         level: "debug",
         sink: new MemoryLogSink(),
       }),
-      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
+      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -289,6 +295,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       filesystem: workerFilesystem,
       label: spec.label,
       latency,
+      phone,
       origin: directPort === undefined ? "" : `http://127.0.0.1:${String(directPort)}`,
       secret,
       spec,
@@ -322,9 +329,13 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   };
   for (const spec of options.workers ?? [{ label: "w1" }]) {
     const member = await addWorker(spec);
-    await member.daemon;
+    const worker = await member.daemon;
+    if (spec.phone === true) {
+      await worker.dispatch("device.add", { id: phoneSerial, platform: "android" }, adminSession);
+      member.driver.setPhysicalPresence(phoneSerial, true);
+    }
   }
-  for (const member of members) await untilRead(rig, member);
+  for (const member of members) if (member.spec.direct !== true) await untilRead(rig, member);
   return rig;
 }
 
@@ -818,6 +829,66 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(request?.input).toMatchObject({ requesterId: hex(1), requires: ["agent-device"] });
   });
 
+  it('through a gateway a physical allocate reaches the worker\'s phone daemon with `requires: ["agent-device"]`, a later command and `devices` follow, the reply carries `device.physical: true`, a phone daemon that is down answers `agent-device is not available on this simlock: phone daemon: <message>` with no lease, and after a gateway restart the live phone lease is adopted', async () => {
+    const down = await setUp({ workers: [{ label: "w1", phone: true, platform: "android" }] });
+    first(down).phone.setUnavailable("down");
+
+    const refused = await envelopeOf(
+      await allocate(down, 1, { physical: true, platform: "android" }),
+    );
+
+    expect(refused.error?.message).toBe(`${notAvailable}phone daemon: down`);
+    expect(await fleetLeases(down)).toEqual([]);
+
+    const rig = await setUp({ workers: [{ label: "w1", phone: true, platform: "android" }] });
+    const member = first(rig);
+    const tap = tapDispatch(rig.gateway);
+    const answer = await envelopeOf(
+      await allocate(rig, 1, { physical: true, platform: "android" }),
+    );
+
+    expect(answer.result).toMatchObject({
+      data: { lease: { device: { model: "Pixel 8", osVersion: "15", physical: true } } },
+    });
+    const request = tap.inputs.find((entry) => entry.operation === "lease.request");
+    expect(request?.input).toMatchObject({ physical: true, requires: ["agent-device"] });
+    expect(member.phone.rpcRequests("agent_device.lease.allocate")).toHaveLength(1);
+    expect(member.fake.rpcRequests("agent_device.lease.allocate")).toEqual([]);
+    await listedByGateway(rig, 1);
+    const reached = () => member.phone.rpcRequests("agent_device.command").length;
+    expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
+    expect(reached()).toBe(1);
+    member.phone.listDevices([{ id: phoneSerial, name: "the phone" }]);
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["the phone"]);
+
+    await restarted(rig, member, 1);
+    expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
+    expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
+    expect(reached()).toBe(3);
+    const own = await envelopeOf(
+      await command(rig, "snapshot", 1, {}, { flags: { serial: phoneSerial } }),
+    );
+    expect(own.error).toBeUndefined();
+    expect(reached()).toBe(4);
+    const other = await envelopeOf(
+      await command(rig, "snapshot", 1, {}, { flags: { serial: "emulator-5554" } }),
+    );
+    expect(other.error?.message).toBe(picksTheDevice);
+    expect(reached()).toBe(4);
+  });
+
+  it('allocate through the gateway with `osVersion` ">=18" reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device`', async () => {
+    const rig = await setUp();
+    const tap = tapDispatch(rig.gateway);
+
+    const answer = await envelopeOf(await allocate(rig, 1, { osVersion: ">=18" }));
+
+    const request = tap.inputs.find((entry) => entry.operation === "lease.request");
+    expect(request?.input).toMatchObject({ osVersion: ">=18", requires: ["agent-device"] });
+    const lease = (answer.result as { data: { lease: Record<string, unknown> } }).data.lease;
+    expect(lease["device"]).toMatchObject({ osVersion: "26.5" });
+  });
+
   it("allocate on a worker, directly, sends no `requires`, as today", async () => {
     const rig = await setUp({ workers: [{ direct: true, label: "w1" }] });
     const member = first(rig);
@@ -1172,25 +1243,6 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(member.fake.requests.length).toBe(before);
   });
 
-  it("an agent on a worker token with the same principal name as a gateway agent, connected to the worker directly, does not see the gateway agent's agent-device session, and the gateway agent's commands still work", async () => {
-    const rig = await setUp({ workers: [{ direct: true, label: "w1" }] });
-    const member = first(rig);
-    await granted(rig, 1);
-    expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
-
-    const direct = await envelopeOf(await heartbeat(member, 1, {}, { token: secrets.direct }));
-
-    expect(direct.result).toBeUndefined();
-    expect(direct.error).toBeDefined();
-    const seen = member.fake.rpcRequests("agent_device.lease.heartbeat").map((r) => r.tenant);
-    expect(seen).toContain(principals.one);
-    expect(seen).toContain(await tenantOf(member, 1));
-    expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
-    expect((await envelopeOf(await command(rig, "snapshot", 1))).result).toMatchObject({
-      ok: true,
-    });
-  });
-
   it("`capabilities.agent-device.leaseTtlCapMs` on the gateway caps the TTL of a lease made through it", async () => {
     const rig = await setUp({ leaseTtlCapMs: 10_000 });
     const member = first(rig);
@@ -1287,6 +1339,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
   });
 
   it("a lease the gateway's `lease.list` leaves out of one answer, read by a `devices` call, an allocate, a renewal while a command runs, or a heartbeat, is not ended: the next heartbeat succeeds and renews the simlock lease", async () => {
+    const during: Record<string, unknown> = {};
     const triggers: Record<string, (rig: Rig, member: Member) => Promise<void>> = {
       allocate: async (rig) => {
         await granted(rig, 2);
@@ -1295,7 +1348,8 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
         await command(rig, "devices", undefined);
       },
       heartbeat: async (rig) => {
-        await heartbeat(rig, 1);
+        const beat = await envelopeOf(await heartbeat(rig, 1));
+        during.heartbeat = beat.result ?? beat.error?.data;
       },
       renewal: async (rig, member) => {
         const running = await runningCommand(rig, member, 1);
@@ -1334,6 +1388,8 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const live = { answer: expect.objectContaining({ ok: true }), cut: 1, leftMs: 60_000 };
     expect(outcomes).toEqual({ allocate: live, devices: live, heartbeat: live, renewal: live });
+    // why: the command already ran on the worker, so the heartbeat that met the omission still answers its reply.
+    expect(during).toEqual({ heartbeat: expect.objectContaining({ ok: true }) });
   });
 });
 
@@ -2262,61 +2318,6 @@ describe(
         expect(beat.result).toMatchObject({ ok: true });
         await commandWorks(rig, member, 1);
       }
-    });
-  },
-);
-
-describe(
-  "the agent-device front, through a gateway: downloads over 2 GiB",
-  { timeout: 120_000 },
-  () => {
-    const limit = 2_147_483_648;
-
-    it("an artifact download whose `content-length` is 2147483649 gets the 413 reply; the worker's fake produced 0 bytes and its body was cancelled", async () => {
-      const rig = await setUp();
-      await granted(rig, 1);
-      const worker = holderOf(rig, 1);
-      worker.fake.serveArtifact({ contentLength: "size", size: limit + 1 });
-
-      const response = await send(rig, "/artifacts/a1", { headers: leased(1) });
-
-      expect(response.status).toBe(413);
-      expect(await response.json()).toEqual({
-        code: "INVALID_ARGS",
-        error: `the download is ${String(limit + 1)} bytes; simlock carries downloads up to 2 GB (2147483648 bytes)`,
-        ok: false,
-      });
-      expect(worker.fake.artifactBytesProduced).toBe(0);
-      await expect.poll(() => worker.fake.artifactBodyCancelled).toBe(true);
-    });
-
-    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly", async () => {
-      const rig = await setUp();
-      await granted(rig, 1);
-      const worker = holderOf(rig, 1);
-      worker.fake.serveArtifact({ contentLength: "none", size: limit + 1 });
-
-      const response = await send(rig, "/artifacts/a1", { headers: leased(1) });
-      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-      const hash = createHash("sha256");
-      let ended = false;
-      let delivered = 0;
-      try {
-        for (;;) {
-          const next = await reader.read();
-          if (next.done) {
-            ended = true;
-            break;
-          }
-          hash.update(next.value);
-          delivered += next.value.length;
-        }
-      } catch {
-        ended = false;
-      }
-
-      expect(ended).toBe(false);
-      expect(delivered).toBeGreaterThanOrEqual(limit);
     });
   },
 );

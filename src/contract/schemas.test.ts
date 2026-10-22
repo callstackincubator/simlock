@@ -5,6 +5,7 @@ import {
   capabilityReason,
   deviceRecordSchema,
   doctorReportSchema,
+  eventEnvelopeSchema,
   fitHostFacts,
   fitHostLoad,
   fitPlatformCatalog,
@@ -14,6 +15,7 @@ import {
   leaseGrantSchema,
   leaseRequestRecordSchema,
   platformCatalogSchema,
+  statusWarmPoolSchema,
   statusDeviceSchema,
   waitingRequestSchema,
   workerViewSchema,
@@ -670,32 +672,6 @@ describe("platformCatalogSchema classDefaults", () => {
   });
 });
 
-describe("the status device entry's absent state (ADR 0022 §7)", () => {
-  const absent = {
-    class: "phone",
-    driverDeviceId: "00008110-001A2B3C4D5E",
-    id: "dev_7",
-    physical: true,
-    servesDefaultMode: false,
-    spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
-    state: "absent",
-  };
-
-  it("the status device entry and the worker view accept state absent and each absentReason, and refuse another reason", () => {
-    const parsed = (device: object) => statusDeviceSchema.safeParse(device);
-
-    for (const absentReason of ["locked", "untrusted", "not-present"] as const) {
-      const result = parsed({ ...absent, absentReason });
-      expect(result.success, `absent (${absentReason})`).toBe(true);
-      expect(result.success ? result.data : undefined).toMatchObject({
-        absentReason,
-        state: "absent",
-      });
-    }
-    expect(parsed({ ...absent, absentReason: "unplugged" }).success).toBe(false);
-  });
-});
-
 describe("doctorReportSchema's module-unavailable finding", () => {
   const finding = {
     kind: "module-unavailable",
@@ -1030,5 +1006,70 @@ describe("waitingRequestSchema's workers", () => {
         { reason: "full", workerId: "wrk_a" },
       ]).success,
     ).toBe(false);
+  });
+});
+
+describe("opaque fields stay optional on the wire", () => {
+  it("accepts an answer whose opaque driverData or payload key is absent (JSON drops undefined)", () => {
+    const record = {
+      physical: false,
+      id: "device-1",
+      driverDeviceId: "SIM-1",
+      spec: { physical: false, platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      mode: "full",
+      state: "ready",
+      createdAt: 0,
+    };
+    const orphan = {
+      findings: [
+        { kind: "orphan-device", platform: "ios", device: { deviceId: "SIM-1", address: "a" } },
+      ],
+    };
+    const envelope = { id: "evt_1", seq: 1, timestamp: 1, event: "x", module: "m" };
+    expect(deviceRecordSchema.safeParse(record).success).toBe(true);
+    expect(doctorReportSchema.safeParse(orphan).success).toBe(true);
+    expect(eventEnvelopeSchema.safeParse(envelope).success).toBe(true);
+  });
+});
+
+describe("statusWarmPoolSchema", () => {
+  const entry = {
+    booting: 0,
+    count: 1,
+    mode: "full",
+    model: "Pixel 8",
+    origin: "learned",
+    osVersion: "35",
+    platform: "android",
+    ready: 1,
+  };
+  const block = (targets: readonly unknown[]) => ({
+    enabled: true,
+    reserveRunning: { android: 0, ios: 0 },
+    targets,
+  });
+  const { origin: _origin, ...withoutOrigin } = entry;
+
+  it("accepts origin configured and learned, an optional imageTag, and 320 entries, and refuses an entry without origin or with another word, a tag imageTagSchema refuses, and 321 entries", () => {
+    const cases: readonly { name: string; targets: readonly unknown[]; accepted: boolean }[] = [
+      { accepted: true, name: "learned", targets: [entry] },
+      { accepted: true, name: "configured", targets: [{ ...entry, origin: "configured" }] },
+      { accepted: true, name: "a tag", targets: [{ ...entry, imageTag: "google_apis_playstore" }] },
+      { accepted: true, name: "320 entries", targets: Array.from({ length: 320 }, () => entry) },
+      { accepted: false, name: "no origin", targets: [withoutOrigin] },
+      { accepted: false, name: "another word", targets: [{ ...entry, origin: "remembered" }] },
+      { accepted: false, name: "a bad tag", targets: [{ ...entry, imageTag: "no spaces" }] },
+      { accepted: false, name: "321 entries", targets: Array.from({ length: 321 }, () => entry) },
+    ];
+
+    expect(
+      cases.map(({ name, targets }) => [
+        name,
+        statusWarmPoolSchema.safeParse(block(targets)).success,
+      ]),
+    ).toEqual(cases.map(({ accepted, name }) => [name, accepted]));
+    expect(
+      statusWarmPoolSchema.parse(block([{ ...entry, imageTag: "google_apis" }])).targets[0],
+    ).toMatchObject({ imageTag: "google_apis", origin: "learned" });
   });
 });

@@ -1,11 +1,12 @@
 import type { Page, Route } from "@playwright/test";
 
 interface WorkerPayload {
-  load?:
-    | {
-        memory?: { availableBytes?: number; pressure?: string; totalBytes?: number } | undefined;
-      }
-    | undefined;
+  connection?: string;
+  load?: unknown;
+}
+
+interface LoadPayload {
+  memory?: { availableBytes?: number; pressure?: string; totalBytes?: number } | undefined;
 }
 
 // why: the page re-reads the list every second, so a re-read can be intercepted just as the test's
@@ -31,6 +32,21 @@ export interface MemoryClaim {
   readonly usedPercent: number;
 }
 
+// why: the three answers below differ only in what they do to each worker of the daemon's own
+// answer, so the route, the connect-error rule and the real headers are written once.
+async function editWorkers(page: Page, edit: (worker: WorkerPayload) => void): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/v1/workers",
+    async (route: Route) => {
+      const response = await fetchOrDrop(route);
+      if (response === undefined) return;
+      const listed = (await response.json()) as { workers: WorkerPayload[] };
+      for (const worker of listed.workers) edit(worker);
+      await route.fulfill({ json: listed, response });
+    },
+  );
+}
+
 /**
  * why: only macOS reports a memory pressure, and how full a CI machine's memory happens to be is
  * nobody's to predict — so the colour test states the memory reading it wants and this writes just
@@ -38,24 +54,15 @@ export interface MemoryClaim {
  * real. The route is asked again per request, so the reading stays as fresh as the daemon's own.
  */
 export async function answerMemory(page: Page, claim: () => MemoryClaim): Promise<void> {
-  await page.route(
-    (url) => url.pathname === "/v1/workers",
-    async (route: Route) => {
-      const response = await fetchOrDrop(route);
-      if (response === undefined) return;
-      const listed = (await response.json()) as { workers: WorkerPayload[] };
-      for (const worker of listed.workers) {
-        const memory = worker.load?.memory;
-        const total = memory?.totalBytes;
-        if (memory === undefined || typeof total !== "number" || total <= 0) continue;
-        const wanted = claim();
-        memory.availableBytes = Math.round((total * (100 - wanted.usedPercent)) / 100);
-        if (wanted.pressure === undefined) delete memory.pressure;
-        else memory.pressure = wanted.pressure;
-      }
-      await route.fulfill({ json: listed, response });
-    },
-  );
+  await editWorkers(page, (worker) => {
+    const memory = (worker.load as LoadPayload | undefined)?.memory;
+    const total = memory?.totalBytes;
+    if (memory === undefined || typeof total !== "number" || total <= 0) return;
+    const wanted = claim();
+    memory.availableBytes = Math.round((total * (100 - wanted.usedPercent)) / 100);
+    if (wanted.pressure === undefined) delete memory.pressure;
+    else memory.pressure = wanted.pressure;
+  });
 }
 
 /**
@@ -64,14 +71,32 @@ export async function answerMemory(page: Page, claim: () => MemoryClaim): Promis
  * answers the page's read of the worker list without the load reading, so only the states are left.
  */
 export async function answerWithoutLoad(page: Page): Promise<void> {
-  await page.route(
-    (url) => url.pathname === "/v1/workers",
-    async (route: Route) => {
-      const response = await fetchOrDrop(route);
-      if (response === undefined) return;
-      const listed = (await response.json()) as { workers: WorkerPayload[] };
-      for (const worker of listed.workers) delete worker.load;
-      await route.fulfill({ json: listed, response });
-    },
-  );
+  await editWorkers(page, (worker) => {
+    delete worker.load;
+  });
+}
+
+/**
+ * why: a table test that states exact CPU, memory and disk figures cannot use the machine's own
+ * reading, so every connected worker is answered with this one, in the shape the daemon sends it.
+ */
+export async function answerWithLoad(
+  page: Page,
+  load: { readonly cpu: number; readonly memory: number; readonly disk: number },
+): Promise<void> {
+  const GIB = 1024 ** 3;
+  await editWorkers(page, (worker) => {
+    if (worker.connection !== "connected") return;
+    worker.load = {
+      cpu: { busyPercent: load.cpu, cores: 8, limited: false },
+      disk: { freeBytes: ((100 - load.disk) / 100) * 500 * GIB, totalBytes: 500 * GIB },
+      memory: {
+        availableBytes: ((100 - load.memory) / 100) * 32 * GIB,
+        limited: false,
+        swapUsedBytes: 0,
+        totalBytes: 32 * GIB,
+      },
+      readAt: Date.now(),
+    };
+  });
 }

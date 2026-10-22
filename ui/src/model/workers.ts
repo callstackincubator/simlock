@@ -15,7 +15,7 @@ export function workerName(worker: WorkerView): string {
 
 // why: ids are opaque, so the id is encoded.
 export function workerPath(id: string): `/${string}` {
-  return `/workers/${encodeURIComponent(id)}`;
+  return `/fleet/${encodeURIComponent(id)}`;
 }
 
 const PLATFORM_NAMES: Readonly<Partial<Record<string, string>>> = {
@@ -71,7 +71,8 @@ export type WarmPoolRow = WarmTarget & { readonly key: string };
 export function warmPoolRows(targets: readonly WarmTarget[]): WarmPoolRow[] {
   const seen = new Map<string, number>();
   return targets.map((target) => {
-    const kind = `${target.platform}-${target.model}-${target.osVersion}-${target.mode}`;
+    const tag = target.imageTag === undefined ? "" : `-${target.imageTag}`;
+    const kind = `${target.platform}-${target.model}-${target.osVersion}-${target.mode}${tag}`;
     const occurrence = seen.get(kind) ?? 0;
     seen.set(kind, occurrence + 1);
     return { ...target, key: `${kind}#${occurrence}` };

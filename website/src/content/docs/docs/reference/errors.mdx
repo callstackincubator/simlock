@@ -83,7 +83,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection before it finished. The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause (often the configuration), and run the command again. |
+| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection during the handshake or before the startup check finished. The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause (often the configuration), and run the command again. |
 | `DAEMON_CONNECTION_LOST` | 1 | 503 | The connection to the daemon dropped mid-command. A lease held by `simlock lease` is not released and stays yours until its deadline. | Start the daemon again; renew the lease with `simlock lease renew <lease-id>` or let it expire. |
 | `DAEMON_STOPPING` | 1 | 503 | The daemon is shutting down, or stopped while an install was running. | Run the command again once the daemon is back. |
 | `PROTOCOL_VERSION_UNSUPPORTED` | 1 | 400 | The CLI and the running daemon are different Simlock versions that cannot talk to each other. | Restart the daemon after an upgrade: `simlock daemon stop`, then any command. |
@@ -131,5 +131,6 @@ The CLI and the HTTP API each add a few codes of their own:
 | --- | --- | --- | --- | --- |
 | `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
 | `UNAUTHENTICATED` | HTTP | 401 | The request has no token, or one the daemon does not accept. | Send a valid token as `Authorization: Bearer <token>`. |
+| `UNSUPPORTED_MEDIA_TYPE` | HTTP | 415 | A request with a JSON body did not send `Content-Type: application/json`. | Send the header `Content-Type: application/json`. |
 | `UNKNOWN_LEASE_REQUEST` | HTTP | 404 | No lease request has this ID. | Check the ID the create call returned. |
 | `REQUEST_NOT_CANCELLABLE` | HTTP | 409 | The lease request was already granted, or device work for it is under way. When it was granted, the answer carries the `leaseId`. | Release the lease in place of cancelling the request. |

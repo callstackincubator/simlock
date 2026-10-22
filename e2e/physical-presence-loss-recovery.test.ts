@@ -82,7 +82,7 @@ describe("a physical reclaim that fails while the device is gone makes it absent
 
     expect(row?.state).toBe("quarantined");
     expect(await payloadsOf(env, "device.purge-failed")).toContainEqual(
-      expect.objectContaining({ deviceId: LEASED.id }),
+      expect.objectContaining({ attemptedStrategy: "uninstall", deviceId: LEASED.id }),
     );
     expect(await payloadsOf(env, "device.quarantined")).toContainEqual(
       expect.objectContaining({ deviceId: LEASED.id }),

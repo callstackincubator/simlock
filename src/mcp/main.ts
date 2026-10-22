@@ -7,15 +7,18 @@ import { resolveRequesterId } from "../agent-identity/index.js";
 import type { SimlockClient } from "../client/index.js";
 import { gatewayNotPresentError } from "../contract/index.js";
 import {
-  NodeDaemonLauncher,
+  launcherFor,
   NodeFilesystem,
   NodeIpcTransport,
+  NodeProcessRunner,
+  productionServiceManager,
   resolveDaemonHome,
   resolveDaemonSocketPath,
   resolveSimlockHome,
   SystemClock,
   type Clock,
   type DaemonFlag,
+  type ServiceManager,
 } from "../ports/index.js";
 import { connectToRunningDaemon, connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
@@ -53,6 +56,7 @@ export interface McpStdioEnvironment {
   readonly env?: NodeJS.ProcessEnv;
   readonly daemonFlag?: DaemonFlag;
   readonly requesterId?: string;
+  readonly serviceManager?: ServiceManager;
   readonly signals?: Signals;
   /** The stdio transport currently does not surface stdin EOF as onclose. */
   readonly stdin?: StdinLifecycle;
@@ -82,7 +86,12 @@ export async function startMcpStdio(
   // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
   // loop must not be able to disagree about what time it is (architecture rule 9).
   const clock = environment.clock ?? new SystemClock();
-  const defaults = defaultEnvironment(requesterId, clock, environment.daemonFlag);
+  const defaults = defaultEnvironment(
+    requesterId,
+    clock,
+    environment.daemonFlag,
+    environment.serviceManager,
+  );
   const session = new McpSession({
     clock,
     connect: environment.connect ?? defaults.connect,
@@ -164,10 +173,18 @@ function defaultEnvironment(
   requesterId: string,
   clock: Clock,
   flag: DaemonFlag,
+  injectedServiceManager: ServiceManager | undefined,
 ): Required<Pick<McpStdioEnvironment, "connect" | "connectForRenew" | "createTransport">> {
   const root = resolveSimlockHome();
   const filesystem = new NodeFilesystem();
   const ipc = new NodeIpcTransport();
+  const serviceManager =
+    injectedServiceManager ??
+    productionServiceManager(process.platform, {
+      runner: new NodeProcessRunner(),
+      filesystem,
+      uid: process.getuid?.() ?? 0,
+    });
   // why: resolved on every connect, so a gateway started after this session began is found, and
   // a throw (an over-long `SIMLOCK_HOME`, a missing gateway) is a tool error rather than a dead
   // server and a raw stack trace on the stdio channel an MCP client is speaking protocol over.
@@ -186,14 +203,13 @@ function defaultEnvironment(
       return connectWithAutoLaunch({
         clock,
         ipc,
-        launcher: new NodeDaemonLauncher({
-          args: [
-            join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
-            ...(role === "gateway" ? ["--gateway"] : []),
-          ],
-          command: process.execPath,
-          logPath: join(dataDirectory, "daemon.log"),
-          simlockHome: root,
+        launcher: launcherFor({
+          role,
+          root,
+          dataDirectory,
+          mainPath: join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
+          serviceManager,
+          notify: (line) => process.stderr.write(`${line}\n`),
         }),
         principal: requesterId,
         socketPath: resolveDaemonSocketPath(dataDirectory),

@@ -75,6 +75,7 @@ Branch on the exit code or on `code`; the message is for people and can change. 
 | `DAEMON_STARTUP_FAILED` | 1 | The CLI started the daemon and it did not come up, often because of a bad config file. The message says why. | Fix what the message names, then run the command again. `simlock daemon logs` shows the daemon's own log. |
 | `DAEMON_CONNECTION_LOST` | 1 | The daemon stopped or crashed while the command was talking to it. A held lease is not released. | Run the command again; the daemon starts on demand. Renew a held lease with `simlock lease renew <lease-id>`. |
 | `DAEMON_STOPPING` | 1 | The daemon is shutting down. | Wait a moment and run the command again. |
+| `SERVICE_FAILED` | 1 | `simlock daemon install`, `uninstall` or a start through the service could not finish: `launchctl` failed or ran past 10 s, or the old daemon did not stop within 300 s. The message names the command and its first error line. | Fix what the message names and run the command again. A failed load removes the service file. |
 | `GATEWAY_NOT_PRESENT` | 2 | You passed `--gateway`, but no gateway has run on this machine. | Drop `--gateway`, or start one with `simlock --gateway daemon start`. |
 | `PROTOCOL_VERSION_UNSUPPORTED` | 1 | The CLI and the running daemon are different versions that cannot talk. | After an upgrade, restart the daemon: `simlock daemon stop`, then any command. |
 

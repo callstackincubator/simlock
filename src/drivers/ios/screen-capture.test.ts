@@ -238,14 +238,10 @@ describe("iOS screen capture", () => {
     expect(await capture.unavailable()).toBeUndefined();
   });
 
-  it("reports streaming available when only the device program is missing, and the simulator program's reason when that one is", async () => {
+  it("reports streaming available when only the device program is missing", async () => {
     const { capture, filesystem } = await setup({ deviceCommand: DEVICE_COMMAND });
     await filesystem.rm(DEVICE_COMMAND);
     expect(await capture.unavailable()).toBeUndefined();
-
-    await filesystem.writeFileAtomic(DEVICE_COMMAND, "");
-    await filesystem.rm(COMMAND);
-    expect(await capture.unavailable()).toBe(`No screen capture program at ${COMMAND}`);
   });
 
   it("refuses as unavailable, and says why, when the capture program is not installed", async () => {

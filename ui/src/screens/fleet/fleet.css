@@ -1,0 +1,159 @@
+.figure-label {
+  margin: 0 0 var(--space-1);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.figure-text {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.figure-count {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xl);
+}
+
+.figure-detail {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+
+.figure-read {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.platform-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.device-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.device-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.device-sub {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+}
+
+.host-statuses {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.device-text,
+.device-name {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.device-text > *,
+.device-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-sub .id {
+  display: inline;
+  max-width: none;
+}
+
+.worker-line {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.worker-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A worker named by its id is a long UUID; one line, cut, with the whole id in its title. */
+.worker-name a {
+  display: block;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-system {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.worker-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 3rem;
+}
+
+.worker-banner {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--status-warn);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
+
+.device-drawer-body {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+}
+
+.worker-events {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.worker-events li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.worker-events li:last-child {
+  border-bottom: 0;
+}
+
+.worker-events li > :last-child {
+  grid-column: 2;
+}

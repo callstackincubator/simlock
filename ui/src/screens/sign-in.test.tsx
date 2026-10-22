@@ -13,7 +13,9 @@ function services() {
   const session = createSession(() => storage);
   return {
     api: createApiClient({ fetch, signOut: session.signOut, token: session.token }),
+    confirm: () => Promise.resolve(),
     fetch,
+    notify: () => undefined,
     preferences: createPreferences(() => storage),
     session,
   };

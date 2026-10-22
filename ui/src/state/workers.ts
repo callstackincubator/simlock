@@ -1,25 +1,36 @@
-import { useState } from "react";
-
+import type { MenuEntry } from "../ds";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
-import type { LeaseList, TokenList } from "../model/leases";
-import { listSearch, TABLE_SIZES } from "../model/paging";
-import { itemIdFrom } from "../model/paths";
+import type { LeaseDetails, LeaseList, TokenList } from "../model/leases";
+import { workerActions } from "../model/actions";
+import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging";
+import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
+  readFilter,
+  searchWorkers,
   upMeta,
   type WorkerFilter,
-  type WorkerInspector,
+  writeFilter,
+  type DeviceRow,
+  type WorkerPage,
   type WorkerRow,
-  workerInspectorOf,
+  type WorkerTab,
+  workerPageOf,
   workerRow,
+  writeWorkerTab,
 } from "../model/worker-page";
-import type { WorkerList, WorkerView } from "../model/workers";
-import { useLiveResource, useNow } from "./live";
+import { type WorkerList, workerPath } from "../model/workers";
+import { type EventRow, eventRows } from "../model/event-list";
+import { eventsOfWorker } from "../model/events";
+import { useActions } from "./actions";
+import { useRecentEvents } from "./events";
+import { useDaemonMode, useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { usePath, useSearch } from "./router";
+import { navigate, setSearch, usePath, useSearch } from "./router";
 
+export type { EventRow } from "../model/event-list";
 export type {
   CapabilityRow,
   DeviceRow,
@@ -28,90 +39,148 @@ export type {
   PlatformCard,
   WarmRow,
   WorkerFilter,
-  WorkerInspector,
+  WorkerPage,
   WorkerRow,
   WorkerTab,
 } from "../model/worker-page";
 // why: a screen's test builds the view model the same way the hook does, and a screen may import
 // no model, so the builders pass through here.
-export { WORKER_FILTERS, workerInspectorOf, workerRow } from "../model/worker-page";
+export { WORKER_FILTERS, workerPageOf, workerRow } from "../model/worker-page";
 export type { WorkerView } from "../model/workers";
 
-export interface WorkerInspectorView extends WorkerInspector {
+// why: the row's ⋯ menu reads the one list of actions a worker offers (ADR 0037 §3); on a single host
+// or before the mode is known it is empty.
+export function useWorkerMenu(): (row: WorkerRow) => readonly MenuEntry[] {
+  const { entries } = useActions();
+  const mode = useDaemonMode();
+  return (row) => entries(workerActions({ ...row, drained: !row.takesLeases }, mode));
+}
+
+// why: the worker page's header reads the same list of actions as the Fleet row (ADR 0037 §3).
+export function useWorkerPageMenu(page: WorkerPage): readonly MenuEntry[] {
+  const { entries } = useActions();
+  const mode = useDaemonMode();
+  return entries(
+    workerActions(
+      { connection: page.connection, drained: page.drained, id: page.id, name: page.title },
+      mode,
+    ),
+  );
+}
+
+export interface WorkerPageView extends WorkerPage {
+  readonly back: string;
+  readonly chooseTab: (tab: WorkerTab) => void;
   readonly devicesPaging: Paging;
   readonly warmPaging: Paging;
 }
 
-export interface WorkersPage {
+export interface FleetPage {
   readonly meta: string;
   readonly empty: boolean;
   readonly filter: WorkerFilter;
   readonly setFilter: (filter: WorkerFilter) => void;
+  readonly query: string;
+  readonly search: (query: string) => void;
   readonly rows: readonly WorkerRow[];
   readonly paging: Paging;
-  readonly chosen: string | undefined;
-  // why: the page is `detail` on a phone only when the URL names a worker.
-  readonly focus: "list" | "detail";
-  readonly inspector: WorkerInspectorView | undefined;
-  readonly missing: string | undefined;
 }
 
-export function useWorkers(): LoadView<WorkersPage> {
+// why: the address names the worker whose page is open, and the device whose drawer is open on it;
+// with no worker the fleet's table shows.
+export function useFleetAddress(): FleetAddress {
+  return fleetAddress(usePath());
+}
+
+export function useFleet(): LoadView<FleetPage> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   const search = useSearch();
-  const named = itemIdFrom("/workers", usePath());
-  const [filter, setFilter] = useState<WorkerFilter>("all");
-
+  const filter = readFilter(search);
   const ready = workers.kind === "ready";
-  const all = ready ? workers.data.workers : [];
-  const shown = filterWorkers(all, filter);
+  const query = readQuery(search);
+  const shown = searchWorkers(filterWorkers(ready ? workers.data.workers : [], filter), query);
   const paging = usePaging({ sizes: TABLE_SIZES, total: ready ? shown.length : undefined });
-  const chosenId = named ?? shown[0]?.id;
-  const chosen = all.find((worker) => worker.id === chosenId);
-  const inspector = useInspector(chosen, ready);
   const keep = listSearch(search);
 
-  return mapView(workers, (list) => {
-    const start = (paging.page - 1) * paging.size;
-    return {
-      chosen: chosenId,
-      empty: list.workers.length === 0,
-      filter,
-      focus: named === undefined ? "list" : "detail",
-      inspector,
-      meta: upMeta(list.workers),
-      missing: named !== undefined && chosen === undefined ? named : undefined,
-      paging,
-      rows: shown.slice(start, start + paging.size).map((worker) => workerRow(worker, keep)),
-      setFilter,
-    };
-  });
-}
-
-function inspectorTotals(chosen: WorkerView | undefined): { devices: number; warm: number } {
-  return {
-    devices: chosen?.devices?.length ?? 0,
-    warm: chosen?.warmPool?.targets.length ?? 0,
-  };
+  // why: the table cuts the page out of every row it is given.
+  return mapView(workers, (list) => ({
+    empty: list.workers.length === 0,
+    filter,
+    meta: upMeta(list.workers),
+    paging,
+    query,
+    rows: shown.map((worker) => workerRow(worker, keep)),
+    // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
+    // letter of the search.
+    search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
+    setFilter: (next) => setSearch(writeFilter(window.location.search, next), { replace: true }),
+  }));
 }
 
 // why: the holders' labels come from the token records and their lease links from the lease list;
 // while either has not arrived or was refused, a holder shows its id and the devices still show.
-function useInspector(
-  chosen: WorkerView | undefined,
-  ready: boolean,
-): WorkerInspectorView | undefined {
+// `undefined` is a worker the fleet does not list.
+export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> {
+  const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
   const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
   const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
   const now = useNow();
-  const totals = ready ? inspectorTotals(chosen) : undefined;
-  const devicesPaging = usePaging({ name: "devices", sizes: TABLE_SIZES, total: totals?.devices });
-  const warmPaging = usePaging({ name: "warm-pool", sizes: TABLE_SIZES, total: totals?.warm });
-  if (chosen === undefined) return undefined;
-  const leaseIds = leases.map((lease) => lease.id);
+  const search = useSearch();
+  const chosen =
+    workers.kind === "ready" ? workers.data.workers.find((worker) => worker.id === id) : undefined;
+  const devicesPaging = usePaging({
+    name: "devices",
+    sizes: TABLE_SIZES,
+    total: chosen === undefined ? undefined : (chosen.devices?.length ?? 0),
+  });
+  const warmPaging = usePaging({
+    name: "warm-pool",
+    sizes: TABLE_SIZES,
+    total: chosen === undefined ? undefined : (chosen.warmPool?.targets.length ?? 0),
+  });
+  return mapView(workers, () => {
+    if (chosen === undefined) return undefined;
+    const leaseIds = leases.map((lease) => lease.id);
+    return {
+      ...workerPageOf({ leaseIds, now: now.server, search, tokens, worker: chosen }),
+      back: `/fleet${listSearch(search)}`,
+      // why: each choice replaces the entry rather than adding one, so Back leaves the page, not
+      // the last tab.
+      chooseTab: (tab) => setSearch(writeWorkerTab(window.location.search, tab), { replace: true }),
+      devicesPaging,
+      warmPaging,
+    };
+  });
+}
+
+// why: a device is gone once the worker no longer lists it, and the drawer says so; `undefined` is
+// that answer.
+export function useDeviceDrawer(
+  workerId: string,
+  deviceId: string,
+): { readonly view: LoadView<DeviceRow | undefined>; readonly close: () => void } {
+  const page = useWorkerPage(workerId);
+  const search = useSearch();
   return {
-    ...workerInspectorOf({ leaseIds, now: now.server, tokens, worker: chosen }),
-    devicesPaging,
-    warmPaging,
+    // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept.
+    close: () => navigate(`${workerPath(workerId)}${search}`, { replace: true }),
+    view: mapView(page, (shown) => shown?.overview.devices?.find((row) => row.id === deviceId)),
   };
+}
+
+// why: a leased device's UDID is known to the console only through its lease.
+export function useLeaseUdid(leaseId: string): string | undefined {
+  return useLiveResource<{ readonly lease: LeaseDetails }>(
+    `/v1/leases/${encodeURIComponent(leaseId)}`,
+  ).data?.lease.udid;
+}
+
+// why: the events the console holds, an hour of them, that belong to this worker, newest first.
+export function useWorkerEvents(workerId: string): LoadView<readonly EventRow[]> {
+  const feed = useRecentEvents();
+  const mode = useDaemonMode();
+  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(feed), (held) =>
+    eventRows(eventsOfWorker(held, workerId, mode), workers, "all"),
+  );
 }

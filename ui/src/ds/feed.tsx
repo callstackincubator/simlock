@@ -1,7 +1,15 @@
 import "./feed.css";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  Fragment,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 // why: the box's height and a row's before either is measured: what a first draw lays out. A row's
 // height is fixed (the caller's rows do not wrap), so no row is measured as it is drawn.
@@ -9,6 +17,9 @@ const BOX_HEIGHT_PX = 640;
 
 // why: rows drawn past each edge of the box, so a short scroll shows rows already there.
 const OVERSCAN = 5;
+
+// why: how close to the last row the last drawn row must be before the list asks for more.
+const NEAR_END_ROWS = 20;
 
 // why: only the rows in view, and a few past each edge, are in the page; the space of the rest is
 // padding, so the scroll bar is as long as every row. New rows come in at the top: while the box
@@ -23,9 +34,23 @@ export function Feed(props: {
   readonly keyAt: (index: number) => string;
   readonly newText: (count: number) => string;
   readonly startAt?: number;
+  readonly onNearEnd?: (() => void) | undefined;
+  // why: below the scrolling box, outside the list, so it never counts as a row.
+  readonly footer?: ReactNode;
   readonly renderRow: (index: number) => ReactNode;
 }) {
-  const { count, keyAt, label, listLabel, newText, renderRow, rowHeight, startAt = 0 } = props;
+  const {
+    count,
+    footer,
+    keyAt,
+    label,
+    listLabel,
+    newText,
+    onNearEnd,
+    renderRow,
+    rowHeight,
+    startAt = 0,
+  } = props;
   const box = useRef<HTMLDivElement>(null);
   const [atTop, setAtTop] = useState(true);
   const unseen = useUnseen(count, keyAt, atTop);
@@ -39,11 +64,13 @@ export function Feed(props: {
     overscan: OVERSCAN,
   });
   useOpenAt(startAt, virtualizer);
+  const atEnd = useStayAtEnd(box);
   const toTop = () => {
     virtualizer.scrollToOffset(0);
     box.current?.focus();
   };
   const items = virtualizer.getVirtualItems();
+  useNearEnd(items.at(-1)?.index, count, onNearEnd);
   const before = items[0]?.start ?? 0;
   const after = Math.max(0, virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0));
   return (
@@ -59,7 +86,11 @@ export function Feed(props: {
         role="region"
         aria-label={label}
         tabIndex={0}
-        onScroll={(event) => setAtTop(event.currentTarget.scrollTop < 1)}
+        onScroll={(event) => {
+          const target = event.currentTarget;
+          setAtTop(target.scrollTop < 1);
+          atEnd.current = target.scrollHeight - target.scrollTop - target.clientHeight < 2;
+        }}
       >
         <ul
           className="list feed-list"
@@ -71,8 +102,64 @@ export function Feed(props: {
           ))}
         </ul>
       </div>
+      {footer}
     </div>
   );
+}
+
+// why: the box's height changes while the reader is at its end (the footer's end row arrives and
+// takes its height from the box); the browser leaves scrollTop alone, so the last row would end up
+// out of view. A smooth scroll to the end (the End key) may still be running when it happens and
+// lands where the end was before: once it stops, a reader who stopped at the old end is moved to
+// the new one.
+function useStayAtEnd(box: RefObject<HTMLDivElement | null>): RefObject<boolean> {
+  const atEnd = useRef(false);
+  useEffect(() => {
+    const element = box.current;
+    if (element === null) return;
+    let height = element.clientHeight;
+    let shrunkFrom: number | undefined;
+    const toEnd = () => {
+      element.scrollTop = element.scrollHeight;
+    };
+    const reachesEnd = (boxHeight: number) =>
+      element.scrollTop + boxHeight >= element.scrollHeight - 2;
+    const observer = new ResizeObserver(() => {
+      const larger = Math.max(height, element.clientHeight);
+      // why: rows that arrived in the same render as the resize put the end below the reader, who
+      // is no longer at it: the rows in view stay where they are.
+      if (atEnd.current) {
+        if (reachesEnd(larger)) toEnd();
+      } else shrunkFrom = larger;
+      height = element.clientHeight;
+    });
+    const onScrollEnd = () => {
+      if (shrunkFrom !== undefined && reachesEnd(shrunkFrom)) toEnd();
+      shrunkFrom = undefined;
+    };
+    observer.observe(element);
+    element.addEventListener("scrollend", onScrollEnd);
+    return () => {
+      observer.disconnect();
+      element.removeEventListener("scrollend", onScrollEnd);
+    };
+  }, [box]);
+  return atEnd;
+}
+
+// why: the callback is read through a ref, so a new function on each render does not ask again;
+// only a change in the last drawn row or in the count does.
+function useNearEnd(last: number | undefined, count: number, onNearEnd: (() => void) | undefined) {
+  const callback = useRef(onNearEnd);
+  callback.current = onNearEnd;
+  // why: the box's height settles after the first draw (it fills the page), which moves the last
+  // drawn row; the list asks once per number of rows, not once per change of what is drawn.
+  const askedAt = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (last === undefined || last < count - NEAR_END_ROWS || askedAt.current === count) return;
+    askedAt.current = count;
+    callback.current?.();
+  }, [last, count]);
 }
 
 function useUnseen(count: number, keyAt: (index: number) => string, atTop: boolean): number {

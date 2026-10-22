@@ -36,7 +36,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 ## Worker: claim and converge (`DaemonServer.start`)
 
 11. Claim the socket — `DaemonEndpointHost.start`. A live daemon →
-    `DaemonAlreadyRunningError`; the start rejects, exit 1. A stale socket file is
+    `DaemonAlreadyRunningError`; the start rejects, the entry logs `Daemon already running` and exits 0. A stale socket file is
     removed.
 12. Host load sampling starts.
 13. `admin.token` written (0600, atomic).

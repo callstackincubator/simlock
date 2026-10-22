@@ -134,6 +134,11 @@ export class SimlockWire {
         new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Daemon connection closed", {}),
       ),
     );
+    if (connection.closed) {
+      this.#die(
+        new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Daemon connection closed", {}),
+      );
+    }
   }
 
   /** Sends `hello` and returns its reply, or throws the contract's typed mismatch/auth error.
@@ -205,7 +210,6 @@ export class SimlockWire {
    * `client.ts` is responsible for input/output schema validation; this only moves bytes and
    * correlates frame ids. */
   call(type: string, payload: unknown, hooks: CallHooks = {}): Promise<unknown> {
-    if (this.#dead !== undefined) return Promise.reject(this.#dead);
     return this.#send(type, payload, hooks);
   }
 
@@ -233,6 +237,7 @@ export class SimlockWire {
   }
 
   #send(type: string, payload: unknown, hooks: CallHooks): Promise<unknown> {
+    if (this.#dead !== undefined) return Promise.reject(this.#dead);
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { ...hooks, reject, resolve });

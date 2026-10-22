@@ -10,6 +10,11 @@
 import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
+import {
+  EVENTS_PAGE_MAX,
+  EVENTS_PAGE_WITH_SINCE_MESSAGE,
+  eventsPageWithoutSince,
+} from "./events-page.js";
 import { parseOsConstraint } from "./os-range.js";
 import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
@@ -24,6 +29,7 @@ import {
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
+  EVENT_ID_PATTERN,
   hostFactsSchema,
   historyStatusSchema,
   hostLoadSchema,
@@ -53,8 +59,8 @@ export type Effect = "read" | "write";
 
 export interface OperationDefinition<
   Name extends string = string,
-  InputSchema extends z.ZodTypeAny = z.ZodTypeAny,
-  OutputSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  InputSchema extends z.ZodType = z.ZodType,
+  OutputSchema extends z.ZodType = z.ZodType,
 > {
   readonly name: Name;
   readonly role: Role | ((input: z.infer<InputSchema>) => Role);
@@ -72,8 +78,8 @@ export interface OperationDefinition<
 
 function defineOperation<
   Name extends string,
-  InputSchema extends z.ZodTypeAny,
-  OutputSchema extends z.ZodTypeAny,
+  InputSchema extends z.ZodType,
+  OutputSchema extends z.ZodType,
 >(
   definition: OperationDefinition<Name, InputSchema, OutputSchema>,
 ): OperationDefinition<Name, InputSchema, OutputSchema> {
@@ -202,7 +208,7 @@ export function refuseModelWithClass(
   return (input, context) => {
     if (input.model !== undefined && input.class !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `a request names a model or a class, not both: send only one of \`${modelField}\` and \`class\``,
         path: ["class"],
       });
@@ -232,7 +238,7 @@ function refusePhysicalWithImageFields(): <
     for (const field of refused) {
       if (field === undefined) continue;
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `\`${field}\` has no meaning for a physical device`,
         path: [field],
       });
@@ -250,7 +256,7 @@ function refuseRequiresWithIdempotencyKey(): <
   return (input, context) => {
     if (input.requires === undefined || input.idempotencyKey === undefined) return;
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "requires cannot be combined with idempotencyKey",
       path: ["requires"],
     });
@@ -266,7 +272,7 @@ function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefi
     const parsed = parseOsConstraint(input.osVersion);
     if (!parsed.ok) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: parsed.message,
         path: ["osVersion"],
       });
@@ -645,7 +651,13 @@ export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
   effect: "read",
-  input: z.object({ sinceTs: z.number().optional() }),
+  input: z
+    .object({
+      beforeId: z.string().regex(EVENT_ID_PATTERN).optional(),
+      limit: z.number().int().min(1).max(EVENTS_PAGE_MAX).optional(),
+      sinceTs: z.number().optional(),
+    })
+    .refine(eventsPageWithoutSince, { message: EVENTS_PAGE_WITH_SINCE_MESSAGE }),
   output: z.array(eventEnvelopeSchema),
 });
 

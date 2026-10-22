@@ -172,7 +172,8 @@ stateDiagram-v2
   `simlock nuke --delete-devices`.
 - **Seen where it is started.** Every refusal is the daemon's start error.
   A CLI or MCP server that auto-started the daemon prints that error as
-  soon as the daemon exits, in place of a timeout.
+  soon as the daemon exits, in place of a timeout. A start through the
+  user's service manager is the one exception (ADR 0041 §6).
 
 ## Consequences
 

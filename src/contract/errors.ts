@@ -106,7 +106,7 @@ export interface ErrorDetailsMap {
   NUKE_UNAVAILABLE: Record<string, never>;
   INTERNAL: Record<string, never>;
   GATEWAY_NOT_PRESENT: Record<string, never>;
-
+  SERVICE_FAILED: Record<string, never>;
   UNSUPPORTED_IN_GATEWAY_MODE: { readonly operation: string };
   /**
    * ADR 0012 §2: the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The operation exists, this daemon
@@ -386,6 +386,8 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 2,
     httpStatus: 404,
   },
+  // why: never sent over HTTP (the CLI raises it when a service manager call fails); the table needs a value.
+  SERVICE_FAILED: { code: "SERVICE_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
   // 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
   // simply does not implement that operation, which is exactly what "Not Implemented" says.
   // `cliExitCode: 2` puts it with the other "you asked the wrong thing" outcomes.

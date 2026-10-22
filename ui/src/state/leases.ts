@@ -2,8 +2,12 @@ import { useState } from "react";
 
 import { ApiError } from "../data/api";
 import type { LoadView } from "../ds/loaded";
+import type { MenuEntry } from "../ds";
 import type { Paging } from "../ds/pager";
+import { leaseActions } from "../model/actions";
+import { type EventRow, eventRows } from "../model/event-list";
 import {
+  eventsOfLease,
   filterLeaseRows,
   type LeaseDetails,
   type LeaseFilter,
@@ -12,16 +16,21 @@ import {
   type LeaseRowView,
   leaseInspection,
   leaseRows,
+  searchLeaseRows,
   type TokenList,
 } from "../model/leases";
-import { listSearch, TABLE_SIZES } from "../model/paging";
+import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
+import { useActions } from "./actions";
+import { useRecentEvents } from "./events";
+import { useListDrawer, type ListDrawerState } from "./drawer";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { usePath, useSearch } from "./router";
+import { setSearch, usePath, useSearch } from "./router";
 
+export { type EventRow } from "../model/event-list";
 export {
   LEASE_FILTERS,
   type LeaseFilter,
@@ -32,18 +41,46 @@ export {
 export interface LeasesPage {
   readonly rows: readonly LeaseRowView[];
   readonly held: number;
-  // why: the id the inspector shows: the one the URL names, or on a wide screen with none, the
-  // first row of the list, without rewriting the URL.
-  readonly chosen: string | undefined;
 }
 
 export interface Leases {
   readonly view: LoadView<LeasesPage>;
   readonly filter: LeaseFilter;
   readonly choose: (filter: LeaseFilter) => void;
+  readonly query: string;
+  readonly search: (query: string) => void;
   readonly paging: Paging;
-  // why: the id in the URL stands even before the list has loaded, so the inspector can ask for it.
+  // why: the id in the URL stands even before the list has loaded, so the drawer can ask for it.
   readonly urlId: string | undefined;
+}
+
+// why: the row's ⋯ menu reads the one list of actions a lease offers (ADR 0037 §3).
+export function useLeaseMenu(): (row: LeaseRowView) => readonly MenuEntry[] {
+  const { entries } = useActions();
+  return (row) => entries(leaseActions(row));
+}
+
+// why: a lease's drawer offers the actions of the same row the list shows, under the same item key,
+// so an action in flight from either disables both.
+export function useLeaseDrawerMenu(id: string): {
+  readonly label: string;
+  readonly entries: readonly MenuEntry[];
+} {
+  const { entries } = useActions();
+  const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
+  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const now = useNow();
+  const row = leaseRows({ leases, now: now.server, tokens, workers }).find(
+    (candidate) => candidate.id === id,
+  );
+  return row === undefined
+    ? { entries: [], label: "" }
+    : { entries: entries(leaseActions(row)), label: `Actions for ${row.holder}` };
+}
+
+export function useLeaseDrawer(urlId: string | undefined): ListDrawerState {
+  return useListDrawer("/leases", urlId);
 }
 
 // why: tokens and workers only name what the leases already show, so while they have not arrived
@@ -58,20 +95,17 @@ export function useLeases(): Leases {
   const all = mapView(leases, (list) =>
     leaseRows({ leases: list.leases, now: now.server, tokens, workers }),
   );
-  const shown = all.kind === "ready" ? filterLeaseRows(all.data, filter) : [];
+  const query = readQuery(useSearch());
+  const shown =
+    all.kind === "ready" ? searchLeaseRows(filterLeaseRows(all.data, filter), query) : [];
   const paging = usePaging({
     sizes: TABLE_SIZES,
     total: all.kind === "ready" ? shown.length : undefined,
   });
-  const start = (paging.page - 1) * paging.size;
   const keep = listSearch(useSearch());
-  const rows = shown
-    .slice(start, start + paging.size)
-    .map((row) => ({ ...row, to: row.to + keep }));
   const view = mapView(all, (every) => ({
-    chosen: urlId ?? rows[0]?.id,
     held: every.length,
-    rows,
+    rows: shown.map((row) => ({ ...row, to: row.to + keep })),
   }));
   return {
     choose: (next) => {
@@ -80,6 +114,10 @@ export function useLeases(): Leases {
     },
     filter,
     paging,
+    query,
+    // why: each key replaces the entry rather than adding one, so Back leaves the page, not a
+    // letter of the search.
+    search: (next) => setSearch(writeQuery(window.location.search, next), { replace: true }),
     urlId,
     view,
   };
@@ -109,4 +147,11 @@ export function useLeaseInspection(id: string): LoadView<LeaseInspection | undef
       workers,
     }),
   );
+}
+
+// why: the events the console holds, an hour of them, that name this lease, newest first.
+export function useLeaseEvents(id: string): LoadView<readonly EventRow[]> {
+  const feed = useRecentEvents();
+  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(feed), (held) => eventRows(eventsOfLease(held, id), workers, "all"));
 }
