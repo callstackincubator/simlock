@@ -8,29 +8,29 @@ Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no
 
 ## Files
 
-| File                                                          | Role                                                                                                                                           |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on                                                               |
-| `worker.ts`                                                   | `createWorker`: both supervisors, edge parts, capability, relay target, mount, hooks                                                           |
-| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop one role's daemon (`simulators` or `phones`); availability state                                                      |
-| `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                                                                                       |
-| `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                                                                                               |
-| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`; a phone daemon's message starts `phone daemon: `                                                   |
-| `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                                                                                    |
-| `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap                                                                           |
-| `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant)                                                                            |
-| `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                                                                                   |
-| `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                                                                                             |
-| `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                                                                                |
-| `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                                                                                  |
-| `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                                                                                           |
-| `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                                                                                            |
-| `front/host-link.ts`                                          | `HostLink` port (`stillHeld`: gateway only, a lease its `lease.list` omits is ended only when the index lost it); `InProcessHostLink` (worker) |
-| `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                                                                                         |
-| `front/edge-parts.ts`                                         | Front parts, dispose and cancel steps, `createAgentDeviceFront`                                                                                |
-| `gateway.ts`                                                  | Gateway side: `FleetPort` from the gateway context, the mount, `beforeDrain`                                                                   |
-| `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope                                                                   |
-| `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                                                                                  |
+| File                                                          | Role                                                                                                                                                                                   |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on                                                                                                       |
+| `worker.ts`                                                   | `createWorker`: both supervisors, edge parts, capability, relay target, mount, hooks                                                                                                   |
+| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop one role's daemon (`simulators` or `phones`); availability state                                                                                              |
+| `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                                                                                                                               |
+| `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                                                                                                                                       |
+| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`; a phone daemon's message starts `phone daemon: `                                                                                           |
+| `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                                                                                                                            |
+| `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap                                                                                                                   |
+| `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant, one per daemon)                                                                                                    |
+| `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                                                                                                                           |
+| `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                                                                                                                                     |
+| `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                                                                                                                        |
+| `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                                                                                                                          |
+| `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                                                                                                                                   |
+| `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                                                                                                                                    |
+| `front/host-link.ts`                                          | `HostLink` port (`stillHeld`: gateway only, a lease its `lease.list` omits is ended only when the index lost it); `RoutedHostLink` (worker: one host per daemon, a lease → daemon map) |
+| `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                                                                                                                                 |
+| `front/edge-parts.ts`                                         | Front parts, dispose and cancel steps, `createAgentDeviceFront`                                                                                                                        |
+| `gateway.ts`                                                  | Gateway side: `FleetPort` from the gateway context, the mount, `beforeDrain`                                                                                                           |
+| `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope                                                                                                           |
+| `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                                                                                                                          |
 
 ## How it works
 
@@ -41,7 +41,7 @@ its env has no simulator set or driver lease key, `ANDROID_ADB_SERVER_PORT=5037`
 `AGENT_DEVICE_IOS_*` signing keys (`capabilities.agent-device.ios.*`), and the no-iOS and
 no-Android sentinels when a platform is off. It starts once the simulator daemon's start has
 settled, never awaited. The capability follows the simulator daemon; doctor lists a finding per
-daemon. Nothing is routed to the phone daemon yet.
+daemon. `RoutedHostLink` sends a physical allocate (its `serial`/`udid` is an enrolled phone's id) and every later call for that lease to the phone daemon, everything else to the simulator daemon; a phone daemon that is not running answers `phone daemon: <message>`. Each daemon has its own `ReleaseScopeRecord` and `AgentDeviceLeaseEnd`; the link forgets a lease when it ends.
 
 Supervisor start (`AgentDeviceSupervisor.start`, at daemon start), per role:
 
@@ -91,13 +91,13 @@ under leasing's signal (`lease.endWaitMs`).
 ## Flow: agent on a worker
 
 1. CLI `open` → `POST /v1/agent-device/rpc` `agent_device.lease.allocate` with its lease id.
-2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, `physical: true`, or a `--target` it does not map.
+2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, a `physical` that is not a boolean, or a `--target` it does not map.
 3. `lease.request`: `leaseId` = `requesterId` = the CLI's lease id; `--device` → model,
-   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`; TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
+   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
-4. Grant → allocate forwarded with the device address (`udid`/`serial`), no
+4. Grant → allocate forwarded with the device address (`udid`/`serial`; a phone's is its enrolled id), to the phone daemon for a phone and the simulator daemon otherwise (`RoutedHostLink`, which remembers each lease's daemon until the lease ends), no
    `device`/`deviceKey`/`target`/`osVersion`/`imageTag` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
-5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, imageTag? }` added from the grant.
+5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag? }` added from the grant.
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
 7. Release → agent-device first, then `lease.release` → reclaim; lease-end finds no scope left.
 
@@ -109,7 +109,7 @@ under leasing's signal (`lease.endWaitMs`).
 3. Every later call is relayed to the lease's worker (`FleetPort.relay` → `GatewayRelay`,
    target `agent-device`) with tenant `gw.<gateway instance id>.<principal>`, cut to 128
    chars with a hash. A lease not the token's → 403. No lease: only `GET /health`.
-4. Worker: `agentDeviceRelayTarget` → `InProcessHostLink` → host, requester = tenant.
+4. Worker: `agentDeviceRelayTarget` → `RoutedHostLink` (the lease id picks the phone daemon or the simulator daemon) → host, requester = tenant.
    No front rules run on the worker.
 5. Worker unreachable → "try again" reply; a command so answered ends its renewal
    reference without releasing the lease or ending worker work. Other live commands

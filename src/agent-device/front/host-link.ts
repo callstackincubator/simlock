@@ -29,33 +29,19 @@ export interface AdoptableLease {
 }
 
 export interface HostLink {
-  // why: only a link that serves many hosts routes non-RPC requests by the lease header and fans out `devices`; a worker never reads the header.
+  // why: only a link that serves many hosts routes non-RPC requests by the lease header and fans out `devices`; the gateway's link and a worker's routed link do.
   readonly readsLeaseHeader: boolean;
   // why: capabilities a lease request must require so it lands on a host that can serve agent-device; none means any worker.
   readonly leaseRequires?: readonly string[];
   status(leaseId?: string, identity?: Identity): Promise<LinkStatus>;
   forward(request: Request, identity: Identity, leaseId?: string): Promise<Response>;
-  // why: only a link that serves many hosts adopts leases made before the front's map was empty; a worker's map is in memory and has no entry for a lease it made before a restart, but that lease is ended, not adopted.
+  // why: only the gateway's link adopts leases made before the front's map was empty; a worker's map is in memory and has no entry for a lease it made before a restart, but that lease is ended, not adopted.
   adoptable?(identity: Identity): readonly AdoptableLease[];
   // why: a lease the front asked for in this process is its allocate's to keep or release, never to adopt.
   asked?(leaseId: string): void;
   // why: only a link that serves many hosts can tell a lease its list left out for a moment from one the host ended; a worker's list is the source, so a lease missing there is final.
   stillHeld?(leaseId: string): boolean;
   dispose?(): void;
-}
-
-export class InProcessHostLink implements HostLink {
-  readonly readsLeaseHeader = false;
-
-  constructor(private readonly host: AgentDeviceHost) {}
-
-  status(): ReturnType<HostLink["status"]> {
-    return this.host.status();
-  }
-
-  forward(request: Request, identity: Identity): Promise<Response> {
-    return this.host.forward(request, identity);
-  }
 }
 
 interface RoutedHosts {
