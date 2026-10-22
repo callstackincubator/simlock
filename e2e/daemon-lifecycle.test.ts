@@ -8,6 +8,29 @@ import { describe, expect, it } from "vitest";
 
 import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
 
+// why: `admin.token` is written before startup finishes, and a SIGTERM before then takes the
+// exit-at-once path, which never logs `Daemon stopping`. A daemon is up once it logged
+// `Daemon started` and, with HTTP on, its gateway is listening: `startDaemon` resolves on both.
+async function startupFinished(directory: string): Promise<boolean> {
+  const log = await readFile(join(directory, "daemon.log"), "utf8").catch(() => "");
+  const records = log
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          message?: string;
+          fields?: { config?: { http?: { enabled?: boolean } } };
+        },
+    );
+  const started = records.find((record) => record.message === "Daemon started");
+  if (started === undefined) return false;
+  return (
+    started.fields?.config?.http?.enabled !== true ||
+    records.some((record) => record.message === "HTTP gateway listening")
+  );
+}
+
 function runDaemonEntry(env: TestEnv, args: readonly string[]): Promise<number | null> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [join(REPO_ROOT, "dist/daemon/main.js"), ...args], {
@@ -42,9 +65,10 @@ describe("daemon lifecycle & recovery", () => {
         child.once("close", (code) => resolve(code));
       });
       try {
-        await waitFor(() => existsSync(join(directory, "admin.token")), {
-          label: "the daemon's admin.token written",
+        await waitFor(() => startupFinished(directory), {
+          label: "the daemon's startup finished",
         });
+        expect(existsSync(join(directory, "admin.token"))).toBe(true);
 
         child.kill("SIGTERM");
         const code = await exited;
