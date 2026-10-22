@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { isMissingPathError } from "../ports/index.js";
 import type {
   Clock,
   DaemonRole,
@@ -161,10 +162,21 @@ export type InstallCheck =
   | { readonly ok: true }
   | { readonly ok: false; readonly foundPath: string };
 
-export async function checkInstall(_options: {
+export async function checkInstall(options: {
   readonly npm: NpmCli;
   readonly filesystem: Filesystem;
   readonly packageRoot: string;
 }): Promise<InstallCheck> {
-  return { ok: true };
+  const { filesystem } = options;
+  const foundPath = await filesystem.realpath(options.packageRoot);
+  const globalRoot = await options.npm.globalRoot();
+  if (globalRoot.ok) {
+    try {
+      const npmCopy = await filesystem.realpath(join(globalRoot.output.trim(), "simlock"));
+      if (npmCopy === foundPath) return { ok: true };
+    } catch (error: unknown) {
+      if (!isMissingPathError(error)) throw error;
+    }
+  }
+  return { ok: false, foundPath };
 }
