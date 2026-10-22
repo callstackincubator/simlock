@@ -798,20 +798,37 @@ describe("the agent-device front, through the whole worker daemon", () => {
   it("allocate with `physical: true` leases an enrolled phone through the phone daemon, and the reply names the device with `physical: true` (`false` for a virtual one)", async () => {
     const cases = [
       {
+        address: { serial: "R58Y61A60HN" },
+        asked: { platform: "android" },
         extra: { platform: "android" },
         id: "R58Y61A60HN",
-        platform: "android",
         phone: { class: "phone", model: "Pixel 8", osVersion: "15" },
-        physical: true,
+        platform: "android",
+      },
+      {
+        address: { udid: "00008030-000270803C28802E" },
+        asked: { model: "iPhone 15 Pro", platform: "ios" },
+        extra: { device: "iPhone 15 Pro" },
+        id: "00008030-000270803C28802E",
+        phone: { class: "phone", model: "iPhone 15 Pro", osVersion: "18.4" },
+        platform: "ios",
+      },
+      {
+        address: { udid: "00008030-000270803C28802E" },
+        asked: { osVersion: ">=18", platform: "ios" },
+        extra: { osVersion: ">=18" },
+        id: "00008030-000270803C28802E",
+        phone: { class: "phone", model: "iPhone 15 Pro", osVersion: "18.4" },
+        platform: "ios",
       },
     ] as const;
-    for (const { extra, id, phone, physical, platform } of cases) {
+    for (const { address, asked, extra, id, phone, platform } of cases) {
       const rig = await setUp({
         drivers: (clock) => [
           new FakeDriver({
             availableOsVersions: ["35"],
             clock,
-            knownModels: ["Pixel 8"],
+            knownModels: [phone.model],
             physicalDevices: [{ ids: [id], ...phone }],
             platform,
           }),
@@ -820,16 +837,21 @@ describe("the agent-device front, through the whole worker daemon", () => {
       await rig.daemon.dispatch("device.add", { id, platform }, adminSession);
       rig.driver.setPhysicalPresence(id, true);
 
-      const answer = await envelopeOf(await allocate(rig, 1, { ...extra, physical }));
+      const answer = await envelopeOf(
+        await allocate(rig, 1, { platform, ...extra, physical: true }),
+      );
 
       expect(answer.result).toMatchObject({
         data: {
-          lease: { device: { model: phone.model, osVersion: phone.osVersion, physical } },
+          lease: {
+            device: { model: phone.model, osVersion: phone.osVersion, physical: true },
+          },
         },
         ok: true,
       });
+      expect(await requestedSpecs(rig, hex(1))).toMatchObject([{ ...asked, physical: true }]);
       expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toMatchObject([
-        { params: { leaseId: hex(1), serial: id } },
+        { params: { leaseId: hex(1), ...address } },
       ]);
       expect(allocatesReceived(rig)).toEqual([]);
     }
