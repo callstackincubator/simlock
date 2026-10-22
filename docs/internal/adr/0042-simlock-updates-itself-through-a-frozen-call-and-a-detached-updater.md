@@ -7,7 +7,12 @@
   0003](0003-one-typed-daemon-contract-behind-every-frontend.md) §6 (a
   second call accepted at every protocol version) and [ADR
   0005](0005-gateway-and-worker-modes.md) §9 (a worker can be out of
-  rotation without being drained).
+  rotation without being drained). Narrows [ADR
+  0009](0009-gateway-routing-is-a-list-of-stages.md) §2, stage 1
+  `takes-requests` (it also drops an `updating` worker), and [ADR
+  0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md)
+  (a user's worker and gateway share one global install, so an update
+  refuses while the other role runs, §13).
 
 ## Context
 
@@ -48,7 +53,9 @@ flowchart LR
    `admin`. The client sends it on a mismatched connection, as it does
    `daemon.stop`. Its input (`version?`, `force?`, `query?`)
    and its answer (`started`, `upToDate`, `resolved`, `version`, `health`,
-   `update`, `lastUpdateFailure`, `latestVersion`) never change shape. `query`
+   `update`, `lastUpdateFailure`, `latestVersion`) never change shape:
+   `update` is the update state or `null`, `lastUpdateFailure` the last
+   failure or `null`, and they are separate fields. `query`
    returns that answer and starts nothing, so it is also how a follower
    or the updater reads a daemon across a protocol change. So a gateway can update, and follow, a worker that
    shows `incompatible`, and the gateway and its workers can be updated
@@ -68,9 +75,12 @@ flowchart LR
    restart, or when the install fails.
 4. **The state is never stored.** A daemon that stops or crashes while
    `updating` starts as usual. The operator asks again.
-5. **The version is resolved before the call answers.** Without
-   `version`, the daemon asks npm for `latest`; with it, npm confirms
-   the version exists. npm unreachable or no such version fails the call
+5. **The version is resolved before the call answers.** `version` must
+   be an exact semver (`0.4.0`, `0.4.0-rc.1`, at most 64 characters);
+   a range or tag (`>=0.1.0`, `next`) is rejected as invalid input before
+   npm is asked. Without `version`, the daemon asks npm for `latest`; with
+   it, npm confirms the version exists. The updater installs the resolved
+   exact version, never the text the caller sent. npm unreachable or no such version fails the call
    with `UPDATE_RESOLVE_FAILED` and changes nothing. A resolved version
    equal to the running one answers `upToDate` and changes nothing. The
    daily check (§12) uses the same lookup.
@@ -101,7 +111,15 @@ flowchart LR
    new daemon is not running within 2 minutes, it writes a result file,
    reinstalls the old version and starts that. That daemon reads the
    file and reports the failure (stage `restarting`) and emits
-   `daemon.update-failed`. If the rollback fails too, the machine stays
+   `daemon.update-failed`. A new daemon that answers but is not `running` with the new version
+   after those 2 minutes counts as not started: the updater stops it
+   (`daemon.stop`, SIGKILL after 10 minutes) before the rollback. Once the
+   old daemon has stopped and before the new one starts, the updater
+   copies that daemon's `state.db`, `history.db` and their `-wal` and
+   `-shm` files to `<data dir>/update-backup/`. A rollback restores them
+   before it starts the old version, so a migration the new version ran
+   never blocks it (ADR 0036 §5); they are deleted once the new daemon is
+   ready. If the rollback fails too, the machine stays
    down and the updater logs it to `daemon.log`.
 9. **npm only.** A Simlock not installed by global npm (a source
    checkout, a pnpm global) refuses the update before anything changes,
@@ -112,7 +130,12 @@ flowchart LR
    never downgraded. "Newer" is semver order against the `latest` tag,
    one rule for every surface.
    Rolling back across a protocol bump leaves the worker `incompatible`,
-   which the frozen call can fix again.
+   which the frozen call can fix again, unless the target is below the
+   version that adds `daemon.update`: that daemon has no such call, and
+   the operator installs by hand. A target below a schema change of
+   `state.db` or `history.db` (ADR 0036 §5) is refused by the older
+   version at its start; the rollback (§8) then reinstalls the version
+   that ran before, with its database copy.
 11. **The call answers at once; progress is state and events.** The
    answer says the update started. Progress is the `update` field of
    `status.get` and of the worker view (`waiting` with the lease count,
@@ -126,6 +149,11 @@ flowchart LR
     `npm view simlock version` at start and every 24 h after, unless
     `update.check` is false, and reports `latestVersion` in `status.get`. A gateway's
     worker list shows each worker's version and its latest.
+13. **A shared install refuses while the other role runs.** A user's
+    worker and gateway run from one global install (ADR 0034), and an
+    update replaces its files. So an update of either refuses with
+    `UPDATE_SHARED_INSTALL` (409, exit 2) while the other role's daemon of
+    that user is running, and changes nothing.
 
 ```mermaid
 sequenceDiagram
@@ -175,5 +203,7 @@ stateDiagram-v2
 - During `installing`, the files of the running daemon are replaced. A
   module it loads lazily after that would come from the new version, so
   the window is kept to the install alone.
-- An update restart fires `worker.disconnected` and `worker.connected`,
-  as every restart does.
+- An update restart fires `worker.disconnected`; `worker.connected`
+  follows when the returning worker is compatible with the gateway. An
+  `incompatible` worker returns without it, and the gateway reads it
+  through `daemon.update` `query`.
