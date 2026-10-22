@@ -1,0 +1,126 @@
+import { describe, expect, it } from "vitest";
+import { promiseState } from "../test-support/promise-state.js";
+import {
+  FakeClock,
+  FakeNpmCli,
+  FakeProcessSupervisor,
+  MemoryFilesystem,
+  ScriptedProcessRunner,
+  type DaemonRole,
+  type NpmOutcome,
+} from "../ports/index.js";
+import { runUpdater, type DaemonProbe } from "./index.js";
+
+const PACKAGE_ROOT = "/global/node_modules/simlock";
+const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
+const PID = 4242;
+
+class FakeProbe implements DaemonProbe {
+  stops = 0;
+  oldDaemonAnswers = true;
+  newDaemon: { health: string; version: string } | undefined;
+
+  constructor(private readonly staysUp = false) {}
+
+  async stop(): Promise<void> {
+    this.stops += 1;
+    if (!this.staysUp) this.oldDaemonAnswers = false;
+  }
+
+  async answers(): Promise<boolean> {
+    return this.oldDaemonAnswers;
+  }
+
+  async state(): Promise<{ health: string; version: string } | undefined> {
+    return this.newDaemon;
+  }
+}
+
+interface Scenario {
+  readonly name: string;
+  readonly role?: DaemonRole;
+  readonly install?: readonly NpmOutcome[];
+  readonly oldDaemonStaysUp?: boolean;
+  readonly expected: {
+    readonly stdout: readonly string[];
+    readonly exit: number;
+    readonly installs: readonly string[];
+    readonly stops: number;
+    readonly startArgs: readonly (readonly string[])[];
+  };
+}
+
+const started = (...extra: string[]): readonly string[] => [CLI, "daemon", "start", ...extra];
+
+const SCENARIOS: readonly Scenario[] = [
+  {
+    name: "latest installed and started",
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 0,
+      installs: ["simlock@0.4.0"],
+      stops: 1,
+      startArgs: [started()],
+    },
+  },
+];
+
+async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
+  const state = promiseState(promise);
+  for (let step = 0; step < 2_000 && state.state === "pending"; step += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    clock.advance(1_000);
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(state.state).toBe("fulfilled");
+  return promise;
+}
+
+describe("runUpdater", () => {
+  it.each(SCENARIOS)(
+    "installs, restarts, and reports each stage on its pipe: $name",
+    async ({ role = "worker", install, oldDaemonStaysUp, expected }) => {
+      const clock = new FakeClock();
+      const npm = new FakeNpmCli(install === undefined ? {} : { install });
+      const probe = new FakeProbe(oldDaemonStaysUp);
+      const processes = new ScriptedProcessRunner([
+        {
+          match: { command: process.execPath, args: expected.startArgs[0] ?? [] },
+          result: { code: 0, stdout: "", stderr: "" },
+          onSpawn: () => {
+            probe.newDaemon = { health: "running", version: "0.4.0" };
+          },
+        },
+      ]);
+      const supervisor = new FakeProcessSupervisor([PID]);
+      const lines: string[] = [];
+
+      const exit = await settle(
+        runUpdater({
+          from: "0.3.0",
+          to: "0.4.0",
+          role,
+          pid: PID,
+          npm,
+          probe,
+          processes,
+          supervisor,
+          filesystem: new MemoryFilesystem(),
+          clock,
+          packageRoot: PACKAGE_ROOT,
+          dataDirectory: role === "gateway" ? "/home/.simlock/gateway" : "/home/.simlock",
+          stdout: { write: (chunk) => lines.push(chunk) },
+        }),
+        clock,
+      );
+
+      expect(lines.join("").trimEnd().split("\n")).toEqual(expected.stdout);
+      expect(exit).toBe(expected.exit);
+      expect(
+        npm.calls.filter((call) => call.method === "install").map((call) => call.spec),
+      ).toEqual(expected.installs);
+      expect(probe.stops).toBe(expected.stops);
+      expect(processes.calls.map((call) => call.args)).toEqual(expected.startArgs);
+    },
+  );
+});
