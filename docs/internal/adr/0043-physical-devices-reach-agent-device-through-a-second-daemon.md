@@ -72,8 +72,11 @@ flowchart LR
 
 The choice of daemon is made in the last hop before agent-device: the
 worker's in-process host link holds one host per daemon and a map from lease
-id to daemon. An allocate is routed by the `physical` flag of the Simlock
-grant; every later call names its lease, in the RPC body or in the
+id to daemon. The link decides from the request alone, so a request relayed
+from a gateway, which never passes the worker's front, is routed the same
+way: an allocate whose `serial` or `udid` names an enrolled physical device
+in the worker's registry goes to the phone daemon, and its lease id is
+remembered; every later call names its lease, in the RPC body or in the
 `x-agent-device-lease-id` header, and goes to that lease's daemon. The link
 declares that it reads the lease header, so the front's existing many-hosts
 path (ADR 0026) routes non-RPC requests and fans out `devices` per lease; the
@@ -95,7 +98,8 @@ sequenceDiagram
   alt refused by simlock
     F-->>CLI: refused by simlock: <message>
   else granted, address = serial | udid
-    F->>L: allocate {serial | udid, ttlMs}, lease id
+    F->>L: allocate {serial | udid, ttlMs}
+    L->>L: address is an enrolled phone → phones; remember lease id
     alt phone daemon not running
       L-->>CLI: agent-device is not available on this simlock: <reason>
       F->>F: lease.release
