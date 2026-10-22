@@ -71,6 +71,17 @@ const IOS_SIGNING_ENVIRONMENT = {
   teamId: "AGENT_DEVICE_IOS_TEAM_ID",
 } as const satisfies Record<keyof AgentDeviceIosSigning, string>;
 
+/** why: the adb server the physical Android driver uses, the host's default one. */
+const DEFAULT_ADB_SERVER_PORT = "5037";
+
+/** why: an operator shell that exported any of these would point the phone daemon at another adb server or device. */
+const ADB_SELECTION_KEYS = new Set([
+  "ANDROID_ADB_SERVER_PORT",
+  "ANDROID_ADB_SERVER_ADDRESS",
+  "ADB_SERVER_SOCKET",
+  "ANDROID_SERIAL",
+]);
+
 export interface AgentDeviceSupervisorOptions {
   readonly baseEnvironment: NodeJS.ProcessEnv;
   readonly clock: Clock;
@@ -534,11 +545,12 @@ export class AgentDeviceSupervisor {
     const env: NodeJS.ProcessEnv = {};
     const phones = o.role === "phones";
     for (const [key, value] of Object.entries(o.baseEnvironment)) {
-      if (!key.startsWith("AGENT_DEVICE_")) env[key] = value;
+      if (key.startsWith("AGENT_DEVICE_") || (phones && ADB_SELECTION_KEYS.has(key))) continue;
+      env[key] = value;
     }
     Object.assign(
       env,
-      o.driverEnvironment,
+      phones ? {} : o.driverEnvironment,
       agentDeviceDaemonEnvironment({
         leaseMaxTtlMs: o.leaseMaxTtlMs,
         policyPath,
@@ -546,6 +558,7 @@ export class AgentDeviceSupervisor {
       }),
     );
     if (phones) {
+      env["ANDROID_ADB_SERVER_PORT"] = DEFAULT_ADB_SERVER_PORT;
       for (const [key, name] of Object.entries(IOS_SIGNING_ENVIRONMENT)) {
         const value = o.ios?.[key as keyof AgentDeviceIosSigning];
         if (value !== undefined) env[name] = value;
