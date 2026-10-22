@@ -58,6 +58,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
+  { name: "worker.update", input: { workerId: "wrk_1" }, role: "admin" },
   // ADR 0010 §6: an operator's consent to a download.
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "component.list", input: {}, role: "agent" },
@@ -146,6 +147,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
+  { name: "worker.update", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, effect: "write" },
   { name: "component.list", input: {}, effect: "read" },
   {
