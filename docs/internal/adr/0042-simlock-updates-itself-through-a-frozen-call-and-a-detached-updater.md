@@ -124,8 +124,10 @@ flowchart LR
    service under a service manager (ADR 0041), so the manager may restart a
    failing new daemon while the updater rolls back. The rollback runs in this
    order: it installs the old version with npm; it sends `daemon.stop` to any
-   daemon the service restarted meanwhile and waits until nothing answers
-   `query` (a socket file alone is not an answer) or its pid has exited;
+   daemon the service restarted meanwhile and waits until its socket
+   refuses connections (or the file is gone) or its pid has exited (a
+   daemon that took `daemon.stop` still holds the socket and `state.db`
+   while it closes, so a silent `query` is not stopped);
    it restores the database copy, so a migration the new version ran never
    blocks the old version (ADR 0036 §5); it runs `simlock daemon start` and
    ends once a daemon answers `query` with the old version. Before the
