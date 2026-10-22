@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 describe("NodeUpdaterLauncher", () => {
-  it("runs the entry detached with its arguments, streams stdout lines and logs stderr", async () => {
+  it("runs the entry with its arguments, streams stdout lines and logs stderr", async () => {
     const tree = await realpath(await mkdtemp(join(tmpdir(), "simlock-updater-")));
     trees.push(tree);
     const entry = join(tree, "main.js");

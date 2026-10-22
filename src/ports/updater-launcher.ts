@@ -1,3 +1,8 @@
+import { spawn } from "node:child_process";
+import { mkdir, open } from "node:fs/promises";
+import { dirname } from "node:path";
+import { createInterface } from "node:readline";
+
 import type { DaemonRole } from "./paths.js";
 
 export interface UpdaterLaunch {
@@ -20,11 +25,41 @@ export interface UpdaterLauncher {
 }
 
 export class NodeUpdaterLauncher implements UpdaterLauncher {
-  async launch(_options: UpdaterLaunch): Promise<LaunchedUpdater> {
-    return {
-      lines: (async function* (): AsyncGenerator<string> {})(),
-      exited: Promise.resolve(null),
-    };
+  async launch(options: UpdaterLaunch): Promise<LaunchedUpdater> {
+    await mkdir(dirname(options.logPath), { recursive: true });
+    const log = await open(options.logPath, "a", 0o600);
+    try {
+      const child = spawn(
+        process.execPath,
+        [
+          options.entry,
+          "--from",
+          options.from,
+          "--to",
+          options.to,
+          "--pid",
+          String(options.pid),
+          ...(options.role === "gateway" ? ["--gateway"] : []),
+        ],
+        {
+          detached: true,
+          env: { ...process.env, SIMLOCK_HOME: options.simlockHome },
+          stdio: ["ignore", "pipe", log.fd],
+        },
+      );
+      const exited = new Promise<number | null>((resolve) => {
+        child.once("close", (code) => resolve(code));
+      });
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      child.unref();
+      if (child.stdout === null) throw new Error("the updater has no stdout pipe");
+      return { lines: createInterface({ input: child.stdout }), exited };
+    } finally {
+      await log.close();
+    }
   }
 }
 
