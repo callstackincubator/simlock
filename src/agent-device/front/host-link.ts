@@ -3,6 +3,7 @@ import type { ModuleRegistryView } from "../../modules/index.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
 import type { AgentDeviceHost } from "../host/host.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
+import { frontReplyFor, notAvailable } from "../shared/replies.js";
 import { classifyCall, readRpcBody } from "../shared/rpc.js";
 
 export type LinkStatus =
@@ -74,17 +75,29 @@ export class RoutedHostLink implements HostLink {
     private readonly registry: ModuleRegistryView,
   ) {}
 
-  status(leaseId?: string): ReturnType<HostLink["status"]> {
-    return this.#host(leaseId === undefined ? undefined : this.#roles.get(leaseId)).status();
+  async status(leaseId?: string): Promise<LinkStatus> {
+    const role = leaseId === undefined ? undefined : this.#roles.get(leaseId);
+    if (role !== "phones") return this.hosts.simulators.status();
+    return this.#phoneStatus();
   }
 
   async forward(request: Request, identity: Identity, leaseId?: string): Promise<Response> {
     const role = await this.#roleOf(request, leaseId);
+    if (role === "phones") {
+      const status = await this.#phoneStatus();
+      if (status.state === "unavailable") {
+        return frontReplyFor(request, notAvailable(status.reason));
+      }
+    }
     return this.hosts[role].forward(request, identity);
   }
 
-  #host(role: Role | undefined): AgentDeviceHost {
-    return this.hosts[role ?? "simulators"];
+  // why: the phone daemon's reason is named with its role, so an agent can tell it from the simulator daemon's.
+  async #phoneStatus(): Promise<LinkStatus> {
+    const status = await this.hosts.phones.status();
+    return status.state === "unavailable"
+      ? { reason: `phone daemon: ${status.reason}`, state: "unavailable" }
+      : status;
   }
 
   async #roleOf(request: Request, leaseId: string | undefined): Promise<Role> {
