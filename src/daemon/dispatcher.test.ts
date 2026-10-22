@@ -2811,8 +2811,19 @@ describe("Dispatcher: status.get console address", () => {
       consoleUrl: "http://127.0.0.1:4711/",
       health: "running",
       mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
-    expect(off.daemon).toEqual({ health: "running", mode: "worker" });
+    expect(off.daemon).toEqual({
+      health: "running",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect("consoleUrl" in off.daemon).toBe(false);
   });
 });
@@ -4181,7 +4192,14 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
     const status = await dispatcher.dispatch("status.get", {}, session());
 
     expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
-    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.daemon).toEqual({
+      health: "starting",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
   });
 

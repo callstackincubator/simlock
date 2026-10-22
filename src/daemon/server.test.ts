@@ -3077,7 +3077,10 @@ describe("daemon.update", () => {
   async function updateRig(leases: number) {
     const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] });
     const launcher = new FakeUpdaterLauncher();
-    const harness = await createHarness({ update: { npm, launcher, version: "0.3.0" } });
+    const harness = await createHarness({
+      iosMaxDevices: 2,
+      update: { npm, launcher, version: "0.3.0" },
+    });
     const client = await createClient(harness.socketPath);
     await hello(client);
     const leaseIds: string[] = [];
@@ -3388,6 +3391,7 @@ async function createHarness(
             launcher: options.update.launcher,
             registry,
             eventBus,
+            clock,
             version: options.update.version,
             packageRoot: "/opt/simlock",
             simlockHome: "/home/simlock",

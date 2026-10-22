@@ -93,8 +93,10 @@ import {
   serviceDefinition,
   type ServiceDefinition,
   type ServiceManager,
+  NodeNpmCli,
   NodeProcessSupervisor,
   NodeSystemStats,
+  NodeUpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
   NodeTcpStreamConnector,
@@ -131,6 +133,7 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
+import { createUpdateCoordinator } from "./update-coordinator.js";
 import {
   DaemonAlreadyRunningError,
   DaemonEndpointHost,
@@ -594,6 +597,19 @@ async function composeDaemon(
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,
     tokens: auth.tokens,
+    update: createUpdateCoordinator({
+      npm: new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory }),
+      launcher: new NodeUpdaterLauncher(),
+      registry,
+      eventBus,
+      clock,
+      version,
+      packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
+      simlockHome: resolveSimlockHome(),
+      role,
+      logPath: join(dataDirectory, "daemon.log"),
+      pid: process.pid,
+    }),
     version: version,
     converge: convergeStartup,
     settle: async () => {

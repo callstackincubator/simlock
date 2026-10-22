@@ -423,6 +423,10 @@ describe("GatewayDispatcher", () => {
       consoleUrl: "http://127.0.0.1:4700/",
       health: "starting",
       mode: "gateway",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
     expect(status.host).toEqual(GATEWAY_HOST);
   });
@@ -456,8 +460,19 @@ describe("GatewayDispatcher", () => {
       consoleUrl: "http://localhost:4711/",
       health: "running",
       mode: "gateway",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
-    expect(off.daemon).toEqual({ health: "running", mode: "gateway" });
+    expect(off.daemon).toEqual({
+      health: "running",
+      mode: "gateway",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect("consoleUrl" in off.daemon).toBe(false);
   });
 

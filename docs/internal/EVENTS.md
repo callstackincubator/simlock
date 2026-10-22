@@ -145,6 +145,7 @@ left behind (#79), each when there is one.
 |---|---|---|---|---|
 | `daemon.started` | version, config snapshot (`gateway.token`, when set, reads `[redacted]`: the payload reaches the ring and `history.db`, which are not a token's place the way `config.json` and `config.get` are; masked rather than dropped so the keys stay the same, #170) | daemon finished startup + reconcile | DaemonServer | implemented |
 | `daemon.stopping` | reason | graceful shutdown began (reason `signal` when the process got SIGTERM, ADR 0041 §4) | DaemonServer | implemented |
+| `daemon.update-started` | from, to, forced | an update began: `daemon.update` resolved the version and entered `waiting` or `installing` (ADR 0042 §11); `forced` is whether it was asked with `force` at the start | UpdateCoordinator | implemented |
 | `disk.pressure-detected` | free bytes, threshold | free disk crossed under the configured threshold (edge-triggered: once per crossing, not once per tick while it persists) | CleanupReaper | implemented |
 | `cleanup.executed` | rule name, action, target, reason | cleanup executor committed a proposed action | CleanupExecutor | implemented |
 | `doctor.reconciled` | drift findings | daemon reconciliation completed | Doctor | implemented |

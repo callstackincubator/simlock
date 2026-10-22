@@ -10,20 +10,21 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Files
 
-| File                    | Role                                                                                                             |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                 |
-| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                              |
-| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                       |
-| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                              |
-| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                        |
-| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                               |
-| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                  |
-| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi` |
-| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                        |
-| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                    |
-| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                           |
-| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                 |
+| File                    | Role                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                               |
+| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                                            |
+| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                                     |
+| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                                            |
+| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                                      |
+| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                                             |
+| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                                |
+| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi`               |
+| `update-coordinator.ts` | `createUpdateCoordinator`: `daemon.update`'s state (`waiting`, `installing`), the updater launch, `status.get`'s update fields |
+| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                                      |
+| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                  |
+| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                         |
+| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                               |
 
 ## Composition (`main.ts`)
 
@@ -43,6 +44,16 @@ The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through
   HTTP always starts; the uplink upgrades on the same listener.
 
 An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
+
+## Update (`update-coordinator.ts`)
+
+`daemon.update` has a handler in the worker `Dispatcher` (a gateway's answers `UNSUPPORTED_IN_GATEWAY_MODE`), so the socket, the uplink and HTTP all reach it.
+
+1. `query` returns the state and starts nothing. A call while an update runs follows it (`started: false`); `force` on a `waiting` one installs now.
+2. Otherwise the version is resolved with `NpmCli.view` (`simlock@latest`, or `simlock@<version>`), the update enters `waiting` with the lease count, and `daemon.update-started` is emitted.
+3. The updater is launched at once with no leases or with `force`, else when the last `lease.released` or `lease.expired` leaves none.
+
+The state lives in memory only.
 
 ## Connection (`server.ts`)
 

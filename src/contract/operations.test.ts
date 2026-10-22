@@ -536,7 +536,14 @@ describe("operation input/output round trips", () => {
         },
         global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: {
         os: "macOS",
         osVersion: "15.5",
@@ -594,7 +601,14 @@ describe("operation input/output round trips", () => {
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: capacityEntry,
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -613,10 +627,27 @@ describe("operation input/output round trips", () => {
       ).toBeDefined();
       expect(
         OPERATIONS["status.get"].output.parse({
-          daemon: { health: "starting", mode: "worker" },
+          daemon: {
+            health: "starting",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
           host,
         }),
-      ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
+      ).toEqual({
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host,
+      });
     });
 
     it("rejects a short outside the ten reasons, and a target list longer than 320", () => {
@@ -659,7 +690,14 @@ describe("operation input/output round trips", () => {
       short,
     };
     const status = {
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
       warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
     };
@@ -726,7 +764,14 @@ describe("operation input/output round trips", () => {
         global: { running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0 },
         ios: capacityEntry,
       },
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       installs,
@@ -792,7 +837,14 @@ describe("operation input/output round trips", () => {
       ],
       leases: [lease],
       capacity,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       queueDepth: 0,
       workers: [
@@ -1406,7 +1458,14 @@ describe("status.get physicalQueueDepth (ADR 0022)", () => {
   it("a status carries the physical line's depth beside the virtual one", () => {
     const parsed = output.parse({
       capacity,
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -1421,7 +1480,14 @@ describe("status.get physicalQueueDepth (ADR 0022)", () => {
   it("a worker's entry in a gateway's status carries it too", () => {
     const parsed = output.parse({
       capacity,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
