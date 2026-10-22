@@ -138,6 +138,7 @@ import {
 } from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
+import { execBaseEnvironment } from "./exec-env.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 import type { RelayTargets } from "./relay.js";
 
@@ -579,7 +580,7 @@ async function composeDaemon(
     logger: logger.child("server"),
     passthrough: core.catalog,
     processRunner,
-    execEnv: process.env,
+    execEnv: execBaseEnvironment(process.env),
     queue: leasing,
     presence: latestPresence,
     reaper,

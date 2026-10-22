@@ -23,6 +23,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 | `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                        |
 | `error-code.ts`         | `classifyError`: thrown error → contract code                                                                    |
 | `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                           |
+| `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                   |
 | `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                 |
 
 ## Composition (`main.ts`)
@@ -114,14 +115,14 @@ Security model: cooperative identity, not a hostile-process boundary.
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
 - A worker that joins a fleet grants its gateway `admin` over itself.
+- An `agent` token is shell access to the worker: `device.exec` runs host tools as the daemon's
+  user, with only the keys `execBaseEnvironment` (`exec-env.ts`) keeps plus the command's own.
 
 ## Uplink and relays (worker side)
 
-- `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host
-  load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
+- `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
-- `relay.request` runs only on that connection; targets come from `relayTargets`
-  (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
+- `relay.request` runs only on that connection; targets come from `relayTargets` (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
 
 ## Logging and event records
 
@@ -139,8 +140,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 
 ## Rules
 
-- One `Dispatcher` instance serves the socket, the uplink and HTTP; HTTP calls
-  `DaemonServer.dispatch` in process.
+- One `Dispatcher` instance serves the socket, the uplink and HTTP; HTTP calls `DaemonServer.dispatch` in process.
 - Handlers never see raw input and never check roles.
 - The claim comes before any write to `admin.token` and before converge.
 - On a worker, no request but `hello`, `status.get` and `daemon.stop` runs before
