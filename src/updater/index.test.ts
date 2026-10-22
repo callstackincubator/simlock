@@ -13,7 +13,7 @@ import {
   type DaemonRole,
   type NpmOutcome,
 } from "../ports/index.js";
-import { checkInstall, runUpdater, type DaemonProbe } from "./index.js";
+import { checkInstall, parseUpdaterArgs, runUpdater, type DaemonProbe } from "./index.js";
 
 const PACKAGE_ROOT = "/global/node_modules/simlock";
 const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
@@ -417,4 +417,44 @@ describe("checkInstall", () => {
 
     expect(result).toEqual(ok ? { ok: true } : { ok: false, foundPath: real });
   });
+});
+
+describe("parseUpdaterArgs", () => {
+  it.each([
+    {
+      name: "a worker's update",
+      argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "4242"],
+      parsed: { from: "0.3.0", to: "0.4.0", pid: 4242, role: "worker" },
+    },
+    {
+      name: "a gateway's update",
+      argv: ["--from", "0.3.0", "--to", "0.4.0-rc.1", "--pid", "7", "--gateway"],
+      parsed: { from: "0.3.0", to: "0.4.0-rc.1", pid: 7, role: "gateway" },
+    },
+    { name: "a missing --to", argv: ["--from", "0.3.0", "--pid", "7"], parsed: undefined },
+    {
+      name: "a pid that is not a positive integer",
+      argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "0"],
+      parsed: undefined,
+    },
+    {
+      name: "a version past 64 characters",
+      argv: ["--from", "0.3.0", "--to", "1".repeat(65), "--pid", "7"],
+      parsed: undefined,
+    },
+    {
+      name: "an argument it does not know",
+      argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "7", "--force"],
+      parsed: undefined,
+    },
+  ])(
+    "reads the arguments a daemon gives the updater and refuses the rest: $name",
+    ({ argv, parsed }) => {
+      if (parsed === undefined) {
+        expect(() => parseUpdaterArgs(argv)).toThrow("updater arguments");
+      } else {
+        expect(parseUpdaterArgs(argv)).toEqual(parsed);
+      }
+    },
+  );
 });

@@ -180,3 +180,14 @@ export async function checkInstall(options: {
   }
   return { ok: false, foundPath };
 }
+
+export interface UpdaterArguments {
+  readonly from: string;
+  readonly to: string;
+  readonly pid: number;
+  readonly role: DaemonRole;
+}
+
+export function parseUpdaterArgs(_argv: readonly string[]): UpdaterArguments {
+  return { from: "", to: "", pid: 0, role: "worker" };
+}
