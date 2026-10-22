@@ -16,6 +16,7 @@
   // captured file, the way the .agents scripts are.
   // src/core/usage/read-thread.ts is the entry of the usage read thread, loaded by path from
   // src/core/usage/index.ts (a worker thread, not an import).
+  // src/updater/main.ts is the entry of the detached updater process (node runs it by path, from dist/).
   // src/daemon/openapi.ts is read only by scripts/openapi.mjs, from the compiled dist/, so no import
   // reaches it.
   // website/ is its own package (its own package.json, lockfile and pnpm root), built by Astro
@@ -24,6 +25,7 @@
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
+    "src/updater/main.ts",
     "src/daemon/openapi.ts",
     "src/core/usage/read-thread.ts",
     "e2e/**/*.test.ts",
