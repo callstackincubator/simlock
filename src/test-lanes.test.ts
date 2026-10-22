@@ -168,7 +168,7 @@ function ciJobs(ci: string): ReadonlyMap<string, string> {
 const CONSOLE_SHARDS_AT_LEAST = 4;
 
 describe("the console lane in CI (.github/workflows/ci.yml)", () => {
-  it("runs the console lane over a matrix of at least four shards, each passing its `--shard=<i>/<n>` in both browser modes, and the required `Console` check needs that job and fails when it does not pass", () => {
+  it("runs the console lane over a matrix of at least four Chromium-only shards, and the required `Console` check needs that job and fails when it does not pass", () => {
     const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
     const jobs = [...ciJobs(ci)];
     const lanes = jobs.filter(([, job]) => job.includes("pnpm test:console"));
@@ -181,7 +181,10 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
       CONSOLE_SHARDS_AT_LEAST,
     );
     const runs = lane.match(/pnpm test:console[^\n]*/g) ?? [];
-    expect(runs, "the lane's chromium-only and every-browser commands").toHaveLength(2);
+    expect(runs, "the lane's Chromium-only command").toHaveLength(1);
+    expect(runs[0]).toContain("--project=chromium");
+    expect(lane).not.toMatch(/firefox|webkit|macos/i);
+    expect(lane).toContain("runs-on: ubuntu-24.04");
     expect(lane, "the shard index comes from the matrix").toMatch(
       /\n {10}SHARD: \$\{\{ matrix\.shard \}\}/,
     );
