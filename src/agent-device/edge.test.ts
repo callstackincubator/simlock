@@ -75,6 +75,7 @@ interface SetUpOptions {
   readonly maxRunning?: number;
   readonly slowStart?: boolean;
   readonly upstream?: FakeAgentDevice;
+  readonly phoneUpstream?: FakeAgentDevice;
 }
 
 interface Rig {
@@ -82,6 +83,7 @@ interface Rig {
   readonly daemon: DaemonServer;
   readonly driver: FakeDriver;
   readonly fake: FakeAgentDevice;
+  readonly phone: FakeAgentDevice;
   readonly filesystem: MemoryFilesystem;
   readonly logs: MemoryLogSink;
   readonly origin: string;
@@ -165,6 +167,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   ]);
   const port = await freeLoopbackPort();
   const fake = options.upstream ?? new FakeAgentDevice();
+  const phone = options.phoneUpstream ?? new FakeAgentDevice();
   const drivers = options.drivers?.(clock) ?? [iosDriver(clock)];
   const stateDbPath = join(directory, "state.db");
   const logs = new MemoryLogSink();
@@ -199,7 +202,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       drivers,
       filesystem,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
-      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
+      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -214,6 +217,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       daemon: undefined as never,
       driver: drivers[0] as FakeDriver,
       fake,
+      phone,
       filesystem,
       logs,
       origin,
@@ -227,6 +231,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     daemon,
     driver: drivers[0] as FakeDriver,
     fake,
+    phone,
     filesystem,
     logs,
     origin,
@@ -252,6 +257,35 @@ async function waitListening(origin: string): Promise<void> {
     }
   }
   throw new Error("the daemon never listened");
+}
+
+const phoneSerial = "R58Y61A60HN";
+
+// why: one Android driver serving a virtual Pixel 8 and an enrolled, present phone, so a test can lease either through the same worker.
+async function setUpWithPhone(options: SetUpOptions = {}): Promise<Rig> {
+  const rig = await setUp({
+    ...options,
+    drivers: (clock) => [
+      new FakeDriver({
+        availableOsVersions: ["35"],
+        clock,
+        defaultModels: { phone: ["Pixel 8"] },
+        knownModels: ["Pixel 8"],
+        modelClasses: { "Pixel 8": "phone" },
+        physicalDevices: [
+          { class: "phone", ids: [phoneSerial], model: "Pixel 8", osVersion: "15" },
+        ],
+        platform: "android",
+      }),
+    ],
+  });
+  await rig.daemon.dispatch("device.add", { id: phoneSerial, platform: "android" }, adminSession);
+  rig.driver.setPhysicalPresence(phoneSerial, true);
+  return rig;
+}
+
+function allocatePhone(rig: Rig, n: number, extra: Record<string, unknown> = {}) {
+  return allocate(rig, n, { platform: "android", ...extra, physical: true });
 }
 
 async function advance(rig: Rig, ms: number, step = 1_000): Promise<void> {
@@ -717,7 +751,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion }` on iOS and on Android without a tag, and `{ model, osVersion, imageTag }` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({
@@ -733,14 +767,14 @@ describe("the agent-device front, through the whole worker daemon", () => {
       maxRunning: 8,
     });
     const cases = [
-      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0" }],
-      [2, {}, { model: "iPhone 16", osVersion: "27.0" }],
+      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0", physical: false }],
+      [2, {}, { model: "iPhone 16", osVersion: "27.0", physical: false }],
       [
         3,
         { imageTag: "google_apis_playstore", platform: "android" },
-        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34" },
+        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34", physical: false },
       ],
-      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35" }],
+      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35", physical: false }],
     ] as const;
 
     for (const [n, extra, device] of cases) {
@@ -790,16 +824,281 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(installs()).toBe(1);
   });
 
-  it("allocate with `physical: true` answers `refused: physical devices are not available through agent-device` and leaves no lease; `physical: false` and `physical: null` are granted", async () => {
+  it("allocate with `physical: true` leases an enrolled phone through the phone daemon, and the reply names the device with `physical: true` (`false` for a virtual one)", async () => {
+    const cases = [
+      {
+        address: { serial: "R58Y61A60HN" },
+        asked: { platform: "android" },
+        extra: { platform: "android" },
+        id: "R58Y61A60HN",
+        phone: { class: "phone", model: "Pixel 8", osVersion: "15" },
+        platform: "android",
+      },
+      {
+        address: { udid: "00008030-000270803C28802E" },
+        asked: { model: "iPhone 15 Pro", platform: "ios" },
+        extra: { device: "iPhone 15 Pro" },
+        id: "00008030-000270803C28802E",
+        phone: { class: "phone", model: "iPhone 15 Pro", osVersion: "18.4" },
+        platform: "ios",
+      },
+      {
+        address: { udid: "00008030-000270803C28802E" },
+        asked: { osVersion: ">=18", platform: "ios" },
+        extra: { osVersion: ">=18" },
+        id: "00008030-000270803C28802E",
+        phone: { class: "phone", model: "iPhone 15 Pro", osVersion: "18.4" },
+        platform: "ios",
+      },
+    ] as const;
+    for (const { address, asked, extra, id, phone, platform } of cases) {
+      const rig = await setUp({
+        drivers: (clock) => [
+          new FakeDriver({
+            availableOsVersions: ["35"],
+            clock,
+            knownModels: [phone.model],
+            physicalDevices: [{ ids: [id], ...phone }],
+            platform,
+          }),
+        ],
+      });
+      await rig.daemon.dispatch("device.add", { id, platform }, adminSession);
+      rig.driver.setPhysicalPresence(id, true);
+
+      const answer = await envelopeOf(
+        await allocate(rig, 1, { platform, ...extra, physical: true }),
+      );
+
+      expect(answer.result).toMatchObject({
+        data: {
+          lease: {
+            device: { model: phone.model, osVersion: phone.osVersion, physical: true },
+          },
+        },
+        ok: true,
+      });
+      expect(await requestedSpecs(rig, hex(1))).toMatchObject([{ ...asked, physical: true }]);
+      expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toMatchObject([
+        { params: { leaseId: hex(1), ...address } },
+      ]);
+      // why: agent-device's daemon refuses any spec key it receives, so `physical` stays with simlock.
+      expect(rig.phone.rpcRequests("agent_device.lease.allocate")[0]?.params).not.toHaveProperty(
+        "physical",
+      );
+      expect(allocatesReceived(rig)).toEqual([]);
+    }
+  });
+
+  it("allocate with `physical: true` that simlock refuses (an `imageTag`, a model no enrolled phone has, an OS range none fits) answers `refused by simlock: <message>` and leaves no lease", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["35"],
+          clock,
+          knownModels: ["Pixel 8"],
+          physicalDevices: [
+            { class: "phone", ids: ["R58Y61A60HN"], model: "Pixel 8", osVersion: "15" },
+          ],
+          platform: "android",
+        }),
+      ],
+    });
+    await rig.daemon.dispatch(
+      "device.add",
+      { id: "R58Y61A60HN", platform: "android" },
+      adminSession,
+    );
+    rig.driver.setPhysicalPresence("R58Y61A60HN", true);
+    const cases = [
+      [{ imageTag: "default" }, "imageTag: `imageTag` has no meaning for a physical device"],
+      [{ device: "Pixel 9" }, "no enrolled physical device can match android model Pixel 9"],
+      [
+        { osVersion: ">=16" },
+        "no enrolled physical device can match android class phone os in the requested range",
+      ],
+    ] as const;
+
+    for (const [index, [extra, message]] of cases.entries()) {
+      const answer = await envelopeOf(
+        await allocate(rig, index + 1, { platform: "android", ...extra, physical: true }),
+      );
+
+      expect(answer.error).toMatchObject(refusal(`refused by simlock: ${message}`));
+    }
+    expect(await leases(rig)).toEqual([]);
+    expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toEqual([]);
+  });
+
+  it("allocate with `physical: true` while the phone daemon is not running answers `agent-device is not available on this simlock: phone daemon: <message>` and releases the lease; a virtual allocate is granted, a command on a live phone lease answers the same, and with the simulator daemon down a physical allocate answers the simulator daemon's reason", async () => {
+    const down = [
+      ["starting", "phone daemon: starting"],
+      ["adb not found", "phone daemon: adb not found"],
+    ] as const;
+    for (const [reason, message] of down) {
+      const rig = await setUpWithPhone({ maxRunning: 4 });
+      rig.phone.setUnavailable(reason);
+
+      const answer = await envelopeOf(await allocatePhone(rig, 1));
+
+      expect(answer.error).toMatchObject(refusal(`${notAvailable}${message}`, "COMMAND_FAILED"));
+      await expect.poll(() => listed(rig)).toEqual([]);
+      await granted(rig, 2, { platform: "android" });
+      expect(await listed(rig)).toEqual([hex(2)]);
+    }
+
+    const live = await setUpWithPhone();
+    await granted(live, 1, { platform: "android", physical: true });
+    live.phone.setUnavailable("starting");
+    const liveCommand = await envelopeOf(await command(live, "snapshot", 1));
+    expect(liveCommand.error).toMatchObject(
+      refusal(`${notAvailable}phone daemon: starting`, "COMMAND_FAILED"),
+    );
+    const beforeRules = await envelopeOf(
+      await runCommand(live, "snapshot", 1, { flags: { serial: "emulator-9999" } }),
+    );
+    expect(beforeRules.error).toMatchObject(
+      refusal(`${notAvailable}phone daemon: starting`, "COMMAND_FAILED"),
+    );
+
+    const simulatorsDown = await setUpWithPhone();
+    simulatorsDown.fake.setUnavailable("found 0.20.3");
+    const simulatorsDownAnswer = await envelopeOf(await allocatePhone(simulatorsDown, 1));
+    expect(simulatorsDownAnswer.error).toMatchObject(
+      refusal(`${notAvailable}found 0.20.3`, "COMMAND_FAILED"),
+    );
+    expect(await listed(simulatorsDown)).toEqual([]);
+  });
+
+  it("a command, a heartbeat, a release and a `devices` naming a phone lease reach the phone daemon, those naming a simulator lease reach the simulator daemon, and `devices` with one lease of each answers both devices, each from its daemon", async () => {
+    const rig = await setUpWithPhone();
+    await granted(rig, 1, { physical: true, platform: "android" });
+    await granted(rig, 2, { platform: "android" });
+    rig.phone.listDevices([{ id: phoneSerial }, { id: "emulator-5600" }]);
+    rig.fake.listDevices([{ id: idOf(rig, 2) }, { id: "emulator-5601" }]);
+    const reached = (fake: FakeAgentDevice, method: string) => fake.rpcRequests(method).length;
+    const calls = [
+      ["agent_device.command", (n: number) => command(rig, "snapshot", n)],
+      ["agent_device.lease.heartbeat", (n: number) => heartbeat(rig, n)],
+      ["agent_device.lease.release", (n: number) => release(rig, n)],
+    ] as const;
+
+    for (const [method, send] of calls) {
+      const [phoneBefore, simulatorBefore] = [
+        reached(rig.phone, method),
+        reached(rig.fake, method),
+      ];
+      await send(1);
+      expect([reached(rig.phone, method), reached(rig.fake, method)]).toEqual([
+        phoneBefore + 1,
+        simulatorBefore,
+      ]);
+      await send(2);
+      expect([reached(rig.phone, method), reached(rig.fake, method)]).toEqual([
+        phoneBefore + 1,
+        simulatorBefore + 1,
+      ]);
+    }
+
+    await granted(rig, 3, { physical: true, platform: "android" });
+    await granted(rig, 4, { platform: "android" });
+    rig.fake.listDevices([{ id: idOf(rig, 4) }, { id: "emulator-5601" }]);
+    const answer = await envelopeOf(await runCommand(rig, "devices", undefined));
+    const data = answer.result?.["data"] as { devices: { id: string }[] } | undefined;
+    expect(data?.devices.map((device) => device.id).sort()).toEqual(
+      [phoneSerial, idOf(rig, 4)].sort(),
+    );
+  });
+
+  it("a client that sends the instance headers of the health it read, as the agent-device CLI does, is granted a phone and its later calls on that phone lease reach the phone daemon", async () => {
+    const rig = await setUpWithPhone();
+    const health = (await (await send(rig, "/health")).json()) as { instanceId: string };
+    const pinned = {
+      headers: {
+        "x-agent-device-instance": health.instanceId,
+        "x-agent-device-upstream-instance": "upstream-from-health",
+      },
+    };
+
+    const allocated = await envelopeOf(
+      await allocate(rig, 1, { physical: true, platform: "android" }, pinned),
+    );
+    const later = await envelopeOf(await command(rig, "snapshot", 1, pinned));
+    const beat = await envelopeOf(await heartbeat(rig, 1, {}, pinned));
+
+    expect(allocated.result).toMatchObject({ ok: true });
+    expect(later.error).toBeUndefined();
+    expect(beat.error).toBeUndefined();
+    expect(rig.phone.rpcRequests("agent_device.command")).toHaveLength(1);
+    expect(rig.phone.rpcRequests("agent_device.lease.heartbeat")).toHaveLength(1);
+  });
+
+  it("when simlock ends a phone lease (presence lost, an operator's release of all) the release reaches the phone daemon, not the simulator daemon, and the agent's next heartbeat answers ended by simlock", async () => {
+    const endings = [
+      async (rig: Rig) => {
+        rig.driver.setPhysicalPresence(phoneSerial, false);
+        await advance(rig, 120_000);
+      },
+      async (rig: Rig) => {
+        await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+      },
+    ];
+    for (const end of endings) {
+      const rig = await setUpWithPhone();
+      await granted(rig, 1, { physical: true, platform: "android" });
+
+      await end(rig);
+
+      await expect.poll(() => listed(rig)).toEqual([]);
+      await expect.poll(() => rig.phone.rpcRequests("agent_device.lease.release")).toHaveLength(1);
+      expect(rig.fake.rpcRequests("agent_device.lease.release")).toEqual([]);
+      expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+    }
+  });
+
+  it("a virtual allocate whose address is also its driver id reaches the simulator daemon, not the phone daemon", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [
+        new FakeDriver({
+          addressIsDeviceId: true,
+          availableOsVersions: ["35"],
+          clock,
+          defaultModels: { phone: ["Pixel 8"] },
+          knownModels: ["Pixel 8"],
+          modelClasses: { "Pixel 8": "phone" },
+          physicalDevices: [
+            { class: "phone", ids: [phoneSerial], model: "Pixel 8", osVersion: "15" },
+          ],
+          platform: "android",
+        }),
+      ],
+    });
+    await rig.daemon.dispatch("device.add", { id: phoneSerial, platform: "android" }, adminSession);
+    rig.driver.setPhysicalPresence(phoneSerial, true);
+
+    await granted(rig, 1, { platform: "android" });
+
+    expect(rig.fake.rpcRequests("agent_device.lease.allocate")).toMatchObject([
+      { params: { leaseId: hex(1), serial: expect.stringMatching(/^fake-android-/) } },
+    ]);
+    expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toEqual([]);
+  });
+
+  it("after a phone lease ends, an allocate that reuses its lease id for a virtual device reaches the simulator daemon", async () => {
+    const rig = await setUpWithPhone();
+    await granted(rig, 1, { physical: true, platform: "android" });
+    await release(rig, 1);
+    await expect.poll(() => listed(rig)).toEqual([]);
+
+    await granted(rig, 1, { platform: "android" });
+
+    expect(allocatesReceived(rig, 1)).toHaveLength(1);
+    expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toHaveLength(1);
+  });
+
+  it("allocate with `physical: false` and `physical: null` are granted", async () => {
     const rig = await setUp({ maxRunning: 8 });
 
-    const answer = await envelopeOf(await allocate(rig, 1, { physical: true }));
-
-    expect(answer.error).toMatchObject(
-      refusal("refused: physical devices are not available through agent-device"),
-    );
-    expect(await leases(rig)).toEqual([]);
-    expect(allocatesReceived(rig)).toEqual([]);
     await granted(rig, 2, { physical: false });
     await granted(rig, 3, { physical: null });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2), hex(3)]);
@@ -1581,27 +1880,47 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
   });
 
-  it("on a worker, an `x-agent-device-lease-id` header naming another token's lease, a malformed one and no header are each forwarded, as today", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    const other = { "x-agent-device-lease-id": hex(1) };
+  it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header, and a header naming a lease routes by the lease id whichever token sends it, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
+    const rig = await setUpWithPhone();
+    await granted(rig, 1, { physical: true, platform: "android" });
+    await granted(rig, 2, { platform: "android" });
+    const named = (n: number) => ({ "x-agent-device-lease-id": hex(n) });
     const malformed = { "x-agent-device-lease-id": "NOT-A-LEASE-ID".repeat(4) };
-    const preflights = () =>
-      rig.fake.requests.filter((request) => request.path === "/upload/preflight").length;
+    const reaching = (fake: FakeAgentDevice, path: string) =>
+      fake.requests.filter((request) => request.path === path).length;
+    const routes = [
+      ["/upload/preflight", { body: "{}" }],
+      ["/artifacts/a1", {}],
+    ] as const;
+    const cases = [
+      [named(1), secrets.one, "phone"],
+      [named(2), secrets.one, "simulators"],
+      [{}, secrets.one, "simulators"],
+      [named(1), secrets.two, "phone"],
+      [malformed, secrets.one, "refused"],
+    ] as const;
 
-    const answers: Response[] = [];
-    for (const headers of [other, malformed, {}]) {
-      const before = preflights();
-      const answer = await send(rig, "/upload/preflight", {
-        body: "{}",
-        headers,
-        token: secrets.two,
-      });
-      answers.push(answer);
-      expect(preflights()).toBe(before + 1);
+    for (const [path, body] of routes) {
+      for (const [headers, token, reaches] of cases) {
+        const [phoneBefore, simulatorsBefore] = [
+          reaching(rig.phone, path),
+          reaching(rig.fake, path),
+        ];
+
+        const answer = await send(rig, path, { ...body, headers, token });
+
+        expect([
+          reaching(rig.phone, path) - phoneBefore,
+          reaching(rig.fake, path) - simulatorsBefore,
+        ]).toEqual([reaches === "phone" ? 1 : 0, reaches === "simulators" ? 1 : 0]);
+        if (reaches === "refused") {
+          expect(answer.status).toBe(400);
+          expect(await answer.text()).toContain(
+            "the x-agent-device-lease-id header is not a lease id",
+          );
+        }
+      }
     }
-
-    expect(answers.map((answer) => answer.status)).toEqual([200, 200, 200]);
   });
 
   it("an `/rpc` body over 1 MiB, one that is not JSON, a JSON array, and an object with no `method` are each refused with their message and `id: null`, also while agent-device is unavailable, and neither simlock nor the agent-device daemon sees them", async () => {
@@ -3260,6 +3579,21 @@ describe("the agent-device front's request rules", () => {
       }
     });
 
+    it("on a phone lease the phone's own serial is forwarded to the phone daemon; another `serial` or `udid` is refused with `refused: simlock picks the device`", async () => {
+      const rig = await setUpWithPhone();
+      await granted(rig, 1, { physical: true, platform: "android" });
+      const reached = () => rig.phone.rpcRequests("agent_device.command").length;
+      await runCommand(rig, "snapshot", 1, { flags: { serial: phoneSerial } });
+      expect(reached()).toBe(1);
+
+      for (const flags of [{ serial: "emulator-5554" }, { udid: "00008030-000270803C28802E" }]) {
+        const answer = await envelopeOf(await runCommand(rig, "snapshot", 1, { flags }));
+
+        expect(answer.error).toMatchObject(refusal(simlockPicks));
+      }
+      expect(reached()).toBe(1);
+    });
+
     it("`--device` with the leased device's id, and its name with `_` for a space, extra spaces and other letter case, are forwarded unchanged", async () => {
       const rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });
@@ -3488,7 +3822,7 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` and an `imageTag` that is an object with `refused: malformed imageTag`, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
+    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` an `imageTag` that is an object with `refused: malformed imageTag` and a `physical` of `yes` or `1` with `refused: malformed physical` and no lease, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       await forwarded(rig, () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } }));
@@ -3505,6 +3839,10 @@ describe("the agent-device front's request rules", () => {
       );
       await refused(rig, () => allocate(rig, 2, { osVersion: 26 }), "refused: malformed osVersion");
       await refused(rig, () => allocate(rig, 2, { imageTag: {} }), "refused: malformed imageTag");
+      for (const physical of ["yes", 1]) {
+        await refused(rig, () => allocate(rig, 2, { physical }), "refused: malformed physical");
+      }
+      expect(await listed(rig)).toEqual([hex(1)]);
       await refused(
         rig,
         () => runCommand(rig, "snapshot", 1, { flags: { osVersion: 26 } }),
@@ -3727,7 +4065,7 @@ describe("the agent-device front's request rules", () => {
       const before = commandsReceived(rig).length;
 
       expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([]);
-      expect(commandsReceived(rig)).toHaveLength(before + 1);
+      expect(commandsReceived(rig)).toHaveLength(before);
       await granted(rig, 1);
       rig.fake.listDevices([...three, { id: idOf(rig, 2) }, { id: idOf(rig, 1) }]);
 
@@ -3749,7 +4087,7 @@ describe("the agent-device front's request rules", () => {
       expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([idOf(rig, 2)]);
     });
 
-    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer an empty list; `devices` with `meta.requestProgress` is refused", async () => {
+    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer `could not read the device list from the worker holding lease <id>`; `devices` with `meta.requestProgress` is refused", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       rig.fake.listDevices([{ id: idOf(rig, 1) }]);
@@ -3787,7 +4125,11 @@ describe("the agent-device front's request rules", () => {
       ];
       for (const body of unusable) {
         rig.fake.answerDevicesWith(body);
-        expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([]);
+        expect((await envelopeOf(await runCommand(rig, "devices", 1))).error).toMatchObject({
+          data: {
+            message: `could not read the device list from the worker holding lease ${hex(1)}`,
+          },
+        });
       }
       await refused(
         rig,

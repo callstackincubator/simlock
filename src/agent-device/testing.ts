@@ -696,6 +696,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
 export function agentDeviceModuleWith(fakes: {
   readonly upstream?: AgentDeviceUpstream;
+  readonly phoneUpstream?: AgentDeviceUpstream;
   readonly health?: AgentDeviceHealthProbe;
 }): OptionalModuleDefinition<unknown> {
   return {

@@ -80,6 +80,7 @@ async function arrange(version: string) {
     platforms: ["ios", "android"],
     processRunner: runner,
     processSupervisor: processes,
+    role: "simulators",
     tcpProbe: probe,
   });
   return { clock, supervisor, upstream: new SupervisorAgentDeviceUpstream(supervisor) };
