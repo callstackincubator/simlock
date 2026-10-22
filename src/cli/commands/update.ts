@@ -15,7 +15,6 @@ type Environment = CommandContext["environment"];
 
 interface Followed {
   readonly answer: Answer;
-  readonly from?: UpdateState;
   readonly interrupted?: true;
 }
 
@@ -57,17 +56,15 @@ class Follower {
   }
 
   async follow(first: Answer): Promise<Followed> {
-    const tracking = first.update ?? undefined;
-    if (tracking !== undefined) this.say(`Updating simlock ${tracking.from} → ${tracking.to}`);
+    if (first.update !== null)
+      this.say(`Updating simlock ${first.update.from} → ${first.update.to}`);
     let current: Answer | undefined = first;
     while (current?.update != null) {
       this.#show(current.update);
       await this.#pause();
       current = this.#stopped ? undefined : await this.#poll();
     }
-    return current === undefined
-      ? { answer: first, ...(tracking === undefined ? {} : { from: tracking }), interrupted: true }
-      : { answer: current, ...(tracking === undefined ? {} : { from: tracking }) };
+    return current === undefined ? { answer: first, interrupted: true } : { answer: current };
   }
 
   close(): Promise<void> {
@@ -178,14 +175,13 @@ function finish(
   say: (line: string) => void,
   json: boolean,
 ): number {
-  const { answer, from } = followed;
+  const { answer } = followed;
   if (followed.interrupted === true) {
     say("Stopped following. The update goes on; run simlock status to see it.");
     return 0;
   }
   const failure = answer.lastUpdateFailure;
-  const failed =
-    failure !== null && from !== undefined && failure.from === from.from && failure.to === from.to;
+  const failed = failure !== null;
   if (json) {
     writeResult((value) => environment.stdout.write(value), answer);
   } else if (failed) {

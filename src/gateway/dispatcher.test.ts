@@ -1305,6 +1305,20 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  describe("daemon.update", () => {
+    it("answers UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying a gateway cannot update itself yet", async () => {
+      const { dispatcher } = harness();
+
+      await expect(
+        dispatcher.dispatch("daemon.update", {}, session({ role: "admin" })),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_IN_GATEWAY_MODE",
+        details: { operation: "daemon.update" },
+        message: "daemon.update updates one machine's daemon; a gateway cannot update itself yet",
+      });
+    });
+  });
+
   describe("device.add and device.remove", () => {
     it("answer UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying to run the command on the worker the device is plugged into", async () => {
       const { dispatcher } = harness();

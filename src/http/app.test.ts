@@ -2597,6 +2597,14 @@ describe("POST /v1/update", () => {
     }
     expect(dispatcher.calls.at(-1)?.input).toEqual({});
 
+    const emptyJson = await app.request("/v1/update", {
+      headers: { ...operatorAuth, "content-type": "application/json" },
+      method: "POST",
+      body: "",
+    });
+    expect(emptyJson.status).toBe(200);
+    expect(dispatcher.calls.at(-1)?.input).toEqual({});
+
     const asAgent = await post(app, {}, agentAuth);
     expect(asAgent.status).toBe(403);
     expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");

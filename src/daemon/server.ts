@@ -1201,11 +1201,7 @@ export class DaemonServer {
       case "device.remove":
         return this.#dispatcher.dispatch("device.remove", frame.payload, this.#session(connection));
       case "daemon.update":
-        return this.#dispatcher.dispatch(
-          "daemon.update",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
+        return this.#dispatcher.dispatch("daemon.update", frame.payload, this.#session(connection));
       // why: "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`

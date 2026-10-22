@@ -3083,6 +3083,7 @@ describe("daemon.update", () => {
     readonly packageRoot?: string;
     readonly otherRoleRunning?: boolean;
     readonly npm?: FakeNpmCli;
+    readonly lease?: { readonly defaultTtlMs: number };
   }
   async function updateRig(leases: number, devices = 2, setup: RigSetup = {}) {
     const npm =
@@ -3094,6 +3095,7 @@ describe("daemon.update", () => {
     const launcher = setup.launcher ?? new FakeUpdaterLauncher();
     const harness = await createHarness({
       iosMaxDevices: devices,
+      ...(setup.lease === undefined ? {} : { lease: setup.lease }),
       update: {
         npm,
         launcher,
@@ -3176,6 +3178,13 @@ describe("daemon.update", () => {
     await held.client.request("lease.release", { leaseId: held.leaseIds[1] });
     await expect.poll(held.updateOf).toEqual(run("installing", false));
     expect(held.launcher.launches).toHaveLength(1);
+
+    const expiring = await updateRig(1, 2, { lease: { defaultTtlMs: 40 } });
+    await expiring.client.request("daemon.update", {});
+    expect(await expiring.updateOf()).toEqual(run("waiting", false, { leases: 1 }));
+    expiring.clock.advance(40);
+    await expect.poll(expiring.updateOf).toEqual(run("installing", false));
+    expect(expiring.launcher.launches).toHaveLength(1);
 
     const forced = await updateRig(2);
     await expect(forced.client.request("daemon.update", { force: true })).resolves.toMatchObject({
@@ -3345,6 +3354,30 @@ describe("daemon.update", () => {
         failure: failure("the updater exited with code 3"),
       },
       {
+        name: "the updater exits non-zero after it reported restarting",
+        script: { lines: [line({ stage: "installing" }), line({ stage: "restarting" })], exit: 2 },
+        update: null,
+        failure: failure("the updater exited with code 2", "restarting"),
+      },
+      {
+        name: "the updater's failed message is longer than 2000 characters",
+        script: {
+          lines: [line({ failed: { stage: "installing", message: "e".repeat(3000) } })],
+          exit: 1,
+        },
+        update: null,
+        failure: failure("e".repeat(2000)),
+      },
+      {
+        name: "the updater prints a line that is not one of its two shapes",
+        script: {
+          lines: [line({ stage: "restarting" }), line({ stage: "waiting" }), "not json"],
+          exit: 0,
+        },
+        update: run("restarting", false),
+        failure: null,
+      },
+      {
         name: "the updater cannot be started",
         script: { lines: [], exit: 0 },
         launcher: new (class extends FakeUpdaterLauncher {
@@ -3391,6 +3424,39 @@ describe("daemon.update", () => {
       }
     }
 
+    class FailsOnce extends FakeUpdaterLauncher {
+      #launched = 0;
+      override async launch(...args: Parameters<FakeUpdaterLauncher["launch"]>) {
+        await super.launch(...args);
+        const never = new Promise<never>(() => undefined);
+        return this.#launched++ === 0
+          ? {
+              lines: (async function* (): AsyncGenerator<string> {
+                yield* [];
+              })(),
+              exited: Promise.resolve(1),
+            }
+          : {
+              lines: (async function* (): AsyncGenerator<string> {
+                await never;
+                yield "";
+              })(),
+              exited: never,
+            };
+      }
+    }
+    const again = await updateRig(0, 2, { launcher: new FailsOnce() });
+    await again.client.request("daemon.update", {});
+    await expect
+      .poll(async () => (await again.client.request("daemon.update", { query: true })).payload)
+      .toMatchObject({
+        update: null,
+        lastUpdateFailure: { message: "the updater exited with code 1" },
+      });
+    await expect(again.client.request("daemon.update", {})).resolves.toMatchObject({
+      payload: { started: true, update: run("installing", false), lastUpdateFailure: null },
+    });
+
     const resultFile = (overrides: Record<string, unknown> = {}) =>
       JSON.stringify({
         from: "0.3.0",
@@ -3414,6 +3480,11 @@ describe("daemon.update", () => {
         },
       },
       { name: "a result file that is not valid", contents: "{not json", reported: null },
+      {
+        name: "a result file that cannot be read",
+        contents: new Error("EACCES: permission denied"),
+        reported: null,
+      },
       {
         name: "a result file with an unknown stage",
         contents: resultFile({ stage: "waiting" }),
@@ -3675,7 +3746,7 @@ async function createHarness(
       readonly version: string;
       readonly packageRoot?: string;
       readonly otherRoleRunning?: boolean;
-      readonly resultFile?: string;
+      readonly resultFile?: string | Error;
     };
   } = {},
 ) {
@@ -3709,11 +3780,21 @@ async function createHarness(
         : { slimmableOsVersions: options.slimmableOsVersions }),
     });
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
-  const updateFilesystem = new MemoryFilesystem();
+  const unreadable =
+    options.update?.resultFile instanceof Error ? options.update.resultFile : undefined;
+  const updateFilesystem =
+    unreadable === undefined
+      ? new MemoryFilesystem()
+      : new (class extends MemoryFilesystem {
+          override async readFile(...args: Parameters<MemoryFilesystem["readFile"]>) {
+            if (args[0] === "/data/update-result.json") throw unreadable;
+            return super.readFile(...args);
+          }
+        })();
   for (const path of ["/opt", "/opt/simlock", "/src", "/src/simlock", "/data"]) {
     await updateFilesystem.mkdir(path);
   }
-  if (options.update?.resultFile !== undefined) {
+  if (typeof options.update?.resultFile === "string") {
     await updateFilesystem.writeFileAtomic("/data/update-result.json", options.update.resultFile);
   }
   const wiring = testComponentWiring({

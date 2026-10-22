@@ -7242,7 +7242,7 @@ const EMPTY_STATUS = {
 
 describe("simlock update and simlock status", () => {
   type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateDaemon"]>>;
-  type Step = UpdateAnswer | SimlockError<"DAEMON_CONNECTION_LOST">;
+  type Step = UpdateAnswer | SimlockError;
   const lost = () =>
     new SimlockError("DAEMON_CONNECTION_LOST", "transport", "The daemon connection was lost", {});
   const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
@@ -7321,6 +7321,9 @@ describe("simlock update and simlock status", () => {
   }
 
   it("follows an update to simlock <v> is running, reports a failure and a rollback, says when nothing is needed, stops following on Ctrl-C only, prints --json, refuses bad input, and shows the version, the update and the last failure in simlock status", async () => {
+    let reconnects = 0;
+    // why: the follower reconnects every second and gives up when 15 minutes have passed since the last answer, so the last attempt is at 14:59 on the fake clock.
+    const RECONNECTS_IN_15_MINUTES = 899;
     const header = "Updating simlock 0.3.0 → 0.4.0\n";
     const wait =
       "Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.\n";
@@ -7331,6 +7334,7 @@ describe("simlock update and simlock status", () => {
       readonly code: number;
       readonly stdout: string;
       readonly calls?: readonly unknown[];
+      readonly reconnects?: number;
     }[] = [
       {
         name: "follows to running",
@@ -7393,9 +7397,31 @@ describe("simlock update and simlock status", () => {
           first: started(),
           polls: [answer({ update: state("restarting") }), lost()],
           after: [new Error("refused")],
+          onReconnect: () => {
+            reconnects += 1;
+          },
         },
         code: 1,
         stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nThe daemon did not come back; run simlock status.\n`,
+        reconnects: RECONNECTS_IN_15_MINUTES,
+      },
+      {
+        name: "stops with the daemon's own error when a poll is refused for a reason other than a lost connection",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [new SimlockError("UPDATE_RESOLVE_FAILED", "domain", "npm is down", {})],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\n`,
+      },
+      {
+        name: "prints its usage for --help and asks the daemon nothing",
+        argv: ["update", "--help"],
+        script: { first: answer() },
+        code: 0,
+        stdout: "Usage: simlock update [--version <version>] [--force] [--json]\n",
+        calls: [],
       },
       {
         name: "the latest version is the running one",
@@ -7470,8 +7496,10 @@ describe("simlock update and simlock status", () => {
         calls: [{}, { query: true }],
       },
     ];
-    for (const { name, argv, script, code, stdout, calls } of cases) {
+    for (const { name, argv, script, code, stdout, calls, reconnects: expected } of cases) {
+      reconnects = 0;
       const result = await runUpdate(argv, script);
+      if (expected !== undefined) expect(reconnects, name).toBe(expected);
       expect({ name, code: result.code, stdout: result.stdout }, name).toEqual({
         name,
         code,
