@@ -158,7 +158,7 @@ const SCENARIOS: readonly Scenario[] = [
       stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
       exit: 1,
       installs: ["simlock@0.4.0", "simlock@0.3.0"],
-      stops: 1,
+      stops: 2,
       startArgs: [started(), started()],
       signals: [],
       waitedAtLeastMs: 0,

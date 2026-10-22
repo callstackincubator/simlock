@@ -49,6 +49,15 @@ function sleep(clock: Clock, milliseconds: number): Promise<void> {
   });
 }
 
+async function waitUntilStopped({ clock, probe }: RunUpdaterOptions): Promise<boolean> {
+  const deadline = clock.now() + STOP_LIMIT_MS;
+  while (await probe.answers()) {
+    if (clock.now() >= deadline) return false;
+    await sleep(clock, POLL_MS);
+  }
+  return true;
+}
+
 function writeLine(options: RunUpdaterOptions, line: unknown): void {
   options.stdout.write(`${JSON.stringify(line)}\n`);
 }
@@ -63,19 +72,18 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
   }
   writeLine(options, { stage: "restarting" });
   await probe.stop();
-  const stopDeadline = clock.now() + STOP_LIMIT_MS;
-  while (await probe.answers()) {
-    if (clock.now() >= stopDeadline) {
-      options.supervisor.signal(options.pid, "SIGKILL");
-      break;
-    }
-    await sleep(clock, POLL_MS);
+  if (!(await waitUntilStopped(options))) {
+    options.supervisor.signal(options.pid, "SIGKILL");
   }
   await backupDatabases(options);
   const reason = await startDaemon(options);
   if (reason === undefined) {
     await options.filesystem.rm(join(options.dataDirectory, BACKUP_DIRECTORY));
     return 0;
+  }
+  if ((await probe.state()) !== undefined) {
+    await probe.stop();
+    await waitUntilStopped(options);
   }
   await options.filesystem.writeFileAtomic(
     join(options.dataDirectory, RESULT_FILE),
