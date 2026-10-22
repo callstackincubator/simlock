@@ -377,46 +377,47 @@ describe("the Update now dialog", () => {
 describe("the toast an update earns", () => {
   it("words the daemon's answer: started, following, upToDate and Update now accepted, and a refusal's title", () => {
     const running = { ...STARTED, stage: "installing" } as const;
-    const offered = (updateFacts: UpdateFacts) =>
-      workerActions(
+    const offered = (updateFacts: UpdateFacts) => {
+      const [, action] = workerActions(
         { connection: "connected", drained: false, id: "wrk_1", name: "mac-mini-1", updateFacts },
         "gateway",
-      ).find((action) => action.id !== "drain");
+      );
+      if (action?.outcome === undefined) throw new Error("no update action");
+      return { ...action, outcome: action.outcome };
+    };
     const update = offered(facts());
+    const force = offered(facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }));
     const upToDate = { started: false, update: null, upToDate: true, version: "0.3.0" };
-    const answers: readonly [string, unknown, string][] = [
+    const cases: readonly [typeof update, string, unknown, string][] = [
       [
+        update,
         "started",
         { started: true, update: running, upToDate: false, version: "0.3.0" },
         "Updating mac-mini-1 to 0.4.0",
       ],
       [
+        update,
         "following",
         { started: false, update: running, upToDate: false, version: "0.3.0" },
         "mac-mini-1 is already updating to 0.4.0",
       ],
-      ["upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
-      ["no body", undefined, "Updating mac-mini-1 to the latest version"],
-    ];
-    for (const [name, answer, title] of answers) {
-      expect(update?.outcome?.(answer), name).toEqual({ title });
-    }
-    const force = offered(facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }));
-    const forced: readonly [string, unknown, string][] = [
+      [update, "upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
+      [update, "no body", undefined, "Updating mac-mini-1 to the latest version"],
       [
-        "accepted",
+        force,
+        "force accepted",
         { started: true, update: running, upToDate: false },
         "mac-mini-1 installs 0.4.0 now",
       ],
-      ["upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
+      [force, "force upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
     ];
-    for (const [name, answer, title] of forced) {
-      expect(force?.outcome?.(answer), name).toEqual({ title });
+    for (const [action, name, answer, title] of cases) {
+      expect(action.outcome(answer), name).toEqual({ title });
     }
-    expect(force?.id).toBe("force-update");
-    expect(force?.success).toEqual({ title: "mac-mini-1 installs 0.4.0 now" });
-    expect([update?.timeoutMs, force?.timeoutMs]).toEqual([100_000, 100_000]);
-    expect([update?.failure, force?.failure]).toEqual(Array(2).fill("Couldn't update mac-mini-1"));
+    expect(force.id).toBe("force-update");
+    expect(force.success).toEqual({ title: "mac-mini-1 installs 0.4.0 now" });
+    expect([update.timeoutMs, force.timeoutMs]).toEqual([100_000, 100_000]);
+    expect([update.failure, force.failure]).toEqual(Array(2).fill("Couldn't update mac-mini-1"));
   });
 });
 
