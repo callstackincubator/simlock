@@ -654,6 +654,32 @@ describe("GatewayDispatcher", () => {
     }
   });
 
+  it("an operator-drained worker stays drained through its update, and a drain during an update leaves the update alone", async () => {
+    const { dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_1", client);
+    const update = {
+      forced: false,
+      from: "0.3.0",
+      stage: "installing",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
+    client.updateAnswer = { ...client.updateAnswer, started: true, update };
+
+    await dispatcher.dispatch("worker.update", { workerId: "wrk_1" }, session());
+    expect(workers.view("wrk_1")).toMatchObject({ drained: true, update });
+    workers.refresh("wrk_1", { update: null });
+    expect(workers.view("wrk_1")).toMatchObject({ drained: true, update: null });
+
+    await dispatcher.dispatch("worker.undrain", { workerId: "wrk_1" }, session());
+    workers.refresh("wrk_1", { update });
+    await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
+    expect(workers.view("wrk_1")).toMatchObject({ drained: true, update });
+  });
+
   it("refuses to remove a connected worker with WORKER_CONNECTED, naming it", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
