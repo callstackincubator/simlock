@@ -623,6 +623,14 @@ describe("SystemdServiceManager (#832)", () => {
         state: { state: "not-loaded", path: definition.path },
       },
     ];
+    const filesystem = new MemoryFilesystem();
+    for (const path of [node, main]) await put(filesystem, path);
+    await put(filesystem, definition.path, unitText(`${node} ${main}`));
+    const missing = new MissingSystemctlRunner();
+    expect(
+      await new SystemdServiceManager({ runner: missing, filesystem }).state(definition),
+      "systemctl missing",
+    ).toEqual({ state: "not-loaded", path: definition.path });
     for (const testCase of stateCases) {
       const filesystem = new MemoryFilesystem();
       for (const present of testCase.present) await put(filesystem, present);
@@ -664,6 +672,35 @@ describe("SystemdServiceManager (#832)", () => {
     await expect(refusal).rejects.toBeInstanceOf(ServiceFailedError);
     await expect(refusal).rejects.toThrow(`systemctl --user disable --now ${unit} failed: Nope`);
     expect(await kept.exists(definition.path)).toBe(true);
+
+    const reloadFails = new MemoryFilesystem();
+    await put(reloadFails, definition.path, "[Service]\nExecStart=a b\n");
+    const reload = new SystemdServiceManager({
+      runner: new ScriptedProcessRunner([
+        { match: systemctl("disable", "--now", unit), result: reply(0) },
+        { match: systemctl("daemon-reload"), result: reply(1, "", "Reload refused") },
+      ]),
+      filesystem: reloadFails,
+    }).uninstall(definition);
+    await expect(reload).rejects.toThrow(`systemctl --user daemon-reload failed: Reload refused`);
+    expect(await reloadFails.readFile(definition.path)).toBe("[Service]\nExecStart=a b\n");
+
+    const stuck = new MemoryFilesystem();
+    await put(stuck, definition.path, "[Service]\n");
+    const timeout = new SystemdServiceManager({
+      runner: new ScriptedProcessRunner([
+        {
+          match: systemctl("disable", "--now", unit),
+          result: { code: null, stdout: "", stderr: "" },
+        },
+      ]),
+      filesystem: stuck,
+    }).uninstall(definition);
+    await expect(timeout).rejects.toBeInstanceOf(ServiceFailedError);
+    await expect(timeout).rejects.toThrow(
+      `systemctl --user disable --now ${unit} did not finish within 10 s`,
+    );
+    expect(await stuck.exists(definition.path)).toBe(true);
   }
 
   it("an operator on Linux installs, starts and removes a systemd user unit", async () => {

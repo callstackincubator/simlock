@@ -375,8 +375,15 @@ export class SystemdServiceManager implements ServiceManager {
 
   async uninstall(definition: ServiceDefinition): Promise<void> {
     await this.checked(["disable", "--now", `${definition.name}.service`]);
-    await this.options.filesystem.rm(definition.path);
-    await this.checked(["daemon-reload"]);
+    const { filesystem } = this.options;
+    const text = await filesystem.readFile(definition.path);
+    await filesystem.rm(definition.path);
+    try {
+      await this.checked(["daemon-reload"]);
+    } catch (error: unknown) {
+      await filesystem.writeFileAtomic(definition.path, text);
+      throw error;
+    }
   }
 
   async start(definition: ServiceDefinition): Promise<void> {

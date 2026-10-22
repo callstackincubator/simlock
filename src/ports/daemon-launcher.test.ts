@@ -303,3 +303,41 @@ describe("launcherFor's fallback to spawning", () => {
     }
   });
 });
+
+describe("launcherFor with an installed service", () => {
+  it("starts an installed service through the manager that owns it, with that manager's definition", async () => {
+    const cases = [
+      { manager: "systemd" as const, path: "/home/me/.config/systemd/user/" },
+      { manager: "launchd" as const, path: "/home/me/Library/LaunchAgents/" },
+    ];
+    for (const testCase of cases) {
+      const serviceManager = new FakeServiceManager({
+        manager: testCase.manager,
+        state: { state: "installed", path: testCase.path },
+      });
+      const spawner = new FakeDaemonLauncher();
+      const launcher = launcherFor({
+        role: "worker",
+        root: "/home/me/.simlock",
+        dataDirectory: "/home/me/.simlock",
+        mainPath: "/opt/simlock/dist/daemon/main.js",
+        nodePath: "/opt/node/bin/node",
+        home: "/home/me",
+        env: {},
+        serviceManager,
+        notify: () => undefined,
+        spawner,
+      });
+
+      await launcher.launch();
+
+      expect(spawner.launches, testCase.manager).toBe(0);
+      expect(
+        serviceManager.starts.map((definition) => definition.path),
+        testCase.manager,
+      ).toEqual([
+        `${testCase.path}com.callstack.simlock.worker.${testCase.manager === "systemd" ? "service" : "plist"}`,
+      ]);
+    }
+  });
+});

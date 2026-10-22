@@ -681,6 +681,17 @@ describe("startDaemon", () => {
       }),
     ]);
     expect(productionServiceCheck("gateway", host)).toEqual({});
+
+    const systemd = productionServiceCheck("worker", {
+      ...host,
+      manager: { ...manager, manager: "systemd" },
+      home: "/home/me",
+      root: "/home/me/.simlock",
+    });
+    await systemd.serviceCheck?.check();
+    expect(seen.at(-1)?.path).toBe(
+      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+    );
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
