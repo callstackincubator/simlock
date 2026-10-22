@@ -94,19 +94,22 @@ export class RoutedHostLink implements HostLink {
   async #roleOf(request: Request, leaseId: string | undefined): Promise<Role> {
     const known = leaseId === undefined ? undefined : this.#roles.get(leaseId);
     if (known !== undefined) return known;
+    if (!(await this.#allocatesPhone(request))) return "simulators";
+    if (leaseId !== undefined) this.#roles.set(leaseId, "phones");
+    return "phones";
+  }
+
+  async #allocatesPhone(request: Request): Promise<boolean> {
     if (request.method !== "POST" || new URL(request.url).pathname !== `${FRONT_PREFIX}/rpc`) {
-      return "simulators";
+      return false;
     }
     const read = await readRpcBody(request.clone());
     if (read.kind !== "request" || classifyCall(read.method, read.params) !== "allocate") {
-      return "simulators";
+      return false;
     }
     const address = read.params["serial"] ?? read.params["udid"];
-    const phone = this.registry.snapshot.devices.some(
+    return this.registry.snapshot.devices.some(
       (device) => device.physical && device.driverDeviceId === address,
     );
-    if (!phone) return "simulators";
-    if (leaseId !== undefined) this.#roles.set(leaseId, "phones");
-    return "phones";
   }
 }
