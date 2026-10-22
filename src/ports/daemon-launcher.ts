@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, open, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /** Starts the detached daemon owned by the operating system rather than the CLI. */
@@ -85,11 +85,29 @@ export interface NodeDaemonLauncherOptions {
   readonly simlockHome: string;
 }
 
+/**
+ * why: the log lives in the data directory, and on a fresh machine this launch is what first
+ * creates it, so it is made owner-only here (`DATA_DIRECTORY_MODE`, which a test that loads this
+ * file alone in a child process cannot import), its parents left to the default and an existing
+ * one left as it is. `chmod` because the umask can only take bits from `mkdir`'s mode.
+ */
+async function createDataDirectory(directory: string): Promise<void> {
+  await mkdir(dirname(directory), { recursive: true });
+  try {
+    await mkdir(directory, { mode: 0o700 });
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST")
+      return;
+    throw error;
+  }
+  await chmod(directory, 0o700);
+}
+
 export class NodeDaemonLauncher implements DaemonLauncher {
   constructor(private readonly options: NodeDaemonLauncherOptions) {}
 
   async launch(): Promise<LaunchedDaemon> {
-    await mkdir(dirname(this.options.logPath), { recursive: true });
+    await createDataDirectory(dirname(this.options.logPath));
     // why: 0600 at creation, like the other files that hold secrets or state under the home:
     // this `open` is what first creates `daemon.log` for an auto-launched daemon -- the daemon's
     // own sink only appends to the file this one made.

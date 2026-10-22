@@ -27,7 +27,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Composition (`main.ts`)
 
-Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway's holds the `tokens` table only; closed last in `dispose`, or by `startDaemon` when the start fails after the open).
+Both modes: the data directory (`prepareDataDirectory`: created `0700` when missing; an existing one keeps its mode, and one group or others can reach gets one `warn` line once the logger exists) → config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway's holds the `tokens` table only; closed last in `dispose`, or by `startDaemon` when the start fails after the open).
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
@@ -46,7 +46,8 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 
 ## Connection (`server.ts`)
 
-1. **Claim** — `DaemonEndpointHost.start`: a live peer → `DaemonAlreadyRunningError`;
+1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when
+   missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`;
    a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver.
@@ -110,7 +111,10 @@ that lost the claim never touches it.
 
 Security model: cooperative identity, not a hostile-process boundary.
 
-- Every socket peer is the same OS user; file modes are the real boundary.
+- Every socket peer is the same OS user; file modes are the real boundary: the data
+  directory is created `0700` (`DATA_DIRECTORY_MODE`) by whoever makes it first (the
+  daemon, `NodeDaemonLauncher`, `config set`, service install), and its files are `0600`.
+  An existing directory is never chmod'ed; the daemon warns when group or others can reach it.
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
 - A worker that joins a fleet grants its gateway `admin` over itself.
