@@ -162,14 +162,14 @@ export type {
 export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";
 export { FakeNpmCli, NodeNpmCli, type NpmCli, type NpmOutcome } from "./npm-cli.js";
 export {
-  // fallow-ignore-next-line unused-re-export -- the launcher's callers arrive with the daemon's update call (#836).
+  // fallow-ignore-next-line unused-export -- the launcher's callers arrive with the daemon's update call (#836).
   FakeUpdaterLauncher,
-  // fallow-ignore-next-line unused-re-export-type -- same.
+  // fallow-ignore-next-line unused-type -- same.
   type LaunchedUpdater,
-  // fallow-ignore-next-line unused-re-export -- same.
+  // fallow-ignore-next-line unused-export -- same.
   NodeUpdaterLauncher,
-  // fallow-ignore-next-line unused-re-export-type -- same.
+  // fallow-ignore-next-line unused-type -- same.
   type UpdaterLaunch,
-  // fallow-ignore-next-line unused-re-export-type -- same.
+  // fallow-ignore-next-line unused-type -- same.
   type UpdaterLauncher,
 } from "./updater-launcher.js";
