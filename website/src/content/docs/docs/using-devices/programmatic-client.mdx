@@ -191,6 +191,7 @@ const answer = await admin.updateDaemon({ version: "0.4.0" });
 
 - `started` is true only for the call that began the update. A call while an update runs follows it (`started: false`, whatever `version` it names); `force` on a waiting update installs now.
 - `upToDate` is true when nothing was needed: the resolved version is the running one, or the running one is newer than `latest` and no `version` was named.
+- `latestVersion` is npm's newest Simlock version as the daemon last read it (at start, then every 24 hours), or `null` when it has not read one or `update.check` is `false`.
 - `{ query: true }` starts nothing and returns the same answer: poll it to follow the update. It works while the daemon restarts only by reconnecting, and across a protocol change: like `stopDaemon()`, `updateDaemon()` is accepted by a daemon on another protocol version, so a client that fails every other call with `PROTOCOL_VERSION_UNSUPPORTED` can still update it.
 - Refusals: `UPDATE_RESOLVE_FAILED`, `UPDATE_UNSUPPORTED_INSTALL` and `UPDATE_SHARED_INSTALL` (see [Errors](/simlock/docs/reference/errors#updating-simlock)). `version` must be an exact version such as `0.4.0` or `0.4.0-rc.1`.
 

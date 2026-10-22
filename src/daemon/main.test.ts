@@ -4160,7 +4160,7 @@ describe("startDaemon version check", () => {
     ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
       .daemon.latestVersion;
 
-  it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value", async () => {
+  it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value; a stopped daemon never schedules the next check", async () => {
     const pending: ((outcome: NpmOutcome) => void)[] = [];
     const npm: NpmCli = {
       view: () => new Promise<NpmOutcome>((resolve) => pending.push(resolve)),
@@ -4205,6 +4205,13 @@ describe("startDaemon version check", () => {
     disabled.clock.advance(2 * day);
     expect(off.calls).toEqual([]);
     expect(await latestOf(disabled.daemon)).toBeNull();
+
+    const stopping = await startChecked(npm);
+    expect(pending).toHaveLength(5);
+    await stopping.daemon.stop("test");
+    pending[4]?.({ ok: true, output: "0.7.0\n" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(stopping.clock.pendingTimerCount).toBe(0);
 
     const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
     const gateway = await startChecked(gatewayNpm, { role: "gateway" });
