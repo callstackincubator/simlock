@@ -124,13 +124,24 @@ export interface WorkerActionInput {
 
 // why: the daemon's answer to an update request: `daemon.update`'s answer with the worker's id.
 interface UpdateAnswer {
+  readonly started?: boolean;
+  readonly upToDate?: boolean;
+  readonly version?: string;
   readonly update?: { readonly to?: string } | null;
 }
 
 function updateToast(name: string): (answer: unknown) => ActionToast {
-  return (answer) => ({
-    title: `Updating ${name} to ${(answer as UpdateAnswer).update?.to ?? "the latest version"}`,
-  });
+  return (raw) => {
+    const answer = raw as UpdateAnswer;
+    const to = answer.update?.to ?? "the latest version";
+    if (answer.upToDate === true) return { title: `${name} already runs ${answer.version ?? ""}` };
+    return {
+      title:
+        answer.started === false
+          ? `${name} is already updating to ${to}`
+          : `Updating ${name} to ${to}`,
+    };
+  };
 }
 
 // why: above the gateway's 90 s uplink limit, so the gateway's answer arrives before the console
