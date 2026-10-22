@@ -960,6 +960,46 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(simulatorsDown)).toEqual([]);
   });
 
+  it("a command, a heartbeat, a release and a `devices` naming a phone lease reach the phone daemon, those naming a simulator lease reach the simulator daemon, and `devices` with one lease of each answers both devices, each from its daemon", async () => {
+    const rig = await setUpWithPhone();
+    await granted(rig, 1, { physical: true, platform: "android" });
+    await granted(rig, 2, { platform: "android" });
+    rig.phone.listDevices([{ id: phoneSerial }, { id: "emulator-5600" }]);
+    rig.fake.listDevices([{ id: idOf(rig, 2) }, { id: "emulator-5601" }]);
+    const reached = (fake: FakeAgentDevice, method: string) => fake.rpcRequests(method).length;
+    const calls = [
+      ["agent_device.command", (n: number) => command(rig, "snapshot", n)],
+      ["agent_device.lease.heartbeat", (n: number) => heartbeat(rig, n)],
+      ["agent_device.lease.release", (n: number) => release(rig, n)],
+    ] as const;
+
+    for (const [method, send] of calls) {
+      const [phoneBefore, simulatorBefore] = [
+        reached(rig.phone, method),
+        reached(rig.fake, method),
+      ];
+      await send(1);
+      expect([reached(rig.phone, method), reached(rig.fake, method)]).toEqual([
+        phoneBefore + 1,
+        simulatorBefore,
+      ]);
+      await send(2);
+      expect([reached(rig.phone, method), reached(rig.fake, method)]).toEqual([
+        phoneBefore + 1,
+        simulatorBefore + 1,
+      ]);
+    }
+
+    await granted(rig, 3, { physical: true, platform: "android" });
+    await granted(rig, 4, { platform: "android" });
+    rig.fake.listDevices([{ id: idOf(rig, 4) }, { id: "emulator-5601" }]);
+    const answer = await envelopeOf(await runCommand(rig, "devices", undefined));
+    const data = answer.result?.["data"] as { devices: { id: string }[] } | undefined;
+    expect(data?.devices.map((device) => device.id).sort()).toEqual(
+      [phoneSerial, idOf(rig, 4)].sort(),
+    );
+  });
+
   it("allocate with `physical: false` and `physical: null` are granted", async () => {
     const rig = await setUp({ maxRunning: 8 });
 
