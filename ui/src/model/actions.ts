@@ -148,13 +148,26 @@ function updateBase(worker: WorkerActionInput) {
   } as const;
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function updateBody(worker: WorkerActionInput, facts: UpdateFacts): string {
+  if (worker.connection === "incompatible") {
+    return "The gateway can't talk to it until then. It finishes its leases first.";
+  }
+  return facts.leased > 0
+    ? `It takes no new leases and waits for its ${plural(facts.leased, "lease")} to end. It restarts by itself.`
+    : "It has no leases, so it installs at once. It restarts by itself.";
+}
+
 function updateAction(worker: WorkerActionInput, facts: UpdateFacts): ItemAction {
   const from = facts.version === undefined ? "" : ` from ${facts.version}`;
   return {
     ...updateBase(worker),
     body: {},
     confirm: {
-      body: "It has no leases, so it installs at once. It restarts by itself.",
+      body: updateBody(worker, facts),
       busy: "Starting…",
       confirm: "Update",
       title: `Update ${worker.name}${from} to ${facts.latestVersion ?? "the latest version"}?`,
