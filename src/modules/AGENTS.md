@@ -7,11 +7,11 @@ Imported by: `daemon/main.ts` (the factory and types); on a gateway it is handed
 
 ## Files
 
-| File         | Role                                                                                                                                                                    |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`   | `OptionalModuleDefinition`, `ModuleConfig`, `WorkerModule`, `WorkerHooks`, `WorkerContext`, the by-shape copies                                                         |
-| `host.ts`    | `createModuleHost`: checks names, loads turned-on modules (`role: "worker"` or `"gateway"`), runs hooks; a gateway host runs `beforeDrain` under the same 30 s deadline |
-| `testing.ts` | Fake module and context for tests and the conformance suite                                                                                                             |
+| File         | Role                                                                                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `types.ts`   | `OptionalModuleDefinition` (with optional `http` route data, read only by the OpenAPI document), `ModuleConfig`, `WorkerModule`, `WorkerHooks`, `WorkerContext`, the by-shape copies |
+| `host.ts`    | `createModuleHost`: checks names, loads turned-on modules (`role: "worker"` or `"gateway"`), runs hooks; a gateway host runs `beforeDrain` under the same 30 s deadline              |
+| `testing.ts` | Fake module and context for tests and the conformance suite                                                                                                                          |
 
 ## Rules
 

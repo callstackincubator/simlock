@@ -886,7 +886,7 @@ class SimlockClientImpl {
     input: unknown,
   ): z.infer<(typeof OPERATIONS)[Name]["input"]> {
     const result = OPERATIONS[name].input.safeParse(input);
-    if (result.success) return result.data;
+    if (result.success) return result.data as z.infer<(typeof OPERATIONS)[Name]["input"]>;
     throw new SimlockError(
       "BAD_REQUEST",
       "protocol",
@@ -900,7 +900,7 @@ class SimlockClientImpl {
     payload: unknown,
   ): z.infer<(typeof OPERATIONS)[Name]["output"]> {
     const result = OPERATIONS[name].output.safeParse(payload);
-    if (result.success) return result.data;
+    if (result.success) return result.data as z.infer<(typeof OPERATIONS)[Name]["output"]>;
     throw new SimlockError(
       "BAD_FRAME",
       "protocol",

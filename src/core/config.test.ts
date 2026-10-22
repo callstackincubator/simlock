@@ -2419,6 +2419,19 @@ describe("loadConfig over http.proxyAuth", () => {
     }
   });
 
+  it("refuses a wrong-type header, jwksUrl or signOutUrl with our message", async () => {
+    const cases = [
+      ["header", "an HTTP header name"],
+      ["jwksUrl", "an https:// URL, or http:// on 127.0.0.1, ::1 or localhost"],
+      ["signOutUrl", "an http:// or https:// URL"],
+    ] as const;
+    for (const [key, message] of cases) {
+      await expect(load({ ...complete, [key]: 7 }), key).rejects.toThrow(
+        `Invalid config value for "http.proxyAuth.${key}": expected ${message}`,
+      );
+    }
+  });
+
   it("accepts an issuer of 128 characters and refuses one of 129", async () => {
     await expect(load({ ...complete, issuer: "i".repeat(128) })).resolves.toBeDefined();
 

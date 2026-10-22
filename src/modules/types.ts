@@ -200,9 +200,25 @@ export interface GatewayContext<C> {
   cancelPending(requesterId: string): Promise<unknown>;
 }
 
+// why: plain data in a `definition.ts`, which imports nothing from its module; the OpenAPI document is its only reader.
+export interface ModuleHttpResponse {
+  readonly description: string;
+  readonly contentTypes?: readonly string[];
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly errorCodes?: readonly string[];
+}
+
+export interface ModuleHttpRoute {
+  readonly method: "get" | "post" | "put" | "patch" | "delete";
+  readonly path: string;
+  readonly description: string;
+  readonly statuses: Readonly<Record<number, ModuleHttpResponse>>;
+}
+
 export interface OptionalModuleDefinition<C> {
   readonly name: string;
   readonly config: ModuleConfig<C>;
+  readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
 }
