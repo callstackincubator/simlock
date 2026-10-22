@@ -87,13 +87,13 @@ rerunnable_runs() {
     -q '.[] | select(.pull_request == null) | .title, .body // ""' |
     grep -oE '(e2e|src|ui)/[A-Za-z0-9_./-]+\.(test|spec)\.tsx?' || true)
   red=$(checks | grep -e '^fail ' -e '^cancel ' || true)
-  others=$(echo "$red" | awk '$3 != "Quality"')
+  others=$(echo "$red" | sed 's/^[^ ]* [^ ]* //' | grep -vxE 'Quality|Console' || true)
   echo "$red" | grep . |
     while read -r bucket link name; do
-      # why: Quality only sums up the CI jobs it needs and fails when one was cancelled, so
-      # next to a red job, judging it would call that job's cancel this PR's to fix. Red
-      # alone, Quality was cancelled itself and is re-run like any job.
-      [ "$name" != Quality ] || [ -z "$others" ] || continue
+      # why: Quality and Console only sum up the CI jobs they need and fail when one was
+      # cancelled, so next to a red job, judging them would call that job's cancel this PR's to
+      # fix. Red alone, they were cancelled themselves and are re-run like any job.
+      case $name in Quality | Console) [ -z "$others" ] || continue ;; esac
       run=$(echo "$link" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\).*#\1#p')
       [ -n "$run" ] || { echo none; continue; }
       if [ "$bucket" = fail ]; then

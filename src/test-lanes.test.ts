@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,8 +182,13 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
     );
     const runs = lane.match(/pnpm test:console[^\n]*/g) ?? [];
     expect(runs, "the lane's chromium-only and every-browser commands").toHaveLength(2);
+    expect(lane, "the shard index comes from the matrix").toMatch(
+      /\n {10}SHARD: \$\{\{ matrix\.shard \}\}/,
+    );
     for (const run of runs) {
-      expect(/--shard[= ]"?\S+\/(\d+)"?/.exec(run)?.[1], run).toBe(String(shards.length));
+      expect(run, "index from the matrix, count from its length").toMatch(
+        new RegExp(`--shard="\\$SHARD/${shards.length}"`),
+      );
     }
 
     expect(required, "a job named Console").toBeDefined();
@@ -190,6 +196,15 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
     expect(requiredId).not.toBe(laneId);
     expect(requiredJob).toMatch(new RegExp(`\\n {4}needs: \\[[^\\]]*\\b${laneId}\\b`));
     expect(requiredJob).toMatch(/\n {4}if: (\$\{\{ )?always\(\)/);
-    expect(requiredJob).toContain("needs.*.result");
+    const body = /\n {8}run: \|\n((?: {10}[^\n]*\n?)+)/.exec(requiredJob)?.[1] ?? "";
+    expect(body, "the Console job's run script").not.toBe("");
+    const verdict = (results: string) =>
+      spawnSync("bash", ["-c", body.replace(/^ {10}/gm, "")], {
+        env: { PATH: process.env["PATH"] ?? "", RESULTS: results },
+      }).status;
+    expect(verdict("success skipped success"), "every need passed or was skipped").toBe(0);
+    for (const bad of ["success failure", "cancelled", "skipped failure skipped"]) {
+      expect(verdict(bad), `results ${bad}`).toBe(1);
+    }
   });
 });
