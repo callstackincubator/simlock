@@ -561,6 +561,7 @@ export class DaemonServer {
       // rather than being taken on trust here, one step from the ring buffer.
       this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
     }
+    await this.#reportUpdateResult();
     this.#logger.info("Daemon started", {
       config: configSnapshot,
       protocolVersion: this.#protocolRange.max,
@@ -575,6 +576,15 @@ export class DaemonServer {
     // this monitor.
     this.#engine?.healthMonitor?.start();
     this.#engine?.physicalDeviceWatcher?.start();
+  }
+
+  // why: a stale or unreadable result file must never keep the daemon from starting.
+  async #reportUpdateResult(): Promise<void> {
+    try {
+      await this.#engine?.update?.readResultFile();
+    } catch (error: unknown) {
+      this.#logger.warn("Could not read the update result file", { message: errorMessage(error) });
+    }
   }
 
   async #converge(): Promise<void> {

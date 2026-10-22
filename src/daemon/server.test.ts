@@ -3316,6 +3316,7 @@ describe("daemon.update", () => {
     const cases: readonly {
       readonly name: string;
       readonly script: { readonly lines: readonly string[]; readonly exit: number };
+      readonly launcher?: FakeUpdaterLauncher;
       readonly update: unknown;
       readonly failure: ReturnType<typeof failure> | null;
     }[] = [
@@ -3343,9 +3344,20 @@ describe("daemon.update", () => {
         update: null,
         failure: failure("the updater exited with code 3"),
       },
+      {
+        name: "the updater cannot be started",
+        script: { lines: [], exit: 0 },
+        launcher: new (class extends FakeUpdaterLauncher {
+          override launch(): Promise<never> {
+            return Promise.reject(new Error("spawn node ENOENT"));
+          }
+        })(),
+        update: null,
+        failure: failure("spawn node ENOENT"),
+      },
     ];
-    for (const { name, script, update, failure: expected } of cases) {
-      const rig = await updateRig(0, 2, { launcher: new FakeUpdaterLauncher(script) });
+    for (const { name, script, launcher, update, failure: expected } of cases) {
+      const rig = await updateRig(0, 2, { launcher: launcher ?? new FakeUpdaterLauncher(script) });
       const failed: unknown[] = [];
       rig.eventBus.subscribe("daemon.update-failed", (envelope) => failed.push(envelope.payload));
       await rig.client.request("daemon.update", {});

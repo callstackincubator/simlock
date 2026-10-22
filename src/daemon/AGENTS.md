@@ -53,7 +53,9 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 2. Otherwise the version is resolved with `NpmCli.view` (`simlock@latest`, or `simlock@<version>`): a failure is `UPDATE_RESOLVE_FAILED`. The running version, or a running version newer than `latest` when no `version` was named (`isNewerVersion`), answers `upToDate` and changes nothing.
 3. Then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and the other role's socket (`socketHeld`, `UPDATE_SHARED_INSTALL`: a worker and a gateway of one user share one install) are checked, so a refusal changes nothing.
 4. The update enters `waiting` with the lease count, leasing's update hold closes admission, and `daemon.update-started` is emitted.
-5. The updater is launched at once with no leases or with `force`, else when the last `lease.released` or `lease.expired` leaves none.
+5. The updater is launched at once with no leases or with `force`, else when the last `lease.released` or `lease.expired` leaves none (`UpdaterLauncher`; `installing`).
+6. The updater's stdout lines move the state (`{"stage":"restarting"}`) or end it: a `{"failed":…}` line, a non-zero exit while this daemon runs, or a launch that throws sets `lastUpdateFailure` (the message cut to 2000 characters), clears the state, releases the update hold and emits `daemon.update-failed`. The first failure of a run wins.
+7. `DaemonServer.start` calls `readResultFile()` after `daemon.started`: a rolled back update leaves `update-result.json`, and this start sets `lastUpdateFailure` from it, emits `daemon.update-failed` and deletes the file. A file that does not parse is deleted and reports nothing.
 
 The state lives in memory only.
 
