@@ -1000,6 +1000,41 @@ describe("GatewayService", () => {
       await harness.service.stop();
     });
 
+    it("shows a worker's update after daemon.update-started and its failure after daemon.update-failed, without waiting for the periodic refresh", async () => {
+      const worker = new ScriptedWorkerClient();
+      const harness = await joined(worker);
+      const base = statusFixture();
+      const update = {
+        forced: false,
+        from: "0.3.0",
+        stage: "installing",
+        startedAt: 1_000,
+        to: "0.4.0",
+      } as const;
+      const failure = {
+        at: 2_000,
+        from: "0.3.0",
+        message: "npm failed",
+        stage: "installing",
+        to: "0.4.0",
+      } as const;
+
+      worker.status = { ...base, daemon: { ...base.daemon, update } };
+      worker.pushEvent({ event: "daemon.update-started" });
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.update).toEqual(update));
+
+      worker.status = { ...base, daemon: { ...base.daemon, lastUpdateFailure: failure } };
+      worker.pushEvent({ event: "daemon.update-failed" });
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")).toMatchObject({
+          lastUpdateFailure: failure,
+          update: null,
+        }),
+      );
+
+      await harness.service.stop();
+    });
+
     it("drops a worker's install after component.install-failed, without waiting for the periodic refresh", async () => {
       const worker = new ScriptedWorkerClient();
       worker.status = statusFixture({ installs: [install] });
