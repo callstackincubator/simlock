@@ -37,7 +37,7 @@ export function formatWorkers(
             : ` -- ${entry.name} ${entry.state}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${capabilities}${load}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${installs}`;
     })
     .join("\n");
 }
@@ -55,6 +55,21 @@ function workerState(worker: WorkerView): string {
     ...(worker.health === "starting" ? ["starting"] : []),
     ...(worker.drained ? ["drained"] : []),
   ].join(", ");
+}
+
+function workerVersion(worker: WorkerView): string {
+  const { latestVersion, update, version } = worker;
+  const available =
+    version !== undefined && latestVersion != null && isNewerVersion(latestVersion, version)
+      ? ` (${latestVersion} available)`
+      : "";
+  const running = version === undefined ? "" : ` -- simlock ${version}${available}`;
+  return `${running}${update == null ? "" : ` -- updating to ${update.to}: ${updateStage(update)}`}`;
+}
+
+function updateStage(update: NonNullable<WorkerView["update"]>): string {
+  if (update.stage !== "waiting") return update.stage;
+  return `waiting for ${update.leases} ${update.leases === 1 ? "lease" : "leases"}`;
 }
 
 function leaseCount(worker: WorkerView): string {

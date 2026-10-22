@@ -65,7 +65,7 @@ import type {
   StatusGetOutput,
   TokenListOutput,
 } from "../simlock-client/client.js";
-import { connectSimlockAdmin } from "../admin/index.js";
+import { connectSimlockAdmin, type WorkerView } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
 import { buildCliEnvironment } from "./environment.js";
@@ -4281,6 +4281,70 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain("incompatible");
     expect(output.stdout).toContain("protocol 4-4 vs gateway 5-5");
+  });
+
+  it("worker list shows a worker's version, the latest only when newer, and its update stage", async () => {
+    const waiting = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const cases: readonly {
+      expected: string;
+      latestVersion: string | null;
+      update: WorkerView["update"];
+      version: string | undefined;
+    }[] = [
+      {
+        expected: " -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: waiting for 2 leases",
+        latestVersion: "0.4.0",
+        update: waiting,
+        version: "0.3.0",
+      },
+      {
+        expected: " -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: installing",
+        latestVersion: "0.4.0",
+        update: {
+          forced: false,
+          from: "0.3.0",
+          stage: "installing",
+          startedAt: 1_000,
+          to: "0.4.0",
+        },
+        version: "0.3.0",
+      },
+      {
+        expected: " -- updating to 0.4.0: waiting for 1 lease",
+        latestVersion: null,
+        update: { ...waiting, leases: 1 },
+        version: undefined,
+      },
+      { expected: " -- simlock 0.4.0", latestVersion: "0.4.0", update: null, version: "0.4.0" },
+      { expected: " -- simlock 0.5.0", latestVersion: "0.4.0", update: null, version: "0.5.0" },
+      { expected: " -- simlock 0.4.0", latestVersion: null, update: null, version: "0.4.0" },
+    ];
+    for (const { expected, latestVersion, update, version } of cases) {
+      const output = outputCapture();
+      const worker = {
+        ...connectedWorker,
+        latestVersion,
+        update,
+        ...(version === undefined ? {} : { version }),
+      };
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ listWorkers: () => Promise.resolve({ workers: [worker] }) }),
+      });
+
+      await runCli(["worker", "list"], environment);
+
+      expect(output.stdout, expected).toContain(expected);
+      if (!expected.includes("available")) expect(output.stdout).not.toContain("available");
+      if (update === null) expect(output.stdout).not.toContain("updating");
+    }
   });
 
   it("emits the raw contract value under --json", async () => {
