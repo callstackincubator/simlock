@@ -117,42 +117,51 @@ class Follower {
 
 class GaveUp extends Error {}
 
-async function run(
-  argv: readonly string[],
-  { environment, token }: CommandContext,
-): Promise<number> {
+function parseUpdateArgs(argv: readonly string[]) {
   const values = commandArgs(argv, {
     force: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
     version: { type: "string" },
   });
-  if (values.help) {
-    environment.stdout.write(USAGE);
-    return 0;
-  }
   const version = typeof values.version === "string" ? values.version : undefined;
   if (version !== undefined && !updateRequestedVersionSchema.safeParse(version).success) {
     throw new UsageError("--version takes a version, e.g. 0.4.0");
   }
-  const json = values.json === true;
+  return {
+    help: values.help === true,
+    json: values.json === true,
+    request: {
+      ...(version === undefined ? {} : { version }),
+      ...(values.force === true ? { force: true } : {}),
+    },
+    version,
+  };
+}
+
+async function run(
+  argv: readonly string[],
+  { environment, token }: CommandContext,
+): Promise<number> {
+  const args = parseUpdateArgs(argv);
+  if (args.help) {
+    environment.stdout.write(USAGE);
+    return 0;
+  }
   const say = (line: string): void => {
-    if (!json) environment.stdout.write(`${line}\n`);
+    if (!args.json) environment.stdout.write(`${line}\n`);
   };
   const client = await connectDaemonClient(environment, token);
   const termination = waitForTermination(environment.signals);
   const follower = new Follower(client, environment, token, say, termination);
   try {
-    const first = await client.updateDaemon({
-      ...(version === undefined ? {} : { version }),
-      ...(values.force === true ? { force: true } : {}),
-    });
+    const first = await client.updateDaemon(args.request);
     if (first.upToDate) {
-      if (json) writeResult((value) => environment.stdout.write(value), first);
-      else say(upToDateMessage(first, version));
+      if (args.json) writeResult((value) => environment.stdout.write(value), first);
+      else say(upToDateMessage(first, args.version));
       return 0;
     }
-    return await finish(await follower.follow(first), environment, say, json);
+    return await finish(await follower.follow(first), environment, say, args.json);
   } catch (error: unknown) {
     if (!(error instanceof GaveUp)) throw error;
     say("The daemon did not come back; run simlock status.");
