@@ -604,6 +604,8 @@ async function composeDaemon(
       registry,
       eventBus,
       clock,
+      filesystem,
+      otherRoleRunning: async () => false,
       version,
       packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
       simlockHome: resolveSimlockHome(),

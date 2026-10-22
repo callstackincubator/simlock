@@ -4,7 +4,7 @@ import type { EventBus } from "../bus/index.js";
 import type { UpdateFailure, UpdateState } from "../contract/index.js";
 import type { Registry } from "../core/index.js";
 import type { UpdateHold } from "../leasing/index.js";
-import type { Clock, DaemonRole, NpmCli, UpdaterLauncher } from "../ports/index.js";
+import type { Clock, DaemonRole, Filesystem, NpmCli, UpdaterLauncher } from "../ports/index.js";
 
 export interface UpdateInput {
   readonly version?: string | undefined;
@@ -36,6 +36,8 @@ export interface UpdateCoordinatorOptions {
   readonly registry: Pick<Registry, "snapshot">;
   readonly eventBus: Pick<EventBus, "emit" | "subscribe">;
   readonly clock: Clock;
+  readonly filesystem: Filesystem;
+  readonly otherRoleRunning: () => Promise<boolean>;
   readonly version: string;
   readonly packageRoot: string;
   readonly simlockHome: string;

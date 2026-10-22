@@ -40,6 +40,7 @@ import {
   ScriptedProcessRunner,
   type IpcConnection,
   type Logger,
+  type NpmOutcome,
   type ProcessRunner,
   type ProcessStreamOptions,
   type StreamingProcessHandle,
@@ -3074,12 +3075,29 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 });
 
 describe("daemon.update", () => {
-  async function updateRig(leases: number, devices = 2) {
-    const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] });
+  interface RigSetup {
+    readonly version?: string;
+    readonly view?: NpmOutcome;
+    readonly packageRoot?: string;
+    readonly otherRoleRunning?: boolean;
+  }
+  async function updateRig(leases: number, devices = 2, setup: RigSetup = {}) {
+    const npm = new FakeNpmCli({
+      view: [setup.view ?? { ok: true, output: "0.4.0" }],
+      globalRoot: [{ ok: true, output: "/opt" }],
+    });
     const launcher = new FakeUpdaterLauncher();
     const harness = await createHarness({
       iosMaxDevices: devices,
-      update: { npm, launcher, version: "0.3.0" },
+      update: {
+        npm,
+        launcher,
+        version: setup.version ?? "0.3.0",
+        ...(setup.packageRoot === undefined ? {} : { packageRoot: setup.packageRoot }),
+        ...(setup.otherRoleRunning === undefined
+          ? {}
+          : { otherRoleRunning: setup.otherRoleRunning }),
+      },
     });
     const client = await createClient(harness.socketPath);
     await hello(client);
@@ -3127,7 +3145,7 @@ describe("daemon.update", () => {
       },
     });
     expect(await idle.updateOf()).toEqual(run("installing", false));
-    expect(idle.npm.calls).toEqual([{ method: "view", spec: "simlock@latest" }]);
+    expect(idle.npm.calls[0]).toEqual({ method: "view", spec: "simlock@latest" });
     expect(idle.launcher.launches).toEqual([
       {
         entry: "/opt/simlock/dist/updater/main.js",
@@ -3172,7 +3190,10 @@ describe("daemon.update", () => {
     expect(waiting.started).toEqual([{ from: "0.3.0", to: "0.4.0", forced: false }]);
 
     const converge = deferred<void>();
-    const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] });
+    const npm = new FakeNpmCli({
+      view: [{ ok: true, output: "0.4.0" }],
+      globalRoot: [{ ok: true, output: "/opt" }],
+    });
     const launcher = new FakeUpdaterLauncher();
     const starting = await createHarness({
       converge: () => converge.promise,
@@ -3190,6 +3211,92 @@ describe("daemon.update", () => {
     await expect(parked).resolves.toMatchObject({
       payload: { started: true, update: run("installing", false) },
     });
+  });
+
+  it("refuses an update that cannot resolve, change or install anything, and answers upToDate when nothing is needed", async () => {
+    const newerThanLatest = { version: "0.5.0-rc.1" };
+    const cases: readonly {
+      readonly name: string;
+      readonly setup: RigSetup;
+      readonly input?: Record<string, unknown>;
+      readonly reply: Record<string, unknown>;
+    }[] = [
+      {
+        name: "npm cannot resolve the version",
+        setup: { view: { ok: false, message: "No match found for version 9.9.9" } },
+        input: { version: "9.9.9" },
+        reply: {
+          ok: false,
+          error: {
+            code: "UPDATE_RESOLVE_FAILED",
+            message: "could not resolve simlock@9.9.9: No match found for version 9.9.9",
+          },
+        },
+      },
+      {
+        name: "the latest version is the running one",
+        setup: { view: { ok: true, output: "0.3.0" } },
+        reply: { ok: true, payload: { started: false, upToDate: true, resolved: "0.3.0" } },
+      },
+      {
+        name: "the named version is the running one",
+        setup: { view: { ok: true, output: "0.3.0" } },
+        input: { version: "0.3.0" },
+        reply: { ok: true, payload: { started: false, upToDate: true, resolved: "0.3.0" } },
+      },
+      {
+        name: "the running version is newer than the latest and none was named",
+        setup: newerThanLatest,
+        reply: {
+          ok: true,
+          payload: { started: false, upToDate: true, resolved: "0.4.0", version: "0.5.0-rc.1" },
+        },
+      },
+      {
+        name: "simlock was not installed with npm",
+        setup: { packageRoot: "/src/simlock" },
+        reply: {
+          ok: false,
+          error: {
+            code: "UPDATE_UNSUPPORTED_INSTALL",
+            message:
+              "simlock was not installed with npm i -g (found /src/simlock). Update it by hand.",
+          },
+        },
+      },
+      {
+        name: "the other role's daemon of this user runs",
+        setup: { otherRoleRunning: true },
+        reply: {
+          ok: false,
+          error: {
+            code: "UPDATE_SHARED_INSTALL",
+            message:
+              "the gateway daemon of this user runs from the same install; stop it first with simlock --gateway daemon stop",
+          },
+        },
+      },
+    ];
+    for (const { name, setup, input = {}, reply } of cases) {
+      const rig = await updateRig(0, 2, setup);
+      expect(await rig.client.request("daemon.update", input), name).toMatchObject(reply);
+      expect(await rig.updateOf(), name).toBeNull();
+      expect(rig.launcher.launches, name).toEqual([]);
+      await expect(
+        rig.client.request("lease.request", {
+          requesterId: "agent-after",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          platform: "ios",
+        }),
+        name,
+      ).resolves.toMatchObject({ ok: true });
+    }
+
+    const downgrade = await updateRig(0, 2, { ...newerThanLatest });
+    await expect(
+      downgrade.client.request("daemon.update", { version: "0.4.0" }),
+    ).resolves.toMatchObject({ payload: { started: true, upToDate: false, resolved: "0.4.0" } });
   });
 
   it("refuses a new and a queued lease request with DAEMON_UPDATING while a held lease renews and releases as usual", async () => {
@@ -3319,6 +3426,8 @@ async function createHarness(
       readonly npm: FakeNpmCli;
       readonly launcher: FakeUpdaterLauncher;
       readonly version: string;
+      readonly packageRoot?: string;
+      readonly otherRoleRunning?: boolean;
     };
   } = {},
 ) {
@@ -3352,6 +3461,10 @@ async function createHarness(
         : { slimmableOsVersions: options.slimmableOsVersions }),
     });
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
+  const updateFilesystem = new MemoryFilesystem();
+  for (const path of ["/opt", "/opt/simlock", "/src", "/src/simlock"]) {
+    await updateFilesystem.mkdir(path);
+  }
   const wiring = testComponentWiring({
     clock: clock,
     drivers: [driver],
@@ -3437,7 +3550,9 @@ async function createHarness(
             eventBus,
             clock,
             version: options.update.version,
-            packageRoot: "/opt/simlock",
+            filesystem: updateFilesystem,
+            otherRoleRunning: async () => options.update?.otherRoleRunning ?? false,
+            packageRoot: options.update.packageRoot ?? "/opt/simlock",
             simlockHome: "/home/simlock",
             role: "worker",
             logPath: "/data/daemon.log",
