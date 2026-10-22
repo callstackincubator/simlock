@@ -3079,6 +3079,7 @@ describe("daemon.update", () => {
   interface RigSetup {
     readonly version?: string;
     readonly view?: NpmOutcome;
+    readonly launcher?: FakeUpdaterLauncher;
     readonly packageRoot?: string;
     readonly otherRoleRunning?: boolean;
     readonly npm?: FakeNpmCli;
@@ -3090,7 +3091,7 @@ describe("daemon.update", () => {
         view: [setup.view ?? { ok: true, output: "0.4.0" }],
         globalRoot: [{ ok: true, output: "/opt" }],
       });
-    const launcher = new FakeUpdaterLauncher();
+    const launcher = setup.launcher ?? new FakeUpdaterLauncher();
     const harness = await createHarness({
       iosMaxDevices: devices,
       update: {
@@ -3124,7 +3125,7 @@ describe("daemon.update", () => {
         .update;
     return { ...harness, client, launcher, leaseIds, npm, started, updateOf };
   }
-  const run = (stage: "waiting" | "installing", forced: boolean, extra = {}) => ({
+  const run = (stage: "waiting" | "installing" | "restarting", forced: boolean, extra = {}) => ({
     stage,
     from: "0.3.0",
     to: "0.4.0",
@@ -3301,6 +3302,139 @@ describe("daemon.update", () => {
       code: "FORBIDDEN",
     });
     await refused.close();
+  });
+
+  it("follows the updater's lines in status.get, turns a failed line or a non-zero exit into lastUpdateFailure and daemon.update-failed and serves leases again, and reports a result file at start and deletes it", async () => {
+    const line = (value: unknown) => JSON.stringify(value);
+    const failure = (message: string, stage = "installing") => ({
+      stage,
+      from: "0.3.0",
+      to: "0.4.0",
+      message,
+      at: 1_000,
+    });
+    const cases: readonly {
+      readonly name: string;
+      readonly script: { readonly lines: readonly string[]; readonly exit: number };
+      readonly update: unknown;
+      readonly failure: ReturnType<typeof failure> | null;
+    }[] = [
+      {
+        name: "the updater reports restarting",
+        script: { lines: [line({ stage: "installing" }), line({ stage: "restarting" })], exit: 0 },
+        update: run("restarting", false),
+        failure: null,
+      },
+      {
+        name: "the updater reports a failed install",
+        script: {
+          lines: [
+            line({ stage: "installing" }),
+            line({ failed: { stage: "installing", message: "npm error code EACCES" } }),
+          ],
+          exit: 1,
+        },
+        update: null,
+        failure: failure("npm error code EACCES"),
+      },
+      {
+        name: "the updater exits non-zero with no failed line",
+        script: { lines: [line({ stage: "installing" })], exit: 3 },
+        update: null,
+        failure: failure("the updater exited with code 3"),
+      },
+    ];
+    for (const { name, script, update, failure: expected } of cases) {
+      const rig = await updateRig(0, 2, { launcher: new FakeUpdaterLauncher(script) });
+      const failed: unknown[] = [];
+      rig.eventBus.subscribe("daemon.update-failed", (envelope) => failed.push(envelope.payload));
+      await rig.client.request("daemon.update", {});
+      await expect.poll(rig.updateOf, { message: name }).toEqual(update);
+      const status = (await rig.client.request("status.get", {})).payload as {
+        daemon: { lastUpdateFailure: unknown };
+      };
+      expect(status.daemon.lastUpdateFailure, name).toEqual(expected);
+      expect(failed, name).toEqual(
+        expected === null
+          ? []
+          : [
+              {
+                stage: expected.stage,
+                from: expected.from,
+                to: expected.to,
+                message: expected.message,
+              },
+            ],
+      );
+      if (expected !== null) {
+        await expect(
+          rig.client.request("lease.request", {
+            requesterId: "agent-after",
+            model: "iPhone 16",
+            osVersion: "26.5",
+            platform: "ios",
+          }),
+          name,
+        ).resolves.toMatchObject({ ok: true });
+      }
+    }
+
+    const resultFile = (overrides: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        from: "0.3.0",
+        to: "0.4.0",
+        stage: "restarting",
+        message: "0.4.0 did not start: health failed",
+        at: 500,
+        rolledBack: true,
+        ...overrides,
+      });
+    for (const { name, contents, reported } of [
+      {
+        name: "a result file from a rolled back update",
+        contents: resultFile(),
+        reported: {
+          stage: "restarting",
+          from: "0.3.0",
+          to: "0.4.0",
+          message: "0.4.0 did not start: health failed",
+          at: 500,
+        },
+      },
+      { name: "a result file that is not valid", contents: "{not json", reported: null },
+      {
+        name: "a result file with an unknown stage",
+        contents: resultFile({ stage: "waiting" }),
+        reported: null,
+      },
+    ]) {
+      const harness = await createHarness({
+        update: {
+          npm: new FakeNpmCli(),
+          launcher: new FakeUpdaterLauncher(),
+          version: "0.3.0",
+          resultFile: contents,
+        },
+      });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+      const status = (await client.request("status.get", {})).payload as {
+        daemon: { lastUpdateFailure: unknown };
+      };
+      expect(status.daemon.lastUpdateFailure, name).toEqual(reported);
+      expect(
+        harness.eventBus
+          .replay()
+          .filter((envelope) => envelope.event === "daemon.update-failed")
+          .map((envelope) => envelope.payload),
+        name,
+      ).toEqual(
+        reported === null
+          ? []
+          : [{ stage: reported.stage, from: "0.3.0", to: "0.4.0", message: reported.message }],
+      );
+      expect(await harness.updateFilesystem.exists("/data/update-result.json"), name).toBe(false);
+    }
   });
 
   it("refuses an update that cannot resolve, change or install anything, and answers upToDate when nothing is needed", async () => {
@@ -3529,6 +3663,7 @@ async function createHarness(
       readonly version: string;
       readonly packageRoot?: string;
       readonly otherRoleRunning?: boolean;
+      readonly resultFile?: string;
     };
   } = {},
 ) {
@@ -3563,8 +3698,11 @@ async function createHarness(
     });
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
   const updateFilesystem = new MemoryFilesystem();
-  for (const path of ["/opt", "/opt/simlock", "/src", "/src/simlock"]) {
+  for (const path of ["/opt", "/opt/simlock", "/src", "/src/simlock", "/data"]) {
     await updateFilesystem.mkdir(path);
+  }
+  if (options.update?.resultFile !== undefined) {
+    await updateFilesystem.writeFileAtomic("/data/update-result.json", options.update.resultFile);
   }
   const wiring = testComponentWiring({
     clock: clock,
@@ -3652,6 +3790,7 @@ async function createHarness(
             clock,
             version: options.update.version,
             filesystem: updateFilesystem,
+            dataDirectory: "/data",
             otherRoleRunning: async () => options.update?.otherRoleRunning ?? false,
             packageRoot: options.update.packageRoot ?? "/opt/simlock",
             simlockHome: "/home/simlock",
@@ -3667,7 +3806,18 @@ async function createHarness(
     await daemon.start();
   }
 
-  return { clock, config, daemon, driver, engine, eventBus, registry, socketPath, state };
+  return {
+    clock,
+    config,
+    daemon,
+    driver,
+    engine,
+    eventBus,
+    registry,
+    socketPath,
+    state,
+    updateFilesystem,
+  };
 }
 
 /**

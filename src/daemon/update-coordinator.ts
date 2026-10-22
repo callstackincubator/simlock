@@ -29,6 +29,7 @@ export interface UpdateOutcome extends UpdateProgress {
 export interface UpdateCoordinator {
   request(input: UpdateInput): Promise<UpdateOutcome>;
   state(): UpdateProgress;
+  readResultFile(): Promise<void>;
 }
 
 export interface UpdateCoordinatorOptions {
@@ -43,6 +44,7 @@ export interface UpdateCoordinatorOptions {
   readonly version: string;
   readonly packageRoot: string;
   readonly simlockHome: string;
+  readonly dataDirectory: string;
   readonly role: DaemonRole;
   readonly logPath: string;
   readonly pid: number;
@@ -176,6 +178,8 @@ class Coordinator implements UpdateCoordinator {
       logPath: this.options.logPath,
     });
   }
+
+  async readResultFile(): Promise<void> {}
 
   #outcome(started: boolean, resolved: string | null): UpdateOutcome {
     return { ...this.state(), started, upToDate: false, resolved };

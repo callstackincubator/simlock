@@ -616,6 +616,7 @@ async function composeDaemon(
       version,
       packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
       simlockHome: resolveSimlockHome(),
+      dataDirectory,
       role,
       logPath: join(dataDirectory, "daemon.log"),
       pid: process.pid,

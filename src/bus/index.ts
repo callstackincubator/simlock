@@ -261,6 +261,12 @@ export interface EventMap {
   };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
+  "daemon.update-failed": {
+    readonly stage: "installing" | "restarting";
+    readonly from: string;
+    readonly to: string;
+    readonly message: string;
+  };
   "daemon.update-started": {
     readonly from: string;
     readonly to: string;
