@@ -1,22 +1,56 @@
 name: Release
 
-# Cuts a release from main. release-it (configured in package.json) runs `pnpm check`, bumps the
-# version from the conventional commits since the last tag, writes CHANGELOG.md, pushes the
-# release commit and tag, and creates the GitHub release.
+# Cuts a release from main, by hand: Actions → Release → Run workflow, with the bump. Nothing
+# irreversible happens before the package is built and checked:
 #
-# It runs here rather than on a laptop because main's ruleset accepts no direct push from a
-# person, and agents push with a maintainer's account. GitHub Actions is the ruleset's only
-# bypass, and agents may not start this workflow (`gh workflow run` is denied in
-# .claude/settings.json).
+#   plan      the next version (0.X for a feature, 0.X.Y for a patch, from package.json), after
+#             checking that main's CI passed on this commit and that the tag and the npm version
+#             are free
+#   build     the package at that version, on macOS so dist/bin/ holds both iOS capture programs
+#             (Linux cannot build them); its tarball is the one artifact every later job ships
+#   tag       the release commit (package.json, CHANGELOG.md) and the tag v0.X.Y, pushed to main
+#   publish   that tarball to npm through trusted publishing (OIDC, no stored token), with
+#             provenance
+#   release   the GitHub release, with the same notes as CHANGELOG.md and the tarball attached
+#   website   the docs site, from the release commit (.github/workflows/website.yml)
+#
+# `dry_run` stops after build, with the tarball to inspect, and may run from any branch (a release
+# only from main). The version and changelog arithmetic is `node scripts/release.mjs`.
+#
+# Why it is shaped this way:
+# - Every action is pinned to a commit. Nothing is cached (no actions/cache, no setup-node cache):
+#   a cache another run wrote cannot hand this one its files. Dependencies come from the lockfile
+#   with lifecycle scripts off; the scrcpy server is checked against its pinned SHA-256 by the
+#   build.
+# - Each job holds the one permission it needs, and the checkout keeps no credentials: the push in
+#   tag is the only step that sees a write token, and publish has only the OIDC token, in the
+#   `release` environment that npm's trusted publisher is bound to, so no other workflow, job or
+#   branch can mint one.
+# - Every job works from the commit plan saw (`github.sha`), and the release commit is pushed only
+#   if main still points there, so main moving during the run cannot change what ships. The
+#   tarball publish and release attach is the one build proved.
+# - Nightly builds would be a `schedule` trigger: plan would name a channel, with a version like
+#   0.X.Y-nightly.<date> and the `nightly` dist-tag, and tag, release and website would skip for
+#   it. Nothing else changes.
+#
+# One-time setup, outside this file: an npm trusted publisher for `simlock` (owner
+# callstackincubator, repository simlock, workflow release.yml, environment release, with
+# `npm publish` allowed); a `release` environment on the repository whose deployments may come
+# from main only; main's ruleset letting GitHub Actions push. Agents cannot start this workflow
+# (`gh workflow run` is denied in .claude/settings.json).
 
 on:
   workflow_dispatch:
     inputs:
-      increment:
-        description: "Version bump. auto reads it from the commits since the last release."
+      bump:
+        description: "feature moves 0.X, patch moves 0.X.Y; auto is feature when a commit since the last tag is a feat or a breaking change"
         type: choice
-        options: [auto, patch, minor, major]
+        options: [auto, feature, patch]
         default: auto
+      dry_run:
+        description: "Plan and build only; push, publish, release and deploy nothing"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -28,19 +62,84 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
-    if: github.ref == 'refs/heads/main'
+  plan:
+    name: Plan
+    # why: a dry run pushes and publishes nothing, so it may try a branch; a release is main's.
+    if: github.ref == 'refs/heads/main' || inputs.dry_run
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-    timeout-minutes: 20
+      contents: read
+      checks: read
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      tag: ${{ steps.next.outputs.tag }}
+      bump: ${{ steps.next.outputs.bump }}
+      previous_tag: ${{ steps.next.outputs.previous_tag }}
+      dist_tag: latest
     steps:
-      # Full history and tags: release-it reads the commits since the last tag. The token is kept
-      # so the release commit and tag can be pushed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          # why: the tags say what the last release was, and the commits since it say what this
+          # one is.
           fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for name in Quality Fallow Console; do
+            passed=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=$name&per_page=20" \
+              --jq '[.check_runs[] | select(.conclusion == "success")] | length')
+            if [ "$passed" -eq 0 ]; then
+              echo "::error::$name has not passed on $GITHUB_SHA; release a commit main's CI is green on"
+              exit 1
+            fi
+          done
+      - name: Next version
+        id: next
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -o pipefail
+          previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -n "$previous" ]; then range="$previous..HEAD"; else range=HEAD; fi
+          git log --format='%s%n%b' "$range" | node scripts/release.mjs plan --bump "$BUMP" | tee -a "$GITHUB_OUTPUT"
+          echo "previous_tag=$previous" | tee -a "$GITHUB_OUTPUT"
+      - name: The tag and the npm version are free
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -o pipefail
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG exists already"
+            exit 1
+          fi
+          published=$(curl -fsS https://registry.npmjs.org/simlock | jq -r --arg v "$VERSION" '.versions[$v].version // empty')
+          if [ -n "$published" ]; then
+            echo "::error::simlock@$VERSION is on npm already"
+            exit 1
+          fi
+
+  build:
+    name: Build
+    needs: plan
+    # why: dist/bin/ holds two Swift programs that only a Mac with Xcode builds; a package built
+    # on Linux would stream no iOS screen for anyone who installs it.
+    runs-on: macos-15
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -50,15 +149,184 @@ jobs:
           corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Release
+      - name: Version
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          INCREMENT: ${{ inputs.increment }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: node scripts/release.mjs bump "$VERSION"
+      - name: Build
+        run: pnpm run build
+      - name: Both iOS capture programs built
         run: |
+          for program in simlock-screen-capture simlock-device-capture; do
+            if [ ! -x "dist/bin/$program" ]; then
+              echo "::error::dist/bin/$program is missing; a release ships both iOS capture programs"
+              exit 1
+            fi
+          done
+      - name: Pack
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/package"
+          # why: `prepare` installs git hooks, which a tarball does not need and this checkout
+          # cannot run.
+          pnpm pack --config.ignore-scripts=true --pack-destination "$RUNNER_TEMP/package"
+          cd "$RUNNER_TEMP/package"
+          tar tzf "simlock-$VERSION.tgz" | tee contents.txt
+          for file in package/dist/cli/main.js package/dist/bin/simlock-screen-capture package/dist/bin/simlock-device-capture package/dist/vendor/scrcpy/NOTICE.md; do
+            grep -qx "$file" contents.txt || { echo "::error::$file is not in the tarball"; exit 1; }
+          done
+          rm contents.txt
+          shasum -a 256 "simlock-$VERSION.tgz" | tee SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: ${{ runner.temp }}/package
+          if-no-files-found: error
+          retention-days: 7
+
+  tag:
+    name: Tag
+    needs: [plan, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          PREVIOUS: ${{ needs.plan.outputs.previous_tag }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/notes"
+          args=(-f "tag_name=$TAG" -f "target_commitish=$GITHUB_SHA")
+          if [ -n "$PREVIOUS" ]; then args+=(-f "previous_tag_name=$PREVIOUS"); fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body \
+            | tee "$RUNNER_TEMP/notes/notes.md"
+      - name: Release commit and tag
+        id: commit
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          PREVIOUS: ${{ needs.plan.outputs.previous_tag }}
+        run: |
+          node scripts/release.mjs bump "$VERSION"
+          node scripts/release.mjs changelog "$VERSION" "$PREVIOUS" "$RUNNER_TEMP/notes/notes.md"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ "$INCREMENT" = auto ]; then
-            pnpm release --ci
-          else
-            pnpm release "$INCREMENT" --ci
+          git add package.json CHANGELOG.md
+          git commit -m "chore(release): $VERSION"
+          git tag -a "$TAG" -m "simlock $VERSION"
+          git show --stat HEAD
+          echo "sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_OUTPUT"
+      - name: Push
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        # why: the lease fails the push when main moved since plan, instead of releasing a commit
+        # nobody checked; the pair goes atomically so a tag never exists without its commit.
+        run: |
+          git push --atomic --force-with-lease="refs/heads/main:$GITHUB_SHA" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            HEAD:refs/heads/main "refs/tags/$TAG"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to npm
+    needs: [plan, build, tag]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 10
+    steps:
+      # why: trusted publishing needs npm 11.5.1 or later; Node 24 bundles one. No checkout: the
+      # tarball is the package, and npm run inside the repository would refuse its devEngines.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: ${{ runner.temp }}/package
+      - name: The tarball is the planned version, and npm can publish without a token
+        working-directory: ${{ runner.temp }}/package
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -o pipefail
+          shasum -a 256 -c SHA256SUMS.txt
+          packed=$(tar -xOzf "simlock-$VERSION.tgz" package/package.json | jq -r .version)
+          if [ "$packed" != "$VERSION" ]; then
+            echo "::error::the tarball is simlock@$packed, not $VERSION"
+            exit 1
           fi
+          npm --version
+          node -e 'const [a, b, c] = process.versions.npm.split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }'
+      - name: Publish
+        working-directory: ${{ runner.temp }}/package
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          DIST_TAG: ${{ needs.plan.outputs.dist_tag }}
+        run: npm publish "simlock-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
+
+  release:
+    name: GitHub release
+    needs: [plan, tag, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: ${{ runner.temp }}/package
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes
+      - name: Create the release
+        working-directory: ${{ runner.temp }}/package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes/notes.md" \
+            "simlock-$VERSION.tgz" SHA256SUMS.txt
+
+  website:
+    name: Website
+    needs: [tag, release]
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/website.yml
+    with:
+      ref: ${{ needs.tag.outputs.sha }}

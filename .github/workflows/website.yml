@@ -1,18 +1,12 @@
 name: Website
 
+# Builds the site (website/) from a commit and deploys it to GitHub Pages. It deploys at the end of
+# every release, from the release commit, and by hand (Actions → Website → Run workflow); not on
+# every push to main, so the site describes the version on npm rather than what main is becoming.
+# A pull request that touches the site builds it without deploying, so a page that breaks the
+# build fails its pull request instead of a release.
+
 on:
-  push:
-    branches: [main]
-    paths:
-      [
-        "website/**",
-        "docs/*.md",
-        "src/**",
-        "package.json",
-        "pnpm-lock.yaml",
-        ".github/workflows/website.yml",
-      ]
-  # why: a page that breaks the build fails its pull request instead of main; only main deploys.
   pull_request:
     paths:
       [
@@ -24,24 +18,37 @@ on:
         ".github/workflows/website.yml",
       ]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or tag to build; empty builds the branch the run starts from"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit to build"
+        type: string
+        required: true
 
 permissions: {}
-
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('website-pr-{0}', github.event.pull_request.number) || 'pages' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    # why: a newer push to the same pull request makes the older build moot; a deploy's build is
+    # never cancelled.
+    concurrency:
+      group: website-build-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
         working-directory: website
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -72,6 +79,11 @@ jobs:
     permissions:
       pages: write
       id-token: write
+    # why: on the job, not the workflow, so it holds when a release calls this workflow too; two
+    # deploys at once would race for the same site.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

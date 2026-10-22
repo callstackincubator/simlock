@@ -56,27 +56,16 @@ async function waitingCount(host: RunningDaemon): Promise<number> {
   return requests.length;
 }
 
-// why: the charts draw complete minutes only, so a run is charted once the minute it started in is
-// over; the Granted tile is the live figure and needs no such wait.
+// why: holds a lease while a request waits, then releases it so stats has a real nonzero wait.
 async function scriptedRun(host: RunningDaemon): Promise<void> {
-  const minute = Math.floor(Date.now() / 60_000);
   const held = await host.cli([...LEASE, "--agent-id", "holder", "--detach"]);
   expect(held.code, held.stderr).toBe(0);
   host.cliBackground([...LEASE, "--agent-id", "waiter"]);
   await waitFor(async () => (await waitingCount(host)) === 1, { label: "a request waiting" });
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const released = await host.cli(["release", (held.json as { lease: { id: string } }).lease.id]);
   expect(released.code, released.stderr).toBe(0);
   await waitFor(async () => (await waitingCount(host)) === 0, { label: "the request granted" });
-  const minuteOver = (minute + 1) * 60_000 + 1_000;
-  await waitFor(() => Date.now() >= minuteOver, { label: "the minute over", timeout: 70_000 });
-  await waitFor(
-    async () => {
-      const stats = await statsOf(host, "1h");
-      return CHARTS.every((key) => stats.series.some((point) => point[key] !== null));
-    },
-    { label: "the run in a completed minute", timeout: 30_000 },
-  );
 }
 
 async function openOverview(page: Page, host: RunningDaemon, path = "/"): Promise<void> {
@@ -117,15 +106,13 @@ function expectedTables(stats: Stats): readonly (readonly string[])[] {
 }
 
 test.describe("the Overview's figures", () => {
-  // why: a run is charted once its minute is over, which can take most of a minute.
-  test.describe.configure({ timeout: 150_000 });
-
   test("picking each of 1 hour, 6 hours, 24 hours and 7 days writes its ?range=, and the Wait p95 tile and the two chart tables equal GET /v1/stats", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       await scriptedRun(host);
+      await host.prepareHistoricalUsage();
       await openOverview(page, host);
 
       for (const range of RANGES) {
@@ -156,6 +143,7 @@ test.describe("the Overview's figures", () => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       await scriptedRun(host);
+      await host.prepareHistoricalUsage();
       await openOverview(page, host, "/?range=6h");
       await expect(page.getByRole("radio", { name: "6 hours" })).toBeChecked();
       await expect(tile(page, "Wait p95")).toBeVisible();
@@ -180,6 +168,7 @@ test.describe("the Overview's figures", () => {
     });
     try {
       await scriptedRun(host);
+      await host.prepareHistoricalUsage();
       await openOverview(page, host, "/?range=24h");
       await expect(tile(page, "Wait p95")).toBeVisible();
       const before = {
