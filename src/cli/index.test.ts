@@ -7292,8 +7292,14 @@ describe("simlock update and simlock status", () => {
     const after = [...(script.after ?? [])];
     let pollCount = 0;
     const signals = new EventEmitter();
-    const clientOver = (steps: Step[], first?: UpdateAnswer | SimlockError) =>
-      fakeClient({
+    let opened = 0;
+    const closedClients = new Set<number>();
+    const clientOver = (steps: Step[], first?: UpdateAnswer | SimlockError) => {
+      const id = opened++;
+      return fakeClient({
+        close: async () => {
+          closedClients.add(id);
+        },
         updateDaemon: async (input) => {
           calls.push(input);
           const isFirst = first !== undefined && calls.length === 1;
@@ -7304,6 +7310,7 @@ describe("simlock update and simlock status", () => {
           return step;
         },
       });
+    };
     const environment = output.environmentWith({
       clock,
       connectAdmin: async () => clientOver(polls, script.first),
@@ -7317,7 +7324,14 @@ describe("simlock update and simlock status", () => {
       signals: signals as unknown as CliEnvironment["signals"],
     });
     const code = await runCli(argv, environment);
-    return { code, calls, stdout: output.stdout, stderr: output.stderr };
+    return {
+      code,
+      calls,
+      stdout: output.stdout,
+      stderr: output.stderr,
+      opened,
+      closed: closedClients.size,
+    };
   }
 
   it("follows an update to simlock <v> is running, reports a failure and a rollback, says when nothing is needed, stops following on Ctrl-C only, prints --json, refuses bad input, and shows the version, the update and the last failure in simlock status", async () => {
@@ -7397,6 +7411,8 @@ describe("simlock update and simlock status", () => {
           first: started(),
           polls: [lost()],
           after: [
+            answer({ health: "starting" }),
+            answer({ health: "starting" }),
             answer({ health: "starting" }),
             answer({
               lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
@@ -7522,6 +7538,7 @@ describe("simlock update and simlock status", () => {
         stdout,
       });
       if (calls !== undefined) expect(result.calls, name).toEqual(calls);
+      expect(result.closed, `${name}: every client opened is closed`).toBe(result.opened);
     }
 
     const refusals: readonly [readonly string[], number, string][] = [

@@ -101,6 +101,8 @@ class Follower {
       await this.#pause();
       if (this.#stopped) return undefined;
       try {
+        // why: each pass opens its own connection, so the one before it is closed first and none outlives the command.
+        await this.close();
         this.#client = await connectDaemonClient(this.environment, this.token, { launch: false });
         const answer = await this.#client.updateDaemon({ query: true });
         this.#lastAnswerAt = this.environment.clock.now();
