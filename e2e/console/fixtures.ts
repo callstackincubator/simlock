@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   createServer,
@@ -51,7 +52,7 @@ export interface RunningDaemon extends ConsoleDaemon {
   /** `simlock daemon start` on the same home, port and tokens. */
   start(): Promise<void>;
   /** Stops the daemon and deletes its home. */
-  dispose(): Promise<void>;
+  dispose(options?: { readonly preservePages?: readonly Page[] }): Promise<void>;
 }
 
 export interface StartOptions {
@@ -61,6 +62,32 @@ export interface StartOptions {
 }
 
 const FAKE_DRIVER_MODULE = join(REPO_ROOT, "dist/e2e/index.js");
+const activePages = new Set<Page>();
+
+async function isProcessAlive(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
+  if (!existsSync(socketPath)) return [];
+  return new Promise((resolve) => {
+    execFile("lsof", ["-t", socketPath], (_error, stdout) => {
+      resolve(
+        stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== "")
+          .map(Number)
+          .filter((pid) => Number.isInteger(pid)),
+      );
+    });
+  });
+}
 
 /**
  * Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
@@ -120,19 +147,39 @@ export async function startDaemon(
   };
   const socketPath = join(dataDirectory, "daemon.sock");
   const background = new Set<CliBackgroundHandle>();
+  const daemonPids = new Set<number>();
+  let daemonStarted = false;
+  let daemonMayBeRunning = false;
   const stop = async () => {
-    await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
-    await waitFor(() => !existsSync(socketPath), { timeout: 10_000 }).catch(() => undefined);
+    if (!daemonMayBeRunning) return;
+    const pids = await pidsHoldingSocket(socketPath);
+    for (const pid of pids) daemonPids.add(pid);
+    if (pids.length === 0 && !existsSync(socketPath)) {
+      daemonMayBeRunning = false;
+      return;
+    }
+    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+    if (daemonStarted) expect(stopped.code, stopped.stderr).toBe(0);
+    await waitFor(() => !existsSync(socketPath), {
+      timeout: 10_000,
+      label: "daemon socket removed",
+    });
+    daemonStarted = false;
+    daemonMayBeRunning = false;
   };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
     const before = (await readLog()).length;
+    daemonMayBeRunning = true;
     const started = await cli([...gatewayFlag, "daemon", "start"], env, { timeout: 30_000 });
     // why: `daemon start` exits 0 once the daemon answers from its socket, which can come before
     // the daemon fails to bind its HTTP port and stops (#553). So a clean exit is not yet a start:
     // wait for this start's own "HTTP gateway listening" or `EADDRINUSE` line (the log keeps the
     // earlier starts' lines), and fail on the latter.
-    if (started.code === 0 && !httpConfig.enabled) return;
+    if (started.code === 0 && !httpConfig.enabled) {
+      daemonStarted = true;
+      return;
+    }
     if (started.code === 0) {
       await waitFor(
         async () => {
@@ -141,7 +188,10 @@ export async function startDaemon(
         },
         { label: "the daemon's HTTP listener" },
       );
-      if (!(await readLog()).slice(before).includes("EADDRINUSE")) return;
+      if (!(await readLog()).slice(before).includes("EADDRINUSE")) {
+        daemonStarted = true;
+        return;
+      }
     }
     // why: a failed start reports only what the CLI saw while polling the socket, and `dispose`
     // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.
@@ -149,9 +199,42 @@ export async function startDaemon(
     const tail = (await readLog()).split("\n").slice(-20).join("\n");
     expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
   };
-  const dispose = async () => {
+  const dispose = async (options: { readonly preservePages?: readonly Page[] } = {}) => {
+    const preserved = new Set(options.preservePages ?? []);
+    for (const page of activePages) {
+      if (preserved.has(page)) continue;
+      if (page.isClosed()) {
+        activePages.delete(page);
+        continue;
+      }
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      await page.close();
+      activePages.delete(page);
+    }
     for (const handle of background) handle.kill("SIGTERM");
+    await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
     await stop();
+    try {
+      await waitFor(
+        async () =>
+          !(await Promise.all([...daemonPids].map((pid) => isProcessAlive(pid)))).some(Boolean),
+        { timeout: 5_000, interval: 100, label: "daemon process exited" },
+      );
+    } catch {
+      for (const pid of daemonPids) {
+        if (!(await isProcessAlive(pid))) continue;
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (killError: unknown) {
+          if ((killError as NodeJS.ErrnoException).code !== "ESRCH") throw killError;
+        }
+      }
+      await waitFor(
+        async () =>
+          !(await Promise.all([...daemonPids].map((pid) => isProcessAlive(pid)))).some(Boolean),
+        { timeout: 10_000, interval: 100, label: "daemon process exited after SIGKILL" },
+      );
+    }
     await rm(home, { force: true, recursive: true });
   };
   try {
@@ -263,9 +346,12 @@ export async function startFleet(
   }
 }
 
-export async function disposeFleet(fleet: Fleet): Promise<void> {
-  await Promise.all(fleet.workers.map((worker) => worker.dispose()));
-  await fleet.gateway.dispose();
+export async function disposeFleet(
+  fleet: Fleet,
+  options: { readonly preservePages?: readonly Page[] } = {},
+): Promise<void> {
+  await Promise.all(fleet.workers.map((worker) => worker.dispose(options)));
+  await fleet.gateway.dispose(options);
 }
 
 /** The protocol range the stand-in below claims: older than any this gateway speaks. */
@@ -470,6 +556,16 @@ export const test = base.extend<
   { proxied: ProxiedDaemon },
   { daemon: RunningDaemon; gateway: RunningDaemon; proxiedDaemon: ProxiedDaemon }
 >({
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    activePages.add(page);
+    try {
+      await use(page);
+    } finally {
+      activePages.delete(page);
+      await page.close();
+    }
+  },
   proxiedDaemon: [
     // oxlint-disable-next-line no-empty-pattern -- as below.
     async ({}, use) => {

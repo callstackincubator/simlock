@@ -356,8 +356,20 @@ async function buildEnv(
     await testEnv.driverScript.set(options.driverScript);
   }
 
-  if (options.mode !== "auto") {
-    await testEnv.startDaemon();
+  try {
+    if (options.mode !== "auto") await testEnv.startDaemon();
+  } catch (error: unknown) {
+    await teardown({
+      backgroundProcesses,
+      dataDirectory,
+      env,
+      gatewayFlag,
+      home,
+      mcpClients,
+      realDrivers: options.driver === "real",
+      socketPath,
+    });
+    throw error;
   }
 
   return {
@@ -464,19 +476,25 @@ async function teardown(state: TeardownState): Promise<void> {
   for (const handle of backgroundProcesses) {
     handle.kill("SIGKILL");
   }
-  await Promise.all(
-    [...backgroundProcesses].map((handle) => handle.waitForExit(10_000).catch(() => undefined)),
-  );
+  await Promise.all([...backgroundProcesses].map((handle) => handle.waitForExit(10_000)));
 
   // Capture who (if anyone) is holding the socket *before* the graceful stop, so
   // we can verify those specific pids actually exit -- checking only "is the
   // socket file still there" after `daemon stop` would miss a process that
   // unlinked its socket on the way out but never actually terminated.
   const pidsBeforeStop = await pidsHoldingSocket(socketPath);
-  await cli([...gatewayFlag, "daemon", "stop"], env).catch(() => undefined);
+  if (pidsBeforeStop.length > 0) {
+    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+    if (stopped.code !== 0) {
+      throw new Error(`daemon stop failed before teardown of ${socketPath}: ${stopped.stderr}`);
+    }
+  }
   // why: a daemon a test SIGKILLed leaves its socket file behind, and nobody will remove it.
   if (pidsBeforeStop.length > 0) {
-    await waitFor(() => !existsSync(socketPath), { timeout: 5_000 }).catch(() => undefined);
+    await waitFor(() => !existsSync(socketPath), {
+      timeout: 5_000,
+      label: "daemon socket removed during teardown",
+    });
   }
 
   // A process can keep running for a little while after its socket is unlinked
@@ -489,7 +507,7 @@ async function teardown(state: TeardownState): Promise<void> {
       return !alive.some(Boolean);
     },
     { timeout: 20_000, interval: 100 },
-  ).catch(() => undefined);
+  );
 
   const stillHoldingSocket = await pidsHoldingSocket(socketPath);
   const stillAlive = (
@@ -505,6 +523,10 @@ async function teardown(state: TeardownState): Promise<void> {
       // Already gone.
     }
   }
+  await waitFor(
+    async () => !(await Promise.all(strayPids.map((pid) => isProcessAlive(pid)))).some(Boolean),
+    { timeout: 10_000, interval: 100, label: "stray daemon processes exited" },
+  );
 
   // Here rather than in each test's own `finally`: a test that hits its timeout is abandoned
   // with its body still running, so its `finally` may not have run yet -- and a booted
