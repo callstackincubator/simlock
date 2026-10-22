@@ -2001,6 +2001,7 @@ async function runDaemonStatus(
     service: {
       manager,
       platform: manager === undefined ? "linux" : "darwin",
+      user: "me",
       definition: async () =>
         serviceDefinition({
           role: testCase.role,
@@ -2205,6 +2206,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
           },
         } as unknown as ServiceManager,
         platform: "darwin",
+        user: "me",
         definition: async () =>
           serviceDefinition({
             role: "worker",
@@ -8653,6 +8655,7 @@ describe("CLI: daemon install (#830)", () => {
     readonly role: "worker" | "gateway";
     readonly root: string;
     readonly env?: NodeJS.ProcessEnv;
+    readonly linux?: boolean;
   }): Promise<{
     readonly exitCode: number;
     readonly output: ReturnType<typeof outputCapture>;
@@ -8663,6 +8666,7 @@ describe("CLI: daemon install (#830)", () => {
     const filesystem = new MemoryFilesystem();
     const ipcTransport = new MemoryIpcTransport();
     const serviceManager = new FakeServiceManager({
+      ...(options.linux === true ? { manager: "systemd" as const } : {}),
       onInstall: async () => {
         await startInMemoryDaemon({
           adminTokenPath: join(dataDirectory, "admin.token"),
@@ -8680,7 +8684,15 @@ describe("CLI: daemon install (#830)", () => {
         ipc: ipcTransport,
         launcher: new FakeDaemonLauncher(),
         daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
-        service: { manager: serviceManager, platform: "darwin", home, root, nodePath, mainPath },
+        service: {
+          manager: serviceManager,
+          platform: options.linux === true ? "linux" : "darwin",
+          home: options.linux === true ? "/home/me" : home,
+          user: "me",
+          root,
+          nodePath,
+          mainPath,
+        },
       },
       options.env,
     );
@@ -8771,6 +8783,41 @@ describe("CLI: daemon install (#830)", () => {
     });
   });
 
+  it("an operator on Linux runs daemon install: the unit lands in the user config directory, and install prints systemd and the linger hint", async () => {
+    const cases = [
+      {
+        label: "default config directory",
+        env: {},
+        unit: "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+      },
+      {
+        label: "absolute XDG_CONFIG_HOME",
+        env: { XDG_CONFIG_HOME: "/xdg" },
+        unit: "/xdg/systemd/user/com.callstack.simlock.worker.service",
+      },
+    ];
+    for (const { label, env, unit } of cases) {
+      const { exitCode, output, serviceManager } = await install({
+        argv: ["daemon", "install"],
+        role: "worker",
+        root: "/home/me/.simlock",
+        env,
+        linux: true,
+      });
+
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(serviceManager.installs[0]?.path, label).toBe(unit);
+      expect(output.stdout.split("\n").slice(0, 2), label).toEqual([
+        "Service installed: com.callstack.simlock.worker (systemd)",
+        "Daemon running",
+      ]);
+      expect(output.stdout.trimEnd().split("\n").at(-1), label).toBe(
+        "To start after a reboot without logging in, run: loginctl enable-linger me",
+      );
+    }
+  });
+
   async function runWithService(options: {
     readonly argv: readonly string[];
     readonly running: boolean;
@@ -8826,6 +8873,7 @@ describe("CLI: daemon install (#830)", () => {
       service: {
         manager: serviceManager,
         platform: "darwin",
+        user: "me",
         definition: async () =>
           serviceDefinition({
             role: "worker",
@@ -9181,6 +9229,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
       service: {
         manager,
         platform: options.platform ?? "darwin",
+        user: "me",
         home,
         root,
         nodePath,
@@ -9200,15 +9249,13 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
     ).error;
 
   it("a failed or stuck launchctl call is SERVICE_FAILED, a failed load removes the plist, and a platform without a service manager is a usage error", async () => {
-    for (const platform of ["linux", "win32"] as const) {
-      for (const command of ["install", "uninstall"]) {
-        const result = await run({ argv: ["daemon", command], platform });
-        expect(result.exitCode, `${platform} ${command}`).toBe(2);
-        expect(errorOf(result.stderr), `${platform} ${command}`).toEqual({
-          code: "USAGE",
-          message: `daemon ${command} is supported on macOS only`,
-        });
-      }
+    for (const command of ["install", "uninstall"]) {
+      const result = await run({ argv: ["daemon", command], platform: "win32" });
+      expect(result.exitCode, `win32 ${command}`).toBe(2);
+      expect(errorOf(result.stderr), `win32 ${command}`).toEqual({
+        code: "USAGE",
+        message: `daemon ${command} is supported on macOS and Linux only`,
+      });
     }
 
     const bootout = {

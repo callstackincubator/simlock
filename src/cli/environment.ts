@@ -266,6 +266,7 @@ export function buildCliEnvironment(
           service: {
             manager: service.manager,
             platform: service.platform,
+            user: service.user,
             definition: async () => {
               const { serviceDefinition } = await import("../ports/index.js");
               return serviceDefinition({

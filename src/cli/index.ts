@@ -91,14 +91,19 @@ function extractGlobalFlags(argv: readonly string[]): {
  * try, where that throw becomes the single structured error line the CLI reference promises instead
  * of a raw stack trace. */
 async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment> {
-  const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }, { homedir }] =
-    await Promise.all([
-      import("node:path"),
-      import("node:url"),
-      import("../ports/index.js"),
-      import("./environment.js"),
-      import("node:os"),
-    ]);
+  const [
+    { join, dirname },
+    { fileURLToPath },
+    ports,
+    { buildCliEnvironment },
+    { homedir, userInfo },
+  ] = await Promise.all([
+    import("node:path"),
+    import("node:url"),
+    import("../ports/index.js"),
+    import("./environment.js"),
+    import("node:os"),
+  ]);
   const {
     launcherFor,
     NodeFilesystem,
@@ -138,6 +143,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
         manager: serviceManager,
         platform: process.platform,
         home: homedir(),
+        user: userInfo().username,
         root,
         nodePath: process.execPath,
         mainPath,

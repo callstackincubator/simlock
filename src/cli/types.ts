@@ -34,6 +34,7 @@ export interface ServiceSetup {
   readonly manager: ServiceManager | undefined;
   readonly platform: NodeJS.Platform;
   readonly home: string;
+  readonly user: string;
   readonly root: string;
   readonly nodePath: string;
   readonly mainPath: string;
@@ -42,6 +43,7 @@ export interface ServiceSetup {
 export interface CliServiceAccess {
   readonly manager: ServiceManager | undefined;
   readonly platform: NodeJS.Platform;
+  readonly user: string;
   readonly definition: () => Promise<ServiceDefinition>;
 }
 
