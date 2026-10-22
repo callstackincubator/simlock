@@ -100,6 +100,35 @@ async function isProcessAlive(pid: number): Promise<boolean> {
   }
 }
 
+async function stopBackgroundProcesses(handles: readonly CliBackgroundHandle[]): Promise<void> {
+  await Promise.all(
+    handles.map(async (handle) => {
+      handle.kill("SIGTERM");
+      try {
+        await handle.waitForExit(10_000);
+      } catch {
+        handle.kill("SIGKILL");
+        await handle.waitForExit(10_000);
+      }
+    }),
+  );
+}
+
+async function forceDaemonPidsToExit(pids: readonly number[]): Promise<void> {
+  for (const pid of pids) {
+    if (!(await isProcessAlive(pid))) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+  await waitFor(
+    async () => !(await Promise.all(pids.map((pid) => isProcessAlive(pid)))).some(Boolean),
+    { timeout: 10_000, interval: 100, label: "daemon process exited after SIGKILL" },
+  );
+}
+
 /**
  * Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
  * does: fake devices use no real memory, so a nominal per-device budget keeps the RAM gate from
@@ -198,9 +227,14 @@ export async function startDaemon(
     expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
   };
   const dispose = async () => {
-    for (const handle of background) handle.kill("SIGTERM");
-    await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
-    await stop();
+    await stopBackgroundProcesses([...background]);
+    try {
+      await stop();
+    } catch (stopError: unknown) {
+      const pids = await pidsHoldingSocket(socketPath);
+      if (pids.length === 0) throw stopError;
+      await forceDaemonPidsToExit(pids);
+    }
     await rm(home, { force: true, recursive: true });
   };
   try {
