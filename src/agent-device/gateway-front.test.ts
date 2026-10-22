@@ -865,6 +865,16 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
     expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
     expect(reached()).toBe(3);
+    const own = await envelopeOf(
+      await command(rig, "snapshot", 1, {}, { flags: { serial: phoneSerial } }),
+    );
+    expect(own.error).toBeUndefined();
+    expect(reached()).toBe(4);
+    const other = await envelopeOf(
+      await command(rig, "snapshot", 1, {}, { flags: { serial: "emulator-5554" } }),
+    );
+    expect(other.error?.message).toBe(picksTheDevice);
+    expect(reached()).toBe(4);
   });
 
   it('allocate through the gateway with `osVersion` ">=18" reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device`', async () => {
