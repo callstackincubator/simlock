@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+
 import type { Filesystem } from "./filesystem.js";
 import type { ProcessRunner } from "./process-runner.js";
 
@@ -58,18 +60,38 @@ export interface NodeNpmCliOptions {
   readonly execPath?: string;
 }
 
+const SHORT_LIMIT_MS = 30_000;
+const INSTALL_LIMIT_MS = 10 * 60_000;
+const MESSAGE_CHARACTERS = 2000;
+
 export class NodeNpmCli implements NpmCli {
   constructor(private readonly options: NodeNpmCliOptions) {}
 
-  async view(_spec: string): Promise<NpmOutcome> {
-    return { ok: false, message: "" };
+  async view(spec: string): Promise<NpmOutcome> {
+    return this.#run(["view", spec, "version"], SHORT_LIMIT_MS, "30 seconds");
   }
 
-  async install(_spec: string): Promise<NpmOutcome> {
-    return { ok: false, message: "" };
+  async install(spec: string): Promise<NpmOutcome> {
+    return this.#run(["i", "-g", spec], INSTALL_LIMIT_MS, "10 minutes");
   }
 
   async globalRoot(): Promise<NpmOutcome> {
-    return { ok: false, message: "" };
+    return this.#run(["root", "-g"], SHORT_LIMIT_MS, "30 seconds");
+  }
+
+  async #run(args: readonly string[], timeoutMs: number, limit: string): Promise<NpmOutcome> {
+    const node = this.options.execPath ?? process.execPath;
+    const script = await this.options.filesystem.realpath(join(dirname(node), "npm"));
+    const result = await this.options.runner.run(node, [script, ...args], {
+      cwd: this.options.dataDirectory,
+      timeoutMs,
+    });
+    if (result.code === null) {
+      return { ok: false, message: `npm did not finish within ${limit}` };
+    }
+    if (result.code !== 0) {
+      return { ok: false, message: result.stderr.trim().slice(-MESSAGE_CHARACTERS) };
+    }
+    return { ok: true, output: result.stdout.trim() };
   }
 }
