@@ -9,10 +9,10 @@ Started by: a daemon through `UpdaterLauncher` (no caller yet).
 
 1. `npm i -g simlock@<to>` through `NpmCli` (10 min). A failure prints `{"failed":{"stage":"installing","message":…}}` and exits 1; the daemon is untouched.
 2. `daemon.stop`, then wait for the socket to go (10 min, then SIGKILL `--pid`).
-3. Copy `state.db`, `history.db` and their `-wal`/`-shm` to `<data dir>/update-backup/`.
+3. Copy `state.db`, `history.db` and their `-wal`/`-shm` to the `update-backup` folder of the data directory.
 4. `node <root>/dist/cli/main.js daemon start [--gateway]`, then poll the probe until `running` at version `to` (2 min).
 5. Not started: stop a daemon that still answers (10 min), write `update-result.json` (0600, `{ from, to, stage: "restarting", message, at, rolledBack }`), reinstall `from`, restore the database copy, start it. A daemon already running `from` counts as started. The updater still exits 1; a failed rollback goes to stderr (`daemon.log`).
-6. A good start deletes `update-backup/`.
+6. A good start deletes the `update-backup` folder.
 
 Progress is one JSON line per stage on stdout: `{"stage":"installing"}`, `{"stage":"restarting"}`.
 
