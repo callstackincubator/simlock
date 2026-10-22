@@ -66,11 +66,14 @@ export const updateRoute = declareRoute({
   summary: "Update this daemon to a Simlock version",
   role: "admin",
   notes:
-    "The body is optional: without a version the newest release is installed. The daemon takes no new leases while it waits for its leases to end, installs and restarts.",
+    "The body is optional: without a version the newest release is installed. The daemon takes no new leases while it waits for its leases to end, installs and restarts. 202 when this call began the update; 200 when it followed an update that was already running, or nothing needed updating (`upToDate`). Worker only: a gateway answers 501 UNSUPPORTED_IN_GATEWAY_MODE.",
   request: { optionalJson: updateBodySchema },
   reply: OPERATIONS["daemon.update"].output,
+  status: 202,
+  alsoStatus: 200,
   errors: {
     409: ["UPDATE_UNSUPPORTED_INSTALL", "UPDATE_SHARED_INSTALL"],
+    502: ["UPDATE_RESOLVE_FAILED"],
     501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
   },
 });

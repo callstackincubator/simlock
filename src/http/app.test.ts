@@ -2582,7 +2582,12 @@ describe("POST /v1/update", () => {
     ]);
 
     for (const [name, following] of [
-      ["follows a running update", answer({ update: { stage: "installing" } })],
+      [
+        "follows a running update",
+        answer({
+          update: { stage: "installing", from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1 },
+        }),
+      ],
       ["nothing to do", answer({ upToDate: true, resolved: "0.3.0" })],
     ] as const) {
       reply = following;

@@ -91,6 +91,7 @@ export const CORE_ROUTE_SEGMENTS: readonly string[] = [
   "stats",
   "status",
   "tokens",
+  "update",
   "uplink",
   "workers",
 ];
