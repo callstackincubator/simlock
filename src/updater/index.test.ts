@@ -315,6 +315,62 @@ async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
   return promise;
 }
 
+type Expected = Scenario["expected"];
+
+async function expectDatabase(
+  database: NonNullable<Expected["database"]>,
+  seen: {
+    readonly filesystem: MemoryFilesystem;
+    readonly statePath: string;
+    readonly backupPath: string;
+    readonly copiedBeforeStart: readonly string[];
+    readonly liveAtStart: readonly string[];
+    readonly liveAtInstall: readonly string[];
+  },
+): Promise<void> {
+  expect(seen.copiedBeforeStart).toEqual([database.copiedBeforeStart]);
+  expect(await seen.filesystem.exists(seen.backupPath)).toBe(database.backupLeft);
+  if (database.restoredBeforeRollbackStart !== undefined) {
+    expect(seen.liveAtStart[1]).toBe(database.restoredBeforeRollbackStart);
+    // why: the backup held no -wal, so the one the new version wrote must go with the rollback.
+    expect(await seen.filesystem.exists(`${seen.statePath}-wal`)).toBe(false);
+  }
+  if (database.liveDuringRollbackInstall !== undefined) {
+    expect(seen.liveAtInstall[1]).toBe(database.liveDuringRollbackInstall);
+  }
+}
+
+async function expectResultFile(
+  expected: Expected,
+  seen: {
+    readonly filesystem: MemoryFilesystem;
+    readonly resultPath: string;
+    readonly clock: FakeClock;
+    readonly fileAtRollbackStart: readonly boolean[];
+  },
+): Promise<void> {
+  const { filesystem, resultPath, clock } = seen;
+  if (expected.resultFile === undefined) {
+    expect(await filesystem.exists(resultPath)).toBe(false);
+    return;
+  }
+  const written = JSON.parse(await filesystem.readFile(resultPath)) as { at: number };
+  expect(written).toEqual({
+    from: "0.3.0",
+    to: "0.4.0",
+    stage: "restarting",
+    message: expected.resultFile.message,
+    at: expect.any(Number),
+    rolledBack: true,
+  });
+  expect(written.at).toBeGreaterThanOrEqual(EPOCH);
+  expect(written.at).toBeLessThanOrEqual(clock.now());
+  expect((await filesystem.stat(resultPath)).mode).toBe(expected.resultFile.mode);
+  expect(seen.fileAtRollbackStart).toEqual(
+    expected.startArgs.length === 2 ? [false, true] : [false],
+  );
+}
+
 describe("runUpdater", () => {
   it.each(SCENARIOS)(
     "installs, restarts, and reports each stage on its pipe: $name",
@@ -407,36 +463,16 @@ describe("runUpdater", () => {
         expect(clock.now()).toBeLessThanOrEqual(EPOCH + expected.waitedAtMostMs);
       }
       if (expected.database !== undefined) {
-        expect(copiedBeforeStart).toEqual([expected.database.copiedBeforeStart]);
-        expect(await filesystem.exists(backupPath)).toBe(expected.database.backupLeft);
-        if (expected.database.restoredBeforeRollbackStart !== undefined) {
-          expect(liveAtStart[1]).toBe(expected.database.restoredBeforeRollbackStart);
-          // why: the backup held no -wal, so the one the new version wrote must go with the rollback.
-          expect(await filesystem.exists(`${statePath}-wal`)).toBe(false);
-        }
-        if (expected.database.liveDuringRollbackInstall !== undefined) {
-          expect(liveAtInstall[1]).toBe(expected.database.liveDuringRollbackInstall);
-        }
-      }
-      if (expected.resultFile === undefined) {
-        expect(await filesystem.exists(resultPath)).toBe(false);
-      } else {
-        const written = JSON.parse(await filesystem.readFile(resultPath)) as { at: number };
-        expect(written).toEqual({
-          from: "0.3.0",
-          to: "0.4.0",
-          stage: "restarting",
-          message: expected.resultFile.message,
-          at: expect.any(Number),
-          rolledBack: true,
+        await expectDatabase(expected.database, {
+          filesystem,
+          statePath,
+          backupPath,
+          copiedBeforeStart,
+          liveAtStart,
+          liveAtInstall,
         });
-        expect(written.at).toBeGreaterThanOrEqual(EPOCH);
-        expect(written.at).toBeLessThanOrEqual(clock.now());
-        expect((await filesystem.stat(resultPath)).mode).toBe(expected.resultFile.mode);
-        expect(fileAtRollbackStart).toEqual(
-          expected.startArgs.length === 2 ? [false, true] : [false],
-        );
       }
+      await expectResultFile(expected, { filesystem, resultPath, clock, fileAtRollbackStart });
     },
   );
 });
