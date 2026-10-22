@@ -2906,16 +2906,22 @@ describe("startDaemon with the agent-device edge", () => {
     return { directory, filesystem };
   }
 
-  function versionAndDaemon(directory: string): ScriptedProcessRunner {
+  function versionAndDaemon(directory: string, role?: "phones"): ScriptedProcessRunner {
+    const version = {
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout: "0.21.28\n" },
+    };
+    const daemon = (marker: readonly string[]) => ({
+      hangs: true,
+      match: { args: [entry, ...marker], command: process.execPath },
+    });
+    const simulators = daemon([`--simlock-home=${directory}`]);
+    if (role === undefined) return new ScriptedProcessRunner([version, simulators]);
     return new ScriptedProcessRunner([
-      {
-        match: { args: [realCli, "--version"], command: process.execPath },
-        result: { code: 0, stderr: "", stdout: "0.21.28\n" },
-      },
-      {
-        hangs: true,
-        match: { args: [entry, `--simlock-home=${directory}`], command: process.execPath },
-      },
+      version,
+      simulators,
+      version,
+      daemon([`--simlock-home=${directory}`, "--simlock-role=phones"]),
     ]);
   }
 
@@ -2923,6 +2929,7 @@ describe("startDaemon with the agent-device edge", () => {
     setup: Awaited<ReturnType<typeof setUp>>,
     ports: {
       readonly agentDevice?: OptionalModuleDefinition<unknown>;
+      readonly clock?: FakeClock;
       readonly drivers?: StartDaemonOptions["drivers"];
       readonly modules?: readonly FakeModule[];
       readonly processRunner: ScriptedProcessRunner;
@@ -2930,7 +2937,7 @@ describe("startDaemon with the agent-device edge", () => {
       readonly role?: "gateway";
     },
   ) {
-    const clock = new FakeClock(1_000);
+    const clock = ports.clock ?? new FakeClock(1_000);
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
@@ -3049,6 +3056,40 @@ describe("startDaemon with the agent-device edge", () => {
     await pollUntil(() => runner.calls.length === 2);
     return runner.calls[1]?.options.env ?? {};
   }
+
+  it.each([
+    ["teamId", "AGENT_DEVICE_IOS_TEAM_ID", "ABCDE12345"],
+    ["bundleId", "AGENT_DEVICE_IOS_BUNDLE_ID", "com.example.runner"],
+    ["provisioningProfile", "AGENT_DEVICE_IOS_PROVISIONING_PROFILE", "Simlock Runner Profile"],
+    ["signingIdentity", "AGENT_DEVICE_IOS_SIGNING_IDENTITY", "Apple Development: Ada (XYZ)"],
+  ])(
+    "a capabilities.agent-device.ios.%s the operator sets reaches the phone daemon's spawn environment as %s",
+    async (key, envName, value) => {
+      const setup = await setUp({
+        capabilities: { "agent-device": { command, enabled: true, ios: { [key]: value } } },
+      });
+      const runner = versionAndDaemon(setup.directory, "phones");
+      const clock = new FakeClock(1_000);
+      await startEdge(setup, {
+        clock,
+        processRunner: runner,
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+      // why: the simulator daemon's /health never answers, so the phone daemon starts when its ready window runs out.
+      for (let tick = 0; tick < 400 && runner.calls.length < 4; tick += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        clock.advance(100);
+      }
+
+      expect(runner.calls[3]?.args).toEqual([
+        entry,
+        `--simlock-home=${setup.directory}`,
+        "--simlock-role=phones",
+      ]);
+      expect(runner.calls[3]?.options.env?.[envName]).toBe(value);
+      expect(runner.calls[1]?.options.env?.[envName]).toBeUndefined();
+    },
+  );
 
   it("hands the drivers' lease environment to the agent-device daemon", async () => {
     const env = await spawnedEnvironment((clock) => [
