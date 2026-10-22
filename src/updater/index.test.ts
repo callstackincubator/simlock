@@ -284,9 +284,12 @@ describe("runUpdater", () => {
           at: expect.any(Number),
           rolledBack: true,
         });
-        expect(written.at).toBeGreaterThanOrEqual(EPOCH + expected.waitedAtLeastMs);
+        expect(written.at).toBeGreaterThanOrEqual(EPOCH);
+        expect(written.at).toBeLessThanOrEqual(clock.now());
         expect((await filesystem.stat(resultPath)).mode).toBe(expected.resultFile.mode);
-        expect(fileAtRollbackStart).toEqual([false, true]);
+        expect(fileAtRollbackStart).toEqual(
+          expected.startArgs.length === 2 ? [false, true] : [false],
+        );
       }
     },
   );

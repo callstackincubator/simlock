@@ -79,23 +79,30 @@ export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
     }),
     { mode: 0o600 },
   );
-  await npm.install(`simlock@${options.from}`);
-  await startDaemon({ ...options, to: options.from });
+  const reinstalled = await npm.install(`simlock@${options.from}`);
+  const rollbackFailure = reinstalled.ok
+    ? await startDaemon({ ...options, to: options.from })
+    : reinstalled.message;
+  if (rollbackFailure !== undefined) {
+    options.stderr.write(`rollback to ${options.from} failed: ${rollbackFailure}\n`);
+  }
   return 1;
 }
 
 async function startDaemon(options: RunUpdaterOptions): Promise<string | undefined> {
   const { clock, probe, to } = options;
-  await options.processes.run(process.execPath, [
+  const started = await options.processes.run(process.execPath, [
     join(options.packageRoot, "dist", "cli", "main.js"),
     "daemon",
     "start",
     ...(options.role === "gateway" ? ["--gateway"] : []),
   ]);
+  if (started.code !== 0) return `daemon start: ${started.stderr.trim()}`;
   const deadline = clock.now() + START_LIMIT_MS;
   for (;;) {
     const state = await probe.state();
     if (state?.health === "running" && state.version === to) return undefined;
+    if (state?.health === "failed") return "health failed";
     if (clock.now() >= deadline) return "did not answer within 2 minutes";
     await sleep(clock, POLL_MS);
   }
