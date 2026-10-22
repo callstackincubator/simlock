@@ -3506,6 +3506,21 @@ describe("the agent-device front's request rules", () => {
       }
     });
 
+    it("on a phone lease the phone's own serial is forwarded to the phone daemon; another `serial` or `udid` is refused with `refused: simlock picks the device`", async () => {
+      const rig = await setUpWithPhone();
+      await granted(rig, 1, { physical: true, platform: "android" });
+      const reached = () => rig.phone.rpcRequests("agent_device.command").length;
+      await runCommand(rig, "snapshot", 1, { flags: { serial: phoneSerial } });
+      expect(reached()).toBe(1);
+
+      for (const flags of [{ serial: "emulator-5554" }, { udid: "00008030-000270803C28802E" }]) {
+        const answer = await envelopeOf(await runCommand(rig, "snapshot", 1, { flags }));
+
+        expect(answer.error).toMatchObject(refusal(simlockPicks));
+      }
+      expect(reached()).toBe(1);
+    });
+
     it("`--device` with the leased device's id, and its name with `_` for a space, extra spaces and other letter case, are forwarded unchanged", async () => {
       const rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });
