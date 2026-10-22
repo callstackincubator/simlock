@@ -1749,6 +1749,15 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("reads update.check in a gateway config without a warning", async () => {
+    const warn = vi.fn();
+
+    const config = await load({ update: { check: false } }, { role: "gateway", warn });
+
+    expect(config.update).toEqual({ check: false });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
     const warn = vi.fn();
     await load({ eventLog: { rotateBytes: 1024 } }, { role: "gateway", warn });
