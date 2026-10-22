@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 
 import { AppFrame, Button, CommandPalette, Icon, Sidebar, Status, StatusDot } from "../ds";
+import { isBehind, versionLine } from "../model/versions";
 import { NotFoundScreen } from "../screens/not-found";
+import { useDaemonFacts, useDaemonMode } from "../state/live";
 import { usePath } from "../state/router";
 import { useSearchPalette, useSearchSession } from "../state/search";
 import {
@@ -55,8 +57,13 @@ export function Shell() {
   );
 }
 
-export function UpdateNotice(_props: { readonly collapsed: boolean }) {
-  return null;
+// why: the gateway's own version is the operator's to act on, so a worker's console and a
+// collapsed sidebar stay quiet; the "newer" rule is the contract's, through `versionLine`.
+export function UpdateNotice({ collapsed }: { readonly collapsed: boolean }) {
+  const mode = useDaemonMode();
+  const facts = { ...useDaemonFacts(), leased: 0, update: null };
+  if (collapsed || mode !== "gateway" || !isBehind(facts)) return null;
+  return <p className="update-notice">{versionLine(facts)}</p>;
 }
 
 function SidebarFoot({ collapsed }: { readonly collapsed: boolean }) {
