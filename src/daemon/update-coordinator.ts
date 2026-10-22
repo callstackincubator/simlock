@@ -68,6 +68,7 @@ function stateOf(run: Run): UpdateState {
 class Coordinator implements UpdateCoordinator {
   #run: Run | undefined;
   #lastFailure: UpdateFailure | null = null;
+  #calls: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: UpdateCoordinatorOptions) {
     const leaseEnded = (): void => {
@@ -85,8 +86,15 @@ class Coordinator implements UpdateCoordinator {
     };
   }
 
-  async request(input: UpdateInput): Promise<UpdateOutcome> {
-    if (input.query === true) return this.#outcome(false, null);
+  // why: a call that arrives while another resolves the version waits for it, so two calls never start two updates; a query never waits.
+  request(input: UpdateInput): Promise<UpdateOutcome> {
+    if (input.query === true) return Promise.resolve(this.#outcome(false, null));
+    const result = this.#calls.then(() => this.#update(input));
+    this.#calls = result.catch(() => undefined);
+    return result;
+  }
+
+  async #update(input: UpdateInput): Promise<UpdateOutcome> {
     const run = this.#run;
     if (run !== undefined) {
       if (input.force === true && run.stage === "waiting") {
