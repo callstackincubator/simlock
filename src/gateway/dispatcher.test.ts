@@ -742,9 +742,15 @@ describe("GatewayDispatcher", () => {
       },
     ] as const) {
       client.updateFailWith = new SimlockError(code, kind, "worker's words", {});
-      await expect(
-        dispatcher.dispatch("worker.update", { workerId: "wrk_1" }, session()),
-      ).rejects.toMatchObject({
+      // why: HTTP maps a rejection through classifyError, which knows DispatchError and not a raw SimlockError.
+      const refusal = await dispatcher
+        .dispatch("worker.update", { workerId: "wrk_1" }, session())
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(refusal).toBeInstanceOf(DispatchError);
+      expect(refusal).toMatchObject({
         code: expected,
         message: expected === code ? "worker's words" : message,
       });
