@@ -1784,34 +1784,47 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
   });
 
-  it("on a worker, an `x-agent-device-lease-id` header naming another token's lease or no header is forwarded, and a malformed one is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    const other = { "x-agent-device-lease-id": hex(1) };
+  it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header or another token's lease, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {
+    const rig = await setUpWithPhone();
+    await granted(rig, 1, { physical: true, platform: "android" });
+    await granted(rig, 2, { platform: "android" });
+    const named = (n: number) => ({ "x-agent-device-lease-id": hex(n) });
     const malformed = { "x-agent-device-lease-id": "NOT-A-LEASE-ID".repeat(4) };
-    const preflights = () =>
-      rig.fake.requests.filter((request) => request.path === "/upload/preflight").length;
+    const reaching = (fake: FakeAgentDevice, path: string) =>
+      fake.requests.filter((request) => request.path === path).length;
+    const routes = [
+      ["/upload/preflight", { body: "{}" }],
+      ["/artifacts/a1", {}],
+    ] as const;
+    const cases = [
+      [named(1), secrets.one, "phone"],
+      [named(2), secrets.one, "simulators"],
+      [{}, secrets.one, "simulators"],
+      [named(1), secrets.two, "phone"],
+      [malformed, secrets.one, "refused"],
+    ] as const;
 
-    const answers: Response[] = [];
-    for (const [headers, reaches] of [
-      [other, 1],
-      [malformed, 0],
-      [{}, 1],
-    ] as const) {
-      const before = preflights();
-      const answer = await send(rig, "/upload/preflight", {
-        body: "{}",
-        headers,
-        token: secrets.two,
-      });
-      answers.push(answer);
-      expect(preflights()).toBe(before + reaches);
+    for (const [path, body] of routes) {
+      for (const [headers, token, reaches] of cases) {
+        const [phoneBefore, simulatorsBefore] = [
+          reaching(rig.phone, path),
+          reaching(rig.fake, path),
+        ];
+
+        const answer = await send(rig, path, { ...body, headers, token });
+
+        expect([
+          reaching(rig.phone, path) - phoneBefore,
+          reaching(rig.fake, path) - simulatorsBefore,
+        ]).toEqual([reaches === "phone" ? 1 : 0, reaches === "simulators" ? 1 : 0]);
+        if (reaches === "refused") {
+          expect(answer.status).toBe(400);
+          expect(await answer.text()).toContain(
+            "the x-agent-device-lease-id header is not a lease id",
+          );
+        }
+      }
     }
-
-    expect(answers.map((answer) => answer.status)).toEqual([200, 400, 200]);
-    expect(await answers[1]?.text()).toContain(
-      "the x-agent-device-lease-id header is not a lease id",
-    );
   });
 
   it("an `/rpc` body over 1 MiB, one that is not JSON, a JSON array, and an object with no `method` are each refused with their message and `id: null`, also while agent-device is unavailable, and neither simlock nor the agent-device daemon sees them", async () => {
