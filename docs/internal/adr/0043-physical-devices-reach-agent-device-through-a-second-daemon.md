@@ -1,6 +1,6 @@
 # 0043. Physical devices reach agent-device through a second daemon on the worker
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-22
 - **Issue:** [#870](https://github.com/callstackincubator/simlock/issues/870)
 - **Supersedes:** in part, [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
