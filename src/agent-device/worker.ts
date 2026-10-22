@@ -6,7 +6,11 @@ import type { AgentDeviceModuleConfig } from "./definition.js";
 import { FrontMap } from "./front/front-map.js";
 import { InProcessHostLink, type LinkStatus } from "./front/host-link.js";
 import { Renewals } from "./front/renewals.js";
-import { AgentDeviceSupervisor, type AgentDevicePlatform } from "./host/agent-device-supervisor.js";
+import {
+  AgentDeviceSupervisor,
+  type AgentDevicePlatform,
+  type AgentDeviceRole,
+} from "./host/agent-device-supervisor.js";
 import { agentDeviceFindings } from "./host/availability-findings.js";
 import { type AgentDeviceHealthProbe, NodeAgentDeviceHealthProbe } from "./host/health.js";
 import { AgentDeviceHost } from "./host/host.js";
@@ -86,23 +90,28 @@ export function createWorkerWith(
   fakes: AgentDeviceFakes,
 ): (ctx: WorkerContext<AgentDeviceModuleConfig>) => WorkerModule {
   return (ctx) => {
-    const supervisor = new AgentDeviceSupervisor({
-      baseEnvironment: ctx.environment,
-      clock: ctx.clock,
-      config: ctx.config,
-      driverEnvironment: ctx.leaseEnvironment,
-      filesystem: ctx.filesystem,
-      healthProbe: fakes.health ?? new NodeAgentDeviceHealthProbe(),
-      home: ctx.dataDirectory,
-      leaseMaxTtlMs: ctx.daemonConfig.lease.maxTtlMs,
-      logger: ctx.logger,
-      nodePath: ctx.nodePath,
-      nodeVersion: ctx.nodeVersion,
-      platforms: ctx.platforms,
-      processRunner: ctx.processRunner,
-      processSupervisor: ctx.processSupervisor,
-      tcpProbe: ctx.tcpProbe,
-    });
+    const supervise = (role: AgentDeviceRole) =>
+      new AgentDeviceSupervisor({
+        baseEnvironment: ctx.environment,
+        clock: ctx.clock,
+        config: ctx.config,
+        driverEnvironment: ctx.leaseEnvironment,
+        filesystem: ctx.filesystem,
+        healthProbe: fakes.health ?? new NodeAgentDeviceHealthProbe(),
+        home: ctx.dataDirectory,
+        ...(ctx.config.ios === undefined ? {} : { ios: ctx.config.ios }),
+        leaseMaxTtlMs: ctx.daemonConfig.lease.maxTtlMs,
+        logger: ctx.logger,
+        nodePath: ctx.nodePath,
+        nodeVersion: ctx.nodeVersion,
+        platforms: ctx.platforms,
+        processRunner: ctx.processRunner,
+        processSupervisor: ctx.processSupervisor,
+        role,
+        tcpProbe: ctx.tcpProbe,
+      });
+    const supervisor = supervise("simulators");
+    const phoneSupervisor = supervise("phones");
     const parts = createAgentDeviceEdgeParts(
       fakes.upstream ?? new SupervisorAgentDeviceUpstream(supervisor),
       ctx.clock,
@@ -118,7 +127,9 @@ export function createWorkerWith(
       hooks: {
         // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost the socket race never gets here, so it reaps nothing.
         afterSocketClaimed: () => {
-          if (fakes.upstream === undefined) void supervisor.start();
+          if (fakes.upstream === undefined) {
+            void supervisor.start().then(() => phoneSupervisor.start());
+          }
         },
         beforeDeviceReclaim: (ended, signal) => parts.leaseEnd.leaseEnded(ended, signal),
         beforeDrain: async () => {
@@ -126,7 +137,9 @@ export function createWorkerWith(
           await cancelWaitingAllocates(parts, (id) => ctx.cancelPending(id));
         },
         // why: before the drivers: the Android driver stops simlock's adb server, which this daemon's agent-device uses, and a client that finds no server forks its own.
-        beforeDriversDispose: () => supervisor.stop(),
+        beforeDriversDispose: async () => {
+          await Promise.all([supervisor.stop(), phoneSupervisor.stop()]);
+        },
       },
       mount: (deps) => {
         const front = createAgentDeviceFront(parts, {

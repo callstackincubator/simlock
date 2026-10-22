@@ -175,6 +175,7 @@ async function arrange(options: Options = {}) {
     platforms: options.platforms ?? ["ios", "android"],
     processRunner: runner,
     processSupervisor: processes,
+    role: "simulators",
     tcpProbe: probe,
   });
   const harness = {
