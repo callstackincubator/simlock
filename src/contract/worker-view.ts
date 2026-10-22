@@ -31,6 +31,9 @@ export const WORKER_VIEW_REFRESH_INTERVAL_MS = 30_000;
  */
 export const WORKER_VIEW_CATALOG_EVENTS = ["component.installed"] as const;
 
+// why: a worker's `update` and `lastUpdateFailure` change on these two events (ADR 0042 §2), so a gateway reads its status again at once.
+export const WORKER_VIEW_UPDATE_EVENTS = ["daemon.update-started", "daemon.update-failed"] as const;
+
 type Output<Name extends keyof typeof OPERATIONS> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
 type WorkerView = z.infer<typeof workerViewSchema>;
 

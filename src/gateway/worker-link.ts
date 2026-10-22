@@ -20,6 +20,7 @@ import {
   grantedDeviceSchema,
   isSimlockError,
   WORKER_VIEW_CATALOG_EVENTS,
+  WORKER_VIEW_UPDATE_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
 import type { StatusGetOutput } from "../admin/index.js";
@@ -603,7 +604,12 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
  * progress, and an install that starts or ends changes that list.
  */
 function changesCapacityOrLeases(event: string): boolean {
-  return event.startsWith("lease.") || event.startsWith("device.") || INSTALL_EVENTS.has(event);
+  return (
+    event.startsWith("lease.") ||
+    event.startsWith("device.") ||
+    INSTALL_EVENTS.has(event) ||
+    (WORKER_VIEW_UPDATE_EVENTS as readonly string[]).includes(event)
+  );
 }
 
 const INSTALL_EVENTS: ReadonlySet<string> = new Set([
