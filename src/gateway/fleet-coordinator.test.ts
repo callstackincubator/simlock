@@ -1062,6 +1062,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
     expect(directory.refreshCalls).toEqual(["wrk_a"]);
 
+    workers.refresh("wrk_a", {
+      update: { forced: false, from: "0.3.0", stage: "installing", startedAt: 1, to: "0.4.0" },
+    });
+    await tick();
+    expect(state.state).toBe("pending");
+
     workers.refresh("wrk_a", { update: null });
     await tick();
 
