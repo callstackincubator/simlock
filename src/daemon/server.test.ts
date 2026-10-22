@@ -3074,11 +3074,11 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 });
 
 describe("daemon.update", () => {
-  async function updateRig(leases: number) {
+  async function updateRig(leases: number, devices = 2) {
     const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] });
     const launcher = new FakeUpdaterLauncher();
     const harness = await createHarness({
-      iosMaxDevices: 2,
+      iosMaxDevices: devices,
       update: { npm, launcher, version: "0.3.0" },
     });
     const client = await createClient(harness.socketPath);
@@ -3190,6 +3190,49 @@ describe("daemon.update", () => {
     await expect(parked).resolves.toMatchObject({
       payload: { started: true, update: run("installing", false) },
     });
+  });
+
+  it("refuses a new and a queued lease request with DAEMON_UPDATING while a held lease renews and releases as usual", async () => {
+    const rig = await updateRig(1, 1);
+    const rejected: unknown[] = [];
+    rig.eventBus.subscribe("lease.rejected", (envelope) => {
+      rejected.push(envelope.payload.reason);
+    });
+    const request = (requesterId: string) =>
+      rig.client.request("lease.request", {
+        requesterId,
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+      });
+    let queuedReply: ServerFrame | undefined;
+    let newReply: ServerFrame | undefined;
+    void request("agent-queued").then((reply) => (queuedReply = reply));
+    await expect
+      .poll(async () => (await rig.client.request("status.get", {})).payload)
+      .toMatchObject({ waiting: [{ requesterId: "agent-queued" }] });
+    await rig.client.request("daemon.update", {});
+
+    const refusal = {
+      ok: false,
+      error: {
+        code: "DAEMON_UPDATING",
+        message: "this daemon is updating and takes no new leases",
+      },
+    };
+    void request("agent-new").then((reply) => (newReply = reply));
+    await expect.poll(() => queuedReply).toMatchObject(refusal);
+    await expect.poll(() => newReply).toMatchObject(refusal);
+    expect(rejected).toEqual(["updating", "updating"]);
+
+    const leaseId = rig.leaseIds[0];
+    await expect(rig.client.request("lease.renew", { leaseId })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(rig.client.request("lease.release", { leaseId })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect.poll(rig.updateOf).toEqual(run("installing", false));
   });
 });
 
@@ -3389,6 +3432,7 @@ async function createHarness(
           update: createUpdateCoordinator({
             npm: options.update.npm,
             launcher: options.update.launcher,
+            leasing: engine.leasing,
             registry,
             eventBus,
             clock,

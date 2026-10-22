@@ -384,6 +384,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
   }
 
+  async holdForUpdate(): Promise<void> {}
+
+  async releaseUpdateHold(): Promise<void> {}
+
   /** Reopens acquisition admission after an administrative maintenance operation. */
   async endMaintenance(): Promise<void> {
     await this.options.decisions.run(async () => {

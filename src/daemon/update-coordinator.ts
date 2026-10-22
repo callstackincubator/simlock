@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { EventBus } from "../bus/index.js";
 import type { UpdateFailure, UpdateState } from "../contract/index.js";
 import type { Registry } from "../core/index.js";
+import type { UpdateHold } from "../leasing/index.js";
 import type { Clock, DaemonRole, NpmCli, UpdaterLauncher } from "../ports/index.js";
 
 export interface UpdateInput {
@@ -31,6 +32,7 @@ export interface UpdateCoordinator {
 export interface UpdateCoordinatorOptions {
   readonly npm: NpmCli;
   readonly launcher: UpdaterLauncher;
+  readonly leasing: UpdateHold;
   readonly registry: Pick<Registry, "snapshot">;
   readonly eventBus: Pick<EventBus, "emit" | "subscribe">;
   readonly clock: Clock;

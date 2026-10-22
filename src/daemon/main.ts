@@ -600,6 +600,7 @@ async function composeDaemon(
     update: createUpdateCoordinator({
       npm: new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory }),
       launcher: new NodeUpdaterLauncher(),
+      leasing,
       registry,
       eventBus,
       clock,
