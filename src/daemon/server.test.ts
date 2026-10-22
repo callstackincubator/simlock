@@ -3080,12 +3080,15 @@ describe("daemon.update", () => {
     readonly view?: NpmOutcome;
     readonly packageRoot?: string;
     readonly otherRoleRunning?: boolean;
+    readonly npm?: FakeNpmCli;
   }
   async function updateRig(leases: number, devices = 2, setup: RigSetup = {}) {
-    const npm = new FakeNpmCli({
-      view: [setup.view ?? { ok: true, output: "0.4.0" }],
-      globalRoot: [{ ok: true, output: "/opt" }],
-    });
+    const npm =
+      setup.npm ??
+      new FakeNpmCli({
+        view: [setup.view ?? { ok: true, output: "0.4.0" }],
+        globalRoot: [{ ok: true, output: "/opt" }],
+      });
     const launcher = new FakeUpdaterLauncher();
     const harness = await createHarness({
       iosMaxDevices: devices,
@@ -3211,6 +3214,55 @@ describe("daemon.update", () => {
     await expect(parked).resolves.toMatchObject({
       payload: { started: true, update: run("installing", false) },
     });
+  });
+
+  it("follows the update that runs whatever version a call names, and answers a query without starting anything", async () => {
+    const idle = await updateRig(0);
+    await expect(idle.client.request("daemon.update", { query: true })).resolves.toMatchObject({
+      ok: true,
+      payload: { started: false, upToDate: false, resolved: null, version: "0.3.0", update: null },
+    });
+    expect(idle.npm.calls).toEqual([]);
+    expect(idle.launcher.launches).toEqual([]);
+
+    const rig = await updateRig(2);
+    await rig.client.request("daemon.update", {});
+    const following = { started: false, upToDate: false, resolved: null };
+    for (const input of [{ query: true }, { version: "0.9.9" }, {}]) {
+      await expect(rig.client.request("daemon.update", input)).resolves.toMatchObject({
+        ok: true,
+        payload: { ...following, update: run("waiting", false, { leases: 2 }) },
+      });
+    }
+    expect(rig.npm.calls.filter((call) => call.method === "view")).toHaveLength(1);
+    expect(rig.launcher.launches).toEqual([]);
+    expect(rig.started).toHaveLength(1);
+
+    const gate = deferred<void>();
+    class HeldNpm extends FakeNpmCli {
+      override async view(spec: string) {
+        await gate.promise;
+        return super.view(spec);
+      }
+    }
+    const racing = await updateRig(0, 2, {
+      npm: new HeldNpm({
+        view: [{ ok: true, output: "0.4.0" }],
+        globalRoot: [{ ok: true, output: "/opt" }],
+      }),
+    });
+    const other = await createClient(racing.socketPath);
+    await hello(other);
+    const first = racing.client.request("daemon.update", {});
+    const second = other.request("daemon.update", {});
+    await expect(other.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    gate.resolve();
+    const replies = (await Promise.all([first, second])).map(
+      (reply) => (reply.payload as { started: boolean }).started,
+    );
+    expect(replies.sort()).toEqual([false, true]);
+    expect(racing.launcher.launches).toHaveLength(1);
+    expect(racing.started).toHaveLength(1);
   });
 
   it("refuses an update that cannot resolve, change or install anything, and answers upToDate when nothing is needed", async () => {
