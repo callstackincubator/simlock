@@ -945,7 +945,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#reject(waiter, new NukeCancelledError(), "killed");
       return undefined;
     }
-    if (this.#refuseNewForUpdate(waiter)) return undefined;
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
     if (plan.kind === "grant-ready") {
@@ -989,6 +988,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
+    if (this.#refuseNewForUpdate(waiter)) return undefined;
     const head = this.options.queue.head;
     if (head !== undefined && head !== waiter) {
       const reason = "behind-earlier-request";
