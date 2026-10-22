@@ -125,7 +125,7 @@ flowchart LR
    failing new daemon while the updater rolls back. The rollback runs in this
    order: it installs the old version with npm; it sends `daemon.stop` to any
    daemon the service restarted meanwhile and waits until nothing answers
-   `query` (a socket file alone is not an answer) or the old pid has exited;
+   `query` (a socket file alone is not an answer) or its pid has exited;
    it restores the database copy, so a migration the new version ran never
    blocks the old version (ADR 0036 §5); it runs `simlock daemon start` and
    ends once a daemon answers `query` with the old version. Before the
