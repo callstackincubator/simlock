@@ -36,6 +36,8 @@ import {
   FakeClock,
   FakeHostInfo,
   FakeHostLoadProbe,
+  type NpmCli,
+  type NpmOutcome,
   type HostLoadCounters,
   FakeProcessSupervisor,
   daemonDataDirectory,
@@ -4122,5 +4124,56 @@ describe("startDaemon state.db", () => {
     expect([...fromModule.keys()].sort()).toEqual(["android", "ios"]);
     expect(fromModule.get("ios")?.name).toBe("fake-device-data");
     expect(fromModule).not.toBe(fakeDeviceDataTables);
+  });
+});
+
+describe("startDaemon version check", () => {
+  const operator = {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startChecked(npm: NpmCli, overrides: Partial<StartDaemonOptions> = {}) {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [],
+      filesystem: new MemoryFilesystem(),
+      hostLoadProbe: null,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      npm,
+      version: "0.3.0",
+      ...overrides,
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { clock, daemon };
+  }
+
+  const latestOf = async (daemon: DaemonServer) =>
+    ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
+      .daemon.latestVersion;
+
+  it("a daemon runs the version check at start without delaying ready, and reports a newer latest in status.get and the daemon.update query", async () => {
+    let answer: (outcome: NpmOutcome) => void = () => undefined;
+    const npm: NpmCli = {
+      view: () => new Promise<NpmOutcome>((resolve) => (answer = resolve)),
+      install: () => Promise.reject(new Error("unused")),
+      globalRoot: () => Promise.reject(new Error("unused")),
+    };
+
+    const { daemon } = await startChecked(npm);
+
+    expect(await latestOf(daemon)).toBeNull();
+    answer({ ok: true, output: "0.4.0\n" });
+    await expect.poll(() => latestOf(daemon)).toBe("0.4.0");
+    const query = (await daemon.dispatch("daemon.update", { query: true }, operator)) as {
+      latestVersion: unknown;
+    };
+    expect(query.latestVersion).toBe("0.4.0");
   });
 });

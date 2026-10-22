@@ -94,6 +94,7 @@ import {
   type ServiceDefinition,
   type ServiceManager,
   NodeNpmCli,
+  type NpmCli,
   NodeProcessSupervisor,
   NodeSystemStats,
   NodeUpdaterLauncher,
@@ -170,6 +171,8 @@ export interface StartDaemonOptions {
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
+  /** why: test-only, replaces the npm CLI the version check and the update coordinator run. */
+  readonly npm?: NpmCli;
   readonly processRunner?: ProcessRunner;
   readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
