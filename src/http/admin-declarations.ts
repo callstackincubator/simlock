@@ -1,6 +1,10 @@
 import { z } from "@hono/zod-openapi";
 
-import { eventEnvelopeSchema, OPERATIONS } from "../contract/index.js";
+import {
+  eventEnvelopeSchema,
+  OPERATIONS,
+  updateRequestedVersionSchema,
+} from "../contract/index.js";
 import { declareRoute, firstValue, platformQuerySchema, sseMessage } from "./routes.js";
 
 const workerParamsSchema = z.object({ id: z.string() });
@@ -49,6 +53,26 @@ export const workerRemoveRoute = declareRoute({
   request: { params: workerParamsSchema },
   reply: OPERATIONS["worker.remove"].output,
   errors: { 409: ["WORKER_CONNECTED"], 501: ["UNSUPPORTED_IN_WORKER_MODE"] },
+});
+
+const updateBodySchema = z
+  .object({ version: updateRequestedVersionSchema.optional(), force: z.boolean().optional() })
+  .strict();
+
+export const updateRoute = declareRoute({
+  method: "post",
+  path: "/v1/update",
+  tag: "System",
+  summary: "Update this daemon to a Simlock version",
+  role: "admin",
+  notes:
+    "The body is optional: without a version the newest release is installed. The daemon takes no new leases while it waits for its leases to end, installs and restarts.",
+  request: { optionalJson: updateBodySchema },
+  reply: OPERATIONS["daemon.update"].output,
+  errors: {
+    409: ["UPDATE_UNSUPPORTED_INSTALL", "UPDATE_SHARED_INSTALL"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+  },
 });
 
 export const componentListRoute = declareRoute({
@@ -174,6 +198,7 @@ export const componentInstallRoute = declareRoute({
 });
 
 export const ADMIN_ROUTES = [
+  updateRoute,
   workerListRoute,
   workerDrainRoute,
   workerUndrainRoute,
