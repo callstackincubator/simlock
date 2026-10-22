@@ -1,0 +1,51 @@
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { NodeUpdaterLauncher } from "./updater-launcher.js";
+
+const trees: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(trees.splice(0).map((tree) => rm(tree, { recursive: true, force: true })));
+});
+
+describe("NodeUpdaterLauncher", () => {
+  it("runs the entry detached with its arguments, streams stdout lines and logs stderr", async () => {
+    const tree = await realpath(await mkdtemp(join(tmpdir(), "simlock-updater-")));
+    trees.push(tree);
+    const entry = join(tree, "main.js");
+    await writeFile(
+      entry,
+      `console.log(JSON.stringify({ argv: process.argv.slice(2), home: process.env.SIMLOCK_HOME }));
+console.log("second");
+console.error("to the log");
+process.exit(3);`,
+    );
+    const logPath = join(tree, "daemon.log");
+
+    const updater = await new NodeUpdaterLauncher().launch({
+      entry,
+      from: "0.3.0",
+      to: "0.4.0",
+      role: "gateway",
+      pid: 4242,
+      simlockHome: "/home/.simlock",
+      logPath,
+    });
+    const lines: string[] = [];
+    for await (const line of updater.lines) lines.push(line);
+
+    expect(lines).toEqual([
+      JSON.stringify({
+        argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "4242", "--gateway"],
+        home: "/home/.simlock",
+      }),
+      "second",
+    ]);
+    await expect(updater.exited).resolves.toBe(3);
+    await expect(readFile(logPath, "utf8")).resolves.toBe("to the log\n");
+  });
+});

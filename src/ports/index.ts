@@ -161,3 +161,10 @@ export type {
 } from "./sqlite.js";
 export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";
 export { FakeNpmCli, NodeNpmCli, type NpmCli, type NpmOutcome } from "./npm-cli.js";
+export {
+  FakeUpdaterLauncher,
+  type LaunchedUpdater,
+  NodeUpdaterLauncher,
+  type UpdaterLaunch,
+  type UpdaterLauncher,
+} from "./updater-launcher.js";
