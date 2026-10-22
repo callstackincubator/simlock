@@ -4160,6 +4160,47 @@ describe("startDaemon version check", () => {
     ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
       .daemon.latestVersion;
 
+  it("a start that fails after the version check began leaves no timer and asks npm no more", async () => {
+    class SecretRefusingFilesystem extends MemoryFilesystem {
+      override async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (arguments_[0].endsWith("admin.token")) throw new Error("disk is read-only");
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const failedStart = async (check: boolean) => {
+      const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0\n" }] });
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-fail-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: { update: { check } },
+          dataDirectory: directory,
+          drivers: [],
+          filesystem: new SecretRefusingFilesystem(),
+          hostLoadProbe: null,
+          logger: new NoopLogger(),
+          npm,
+          socketPath: join(directory, "daemon.sock"),
+          version: "0.3.0",
+        } as StartDaemonOptions),
+      ).rejects.toThrow("disk is read-only");
+      // why: the answer is processed after the call; wait it out so a leaked next-check timer exists before it is counted.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      const pending = clock.pendingTimerCount;
+      clock.advance(2 * 24 * 60 * 60 * 1000);
+      return { calls: npm.calls.length, pending };
+    };
+
+    const checked = await failedStart(true);
+    const unchecked = await failedStart(false);
+
+    expect(checked).toEqual({ calls: 1, pending: unchecked.pending });
+  });
+
   it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value; a stopped daemon never schedules the next check", async () => {
     const pending: ((outcome: NpmOutcome) => void)[] = [];
     const npm: NpmCli = {
@@ -4212,6 +4253,17 @@ describe("startDaemon version check", () => {
     pending[4]?.({ ok: true, output: "0.7.0\n" });
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
     expect(stopping.clock.pendingTimerCount).toBe(0);
+
+    // why: stopping while the next check is scheduled (no npm call in flight) must cancel that timer.
+    const scheduled = new FakeNpmCli({ view: [{ ok: true, output: "0.8.0\n" }] });
+    const idle = await startChecked(scheduled);
+    await expect.poll(() => latestOf(idle.daemon)).toBe("0.8.0");
+    await expect.poll(() => idle.clock.pendingTimerCount).toBeGreaterThan(0);
+    const armed = idle.clock.pendingTimerCount;
+    await idle.daemon.stop("test");
+    expect(idle.clock.pendingTimerCount).toBeLessThan(armed);
+    idle.clock.advance(2 * day);
+    expect(scheduled.calls).toHaveLength(1);
 
     const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
     const gateway = await startChecked(gatewayNpm, { role: "gateway" });

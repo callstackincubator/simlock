@@ -187,11 +187,20 @@ export interface StartDaemonOptions {
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   let opened: StateDatabase | undefined;
+  let check: VersionCheck | undefined;
   try {
-    return await composeDaemon(options, (state) => {
-      opened = state;
-    });
+    return await composeDaemon(
+      options,
+      (state) => {
+        opened = state;
+      },
+      (started) => {
+        check = started;
+      },
+    );
   } catch (error: unknown) {
+    // why: the check's 24 h timer would keep a failed start's process alive and re-ask npm; a running daemon disposes it in `dispose`.
+    check?.dispose();
     // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
     opened?.close();
     throw error;
@@ -202,6 +211,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 async function composeDaemon(
   options: StartDaemonOptions,
   onStateOpened: (state: StateDatabase) => void,
+  onVersionCheck: (check: VersionCheck) => void,
 ): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
   const role = options.role ?? "worker";
@@ -302,6 +312,7 @@ async function composeDaemon(
     logger: logger.child("version-check"),
     enabled: config.update.check,
   });
+  onVersionCheck(versionCheck);
   if (role === "gateway") {
     return startGatewayDaemon({
       auth,
