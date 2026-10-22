@@ -116,8 +116,8 @@ flowchart LR
    `daemon.update-failed`. A new daemon that answers but is not `running` with the new version
    after those 2 minutes counts as not started: the updater sends it
    `daemon.stop` before the rollback and waits up to 10 minutes. It does not
-   kill it (it has no pid for it), so a daemon that ignores the stop does not
-   hold the rollback back. Once the old daemon has stopped and before the new
+   kill it (it has no pid for it), so a daemon that ignores the stop ends the
+   update with no rollback (see the 10-minute rule below). Once the old daemon has stopped and before the new
    one starts, the updater copies that daemon's `state.db`, `history.db` and
    their `-wal` and `-shm` files to `<data dir>/update-backup/`; they are
    deleted once the new daemon is ready. The updater never unloads the
@@ -125,7 +125,7 @@ flowchart LR
    failing new daemon while the updater rolls back. The rollback runs in this
    order: it installs the old version with npm; it sends `daemon.stop` to any
    daemon the service restarted meanwhile and waits until its socket
-   refuses connections (or the file is gone) or its pid has exited (a
+   refuses connections (or the file is gone) (a
    daemon that took `daemon.stop` still holds the socket and `state.db`
    while it closes, so a silent `query` is not stopped);
    it restores the database copy, so a migration the new version ran never
