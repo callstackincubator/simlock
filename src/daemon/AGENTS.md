@@ -74,7 +74,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 2. Parse input → `BAD_REQUEST`.
 3. Role: `admin` passes all; `agent` only `agent` operations → `FORBIDDEN`.
 4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes, so the handler answers `UNKNOWN_LEASE`.
-5. Park on readiness — every operation but `status.get`.
+5. Park on readiness — every operation but `status.get` and `daemon.update {query}`.
 6. Handler → parse output; a mismatch is logged and answers `INTERNAL`.
 
 ## Readiness

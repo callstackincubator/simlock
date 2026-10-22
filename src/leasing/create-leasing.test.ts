@@ -4616,6 +4616,38 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     ).toEqual([["queued", "updating"]]);
   });
 
+  it("refuses the retry of a provision that fails while the update hold is on, with DAEMON_UPDATING and no second provision", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { provision: 50 },
+      platform: "ios",
+    });
+    driver.failOn("provision", 1, new DriverCrashError("simulator exited"));
+    const harness = await createHarness({ driver, limits: runningLimit });
+    const failing = harness.engine
+      .request(request, asking("failing"))
+      .catch((error: unknown) => error);
+    await flush();
+
+    await harness.engine.leasing.holdForUpdate();
+    clock.advance(50);
+    await flush();
+    clock.advance(50);
+    await flush();
+
+    expect(await failing).toBeInstanceOf(DaemonUpdatingError);
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload as { requester: string; reason: string })
+        .map(({ requester, reason }) => [requester, reason]),
+    ).toEqual([["failing", "updating"]]);
+  });
+
   it("refuses a request that is still resolving its spec when the update hold begins", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({

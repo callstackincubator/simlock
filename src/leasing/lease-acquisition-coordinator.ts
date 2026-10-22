@@ -411,9 +411,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     });
   }
 
-  // why: a `new` waiter reaches `#decide` after resolving its spec or being sent back to retry, and the update hold refuses everything not yet provisioning.
-  #refuseNewForUpdate(waiter: AcquisitionWaiter): boolean {
-    if (!this.#updateHold || waiter.state !== "new") return false;
+  // why: every waiter passes `#nextPlan` before a provision starts, in whatever state `markNew` or `#defer` left it, so the update hold refuses here (#825 Decisions).
+  #refuseUnderHold(waiter: AcquisitionWaiter): boolean {
+    if (!this.#updateHold) return false;
     if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
       this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
     }
@@ -988,7 +988,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
-    if (this.#refuseNewForUpdate(waiter)) return undefined;
+    if (this.#refuseUnderHold(waiter)) return undefined;
     const head = this.options.queue.head;
     if (head !== undefined && head !== waiter) {
       const reason = "behind-earlier-request";
