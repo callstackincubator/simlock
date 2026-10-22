@@ -542,8 +542,8 @@ export class AgentDeviceSupervisor {
 
   async #environment(policyPath: string): Promise<NodeJS.ProcessEnv> {
     const o = this.#o;
-    const env: NodeJS.ProcessEnv = {};
     const phones = o.role === "phones";
+    const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(o.baseEnvironment)) {
       if (key.startsWith("AGENT_DEVICE_") || (phones && ADB_SELECTION_KEYS.has(key))) continue;
       env[key] = value;
@@ -557,14 +557,22 @@ export class AgentDeviceSupervisor {
         stateDir: this.#stateDir,
       }),
     );
-    if (phones) {
-      env["ANDROID_ADB_SERVER_PORT"] = DEFAULT_ADB_SERVER_PORT;
-      for (const [key, name] of Object.entries(IOS_SIGNING_ENVIRONMENT)) {
-        const value = o.ios?.[key as keyof AgentDeviceIosSigning];
-        if (value !== undefined) env[name] = value;
-      }
-      return env;
+    if (phones) return Object.assign(env, this.#phoneEnvironment());
+    await this.#hideUnusedPlatforms(env);
+    return env;
+  }
+
+  #phoneEnvironment(): Record<string, string> {
+    const signing: Record<string, string> = { ANDROID_ADB_SERVER_PORT: DEFAULT_ADB_SERVER_PORT };
+    for (const [key, name] of Object.entries(IOS_SIGNING_ENVIRONMENT)) {
+      const value = this.#o.ios?.[key as keyof AgentDeviceIosSigning];
+      if (value !== undefined) signing[name] = value;
     }
+    return signing;
+  }
+
+  async #hideUnusedPlatforms(env: NodeJS.ProcessEnv): Promise<void> {
+    const o = this.#o;
     if (o.platforms.includes("ios")) {
       const deviceSet = o.driverEnvironment["SIMLOCK_IOS_DEVICE_SET"];
       if (deviceSet !== undefined) env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = deviceSet;
@@ -581,7 +589,6 @@ export class AgentDeviceSupervisor {
     if (!o.platforms.includes("android")) {
       env["AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST"] = NO_ANDROID_DEVICE_SERIAL;
     }
-    return env;
   }
 
   async #waitReady(

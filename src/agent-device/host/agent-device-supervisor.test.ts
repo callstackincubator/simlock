@@ -84,9 +84,23 @@ interface Options {
   readonly behaviours?: ReadonlyMap<number, Behaviour>;
 }
 
+function stemOf(role: AgentDeviceRole | undefined): string {
+  return role === "phones" ? "agent-device-phones" : "agent-device";
+}
+
+function supervisorRole(options: Options): {
+  readonly ios?: AgentDeviceIosSigning;
+  readonly role: AgentDeviceRole;
+} {
+  return {
+    ...(options.ios === undefined ? {} : { ios: options.ios }),
+    role: options.role ?? "simulators",
+  };
+}
+
 async function arrange(options: Options = {}) {
   const clock = new FakeClock(1_000_000);
-  const stem = options.role === "phones" ? "agent-device-phones" : "agent-device";
+  const stem = stemOf(options.role);
   const filesystem = options.filesystem ?? new MemoryFilesystem();
   const simlockHome = options.home ?? home;
   const sink = new MemoryLogSink();
@@ -173,7 +187,7 @@ async function arrange(options: Options = {}) {
     filesystem,
     healthProbe: health,
     home: simlockHome,
-    ...(options.ios === undefined ? {} : { ios: options.ios }),
+    ...supervisorRole(options),
     leaseMaxTtlMs: options.leaseMaxTtlMs ?? 4 * 60 * 60_000,
     logger,
     nodePath,
@@ -181,7 +195,6 @@ async function arrange(options: Options = {}) {
     platforms: options.platforms ?? ["ios", "android"],
     processRunner: runner,
     processSupervisor: processes,
-    role: options.role ?? "simulators",
     tcpProbe: probe,
   });
   const harness = {
