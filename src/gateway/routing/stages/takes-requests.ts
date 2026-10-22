@@ -13,6 +13,7 @@ export const takesRequests: FilterStage = {
   check(worker) {
     if (worker.connection !== "connected") return { reason: worker.connection };
     if (worker.drained) return { reason: "drained" };
+    if (worker.update != null) return { reason: "updating" };
     const ready =
       worker.health === "starting"
         ? worker.catalog !== undefined

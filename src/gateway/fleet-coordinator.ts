@@ -119,6 +119,7 @@ const COULD_TAKE_LATER: ReadonlySet<WorkerReason["reason"]> = new Set([
   "full",
   "not-ready",
   "unhealthy",
+  "updating",
 ]);
 
 const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
