@@ -60,10 +60,33 @@ function defineSuite(platform: Platform, id: string): void {
       let env: SharedTestEnv;
       let secret: string;
 
+      // why: the agent-device CLI reads `/health` before any lease and sends its two instance ids on every RPC; a lease on the phone daemon must accept them.
+      const pins = async (): Promise<Record<string, string>> => {
+        const response = await fetch(`http://127.0.0.1:${env.httpPort}/v1/agent-device/health`, {
+          headers: { authorization: `Bearer ${secret}` },
+        });
+        const health = (await response.json()) as {
+          readonly instanceId?: string;
+          readonly upstream?: { readonly instanceId?: string };
+        };
+        return {
+          ...(health.instanceId === undefined
+            ? {}
+            : { "x-agent-device-instance": health.instanceId }),
+          ...(health.upstream?.instanceId === undefined
+            ? {}
+            : { "x-agent-device-upstream-instance": health.upstream.instanceId }),
+        };
+      };
+
       const call = async (method: string, params: Record<string, unknown>): Promise<RpcAnswer> => {
         const response = await fetch(`http://127.0.0.1:${env.httpPort}/v1/agent-device/rpc`, {
           body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }),
-          headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+          headers: {
+            authorization: `Bearer ${secret}`,
+            "content-type": "application/json",
+            ...(await pins()),
+          },
           method: "POST",
           signal: AbortSignal.timeout(6 * MINUTE),
         });

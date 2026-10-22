@@ -270,6 +270,7 @@ function forwardedBody(
     deviceKey: _deviceKey,
     imageTag: _imageTag,
     osVersion: _osVersion,
+    physical: _physical,
     target: _target,
     ...rest
   } = call.params;

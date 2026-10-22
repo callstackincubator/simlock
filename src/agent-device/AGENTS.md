@@ -96,7 +96,7 @@ under leasing's signal (`lease.endWaitMs`).
    `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`; a phone's is its enrolled id), to the phone daemon for a phone and the simulator daemon otherwise (`RoutedHostLink`, which remembers each lease's daemon until the lease ends), no
-   `device`/`deviceKey`/`target`/`osVersion`/`imageTag` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
+   `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`physical` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
 5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag? }` added from the grant.
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
 7. Release → agent-device first, then `lease.release` → reclaim; lease-end finds no scope left.
@@ -144,5 +144,5 @@ renewals and release scopes: memory only.
 ## Known gaps
 
 - **A daemon restart loses agent-device leases.** The next heartbeat answers ended by
-  simlock and the simlock lease is released.
+  simlock and the simlock lease is released. A call on a phone lease drops the client's `x-agent-device-instance` and `x-agent-device-upstream-instance` pins (`front/host-link.ts`), which name the simulator daemon the client read `/health` from; so this holds for the phone daemon too.
 - **Agents sharing a token share a tenant**, and see each other's sessions.

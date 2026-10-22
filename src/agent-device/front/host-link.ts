@@ -51,6 +51,12 @@ interface RoutedHosts {
 
 type Role = keyof RoutedHosts;
 
+// why: a client reads `/health` before it names a lease, so it pins the simulator daemon's proxy and daemon ids; the phone daemon's differ and would refuse every phone call, so a phone call carries no pin and a phone-daemon restart ends the lease at its next heartbeat, as a simulator-daemon restart does.
+function dropInstancePins(request: Request): void {
+  request.headers.delete("x-agent-device-instance");
+  request.headers.delete("x-agent-device-upstream-instance");
+}
+
 // why: a worker runs one agent-device daemon for simulators and one for phones; this link holds a host for each and remembers which daemon each lease was allocated on.
 export class RoutedHostLink implements HostLink {
   readonly readsLeaseHeader = true;
@@ -74,6 +80,7 @@ export class RoutedHostLink implements HostLink {
       if (status.state === "unavailable") {
         return frontReplyFor(request, notAvailable(status.reason));
       }
+      dropInstancePins(request);
     }
     return this.hosts[role].forward(request, identity);
   }

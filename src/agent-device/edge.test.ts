@@ -882,6 +882,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
       expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toMatchObject([
         { params: { leaseId: hex(1), ...address } },
       ]);
+      // why: agent-device's daemon refuses any spec key it receives, so `physical` stays with simlock.
+      expect(rig.phone.rpcRequests("agent_device.lease.allocate")[0]?.params).not.toHaveProperty(
+        "physical",
+      );
       expect(allocatesReceived(rig)).toEqual([]);
     }
   });
@@ -1004,6 +1008,29 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(data?.devices.map((device) => device.id).sort()).toEqual(
       [phoneSerial, idOf(rig, 4)].sort(),
     );
+  });
+
+  it("a client that sends the instance headers of the health it read, as the agent-device CLI does, is granted a phone and its later calls on that phone lease reach the phone daemon", async () => {
+    const rig = await setUpWithPhone();
+    const health = (await (await send(rig, "/health")).json()) as { instanceId: string };
+    const pinned = {
+      headers: {
+        "x-agent-device-instance": health.instanceId,
+        "x-agent-device-upstream-instance": "upstream-from-health",
+      },
+    };
+
+    const allocated = await envelopeOf(
+      await allocate(rig, 1, { physical: true, platform: "android" }, pinned),
+    );
+    const later = await envelopeOf(await command(rig, "snapshot", 1, pinned));
+    const beat = await envelopeOf(await heartbeat(rig, 1, {}, pinned));
+
+    expect(allocated.result).toMatchObject({ ok: true });
+    expect(later.error).toBeUndefined();
+    expect(beat.error).toBeUndefined();
+    expect(rig.phone.rpcRequests("agent_device.command")).toHaveLength(1);
+    expect(rig.phone.rpcRequests("agent_device.lease.heartbeat")).toHaveLength(1);
   });
 
   it("when simlock ends a phone lease (presence lost, an operator's release of all) the release reaches the phone daemon, not the simulator daemon, and the agent's next heartbeat answers ended by simlock", async () => {
