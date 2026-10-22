@@ -16,6 +16,16 @@ const CLI = `${PACKAGE_ROOT}/dist/cli/main.js`;
 const PID = 4242;
 const EPOCH = 1_700_000_000_000;
 
+class StopRecordingNpm extends FakeNpmCli {
+  readonly stopsBeforeInstall: number[] = [];
+  probe: FakeProbe | undefined;
+
+  override async install(spec: string): Promise<NpmOutcome> {
+    this.stopsBeforeInstall.push(this.probe?.stops ?? -1);
+    return super.install(spec);
+  }
+}
+
 class FakeProbe implements DaemonProbe {
   stops = 0;
   oldDaemonAnswers = true;
@@ -57,6 +67,7 @@ interface Scenario {
     readonly signals: readonly string[];
     readonly waitedAtLeastMs: number;
     readonly stderr?: readonly string[];
+    readonly stopsBeforeEachInstall?: readonly number[];
     readonly database?: {
       readonly copiedBeforeStart: string;
       readonly restoredBeforeRollbackStart?: string;
@@ -221,6 +232,21 @@ const SCENARIOS: readonly Scenario[] = [
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
+  {
+    name: "new daemon alive but starting after 2 minutes",
+    starts: [{ daemon: { health: "starting", version: "0.4.0" } }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 2,
+      stopsBeforeEachInstall: [0, 2],
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
 ];
 
 async function settle<T>(promise: Promise<T>, clock: FakeClock): Promise<T> {
@@ -251,8 +277,9 @@ describe("runUpdater", () => {
       await filesystem.writeFileAtomic(`${dataDirectory}/history.db`, "history");
       const copiedBeforeStart: string[] = [];
       const liveAtStart: string[] = [];
-      const npm = new FakeNpmCli(install === undefined ? {} : { install });
+      const npm = new StopRecordingNpm(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
+      npm.probe = probe;
       const processes = new ScriptedProcessRunner(
         expected.startArgs.map((args, index) => ({
           match: { command: process.execPath, args },
@@ -309,6 +336,9 @@ describe("runUpdater", () => {
         npm.calls.filter((call) => call.method === "install").map((call) => call.spec),
       ).toEqual(expected.installs);
       expect(probe.stops).toBe(expected.stops);
+      if (expected.stopsBeforeEachInstall !== undefined) {
+        expect(npm.stopsBeforeInstall).toEqual(expected.stopsBeforeEachInstall);
+      }
       expect(processes.calls.map((call) => call.args)).toEqual(expected.startArgs);
       expect(supervisor.signals.map((sent) => `${sent.pid}:${sent.signal}`)).toEqual(
         expected.signals,
