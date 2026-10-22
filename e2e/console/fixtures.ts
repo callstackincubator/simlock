@@ -487,13 +487,13 @@ export async function startFleet(
     );
     return { gateway, joinTokens, workers: started };
   } catch (error: unknown) {
-    await disposeFleet({ gateway, joinTokens, workers: started });
+    await disposeFleet({ gateway, workers: started });
     throw error;
   }
 }
 
 export async function disposeFleet(
-  fleet: Fleet,
+  fleet: Pick<Fleet, "gateway" | "workers">,
   options: { readonly preservePages?: readonly Page[] } = {},
 ): Promise<void> {
   await Promise.all(fleet.workers.map((worker) => worker.dispose(options)));
