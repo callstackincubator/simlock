@@ -4,15 +4,28 @@ import type { DaemonFacts, DaemonMode } from "../data/mode";
 import { inConsole } from "../state/test-support";
 import { UpdateNotice } from "./shell";
 
+function textOf(markup: string): string {
+  let text = "";
+  let inTag = false;
+  for (const char of markup) {
+    if (char === "<") inTag = true;
+    else if (char === ">") inTag = false;
+    else if (!inTag) text += char;
+  }
+  return text;
+}
+
 function footer(options: {
   readonly mode: DaemonMode | undefined;
   readonly daemon: DaemonFacts;
   readonly collapsed?: boolean;
 }): string {
-  return inConsole(<UpdateNotice collapsed={options.collapsed ?? false} />, {
-    daemon: () => options.daemon,
-    mode: () => options.mode,
-  }).replace(/<[^>]+>/g, "");
+  return textOf(
+    inConsole(<UpdateNotice collapsed={options.collapsed ?? false} />, {
+      daemon: () => options.daemon,
+      mode: () => options.mode,
+    }),
+  );
 }
 
 describe("the sidebar footer", () => {
