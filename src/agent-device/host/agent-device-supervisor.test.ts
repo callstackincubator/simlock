@@ -104,7 +104,7 @@ async function arrange(options: Options = {}) {
   await installAgentDevice(filesystem, simlockHome, options);
   if (options.record !== undefined) {
     await filesystem.writeFileAtomic(
-      `${simlockHome}/agent-device-daemon.json`,
+      `${simlockHome}/${stem}-daemon.json`,
       JSON.stringify(options.record),
     );
   }
@@ -270,8 +270,9 @@ function psRun(pid: number, line: string, code = 0): ScriptedProcessExpectation 
   };
 }
 
-function ownLine(entry = internalEntry, simlockHome = home): string {
-  return `${nodePath} ${entry} --simlock-home=${simlockHome}`;
+function ownLine(entry = internalEntry, simlockHome = home, role?: "phones"): string {
+  const suffix = role === undefined ? "" : " --simlock-role=phones";
+  return `${nodePath} ${entry} --simlock-home=${simlockHome}${suffix}`;
 }
 
 function record(pid: number, entry = internalEntry) {
@@ -746,6 +747,71 @@ describe("AgentDeviceSupervisor in the phones role", () => {
       });
       expect(await harness.filesystem.exists(`${stateDir}/policy.json`)).toBe(false);
       expect(await harness.filesystem.exists(recordPath)).toBe(false);
+    },
+  );
+});
+
+describe("AgentDeviceSupervisor reaping by role", () => {
+  const phonesRecordPath = `${home}/agent-device-phones-daemon.json`;
+  const leftBehind = (path: string, pid: number) => async (filesystem: MemoryFilesystem) => {
+    await filesystem.writeFileAtomic(path, JSON.stringify(record(pid)));
+  };
+
+  it.each([
+    {
+      name: "a phones record whose pid line ends with the phones suffix is signalled, with the simulator record left alone",
+      role: "phones",
+      line: ownLine(internalEntry, home, "phones"),
+      otherRecord: recordPath,
+      signalled: true,
+      survivingRecord: recordPath,
+    },
+    {
+      name: "a simulators record whose pid line ends with the simulators suffix is signalled, with the phones record left alone",
+      role: "simulators",
+      line: ownLine(),
+      otherRecord: phonesRecordPath,
+      signalled: true,
+      survivingRecord: phonesRecordPath,
+    },
+    {
+      name: "a phones record whose pid line is a simulator daemon's is not signalled",
+      role: "phones",
+      line: ownLine(),
+      otherRecord: undefined,
+      signalled: false,
+      survivingRecord: undefined,
+    },
+    {
+      name: "a simulators record whose pid line is a phone daemon's is not signalled",
+      role: "simulators",
+      line: ownLine(internalEntry, home, "phones"),
+      otherRecord: undefined,
+      signalled: false,
+      survivingRecord: undefined,
+    },
+  ] as const)(
+    "signals only a pid whose line ends with its own role's suffix, and never touches the other role's record: $name",
+    async ({ line, otherRecord, role, signalled, survivingRecord }) => {
+      const harness = await run({
+        expectations: [
+          psRun(900, line),
+          versionRun(),
+          role === "phones" ? phoneSpawn() : daemonSpawn(),
+        ],
+        layout: async (filesystem) => {
+          if (otherRecord !== undefined) await leftBehind(otherRecord, 901)(filesystem);
+        },
+        livePids: [900, 901],
+        record: record(900),
+        role,
+      });
+
+      expect(harness.processes.signals).toEqual(signalled ? [{ pid: 900, signal: "SIGTERM" }] : []);
+      expect(stateOf(harness)).toBe("running");
+      if (survivingRecord !== undefined) {
+        expect(await readJson(harness, survivingRecord)).toMatchObject({ pid: 901 });
+      }
     },
   );
 });
