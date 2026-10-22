@@ -281,6 +281,9 @@ export interface Config {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
   };
+  readonly update: {
+    readonly check: boolean;
+  };
   readonly warmPool: WarmPoolConfig & {
     readonly quarantine: {
       /** Failed retries allowed after the release-time purge that triggers quarantine. */
@@ -904,6 +907,7 @@ function defaultConfig(
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
     },
+    update: { check: true },
     warmPool: {
       ...defaultWarmPoolConfig(systemStats),
       quarantine: {
@@ -1062,6 +1066,7 @@ function configValidators(
       timeoutMs: positiveNumber,
     }),
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
+    update: objectValidator({ check: booleanValue }),
     warmPool: objectValidator({
       ...warmPoolConfigValidator,
       quarantine: objectValidator({

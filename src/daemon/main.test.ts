@@ -36,6 +36,7 @@ import {
   FakeClock,
   FakeHostInfo,
   FakeHostLoadProbe,
+  FakeNpmCli,
   type NpmCli,
   type NpmOutcome,
   type HostLoadCounters,
@@ -4198,5 +4199,11 @@ describe("startDaemon version check", () => {
       }
       await expect.poll(() => latestOf(daemon)).toBe(failed ? "0.4.0" : "0.5.0");
     }
+
+    const off = new FakeNpmCli({ view: [{ ok: true, output: "0.9.0\n" }] });
+    const disabled = await startChecked(off, { configOverrides: { update: { check: false } } });
+    disabled.clock.advance(2 * day);
+    expect(off.calls).toEqual([]);
+    expect(await latestOf(disabled.daemon)).toBeNull();
   });
 });

@@ -73,6 +73,7 @@ const gatewayConfig = {
   },
   http: { enabled: true, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
+  update: { check: true },
   ios: { defaultMode: "full" as const, defaultModels: {}, slim: { bootTimeoutMs: 1 } },
   android: {
     defaultModels: {},

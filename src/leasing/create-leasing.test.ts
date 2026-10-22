@@ -85,6 +85,7 @@ function config(
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: idleShutdownAfterMs },
+    update: { check: true },
     lease: {
       defaultTtlMs: 100,
       maxTtlMs: 14_400_000,

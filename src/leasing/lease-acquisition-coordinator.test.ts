@@ -98,6 +98,7 @@ function config(maxDevices = 1, maxRunning = 1): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 100,
       maxTtlMs: 100,

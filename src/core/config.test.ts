@@ -98,6 +98,7 @@ describe("loadConfig", () => {
         maxConcurrentRecoveries: 1,
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
