@@ -9951,7 +9951,7 @@ describe("simlock worker update", () => {
     ...overrides,
   });
 
-  it("follows the update to is running, reports a failure with exit 1, says when the worker is on the latest, detaches, and refuses on a worker daemon", async () => {
+  it("follows the update to is running, reports a failure with exit 1, says why the worker is up to date, detaches, and refuses on a worker daemon", async () => {
     const failure = {
       at: 2_000,
       from: "0.3.0",
@@ -9999,6 +9999,29 @@ describe("simlock worker update", () => {
         answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
         code: 0,
         stdout: "mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)\n",
+        polls: 1,
+      },
+      {
+        name: "already running the requested version",
+        argv: ["worker", "update", "3f81a2c4", "--version", "0.4.0"],
+        answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is already running 0.4.0\n",
+        polls: 1,
+      },
+      {
+        name: "newer than the latest",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer({
+          resolved: "0.3.0",
+          started: false,
+          update: null,
+          upToDate: true,
+          version: "0.4.0",
+        }),
+        code: 0,
+        stdout:
+          "mac-studio-2 (3f81a2c4) is newer than the latest (0.3.0). Use --version to install another version.\n",
         polls: 1,
       },
       {

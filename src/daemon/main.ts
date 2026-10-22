@@ -997,7 +997,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
 
   let alerts: Alerts | undefined;
 
-  // why: a gateway holds no leases of its own and fleet admission is not changed (ADR 0042 §4), so an update never waits.
+  // why: a gateway holds no leases of its own and fleet admission is not changed (ADR 0042 §6), so an update never waits.
   const update = createUpdateCoordinator({
     ...updateOptionsFor({
       clock,

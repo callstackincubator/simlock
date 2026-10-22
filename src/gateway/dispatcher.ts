@@ -39,6 +39,7 @@ import { createUsageReader, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
+  isSimlockError,
   EVENTS_PAGE_DEFAULT,
   OPERATIONS,
   requestedDevice,
@@ -59,7 +60,7 @@ import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
+import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
@@ -95,7 +96,7 @@ export type AlertTestOutcome =
 
 type DaemonUpdateOutput = z.infer<(typeof OPERATIONS)["daemon.update"]["output"]>;
 
-// why: ADR 0042 §4: the gateway's own update has no lease wait and goes straight to installing; `src/daemon` supplies it.
+// why: ADR 0042 §6: the gateway's own update has no lease wait and goes straight to installing; `src/daemon` supplies it.
 export interface GatewayUpdate {
   request(
     input: z.infer<(typeof OPERATIONS)["daemon.update"]["input"]>,
@@ -442,13 +443,18 @@ export class GatewayDispatcher {
       });
     }
     const { workerId, ...request } = input;
-    const answer = await this.#withinUplinkBound(client.updateDaemon(request), workerId);
+    const answer = await this.#withinUplinkBound(
+      client.updateDaemon(request).catch((error: unknown) => {
+        throw relayedUpdateError(error, workerId);
+      }),
+      workerId,
+    );
     this.options.workers.refreshUpdate(workerId, answer);
     await target.refresh();
     return { ...answer, workerId };
   };
 
-  // why: above the worker's own npm `view` and `root -g` (30 s each); at the limit the view catches up on the next read (ADR 0042 §2).
+  // why: above the worker's own npm `view` and `root -g` (30 s each); at the limit the view catches up on the next read.
   #withinUplinkBound<Value>(call: Promise<Value>, workerId: string): Promise<Value> {
     return new Promise<Value>((resolve, reject) => {
       const timer = this.options.clock.setTimer(UPDATE_UPLINK_BOUND_MS, () => {
@@ -721,4 +727,16 @@ function unsupportedByDesign(
 // why: relays run from a gateway to its workers, so a gateway's own front door has none.
 function relayRefused(): never {
   throw new DispatchError("FORBIDDEN", "A gateway does not accept relay operations");
+}
+
+// why: a worker's refusal keeps its code and message so HTTP and the CLI answer it as the worker would (409, 502); a link that closed under the call
+// never answered, so it is WORKER_NOT_CONNECTED like the 90 s limit.
+function relayedUpdateError(error: unknown, workerId: string): unknown {
+  if (!isSimlockError(error)) return error;
+  if (isUplinkLost(error)) {
+    return new DispatchError("WORKER_NOT_CONNECTED", `worker ${workerId} is not connected`, {
+      workerId,
+    });
+  }
+  return new DispatchError(error.code, error.message, error.details);
 }

@@ -142,7 +142,9 @@ async function runWorkerUpdate(
   const first = await find();
   const name = workerName(first, workerId);
   if (answer.upToDate) {
-    environment.stdout.write(`${name} is already on the latest (${answer.version})\n`);
+    environment.stdout.write(
+      `${upToDateMessage(name, answer, typeof values.version === "string" ? values.version : undefined)}\n`,
+    );
     return 0;
   }
   const { from, to } = updateEnds(answer);
@@ -153,6 +155,19 @@ async function runWorkerUpdate(
     return 0;
   }
   return follow({ environment, find, first, name, to });
+}
+
+// why: the three reasons a worker is up to date, as `simlock update` tells them apart (update.ts upToDateMessage).
+function upToDateMessage(
+  name: string,
+  answer: { readonly version: string; readonly resolved?: string | null },
+  requested: string | undefined,
+): string {
+  if (requested !== undefined) return `${name} is already running ${answer.version}`;
+  if (answer.resolved === answer.version) {
+    return `${name} is already on the latest (${answer.version})`;
+  }
+  return `${name} is newer than the latest (${answer.resolved}). Use --version to install another version.`;
 }
 
 async function follow(options: {

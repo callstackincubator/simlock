@@ -366,7 +366,7 @@ export class WorkerLink {
     }
   }
 
-  // why: a failed query keeps the last view (ADR 0042 §2), so its error is dropped.
+  // why: a failed query keeps the last view, so its error is dropped.
   async #queryUpdate(client: GatewayWorkerClient): Promise<void> {
     try {
       const answer = await this.#withTimeout(client.updateDaemon({ query: true }), "daemon.update");

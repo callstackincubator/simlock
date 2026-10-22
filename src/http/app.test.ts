@@ -2563,7 +2563,7 @@ describe("POST /v1/update", () => {
       }),
     );
 
-  it("answers 202 when the call began the update and 200 when it followed one or nothing was needed, dispatches daemon.update with the body, refuses an agent and a bad body, and passes a gateway's refusal on", async () => {
+  it("answers 202 when the call began the update and 200 when it followed one or nothing was needed, dispatches daemon.update with the body, refuses an agent and a bad body", async () => {
     const { app, dispatcher } = buildHarness();
     // why: `daemon.update`'s own role check runs through the contract's real pipeline; the route adds none.
     let reply: Record<string, unknown> = answer({ started: true, resolved: "0.4.0" });
@@ -2672,6 +2672,21 @@ describe("POST /v1/workers/{id}/update", () => {
       expect({ body, status: refused.status }).toEqual({ body, status: 400 });
     }
     expect(dispatcher.calls).toHaveLength(callsBefore);
+
+    for (const [code, status] of [
+      ["WORKER_NOT_CONNECTED", 409],
+      ["UPDATE_UNSUPPORTED_INSTALL", 409],
+      ["UPDATE_SHARED_INSTALL", 409],
+      ["UPDATE_RESOLVE_FAILED", 502],
+      ["UNKNOWN_WORKER", 404],
+    ] as const) {
+      dispatcher.handlers["worker.update"] = () => {
+        throw new DispatchError(code, "refused");
+      };
+      const refusal = await post();
+      expect({ code, status: refusal.status }).toEqual({ code, status });
+      expect(((await refusal.json()) as { error: { code: string } }).error.code).toBe(code);
+    }
   });
 });
 

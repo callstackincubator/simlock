@@ -18,7 +18,7 @@ import {
   T0,
   usageRig,
 } from "../history/testing.js";
-import { OPERATIONS, type OperationName } from "../contract/index.js";
+import { OPERATIONS, SimlockError, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
 import {
   FakeClock,
@@ -707,6 +707,48 @@ describe("GatewayDispatcher", () => {
       details: { workerId: "wrk_1" },
       message: "worker wrk_1 did not answer within 90 s; check simlock worker list",
     });
+  });
+
+  it("worker.update answers what the worker refused with its own code, and a link that closes mid-call with WORKER_NOT_CONNECTED", async () => {
+    const { dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_1", client);
+
+    for (const { code, kind, expected, message } of [
+      {
+        code: "UPDATE_RESOLVE_FAILED",
+        kind: "domain",
+        expected: "UPDATE_RESOLVE_FAILED",
+        message: "npm view failed",
+      },
+      {
+        code: "UPDATE_UNSUPPORTED_INSTALL",
+        kind: "domain",
+        expected: "UPDATE_UNSUPPORTED_INSTALL",
+        message: "not npm",
+      },
+      {
+        code: "UPDATE_SHARED_INSTALL",
+        kind: "domain",
+        expected: "UPDATE_SHARED_INSTALL",
+        message: "shared",
+      },
+      {
+        code: "DAEMON_CONNECTION_LOST",
+        kind: "transport",
+        expected: "WORKER_NOT_CONNECTED",
+        message: "worker wrk_1 is not connected",
+      },
+    ] as const) {
+      client.updateFailWith = new SimlockError(code, kind, "worker's words", {});
+      await expect(
+        dispatcher.dispatch("worker.update", { workerId: "wrk_1" }, session()),
+      ).rejects.toMatchObject({
+        code: expected,
+        message: expected === code ? "worker's words" : message,
+      });
+    }
   });
 
   it("an operator-drained worker stays drained through its update, and a drain during an update leaves the update alone", async () => {
