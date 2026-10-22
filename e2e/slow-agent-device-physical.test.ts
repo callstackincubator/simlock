@@ -23,11 +23,16 @@ type Platform = "android" | "ios";
 
 const ANDROID_SERIAL = process.env["SIMLOCK_PHYSICAL_ANDROID"];
 const IOS_UDID = process.env["SIMLOCK_PHYSICAL_IOS"];
+// why: teamId and bundleId let Xcode sign the runner automatically; a provisioning profile or signing identity switches agent-device to manual signing, so each goes in only when set.
 const IOS_SIGNING = {
-  bundleId: process.env["SIMLOCK_E2E_IOS_BUNDLE_ID"],
-  provisioningProfile: process.env["SIMLOCK_E2E_IOS_PROVISIONING_PROFILE"],
-  signingIdentity: process.env["SIMLOCK_E2E_IOS_SIGNING_IDENTITY"],
   teamId: process.env["SIMLOCK_E2E_IOS_TEAM_ID"],
+  bundleId: process.env["SIMLOCK_E2E_IOS_BUNDLE_ID"],
+  ...(process.env["SIMLOCK_E2E_IOS_PROVISIONING_PROFILE"]
+    ? { provisioningProfile: process.env["SIMLOCK_E2E_IOS_PROVISIONING_PROFILE"] }
+    : {}),
+  ...(process.env["SIMLOCK_E2E_IOS_SIGNING_IDENTITY"]
+    ? { signingIdentity: process.env["SIMLOCK_E2E_IOS_SIGNING_IDENTITY"] }
+    : {}),
 } as const;
 
 function unset(name: string, value: string | undefined): string | undefined {
@@ -39,9 +44,7 @@ const missing = {
   ios:
     unset("SIMLOCK_PHYSICAL_IOS", IOS_UDID) ??
     unset("SIMLOCK_E2E_IOS_TEAM_ID", IOS_SIGNING.teamId) ??
-    unset("SIMLOCK_E2E_IOS_BUNDLE_ID", IOS_SIGNING.bundleId) ??
-    unset("SIMLOCK_E2E_IOS_PROVISIONING_PROFILE", IOS_SIGNING.provisioningProfile) ??
-    unset("SIMLOCK_E2E_IOS_SIGNING_IDENTITY", IOS_SIGNING.signingIdentity),
+    unset("SIMLOCK_E2E_IOS_BUNDLE_ID", IOS_SIGNING.bundleId),
 } as const;
 
 interface RpcAnswer {

@@ -38,7 +38,7 @@ A worker runs two supervisors, one per role. `simulators`: state dir `<data dir>
 record `agent-device-daemon.json`, marker `--simlock-home=<data dir>`. `phones`: state dir
 `agent-device-phones`, record `agent-device-phones-daemon.json`, marker adds `--simlock-role=phones`;
 its env has no simulator set or driver lease key, `ANDROID_ADB_SERVER_PORT=5037`, the
-`AGENT_DEVICE_IOS_*` signing keys (`capabilities.agent-device.ios.*`), and the no-iOS and
+`AGENT_DEVICE_IOS_*` signing keys (`capabilities.agent-device.ios.*`; `teamId` and `bundleId` suffice, `provisioningProfile` and `signingIdentity` are for manual signing only), and the no-iOS and
 no-Android sentinels when a platform is off. It starts once the simulator daemon's start has
 settled, never awaited. The capability follows the simulator daemon; doctor lists a finding per
 daemon. `RoutedHostLink` sends a physical allocate (its `serial`/`udid` is an enrolled phone's id) and every later call for that lease to the phone daemon, everything else to the simulator daemon; a phone daemon that is not running answers `phone daemon: <message>`. Each daemon has its own `ReleaseScopeRecord` and `AgentDeviceLeaseEnd`; the link forgets a lease when it ends.
