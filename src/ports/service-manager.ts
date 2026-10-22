@@ -94,7 +94,6 @@ export class FakeServiceManager implements ServiceManager {
     this.current = options.state ?? { state: "not-installed" };
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through the `ServiceManager` port.
   async state(): Promise<ServiceState> {
     return this.current;
   }
