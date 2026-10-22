@@ -55,11 +55,14 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
       | "devices"
       | "downloads"
       | "installs"
+      | "lastUpdateFailure"
+      | "latestVersion"
       | "lease"
       | "leases"
       | "load"
       | "physicalQueueDepth"
       | "queueDepth"
+      | "update"
       | "waiting"
       | "warmPool"
     >
@@ -87,6 +90,9 @@ export function workerViewFields(reads: WorkerReads): WorkerViewReport {
     host: status.host,
     ...load,
     installs: status.installs ?? [],
+    lastUpdateFailure: status.daemon.lastUpdateFailure,
+    latestVersion: status.daemon.latestVersion,
+    update: status.daemon.update,
     waiting: status.waiting ?? [],
     ...(status.capabilities === undefined ? {} : { capabilities: status.capabilities }),
     ...(status.capacity === undefined ? {} : { capacity: status.capacity }),

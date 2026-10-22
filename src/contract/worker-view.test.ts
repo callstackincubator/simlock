@@ -303,8 +303,11 @@ describe("workerViewFields", () => {
       health: "running",
       host: HOST,
       installs: [],
+      lastUpdateFailure: null,
+      latestVersion: null,
       leases: [],
       queueDepth: 3,
+      update: null,
       waiting: [],
     });
   });
@@ -349,7 +352,15 @@ describe("workerViewFields", () => {
       },
     });
 
-    expect(Object.keys(view).sort()).toEqual(["health", "host", "installs", "waiting"]);
+    expect(Object.keys(view).sort()).toEqual([
+      "health",
+      "host",
+      "installs",
+      "lastUpdateFailure",
+      "latestVersion",
+      "update",
+      "waiting",
+    ]);
   });
   describe("a worker's load", () => {
     const LOAD = {

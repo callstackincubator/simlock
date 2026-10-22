@@ -445,9 +445,12 @@ describe("GatewayService", () => {
       installs: [install],
       label: "mac-mini-1",
       lastSeenAt: 1_000,
+      lastUpdateFailure: null,
+      latestVersion: null,
       lease: { maxTtlMs: 6 * 60 * 60_000 },
       leases: [leaseFixture("lease_1", "dev_1")],
       queueDepth: 3,
+      update: null,
       version: "9.8.7",
       waiting: [waiting],
     });
