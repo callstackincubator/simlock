@@ -91,6 +91,8 @@ import {
   NodeProcessRunner,
   productionServiceManager,
   serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
   NodeProcessSupervisor,
   NodeSystemStats,
   NodeBytePipeLauncher,
@@ -1587,35 +1589,44 @@ function logFatalStart(role: DaemonMode | undefined, message: string, extra: obj
   process.exitCode = 1;
 }
 
-/** why: only a worker has a service check; a gateway and an unsupported platform have none. */
-function productionServiceCheck(role: DaemonMode): { readonly serviceCheck?: ServiceCheck } {
-  const filesystem = new NodeFilesystem();
-  const manager = productionServiceManager(process.platform, {
-    runner: new NodeProcessRunner(),
-    filesystem,
-    uid: process.getuid?.() ?? 0,
-  });
+/** why: only a worker has a service check; a gateway and an unsupported platform (no manager) have none. */
+export function serviceCheckFor(
+  role: DaemonMode,
+  manager: ServiceManager | undefined,
+  definition: () => ServiceDefinition,
+): { readonly serviceCheck?: ServiceCheck } {
   if (manager === undefined || role !== "worker") return {};
-  const root = resolveSimlockHome();
-  const definition = serviceDefinition({
-    role,
-    root,
-    dataDirectory: daemonDataDirectory(root, role),
-    home: homedir(),
-    nodePath: process.execPath,
-    mainPath: fileURLToPath(import.meta.url),
-    env: process.env,
-  });
+  const { name } = definition();
   return {
     serviceCheck: {
       manager: manager.manager,
-      name: definition.name,
+      name,
       check: async () => {
-        const state = await manager.state(definition);
+        const state = await manager.state(definition());
         return state.state === "broken" ? state.missing : [];
       },
     },
   };
+}
+
+function productionServiceCheck(role: DaemonMode): { readonly serviceCheck?: ServiceCheck } {
+  const manager = productionServiceManager(process.platform, {
+    runner: new NodeProcessRunner(),
+    filesystem: new NodeFilesystem(),
+    uid: process.getuid?.() ?? 0,
+  });
+  return serviceCheckFor(role, manager, () => {
+    const root = resolveSimlockHome();
+    return serviceDefinition({
+      role,
+      root,
+      dataDirectory: daemonDataDirectory(root, role),
+      home: homedir(),
+      nodePath: process.execPath,
+      mainPath: fileURLToPath(import.meta.url),
+      env: process.env,
+    });
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

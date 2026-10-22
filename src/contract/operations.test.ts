@@ -486,7 +486,7 @@ describe("operation input/output round trips", () => {
     expect(() => OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy] })).toThrow();
   });
 
-  it("doctor.run: round-trips a service-broken finding field for field, and refuses an empty missing list", () => {
+  it("doctor.run: round-trips a service-broken finding field for field, and refuses an empty missing list or a missing name, remedy or unknown manager", () => {
     const finding = {
       kind: "service-broken",
       manager: "launchd",
@@ -500,6 +500,11 @@ describe("operation input/output round trips", () => {
     expect(() =>
       OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, missing: [] }] }),
     ).toThrow();
+    for (const broken of [{ name: undefined }, { manager: "pm2" }, { remedy: undefined }]) {
+      expect(() =>
+        OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, ...broken }] }),
+      ).toThrow();
+    }
   });
 
   it("status.get: round-trips a representative status snapshot", () => {

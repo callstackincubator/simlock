@@ -38,6 +38,9 @@ import {
   FakeHostLoadProbe,
   type HostLoadCounters,
   FakeProcessSupervisor,
+  FakeServiceManager,
+  serviceDefinition,
+  type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
   JsonLinesLogger,
@@ -57,6 +60,7 @@ import {
   emitSlimDiagnostic,
   parseDaemonArgv,
   processRunnerFor,
+  serviceCheckFor,
   startDaemon,
   type DriverDiscoveryContext,
   type StartDaemonOptions,
@@ -606,6 +610,46 @@ describe("startDaemon", () => {
         ).not.toContain("service-broken");
       }
     }
+  });
+
+  it("serviceCheckFor reads the worker's service state through the manager: the missing paths when broken, none otherwise, and no check on a gateway or without a manager", async () => {
+    const definition = () =>
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: "/simlock",
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: {},
+      });
+    const name = "com.callstack.simlock.worker";
+    const states: readonly { readonly state: ServiceState; readonly missing: readonly string[] }[] =
+      [
+        { state: { state: "not-installed" }, missing: [] },
+        { state: { state: "installed", path: "/p" }, missing: [] },
+        { state: { state: "not-loaded", path: "/p" }, missing: [] },
+        {
+          state: { state: "broken", path: "/p", missing: ["/gone/node", "/gone/main.js"] },
+          missing: ["/gone/node", "/gone/main.js"],
+        },
+      ];
+    for (const testCase of states) {
+      const { serviceCheck } = serviceCheckFor(
+        "worker",
+        new FakeServiceManager({ state: testCase.state }),
+        definition,
+      );
+      expect(serviceCheck?.manager).toBe("launchd");
+      expect(serviceCheck?.name).toBe(name);
+      expect(await serviceCheck?.check(), testCase.state.state).toEqual(testCase.missing);
+    }
+    expect(
+      serviceCheckFor("worker", new FakeServiceManager({ manager: "systemd" }), definition)
+        .serviceCheck?.manager,
+    ).toBe("systemd");
+    expect(serviceCheckFor("gateway", new FakeServiceManager(), definition)).toEqual({});
+    expect(serviceCheckFor("worker", undefined, definition)).toEqual({});
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {

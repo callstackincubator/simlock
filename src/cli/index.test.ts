@@ -30,6 +30,7 @@ import {
   NodeIpcTransport,
   NoopLogger,
   serviceDefinition,
+  type ServiceManager,
   type ServiceState,
   type Filesystem,
   type IdGenerator,
@@ -2185,6 +2186,40 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       };
       expect(json.service, `${testCase.label} --json`).toEqual(testCase.service);
     }
+  });
+
+  it("daemon status fails with the service manager's error instead of printing Daemon stopped", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      connectExistingAdmin: async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+      service: {
+        manager: {
+          manager: "launchd",
+          state: async () => {
+            throw new Error("launchctl timed out");
+          },
+        } as unknown as ServiceManager,
+        platform: "darwin",
+        definition: async () =>
+          serviceDefinition({
+            role: "worker",
+            root: "/Users/me/.simlock",
+            dataDirectory: "/simlock",
+            home: "/Users/me",
+            nodePath: "/n",
+            mainPath: "/m.js",
+            env: {},
+          }),
+      },
+    });
+
+    await expect(runCli(["daemon", "status"], environment)).resolves.not.toBe(0);
+
+    expect(output.stdout).not.toContain("Daemon stopped");
+    expect(output.stderr).toContain("launchctl timed out");
   });
 
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
