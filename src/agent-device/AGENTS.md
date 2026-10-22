@@ -34,16 +34,14 @@ Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no
 
 ## How it works
 
-A worker runs two supervisors, one per role. The `simulators` role is the simulator daemon:
-state dir `<data dir>/agent-device`, pid record `agent-device-daemon.json`, marker
-`--simlock-home=<data dir>`. The `phones` role is the phone daemon: state dir
-`agent-device-phones`, record `agent-device-phones-daemon.json`, marker
-`--simlock-home=<data dir> --simlock-role=phones`; its env has no simulator set and no driver
-lease key, `ANDROID_ADB_SERVER_PORT=5037` (the operator's adb selection keys dropped), and the
-`AGENT_DEVICE_IOS_*` signing keys from `capabilities.agent-device.ios.*`. The phone daemon
-starts when the simulator daemon's start has settled, never awaited by Simlock's start. The
-`agent-device` capability follows the simulator daemon; doctor lists a finding per daemon.
-Nothing is routed to the phone daemon yet.
+A worker runs two supervisors, one per role. `simulators`: state dir `<data dir>/agent-device`,
+record `agent-device-daemon.json`, marker `--simlock-home=<data dir>`. `phones`: state dir
+`agent-device-phones`, record `agent-device-phones-daemon.json`, marker adds `--simlock-role=phones`;
+its env has no simulator set or driver lease key, `ANDROID_ADB_SERVER_PORT=5037`, the
+`AGENT_DEVICE_IOS_*` signing keys (`capabilities.agent-device.ios.*`), and the no-iOS and
+no-Android sentinels when a platform is off. It starts once the simulator daemon's start has
+settled, never awaited. The capability follows the simulator daemon; doctor lists a finding per
+daemon. Nothing is routed to the phone daemon yet.
 
 Supervisor start (`AgentDeviceSupervisor.start`, at daemon start), per role:
 
@@ -61,9 +59,7 @@ Supervisor start (`AgentDeviceSupervisor.start`, at daemon start), per role:
 7. Exit — after ≥ 60 s running: start again now. Sooner: `unavailable`, retry in 30 s.
 8. Stop — SIGTERM, SIGKILL, remove the record; a survivor keeps its record.
 
-Availability: `off` | `starting` | `running` | `unavailable` (`not-found`, `not-agent-device`,
-`wrong-version`, `state-dir`, `start-failed`). Only `start-failed` retries; the rest need a
-daemon restart. Read by `agentDeviceFindings` (doctor) and `agentDeviceCapabilitySource`
+Availability: `off` | `starting` | `running` | `unavailable` (`not-found`, `not-agent-device`, `wrong-version`, `state-dir`, `start-failed`). Only `start-failed` retries; the rest need a daemon restart. Read by `agentDeviceFindings` (doctor) and `agentDeviceCapabilitySource`
 (the `agent-device` capability in `status.get`). Unavailable: every route answers why.
 
 Front (`createFront`, prefix `agent-device`):
@@ -72,23 +68,19 @@ Front (`createFront`, prefix `agent-device`):
    rebuilt into the map first.
 2. Non-RPC: a fixed route list (`shared/routes.ts`), else 404. `/health` answers 200 even
    when unavailable.
-3. `/rpc`: body ≤ 1 MiB, one JSON-RPC request; only `command` and `lease.*` methods, as
-   agent-device's proxy takes no other from a tenant; `classifyCall` → allocate, heartbeat,
+3. `/rpc`: body ≤ 1 MiB, one JSON-RPC request; only `command` and `lease.*` methods, as agent-device's proxy takes no other from a tenant; `classifyCall` → allocate, heartbeat,
    release, command, or refused `wrapped-lease`.
 4. `checkRequest`: iOS/Android only; no device selector but the leased one; no device
    set or allowlist; `install` only from an upload; `devices` alone, not streamed.
 5. Allocate → `lease.request` (`front/allocate.ts`), see flow.
 6. Heartbeat → forwarded with `ttlMs` raised to the ceiling; on success `renewLease`
-   (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`,
-   reply "ended by simlock".
+   (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`, reply "ended by simlock".
 7. Release → forwarded; on success `lease.release`; map marks it ended by `agent`.
 8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends,
    capped at `lease.maxTtlMs`. A reply naming `endedLeases` (in `data`, `error.details`, a streamed `type: "response"` line, or a
    batch's `data`) → `front/ended.ts` ends each simlock lease this token holds, as a release does.
 
-Host (`AgentDeviceHost.forward`): one proxy per daemon generation. Tags the request,
-and `authenticate` sets tenant = requester id, overwriting the client's. Rewrites
-`/v1/agent-device` → `/agent-device`. Download: `Content-Length` > 2 GiB → 413 before
+Host (`AgentDeviceHost.forward`): one proxy per daemon generation. Tags the request, and `authenticate` sets tenant = requester id, overwriting the client's. Rewrites `/v1/agent-device` → `/agent-device`. Download: `Content-Length` > 2 GiB → 413 before
 any byte; no length → counted, errors past 2 GiB.
 
 Lease end: `ReleaseScopeRecord` reads each allocate reply's scope (tenant, run id, …)

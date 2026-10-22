@@ -3359,39 +3359,6 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
-    it("lists agent-device's module-unavailable findings, one per daemon, before a module's own", async () => {
-      const setup = await setUp({
-        capabilities: {
-          "agent-device": { command: "/opt/missing/agent-device", enabled: true },
-          alpha: { enabled: true },
-        },
-      });
-      const { daemon } = await startEdge(setup, {
-        modules: [
-          fakeModule({
-            findings: () => [{ message: "it is down", remedy: "bring it up" }],
-            name: "alpha",
-          }),
-        ],
-        processRunner: new ScriptedProcessRunner([]),
-        processSupervisor: new FakeProcessSupervisor(),
-      });
-
-      await expect
-        .poll(
-          async () =>
-            (
-              (await daemon.dispatch("doctor.run", {}, operator)) as {
-                readonly findings: readonly { readonly kind: string; readonly module?: string }[];
-              }
-            ).findings
-              .filter((finding) => finding.kind === "module-unavailable")
-              .map((finding) => finding.module),
-          { timeout: 4_000 },
-        )
-        .toEqual(["agent-device", "agent-device", "alpha"]);
-    });
-
     it.each([
       {
         name: "both daemons down: agent-device is found nowhere",
@@ -3496,6 +3463,11 @@ describe("startDaemon with the agent-device edge", () => {
         }
 
         expect(await labelled()).toEqual(findings);
+        expect(
+          (await unavailable())
+            .filter((finding) => finding.module !== "alpha")
+            .map((f) => f.module),
+        ).toEqual(findings.filter((label) => label !== "alpha").map(() => "agent-device"));
         const status = await daemon.dispatch("status.get", {}, operator);
         expect(status.capabilities?.find((entry) => entry.name === "agent-device")?.state).toBe(
           capability,

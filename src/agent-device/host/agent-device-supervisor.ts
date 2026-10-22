@@ -226,7 +226,7 @@ export class AgentDeviceSupervisor {
         await this.#removeRecord();
       } else {
         this.#o.logger.warn(
-          `agent-device daemon pid ${child.pid} is still alive after stop; its record is kept for the next start`,
+          `agent-device (${this.#o.role}) daemon pid ${child.pid} is still alive after stop; its record is kept for the next start`,
         );
       }
     }
@@ -472,7 +472,9 @@ export class AgentDeviceSupervisor {
     this.#child = undefined;
     const result = child.exit as ProcessResult;
     const elapsedMs = this.#o.clock.now() - child.readyAt;
-    this.#o.logger.warn(`agent-device daemon pid ${child.pid} exited ${describeExit(result)}`);
+    this.#o.logger.warn(
+      `agent-device (${this.#o.role}) daemon pid ${child.pid} exited ${describeExit(result)}`,
+    );
     if (elapsedMs >= STABLE_AFTER_READY_MS) {
       void this.#begin();
       return;
@@ -557,7 +559,7 @@ export class AgentDeviceSupervisor {
         stateDir: this.#stateDir,
       }),
     );
-    if (phones) return Object.assign(env, this.#phoneEnvironment());
+    if (phones) Object.assign(env, this.#phoneEnvironment());
     await this.#hideUnusedPlatforms(env);
     return env;
   }
@@ -575,7 +577,9 @@ export class AgentDeviceSupervisor {
     const o = this.#o;
     if (o.platforms.includes("ios")) {
       const deviceSet = o.driverEnvironment["SIMLOCK_IOS_DEVICE_SET"];
-      if (deviceSet !== undefined) env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = deviceSet;
+      if (o.role !== "phones" && deviceSet !== undefined) {
+        env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = deviceSet;
+      }
     } else {
       const empty = `${this.#stateDir}/no-ios-devices`;
       try {
@@ -586,7 +590,11 @@ export class AgentDeviceSupervisor {
       }
       env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = empty;
     }
-    if (!o.platforms.includes("android")) {
+    this.#hideAndroid(env);
+  }
+
+  #hideAndroid(env: NodeJS.ProcessEnv): void {
+    if (!this.#o.platforms.includes("android")) {
       env["AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST"] = NO_ANDROID_DEVICE_SERIAL;
     }
   }
@@ -648,7 +656,7 @@ export class AgentDeviceSupervisor {
       return;
     }
     this.#o.logger.warn(
-      `agent-device daemon pid ${child.pid} is still alive after SIGKILL; its record is kept for the next start`,
+      `agent-device (${this.#o.role}) daemon pid ${child.pid} is still alive after SIGKILL; its record is kept for the next start`,
     );
     this.#fail(
       reason,

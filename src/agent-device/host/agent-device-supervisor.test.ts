@@ -712,8 +712,21 @@ describe("AgentDeviceSupervisor in the phones role", () => {
   it.each([
     ["iOS and Android on, keys set", ["ios", "android"], signing, signingEnvironment],
     ["iOS and Android on, keys unset", ["ios", "android"], undefined, {}],
-    ["iOS off", ["android"], signing, signingEnvironment],
-    ["Android off", ["ios"], undefined, {}],
+    [
+      "iOS off: the empty private set directory",
+      ["android"],
+      signing,
+      {
+        ...signingEnvironment,
+        AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET: `${phonesStateDir}/no-ios-devices`,
+      },
+    ],
+    [
+      "Android off: the allowlist sentinel",
+      ["ios"],
+      undefined,
+      { AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST: "simlock-no-android-device" },
+    ],
   ] as const)(
     "spawns the phone daemon with its own state directory, policy file, pid record and marker suffix, no simulator set and no driver lease key, adb on 5037 and the configured AGENT_DEVICE_IOS_ keys: %s",
     async (_case, platforms, ios, signingKeys) => {
@@ -1135,6 +1148,11 @@ describe("AgentDeviceSupervisor failed starts", () => {
     expect(harness.processes.signals.map((entry) => entry.signal)).toEqual(["SIGTERM", "SIGKILL"]);
     expect(unavailable(harness)).toMatchObject({ reason: "start-failed" });
     expect(unavailable(harness).message).toContain(String(pid));
+    expect(
+      warnings(harness).some((line) =>
+        line.includes(`agent-device (simulators) daemon pid ${pid} is still alive after SIGKILL`),
+      ),
+    ).toBe(true);
     expect(await readJson(harness, recordPath)).toMatchObject({ pid });
   });
 
@@ -1378,7 +1396,11 @@ describe("AgentDeviceSupervisor after the daemon is running", () => {
     expect(daemonSpawns(harness)).toHaveLength(2);
     expect(harness.runner.calls[3]?.options.env).toEqual(firstEnv);
     expect(running(harness).generation).toBe(2);
-    expect(warnings(harness).some((line) => line.includes("42"))).toBe(true);
+    expect(
+      warnings(harness).some(
+        (line) => line.includes("agent-device (simulators) daemon pid") && line.includes("42"),
+      ),
+    ).toBe(true);
   });
 
   it("reports start-failed for a child that exits 5 s after ready, and starts it again only 30 s later", async () => {
@@ -1557,7 +1579,11 @@ describe("AgentDeviceSupervisor.stop", () => {
     await advancing(harness, harness.agentDevice.stop());
 
     expect(await readJson(harness, recordPath)).toMatchObject({ pid });
-    expect(warnings(harness).some((line) => line.includes(String(pid)))).toBe(true);
+    expect(
+      warnings(harness).some((line) =>
+        line.includes(`agent-device (simulators) daemon pid ${pid} is still alive after`),
+      ),
+    ).toBe(true);
     expect(stateOf(harness)).toBe("off");
   });
 
@@ -1572,7 +1598,11 @@ describe("AgentDeviceSupervisor.stop", () => {
     await advancing(harness, harness.started as Promise<void>);
 
     expect(await readJson(harness, recordPath)).toMatchObject({ pid });
-    expect(warnings(harness).some((line) => line.includes(String(pid)))).toBe(true);
+    expect(
+      warnings(harness).some((line) =>
+        line.includes(`agent-device (simulators) daemon pid ${pid} is still alive after`),
+      ),
+    ).toBe(true);
     expect(stateOf(harness)).toBe("off");
   });
 
