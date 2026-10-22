@@ -383,6 +383,7 @@ describe("the toast an update earns", () => {
         "gateway",
       ).find((action) => action.id !== "drain");
     const update = offered(facts());
+    const upToDate = { started: false, update: null, upToDate: true, version: "0.3.0" };
     const answers: readonly [string, unknown, string][] = [
       [
         "started",
@@ -394,28 +395,28 @@ describe("the toast an update earns", () => {
         { started: false, update: running, upToDate: false, version: "0.3.0" },
         "mac-mini-1 is already updating to 0.4.0",
       ],
-      [
-        "upToDate",
-        { started: false, update: null, upToDate: true, version: "0.3.0" },
-        "mac-mini-1 already runs 0.3.0",
-      ],
+      ["upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
+      ["no body", undefined, "Updating mac-mini-1 to the latest version"],
     ];
     for (const [name, answer, title] of answers) {
       expect(update?.outcome?.(answer), name).toEqual({ title });
     }
     const force = offered(facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }));
+    const forced: readonly [string, unknown, string][] = [
+      [
+        "accepted",
+        { started: true, update: running, upToDate: false },
+        "mac-mini-1 installs 0.4.0 now",
+      ],
+      ["upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
+    ];
+    for (const [name, answer, title] of forced) {
+      expect(force?.outcome?.(answer), name).toEqual({ title });
+    }
     expect(force?.id).toBe("force-update");
     expect(force?.success).toEqual({ title: "mac-mini-1 installs 0.4.0 now" });
-    expect(force?.outcome?.({ started: true, update: running, upToDate: false })).toEqual({
-      title: "mac-mini-1 installs 0.4.0 now",
-    });
-    expect(force?.outcome?.(answers[2]?.[1])).toEqual({ title: "mac-mini-1 already runs 0.3.0" });
-    expect(update?.outcome?.(undefined)).toEqual({
-      title: "Updating mac-mini-1 to the latest version",
-    });
     expect([update?.timeoutMs, force?.timeoutMs]).toEqual([100_000, 100_000]);
-    expect(update?.failure).toBe("Couldn't update mac-mini-1");
-    expect(force?.failure).toBe("Couldn't update mac-mini-1");
+    expect([update?.failure, force?.failure]).toEqual(Array(2).fill("Couldn't update mac-mini-1"));
   });
 });
 
