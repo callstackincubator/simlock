@@ -59,19 +59,23 @@ function createAgentDeviceEdgeParts(
 // why: a relayed request's tenant is the gateway's prefixed principal, which the host treats as the requester, so the worker's own tokens never share a session with it.
 function agentDeviceRelayTarget(
   parts: AgentDeviceEdgeParts,
-): (request: Request, tenant: string) => Promise<Response> {
-  return async (request, tenant) => {
-    const status = await parts.link.status();
+): (request: Request, tenant: string, leaseId: string | undefined) => Promise<Response> {
+  return async (request, tenant, leaseId) => {
+    const status = await parts.link.status(leaseId);
     if (status.state === "unavailable") {
       return frontReplyFor(request, notAvailable(status.reason));
     }
-    return parts.link.forward(request, {
-      principal: tenant,
-      name: tenant,
-      role: "agent",
-      via: "relay",
-      ambient: false,
-    });
+    return parts.link.forward(
+      request,
+      {
+        principal: tenant,
+        name: tenant,
+        role: "agent",
+        via: "relay",
+        ambient: false,
+      },
+      leaseId,
+    );
   };
 }
 
