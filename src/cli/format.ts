@@ -1,5 +1,6 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
+import { isNewerVersion } from "../contract/index.js";
 import type { StatusGetOutput, WorkerView } from "../admin/index.js";
 import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 
@@ -186,10 +187,14 @@ export function serviceLine(service: ServiceReport): string {
 }
 
 function daemonLines(daemon: StatusGetOutput["daemon"]): string[] {
-  const { update, lastUpdateFailure } = daemon;
+  const { update, lastUpdateFailure, latestVersion } = daemon;
+  const available =
+    latestVersion !== null && isNewerVersion(latestVersion, daemon.version)
+      ? ` (${latestVersion} available)`
+      : "";
   return [
     `Daemon: ${daemon.health} (${daemon.mode})`,
-    `Simlock: ${daemon.version}`,
+    `Simlock: ${daemon.version}${available}`,
     ...(update === null
       ? []
       : [
