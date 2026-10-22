@@ -9,7 +9,6 @@ import {
   type UpdateFailure,
   type UpdateState,
 } from "../contract/index.js";
-import type { Registry } from "../core/index.js";
 import type { UpdateHold } from "../leasing/index.js";
 import { checkInstall } from "../updater/index.js";
 import { DispatchError } from "./dispatch.js";
@@ -53,7 +52,7 @@ export interface UpdateCoordinatorOptions {
   readonly latestVersion: () => string | null;
   readonly launcher: UpdaterLauncher;
   readonly leasing: UpdateHold;
-  readonly registry: Pick<Registry, "snapshot">;
+  readonly registry: { readonly snapshot: { readonly leases: readonly unknown[] } };
   readonly eventBus: Pick<EventBus, "emit" | "subscribe">;
   readonly clock: Clock;
   readonly filesystem: Filesystem;

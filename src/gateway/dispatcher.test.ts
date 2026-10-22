@@ -29,7 +29,7 @@ import {
 } from "../ports/index.js";
 import { FakeWebhookPoster } from "../ports/testing.js";
 import type { TokenOperations } from "../auth/index.js";
-import { GatewayDispatcher } from "./dispatcher.js";
+import { GatewayDispatcher, type GatewayDispatcherOptions } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
@@ -168,6 +168,25 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
+// why: the gateway's own update coordinator, scripted.
+class ScriptedUpdate {
+  readonly requests: unknown[] = [];
+  progress: ReturnType<GatewayDispatcherOptions["update"]["state"]> = {
+    lastUpdateFailure: null,
+    latestVersion: null,
+    update: null,
+  };
+
+  async request(input: unknown) {
+    this.requests.push(input);
+    return { ...this.progress, resolved: "0.4.0", started: true, upToDate: false };
+  }
+
+  state() {
+    return this.progress;
+  }
+}
+
 function harness(
   options: {
     readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
@@ -235,9 +254,11 @@ function harness(
           version: "9.9.9",
           workerLabel: () => undefined,
         });
+  const update = new ScriptedUpdate();
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
     latestVersion: () => null,
+    update,
     clock,
     closeUplinksForToken: async (tokenId) => {
       closedUplinkTokens.push(tokenId);
@@ -271,6 +292,7 @@ function harness(
     eventBus,
     leaseIndex,
     tokens,
+    update,
     workers,
   };
 }
@@ -1397,16 +1419,40 @@ describe("GatewayDispatcher", () => {
   });
 
   describe("daemon.update", () => {
-    it("answers UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying a gateway cannot update itself yet", async () => {
-      const { dispatcher } = harness();
+    it("asks the gateway's own update coordinator and answers with its outcome, the gateway's version and its health, and status.get carries the update and its last failure", async () => {
+      const { dispatcher, update } = harness();
+      const run = {
+        forced: true,
+        from: "0.0.0-test",
+        stage: "installing",
+        startedAt: 1_000,
+        to: "0.4.0",
+      } as const;
+      const failure = {
+        at: 500,
+        from: "0.0.0-test",
+        message: "npm failed",
+        stage: "installing",
+        to: "0.3.0",
+      } as const;
+      update.progress = { lastUpdateFailure: failure, latestVersion: "0.4.0", update: run };
 
       await expect(
-        dispatcher.dispatch("daemon.update", {}, session({ role: "admin" })),
-      ).rejects.toMatchObject({
-        code: "UNSUPPORTED_IN_GATEWAY_MODE",
-        details: { operation: "daemon.update" },
-        message: "daemon.update updates one machine's daemon; a gateway cannot update itself yet",
+        dispatcher.dispatch("daemon.update", { force: true }, session({ role: "admin" })),
+      ).resolves.toEqual({
+        health: "running",
+        lastUpdateFailure: failure,
+        latestVersion: "0.4.0",
+        resolved: "0.4.0",
+        started: true,
+        update: run,
+        upToDate: false,
+        version: "0.0.0-test",
       });
+      expect(update.requests).toEqual([{ force: true }]);
+
+      const status = await dispatcher.dispatch("status.get", {}, session({ role: "admin" }));
+      expect(status.daemon).toMatchObject({ lastUpdateFailure: failure, update: run });
     });
   });
 

@@ -47,6 +47,8 @@ export interface AggregateStatusOptions {
   readonly health: StatusOutput["daemon"]["health"];
   readonly version: string;
   readonly latestVersion?: string | null;
+  // why: the gateway's own update and its last failure; none when nothing is running.
+  readonly progress?: Pick<StatusOutput["daemon"], "update" | "lastUpdateFailure">;
   readonly host: StatusOutput["host"];
   readonly load?: StatusOutput["load"];
   readonly queueDepth: number;
@@ -70,8 +72,8 @@ export function aggregateStatus(
       health: options.health,
       mode: "gateway",
       version: options.version,
-      update: null,
-      lastUpdateFailure: null,
+      update: options.progress?.update ?? null,
+      lastUpdateFailure: options.progress?.lastUpdateFailure ?? null,
       latestVersion: options.latestVersion ?? null,
     },
     host: options.host,

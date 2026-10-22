@@ -93,6 +93,16 @@ export type AlertTestOutcome =
       readonly error?: string;
     };
 
+type DaemonUpdateOutput = z.infer<(typeof OPERATIONS)["daemon.update"]["output"]>;
+
+// why: ADR 0042 §4: the gateway's own update has no lease wait and goes straight to installing; `src/daemon` supplies it.
+export interface GatewayUpdate {
+  request(
+    input: z.infer<(typeof OPERATIONS)["daemon.update"]["input"]>,
+  ): Promise<Omit<DaemonUpdateOutput, "health" | "version">>;
+  state(): Pick<DaemonUpdateOutput, "lastUpdateFailure" | "latestVersion" | "update">;
+}
+
 export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
@@ -126,6 +136,7 @@ export interface GatewayDispatcherOptions {
   readonly health: () => "starting" | "running" | "failed";
   readonly version: string;
   readonly latestVersion: () => string | null;
+  readonly update: GatewayUpdate;
   readonly host: AggregateStatusOptions["host"];
   readonly load?: () => AggregateStatusOptions["load"];
   readonly awaitReady: () => Promise<void>;
@@ -237,10 +248,7 @@ export class GatewayDispatcher {
       "worker.remove": this.#workerRemove,
       "worker.update": this.#workerUpdate,
       "alerts.test": this.#alertsTest,
-      "daemon.update": unsupportedByDesign(
-        "daemon.update",
-        "daemon.update updates one machine's daemon; a gateway cannot update itself yet",
-      ),
+      "daemon.update": this.#daemonUpdate,
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
@@ -329,9 +337,7 @@ export class GatewayDispatcher {
           health: "starting",
           mode: "gateway",
           version: this.options.version,
-          update: null,
-          lastUpdateFailure: null,
-          latestVersion: this.options.latestVersion(),
+          ...this.options.update.state(),
           ...consoleUrl,
         },
         history,
@@ -343,6 +349,7 @@ export class GatewayDispatcher {
       health: this.options.health(),
       version: this.options.version,
       latestVersion: this.options.latestVersion(),
+      progress: this.options.update.state(),
       host: this.options.host,
       ...(load === undefined ? {} : { load }),
       physicalQueueDepth: this.options.coordinator.physicalQueueDepth,
@@ -413,6 +420,12 @@ export class GatewayDispatcher {
     await this.options.workers.setDrained(input.workerId, false);
     return { drained: false, workerId: input.workerId };
   };
+
+  #daemonUpdate: Handler<"daemon.update"> = async (input) => ({
+    ...(await this.options.update.request(input)),
+    health: this.options.health(),
+    version: this.options.version,
+  });
 
   #workerUpdate: Handler<"worker.update"> = async (input) => {
     const view = this.options.workers.view(input.workerId);

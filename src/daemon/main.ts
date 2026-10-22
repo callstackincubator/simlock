@@ -73,6 +73,7 @@ import {
   LoggingProcessRunner,
   NodeFileLogSink,
   type Clock,
+  type DaemonRole,
   type Filesystem,
   type HostInfo,
   type HostLoadProbe,
@@ -136,7 +137,7 @@ import { createModuleHost, type OptionalModuleDefinition } from "../modules/inde
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { socketHeld } from "../updater/index.js";
-import { createUpdateCoordinator } from "./update-coordinator.js";
+import { createUpdateCoordinator, type UpdateCoordinatorOptions } from "./update-coordinator.js";
 import { startVersionCheck, type VersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
@@ -191,6 +192,47 @@ export interface StartDaemonOptions {
   readonly version?: string;
   /** why: test-only, replaces the poster a gateway's alerts send through. */
   readonly webhookPoster?: WebhookPoster;
+}
+
+interface UpdateOptionsParts {
+  readonly clock: Clock;
+  readonly dataDirectory: string;
+  readonly eventBus: EventBus;
+  readonly filesystem: Filesystem;
+  readonly ipc: IpcConnector & IpcListenerFactory;
+  readonly npm: NpmCli;
+  readonly role: DaemonRole;
+  readonly version: string;
+  readonly versionCheck: VersionCheck;
+}
+
+// why: both roles share these; each adds what it holds leases with.
+function updateOptionsFor(
+  parts: UpdateOptionsParts,
+): Omit<UpdateCoordinatorOptions, "leasing" | "registry"> {
+  const { dataDirectory, ipc, role } = parts;
+  return {
+    clock: parts.clock,
+    dataDirectory,
+    eventBus: parts.eventBus,
+    filesystem: parts.filesystem,
+    latestVersion: () => parts.versionCheck.latest(),
+    launcher: new NodeUpdaterLauncher(),
+    logPath: join(dataDirectory, "daemon.log"),
+    npm: parts.npm,
+    otherRoleRunning: () =>
+      socketHeld(
+        ipc,
+        resolveDaemonSocketPath(
+          daemonDataDirectory(resolveSimlockHome(), role === "worker" ? "gateway" : "worker"),
+        ),
+      ),
+    packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
+    pid: process.pid,
+    role,
+    simlockHome: resolveSimlockHome(),
+    version: parts.version,
+  };
 }
 
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
@@ -338,9 +380,11 @@ async function composeDaemon(
       idGenerator,
       ipc,
       logger,
+      npm,
       optionalModules: moduleDefinitions,
       socketPath,
       state,
+      ...(options.updater === undefined ? {} : { updater: options.updater }),
       version: version,
       versionCheck,
       ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
@@ -633,28 +677,19 @@ async function composeDaemon(
     adminSecret: auth.adminSecret,
     tokens: auth.tokens,
     update: createUpdateCoordinator({
-      npm,
-      latestVersion: () => versionCheck.latest(),
-      launcher: new NodeUpdaterLauncher(),
+      ...updateOptionsFor({
+        clock,
+        dataDirectory,
+        eventBus,
+        filesystem,
+        ipc,
+        npm,
+        role,
+        version,
+        versionCheck,
+      }),
       leasing,
       registry,
-      eventBus,
-      clock,
-      filesystem,
-      otherRoleRunning: () =>
-        socketHeld(
-          ipc,
-          resolveDaemonSocketPath(
-            daemonDataDirectory(resolveSimlockHome(), role === "worker" ? "gateway" : "worker"),
-          ),
-        ),
-      version,
-      packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
-      simlockHome: resolveSimlockHome(),
-      dataDirectory,
-      role,
-      logPath: join(dataDirectory, "daemon.log"),
-      pid: process.pid,
     }),
     version: version,
     converge: convergeStartup,
@@ -820,9 +855,11 @@ interface GatewayDaemonOptions {
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
+  readonly npm: NpmCli;
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
   readonly state: StateDatabase;
+  readonly updater?: StartDaemonOptions["updater"];
   readonly version: string;
   readonly versionCheck: VersionCheck;
   readonly webhookPoster?: WebhookPoster;
@@ -960,6 +997,23 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
 
   let alerts: Alerts | undefined;
 
+  // why: a gateway holds no leases of its own and fleet admission is not changed (ADR 0042 §4), so an update never waits.
+  const update = createUpdateCoordinator({
+    ...updateOptionsFor({
+      clock,
+      dataDirectory,
+      eventBus,
+      filesystem,
+      ipc: options.ipc,
+      npm: options.npm,
+      role: "gateway",
+      version: options.version,
+      versionCheck: options.versionCheck,
+    }),
+    ...options.updater,
+    leasing: { holdForUpdate: async () => {}, releaseUpdateHold: async () => {} },
+    registry: { snapshot: { leases: [] } },
+  });
   const gatewayDispatcher = new GatewayDispatcher({
     awaitReady: () => Promise.resolve(),
     clock,
@@ -976,6 +1030,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     leaseIndex,
     latestVersion: () => options.versionCheck.latest(),
     logger: logger.child("gateway"),
+    update,
     // why: `alerts` is built after this dispatcher but before start(), and only with destinations; without any, the option stays out.
     ...(config.gateway.alerts.destinations.length === 0
       ? {}
