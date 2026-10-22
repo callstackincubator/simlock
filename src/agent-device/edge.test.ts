@@ -3555,7 +3555,7 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` and an `imageTag` that is an object with `refused: malformed imageTag`, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
+    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` an `imageTag` that is an object with `refused: malformed imageTag` and a `physical` of `yes` or `1` with `refused: malformed physical` and no lease, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       await forwarded(rig, () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } }));
@@ -3572,6 +3572,10 @@ describe("the agent-device front's request rules", () => {
       );
       await refused(rig, () => allocate(rig, 2, { osVersion: 26 }), "refused: malformed osVersion");
       await refused(rig, () => allocate(rig, 2, { imageTag: {} }), "refused: malformed imageTag");
+      for (const physical of ["yes", 1]) {
+        await refused(rig, () => allocate(rig, 2, { physical }), "refused: malformed physical");
+      }
+      expect(await listed(rig)).toEqual([hex(1)]);
       await refused(
         rig,
         () => runCommand(rig, "snapshot", 1, { flags: { osVersion: 26 } }),
