@@ -1374,6 +1374,9 @@ export const workerViewSchema = z.object({
   host: hostFactsSchema.optional(),
   installs: workerInstallsSchema.optional(),
   waiting: z.array(waitingRequestSchema).optional(),
+  update: daemonUpdateFields.update.optional(),
+  lastUpdateFailure: daemonUpdateFields.lastUpdateFailure.optional(),
+  latestVersion: daemonUpdateFields.latestVersion.optional(),
 });
 
 export const statusLeaseSchema = leaseRecordSchema.extend({

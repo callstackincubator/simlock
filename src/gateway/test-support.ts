@@ -11,6 +11,8 @@ import type { z } from "zod";
 import type {
   ComponentInstallInput,
   ComponentInstallOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   ExecInput,
   ExecOptions,
   ExecOutput,
@@ -398,6 +400,25 @@ export class ScriptedWorkerClient {
       this.#statusHold = undefined;
       release();
     };
+  }
+
+  readonly updateInputs: DaemonUpdateInput[] = [];
+  updateAnswer: DaemonUpdateOutput = {
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+  };
+
+  // why: the degraded client lets `daemon.update` through (ADR 0042 §1), so this answers even when `failWith` is set.
+  async updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
+    this.calls.push("daemon.update");
+    this.updateInputs.push(input);
+    return this.updateAnswer;
   }
 
   async getStatus(): Promise<StatusGetOutput> {

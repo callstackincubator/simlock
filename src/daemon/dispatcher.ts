@@ -332,6 +332,7 @@ export class Dispatcher {
       "worker.drain": unsupportedOnWorker("worker.drain"),
       "worker.undrain": unsupportedOnWorker("worker.undrain"),
       "worker.remove": unsupportedOnWorker("worker.remove"),
+      "worker.update": unsupportedOnWorker("worker.update"),
       "worker.install-component": unsupportedOnWorker(
         "worker.install-component",
         "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",

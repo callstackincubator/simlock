@@ -827,6 +827,20 @@ export const workerRemove = defineOperation({
   output: z.object({ workerId: z.string(), removed: z.boolean() }),
 });
 
+// why: ADR 0042 §2: the gateway sends `daemon.update` over that worker's uplink and answers with the worker's own answer plus the id.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerUpdate = defineOperation({
+  name: "worker.update",
+  role: "admin",
+  effect: "write",
+  input: z.object({
+    workerId: z.string().min(1),
+    version: updateRequestedVersionSchema.optional(),
+    force: z.boolean().optional(),
+  }),
+  output: daemonUpdate.output.extend({ workerId: z.string() }),
+});
+
 // ---- component.install (ADR 0010 §6) --------------------------------------------------------
 
 /**
@@ -1131,6 +1145,7 @@ export const OPERATIONS = {
   "worker.drain": workerDrain,
   "worker.undrain": workerUndrain,
   "worker.remove": workerRemove,
+  "worker.update": workerUpdate,
   "component.install": componentInstall,
   "component.list": componentList,
   "worker.install-component": workerInstallComponent,

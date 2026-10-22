@@ -233,6 +233,7 @@ export class GatewayDispatcher {
       "worker.drain": this.#workerDrain,
       "worker.undrain": this.#workerUndrain,
       "worker.remove": this.#workerRemove,
+      "worker.update": this.#workerUpdate,
       "alerts.test": this.#alertsTest,
       "daemon.update": unsupportedByDesign(
         "daemon.update",
@@ -410,6 +411,18 @@ export class GatewayDispatcher {
     await this.options.workers.setDrained(input.workerId, false);
     return { drained: false, workerId: input.workerId };
   };
+
+  #workerUpdate: Handler<"worker.update"> = async (input) => ({
+    health: "running",
+    lastUpdateFailure: null,
+    latestVersion: null,
+    resolved: null,
+    started: false,
+    update: null,
+    upToDate: false,
+    version: "",
+    workerId: input.workerId,
+  });
 
   #alertsTest: Handler<"alerts.test"> = async (input) => {
     const { destination } = input;
