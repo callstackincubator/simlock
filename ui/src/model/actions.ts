@@ -133,9 +133,25 @@ function updateToast(name: string): (answer: unknown) => ActionToast {
   });
 }
 
+// why: above the gateway's 90 s uplink limit, so the gateway's answer arrives before the console
+// gives up.
+const UPDATE_TIMEOUT_MS = 100_000;
+
+function updateBase(worker: WorkerActionInput) {
+  return {
+    danger: false,
+    failure: `Couldn't update ${worker.name}`,
+    itemKey: `worker/${worker.id}`,
+    method: "POST",
+    path: `/v1/workers/${encodeURIComponent(worker.id)}/update`,
+    timeoutMs: UPDATE_TIMEOUT_MS,
+  } as const;
+}
+
 function updateAction(worker: WorkerActionInput, facts: UpdateFacts): ItemAction {
   const from = facts.version === undefined ? "" : ` from ${facts.version}`;
   return {
+    ...updateBase(worker),
     body: {},
     confirm: {
       body: "It has no leases, so it installs at once. It restarts by itself.",
@@ -143,18 +159,34 @@ function updateAction(worker: WorkerActionInput, facts: UpdateFacts): ItemAction
       confirm: "Update",
       title: `Update ${worker.name}${from} to ${facts.latestVersion ?? "the latest version"}?`,
     },
-    danger: false,
-    failure: `Couldn't update ${worker.name}`,
     id: "update-worker",
-    itemKey: `worker/${worker.id}`,
     label: "Update…",
-    method: "POST",
     outcome: updateToast(worker.name),
-    path: `/v1/workers/${encodeURIComponent(worker.id)}/update`,
-    // why: above the gateway's 90 s uplink limit, so the gateway's answer arrives before the console gives up.
     success: { title: `Updating ${worker.name}` },
-    timeoutMs: 100_000,
   };
+}
+
+function forceAction(worker: WorkerActionInput, to: string): ItemAction {
+  return {
+    ...updateBase(worker),
+    body: { force: true },
+    id: "force-update",
+    label: "Update now",
+    success: { title: `${worker.name} installs ${to} now` },
+  };
+}
+
+// why: the table of #839: an update in flight offers only Update now, and only while it waits; a
+// worker that shows `incompatible` is offered Update… whatever the latest version, since the
+// gateway cannot compare versions with it; a connected one only when the latest is newer.
+function updateEntry(worker: WorkerActionInput): ItemAction | undefined {
+  const facts = worker.updateFacts;
+  if (facts === undefined || worker.connection === "disconnected") return undefined;
+  if (facts.update !== null) {
+    return facts.update.stage === "waiting" ? forceAction(worker, facts.update.to) : undefined;
+  }
+  if (worker.connection === "incompatible" || isBehind(facts)) return updateAction(worker, facts);
+  return undefined;
 }
 
 // why: ADR 0037 §4. On a single host the three worker routes answer 501, and when the mode is not
@@ -191,13 +223,8 @@ export function workerActions(
     undo: undrain,
   };
   const actions: ItemAction[] = [worker.drained ? undrain : drain];
-  if (
-    worker.updateFacts !== undefined &&
-    worker.connection === "connected" &&
-    isBehind(worker.updateFacts)
-  ) {
-    actions.unshift(updateAction(worker, worker.updateFacts));
-  }
+  const entry = updateEntry(worker);
+  if (entry !== undefined) actions.unshift(entry);
   if (worker.connection === "disconnected") {
     actions.push({
       confirm: {
