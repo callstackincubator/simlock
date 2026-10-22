@@ -432,12 +432,15 @@ class MissingSystemctlRunner implements ProcessRunner {
 }
 
 describe("SystemdServiceManager (#832)", () => {
+  const definition = systemdDefinition("worker");
+  const unit = `${definition.name}.service`;
+
   async function put(filesystem: MemoryFilesystem, path: string, text = ""): Promise<void> {
     await filesystem.mkdirp(dirname(path));
     await filesystem.writeFileAtomic(path, text);
   }
 
-  it("an operator on Linux installs, starts and removes a systemd user unit", async () => {
+  async function checkUnitText(): Promise<void> {
     const saved = { PATH: "/usr/bin:/opt/bin", ANDROID_HOME: "/sdk", JAVA_HOME: "/jdk" };
     const textCases = [
       {
@@ -494,7 +497,9 @@ describe("SystemdServiceManager (#832)", () => {
       for (const call of runner.calls) expect(call.options.timeoutMs, testCase.label).toBe(10_000);
       expect((await filesystem.stat(definition.logPath)).mode, testCase.label).toBe(0o600);
     }
+  }
 
+  function checkUnitPath(): void {
     const name = systemdDefinition("worker").name;
     const pathCases = [
       { xdg: "/xdg/config", path: `/xdg/config/systemd/user/${name}.service` },
@@ -505,9 +510,9 @@ describe("SystemdServiceManager (#832)", () => {
       const env = testCase.xdg === undefined ? {} : { XDG_CONFIG_HOME: testCase.xdg };
       expect(systemdDefinition("worker", env).path, String(testCase.xdg)).toBe(testCase.path);
     }
+  }
 
-    const definition = systemdDefinition("worker");
-    const unit = `${definition.name}.service`;
+  async function checkStart(): Promise<void> {
     const started = new ScriptedProcessRunner([
       { match: systemctl("start", unit), result: reply(0) },
     ]);
@@ -523,7 +528,9 @@ describe("SystemdServiceManager (#832)", () => {
     }).start(definition);
     await expect(refused).rejects.toBeInstanceOf(ServiceFailedError);
     await expect(refused).rejects.toThrow(`systemctl --user start ${unit} failed: Unit not found.`);
+  }
 
+  async function checkInstallFailures(): Promise<void> {
     const failures = [
       {
         label: "no user bus",
@@ -555,7 +562,9 @@ describe("SystemdServiceManager (#832)", () => {
       await expect(install, testCase.label).rejects.toThrow(testCase.message);
       expect(await filesystem.exists(definition.path), testCase.label).toBe(false);
     }
+  }
 
+  async function checkStates(): Promise<void> {
     const node = definition.command;
     const main = definition.args[0] ?? "";
     const isEnabled = (result: ReturnType<typeof reply>) => ({
@@ -626,7 +635,9 @@ describe("SystemdServiceManager (#832)", () => {
       expect(runner.calls.length, testCase.label).toBe(testCase.script.length);
       for (const call of runner.calls) expect(call.options.timeoutMs, testCase.label).toBe(10_000);
     }
+  }
 
+  async function checkUninstall(): Promise<void> {
     const removal = new MemoryFilesystem();
     await put(removal, definition.path, "[Service]\n");
     const removeRunner = new ScriptedProcessRunner([
@@ -653,5 +664,14 @@ describe("SystemdServiceManager (#832)", () => {
     await expect(refusal).rejects.toBeInstanceOf(ServiceFailedError);
     await expect(refusal).rejects.toThrow(`systemctl --user disable --now ${unit} failed: Nope`);
     expect(await kept.exists(definition.path)).toBe(true);
+  }
+
+  it("an operator on Linux installs, starts and removes a systemd user unit", async () => {
+    await checkUnitText();
+    checkUnitPath();
+    await checkStart();
+    await checkInstallFailures();
+    await checkStates();
+    await checkUninstall();
   });
 });
