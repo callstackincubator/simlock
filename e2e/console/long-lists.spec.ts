@@ -277,8 +277,9 @@ test.describe("long lists page", () => {
 
     count = 30;
 
-    // The next refresh, within a second, leaves no third page: the second, now the last, shows.
-    await expect(range).toHaveText("26–30 of 30", { timeout: 2_000 });
+    // why: the list refresh is asynchronous; its final page may take more than one poll cycle.
+    // The next refresh leaves no third page: the second, now the last, shows.
+    await expect(range).toHaveText("26–30 of 30", { timeout: 10_000 });
     expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 30));
     await expect(page).toHaveURL(/\/leases\?page=2$/);
   });

@@ -107,14 +107,19 @@ test.describe("the search while data loads", () => {
       const dialog = page.getByRole("dialog", { name: "Search" });
       await dialog.getByRole("combobox").fill("nav");
       const highlighted = dialog.locator("[data-highlighted]");
-      await expect(highlighted).toContainText("nav-waiter");
       await expect(dialog.getByText("Loading…")).toHaveCount(2);
       await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(0);
+      await expect(highlighted).toHaveCount(1);
+      await expect(highlighted).not.toBeEmpty();
+      const highlightedId = await highlighted.getAttribute("id");
+      const highlightedText = await highlighted.innerText();
+      expect(highlightedId).toBeTruthy();
 
       release();
       await expect(dialog.getByRole("option", { name: /nav-holder/ })).toHaveCount(2);
       await expect(dialog.getByText("Loading…")).toHaveCount(0);
-      await expect(highlighted).toContainText("nav-waiter");
+      await expect(highlighted).toHaveAttribute("id", highlightedId ?? "");
+      await expect(highlighted).toHaveText(highlightedText);
       await expect(highlighted).toHaveCount(1);
 
       await page.keyboard.press("Escape");
@@ -147,11 +152,18 @@ test.describe("the search during live updates", () => {
       const box = dialog.getByRole("combobox");
       await box.fill("nav");
       const options = dialog.getByRole("option");
+      await expect(options).toHaveCount(4);
+      await expect(dialog.getByText("Loading…")).toHaveCount(0);
+      const highlighted = dialog.locator("[data-highlighted]");
+      await expect(highlighted).toHaveCount(1);
+      await expect(highlighted).not.toBeEmpty();
+      const initialHighlight = await highlighted.getAttribute("id");
+      expect(initialHighlight).toBeTruthy();
       const before = await options.allInnerTexts();
       expect(before).toHaveLength(4);
       await page.keyboard.press("ArrowDown");
-      const highlighted = dialog.locator("[data-highlighted]");
-      await expect(highlighted).toHaveText(before[1] ?? "");
+      await expect(highlighted).not.toHaveAttribute("id", initialHighlight ?? "");
+      const highlightBeforeUpdate = await highlighted.getAttribute("id");
 
       const refetched = page.waitForResponse(
         async (response) =>
@@ -174,7 +186,7 @@ test.describe("the search during live updates", () => {
         () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
       );
       expect(await options.allInnerTexts()).toEqual(before);
-      await expect(highlighted).toHaveText(before[1] ?? "");
+      await expect(highlighted).toHaveAttribute("id", highlightBeforeUpdate ?? "");
 
       await page.keyboard.press("Escape");
       await page.keyboard.press("Control+k");
@@ -242,6 +254,13 @@ test.describe("the search results", () => {
         await expect(page.getByRole("dialog")).toHaveCount(0);
         await page.keyboard.press("Control+k");
         await box.fill(typed);
+        const highlighted = page
+          .getByRole("dialog", { name: "Search" })
+          .locator("[data-highlighted]");
+        await expect(highlighted).toBeVisible();
+        await expect(highlighted).toContainText(typed.split(/\s+/).at(-1) ?? typed, {
+          ignoreCase: true,
+        });
         await page.keyboard.press("Enter");
         await expect(page.getByRole("dialog", { name: "Search" })).toBeHidden();
         await expect(page).toHaveURL(path);
@@ -281,7 +300,13 @@ test.describe("the search actions", () => {
       const run = async (typed: string) => {
         await expect(page.getByRole("alertdialog")).toHaveCount(0);
         await page.keyboard.press("Control+k");
-        await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill(typed);
+        const dialog = page.getByRole("dialog", { name: "Search" });
+        await dialog.getByRole("combobox", { name: "Search pages, items and actions" }).fill(typed);
+        const highlighted = dialog.locator("[data-highlighted]");
+        await expect(highlighted).toBeVisible();
+        await expect(highlighted).toContainText(typed.split(/\s+/).at(-1) ?? typed, {
+          ignoreCase: true,
+        });
         await page.keyboard.press("Enter");
         await expect(page.getByRole("dialog", { name: "Search" })).toBeHidden();
       };

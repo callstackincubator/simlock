@@ -98,7 +98,7 @@ test.describe("the workers page response helper against a gateway whose listener
       parkNext = true;
       const asked = askForWorkerList(page, fleet.gateway);
       await arrived;
-      await disposeFleet(fleet);
+      await disposeFleet(fleet, { preservePages: [page] });
       await waitFor(() => listenerIsGone(fleet.gateway), {
         interval: 50,
         label: "the gateway's HTTP listener stopped",
