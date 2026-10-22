@@ -61,10 +61,10 @@ the status is stale.
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — partly implemented: §5 (usage figures) is not built |
 | [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Proposed; amends 0001 §3 and §5, 0015 §3 and 0019 §1–2 for physical devices |
-| [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off) |
+| [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by 0043 |
 | [0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) | Leasing calls lease-end participants before it reclaims a device | Accepted |
 | [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted |
-| [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies |
+| [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies; §3's in-process link narrowed by 0043 |
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
@@ -80,3 +80,4 @@ the status is stale.
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
+| [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part |

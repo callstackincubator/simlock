@@ -47,6 +47,7 @@ const missingMessage =
 const tooOld = "refused: this agent-device is too old to use through a gateway; update it";
 // why: shorter than the gateway's 10 s call timeout, so the read can finish once the fake clock moves past it.
 const slowCatalogMs = 8_000;
+const phoneSerial = "R58Y61A60HN";
 const defaultTtlMs = 600_000;
 const gatewayMaxTtlMs = 1_800_000;
 const workerMaxTtlMs = 50_000_000;
@@ -89,6 +90,8 @@ interface WorkerSpec {
   readonly label: string;
   readonly platform?: "ios" | "android";
   readonly model?: string;
+  // why: an Android worker with one enrolled, present phone, leased with `physical: true` through its phone daemon.
+  readonly phone?: boolean;
   readonly capability?: "available" | "off" | "unavailable";
   readonly maxRunning?: number;
   // why: a standalone worker -- no gateway membership, its own HTTP port -- the way a worker without a gateway is; a joined worker may not enable HTTP.
@@ -106,6 +109,7 @@ interface Member {
   readonly label: string;
   readonly daemon: Promise<DaemonServer>;
   readonly fake: FakeAgentDevice;
+  readonly phone: FakeAgentDevice;
   readonly driver: FakeDriver;
   readonly directory: string;
   readonly filesystem: Filesystem;
@@ -165,6 +169,9 @@ function driverFor(
       latencyMs: latency,
       knownModels: [model],
       modelClasses: { [model]: "phone" },
+      ...(spec.phone === true
+        ? { physicalDevices: [{ class: "phone", ids: [phoneSerial], model, osVersion: "15" }] }
+        : {}),
       platform: "android",
     });
   }
@@ -242,6 +249,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     if (existing === undefined) temporaryDirectories.push(workerDirectory);
     const workerFilesystem = existing?.filesystem ?? new MemoryFilesystem();
     const fake = existing?.fake ?? new FakeAgentDevice();
+    const phone = existing?.phone ?? new FakeAgentDevice();
     if (spec.capability === "unavailable") fake.setUnavailable("down");
     const latency: Record<string, number> =
       spec.slowCatalog === true ? { listCatalog: slowCatalogMs } : {};
@@ -272,7 +280,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         level: "debug",
         sink: new MemoryLogSink(),
       }),
-      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
+      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -287,6 +295,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       filesystem: workerFilesystem,
       label: spec.label,
       latency,
+      phone,
       origin: directPort === undefined ? "" : `http://127.0.0.1:${String(directPort)}`,
       secret,
       spec,
@@ -320,7 +329,11 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   };
   for (const spec of options.workers ?? [{ label: "w1" }]) {
     const member = await addWorker(spec);
-    await member.daemon;
+    const worker = await member.daemon;
+    if (spec.phone === true) {
+      await worker.dispatch("device.add", { id: phoneSerial, platform: "android" }, adminSession);
+      member.driver.setPhysicalPresence(phoneSerial, true);
+    }
   }
   for (const member of members) if (member.spec.direct !== true) await untilRead(rig, member);
   return rig;
@@ -814,6 +827,54 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(await workerLeases(first(rig))).toHaveLength(1);
     const request = tap.inputs.find((entry) => entry.operation === "lease.request");
     expect(request?.input).toMatchObject({ requesterId: hex(1), requires: ["agent-device"] });
+  });
+
+  it('through a gateway a physical allocate reaches the worker\'s phone daemon with `requires: ["agent-device"]`, a later command and `devices` follow, the reply carries `device.physical: true`, a phone daemon that is down answers `agent-device is not available on this simlock: phone daemon: <message>` with no lease, and after a gateway restart the live phone lease is adopted', async () => {
+    const down = await setUp({ workers: [{ label: "w1", phone: true, platform: "android" }] });
+    first(down).phone.setUnavailable("down");
+
+    const refused = await envelopeOf(
+      await allocate(down, 1, { physical: true, platform: "android" }),
+    );
+
+    expect(refused.error?.message).toBe(`${notAvailable}phone daemon: down`);
+    expect(await fleetLeases(down)).toEqual([]);
+
+    const rig = await setUp({ workers: [{ label: "w1", phone: true, platform: "android" }] });
+    const member = first(rig);
+    const tap = tapDispatch(rig.gateway);
+    const answer = await envelopeOf(
+      await allocate(rig, 1, { physical: true, platform: "android" }),
+    );
+
+    expect(answer.result).toMatchObject({
+      data: { lease: { device: { model: "Pixel 8", osVersion: "15", physical: true } } },
+    });
+    const request = tap.inputs.find((entry) => entry.operation === "lease.request");
+    expect(request?.input).toMatchObject({ physical: true, requires: ["agent-device"] });
+    expect(member.phone.rpcRequests("agent_device.lease.allocate")).toHaveLength(1);
+    expect(member.fake.rpcRequests("agent_device.lease.allocate")).toEqual([]);
+    await listedByGateway(rig, 1);
+    const reached = () => member.phone.rpcRequests("agent_device.command").length;
+    expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
+    expect(reached()).toBe(1);
+    member.phone.listDevices([{ id: phoneSerial, name: "the phone" }]);
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["the phone"]);
+
+    await restarted(rig, member, 1);
+    expect((await envelopeOf(await command(rig, "snapshot", 1))).error).toBeUndefined();
+    expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
+    expect(reached()).toBe(3);
+    const own = await envelopeOf(
+      await command(rig, "snapshot", 1, {}, { flags: { serial: phoneSerial } }),
+    );
+    expect(own.error).toBeUndefined();
+    expect(reached()).toBe(4);
+    const other = await envelopeOf(
+      await command(rig, "snapshot", 1, {}, { flags: { serial: "emulator-5554" } }),
+    );
+    expect(other.error?.message).toBe(picksTheDevice);
+    expect(reached()).toBe(4);
   });
 
   it('allocate through the gateway with `osVersion` ">=18" reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device`', async () => {

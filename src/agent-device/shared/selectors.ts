@@ -18,11 +18,15 @@ const STRING_FIELDS = [
   "osVersion",
   "imageTag",
 ] as const;
+const BOOLEAN_FIELDS = ["physical"] as const;
 const INTEGER_FIELDS = ["shardAll", "shardSplit"] as const;
 
 export function malformedField(source: Fields): string | undefined {
   for (const field of STRING_FIELDS) {
     if (present(source[field]) && typeof source[field] !== "string") return field;
+  }
+  for (const field of BOOLEAN_FIELDS) {
+    if (present(source[field]) && typeof source[field] !== "boolean") return field;
   }
   for (const field of INTEGER_FIELDS) {
     if (present(source[field]) && !Number.isInteger(source[field])) return field;

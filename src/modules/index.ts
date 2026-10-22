@@ -14,6 +14,7 @@ export type {
   ModuleHttpResponse,
   ModuleLeaseEndParticipant,
   ModuleMount,
+  ModuleRegistryView,
   ModuleRelayTarget,
   OptionalModuleDefinition,
   WorkerContext,

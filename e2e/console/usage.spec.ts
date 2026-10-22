@@ -72,7 +72,6 @@ async function scriptedRun(host: RunningDaemon, completeMinute = false): Promise
   const released = await host.cli(["release", (held.json as { lease: { id: string } }).lease.id]);
   expect(released.code, released.stderr).toBe(0);
   await waitFor(async () => (await waitingCount(host)) === 0, { label: "the request granted" });
-  if (!completeMinute) return;
   if (completeMinute) await host.prepareHistoricalUsage();
 }
 

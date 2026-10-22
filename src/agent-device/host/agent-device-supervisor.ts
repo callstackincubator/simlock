@@ -54,6 +54,34 @@ export type AgentDeviceAvailability =
       readonly remedy: string;
     };
 
+/** why: which of the worker's two daemons a supervisor runs: the one over Simlock's simulator set, or the one that sees the host's phones. */
+export type AgentDeviceRole = "simulators" | "phones";
+
+export interface AgentDeviceIosSigning {
+  readonly teamId?: string;
+  readonly bundleId?: string;
+  readonly provisioningProfile?: string;
+  readonly signingIdentity?: string;
+}
+
+const IOS_SIGNING_ENVIRONMENT = {
+  bundleId: "AGENT_DEVICE_IOS_BUNDLE_ID",
+  provisioningProfile: "AGENT_DEVICE_IOS_PROVISIONING_PROFILE",
+  signingIdentity: "AGENT_DEVICE_IOS_SIGNING_IDENTITY",
+  teamId: "AGENT_DEVICE_IOS_TEAM_ID",
+} as const satisfies Record<keyof AgentDeviceIosSigning, string>;
+
+/** why: the adb server the physical Android driver uses, the host's default one. */
+const DEFAULT_ADB_SERVER_PORT = "5037";
+
+/** why: an operator shell that exported any of these would point the phone daemon at another adb server or device. */
+const ADB_SELECTION_KEYS = new Set([
+  "ANDROID_ADB_SERVER_PORT",
+  "ANDROID_ADB_SERVER_ADDRESS",
+  "ADB_SERVER_SOCKET",
+  "ANDROID_SERIAL",
+]);
+
 export interface AgentDeviceSupervisorOptions {
   readonly baseEnvironment: NodeJS.ProcessEnv;
   readonly clock: Clock;
@@ -62,6 +90,7 @@ export interface AgentDeviceSupervisorOptions {
   readonly filesystem: Filesystem;
   readonly healthProbe: AgentDeviceHealthProbe;
   readonly home: string;
+  readonly ios?: AgentDeviceIosSigning;
   readonly leaseMaxTtlMs: number;
   readonly logger: Logger;
   readonly nodePath: string;
@@ -69,6 +98,7 @@ export interface AgentDeviceSupervisorOptions {
   readonly platforms: readonly AgentDevicePlatform[];
   readonly processRunner: ProcessRunner;
   readonly processSupervisor: ProcessSupervisor;
+  readonly role: AgentDeviceRole;
   readonly tcpProbe: TcpProbe;
 }
 
@@ -81,6 +111,7 @@ const KILL_GRACE_MS = 2_000;
 const RETRY_MS = 30_000;
 const STABLE_AFTER_READY_MS = 60_000;
 const MARKER = "--simlock-home=";
+const PHONES_MARKER = "--simlock-role=phones";
 const RESTART = "then restart the daemon (`simlock daemon stop`, then `simlock daemon start`)";
 
 type RemedyKind = UnavailableReason | "node" | "protocol";
@@ -158,9 +189,20 @@ export class AgentDeviceSupervisor {
 
   constructor(options: AgentDeviceSupervisorOptions) {
     this.#o = options;
-    this.#stateDir = `${options.home}/agent-device`;
-    this.#recordPath = `${options.home}/agent-device-daemon.json`;
+    this.#stateDir = `${options.home}/${this.#stem}`;
+    this.#recordPath = `${options.home}/${this.#stem}-daemon.json`;
     this.#availability = { state: "starting" };
+  }
+
+  get #stem(): string {
+    return this.#o.role === "phones" ? "agent-device-phones" : "agent-device";
+  }
+
+  /** why: the words after the entry on the daemon's command line; a pid is signalled only when its line ends with them. */
+  #markerArgs(realHome: string): readonly string[] {
+    return this.#o.role === "phones"
+      ? [`${MARKER}${realHome}`, PHONES_MARKER]
+      : [`${MARKER}${realHome}`];
   }
 
   availability(): AgentDeviceAvailability {
@@ -184,7 +226,7 @@ export class AgentDeviceSupervisor {
         await this.#removeRecord();
       } else {
         this.#o.logger.warn(
-          `agent-device daemon pid ${child.pid} is still alive after stop; its record is kept for the next start`,
+          `agent-device (${this.#o.role}) daemon pid ${child.pid} is still alive after stop; its record is kept for the next start`,
         );
       }
     }
@@ -243,7 +285,7 @@ export class AgentDeviceSupervisor {
 
   #fail(reason: UnavailableReason, message: string, remedyKind?: RemedyKind): void {
     if (reason === "start-failed" && !this.#stopped)
-      this.#o.logger.warn(`agent-device start failed: ${message}`);
+      this.#o.logger.warn(`agent-device (${this.#o.role}) start failed: ${message}`);
     this.#availability = {
       state: "unavailable",
       reason,
@@ -255,8 +297,8 @@ export class AgentDeviceSupervisor {
   async #startOnce(): Promise<void> {
     const o = this.#o;
     const realHome = await o.filesystem.realpath(o.home);
-    this.#stateDir = `${realHome}/agent-device`;
-    this.#recordPath = `${realHome}/agent-device-daemon.json`;
+    this.#stateDir = `${realHome}/${this.#stem}`;
+    this.#recordPath = `${realHome}/${this.#stem}-daemon.json`;
     this.#availability = { state: "starting" };
     if (!(await this.#reapStep(realHome))) return;
     const found = await this.#checkInstall();
@@ -333,7 +375,7 @@ export class AgentDeviceSupervisor {
     const o = this.#o;
     let handle: ProcessHandle;
     try {
-      handle = o.processRunner.spawn(o.nodePath, [entry, `${MARKER}${realHome}`], {
+      handle = o.processRunner.spawn(o.nodePath, [entry, ...this.#markerArgs(realHome)], {
         env,
         stdio: "ignore",
       });
@@ -430,7 +472,9 @@ export class AgentDeviceSupervisor {
     this.#child = undefined;
     const result = child.exit as ProcessResult;
     const elapsedMs = this.#o.clock.now() - child.readyAt;
-    this.#o.logger.warn(`agent-device daemon pid ${child.pid} exited ${describeExit(result)}`);
+    this.#o.logger.warn(
+      `agent-device (${this.#o.role}) daemon pid ${child.pid} exited ${describeExit(result)}`,
+    );
     if (elapsedMs >= STABLE_AFTER_READY_MS) {
       void this.#begin();
       return;
@@ -500,22 +544,42 @@ export class AgentDeviceSupervisor {
 
   async #environment(policyPath: string): Promise<NodeJS.ProcessEnv> {
     const o = this.#o;
+    const phones = o.role === "phones";
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(o.baseEnvironment)) {
-      if (!key.startsWith("AGENT_DEVICE_")) env[key] = value;
+      if (key.startsWith("AGENT_DEVICE_") || (phones && ADB_SELECTION_KEYS.has(key))) continue;
+      env[key] = value;
     }
     Object.assign(
       env,
-      o.driverEnvironment,
+      phones ? {} : o.driverEnvironment,
       agentDeviceDaemonEnvironment({
         leaseMaxTtlMs: o.leaseMaxTtlMs,
         policyPath,
         stateDir: this.#stateDir,
       }),
     );
+    if (phones) Object.assign(env, this.#phoneEnvironment());
+    await this.#hideUnusedPlatforms(env);
+    return env;
+  }
+
+  #phoneEnvironment(): Record<string, string> {
+    const signing: Record<string, string> = { ANDROID_ADB_SERVER_PORT: DEFAULT_ADB_SERVER_PORT };
+    for (const [key, name] of Object.entries(IOS_SIGNING_ENVIRONMENT)) {
+      const value = this.#o.ios?.[key as keyof AgentDeviceIosSigning];
+      if (value !== undefined) signing[name] = value;
+    }
+    return signing;
+  }
+
+  async #hideUnusedPlatforms(env: NodeJS.ProcessEnv): Promise<void> {
+    const o = this.#o;
     if (o.platforms.includes("ios")) {
       const deviceSet = o.driverEnvironment["SIMLOCK_IOS_DEVICE_SET"];
-      if (deviceSet !== undefined) env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = deviceSet;
+      if (o.role !== "phones" && deviceSet !== undefined) {
+        env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = deviceSet;
+      }
     } else {
       const empty = `${this.#stateDir}/no-ios-devices`;
       try {
@@ -526,10 +590,13 @@ export class AgentDeviceSupervisor {
       }
       env["AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET"] = empty;
     }
-    if (!o.platforms.includes("android")) {
+    this.#hideAndroid(env);
+  }
+
+  #hideAndroid(env: NodeJS.ProcessEnv): void {
+    if (!this.#o.platforms.includes("android")) {
       env["AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST"] = NO_ANDROID_DEVICE_SERIAL;
     }
-    return env;
   }
 
   async #waitReady(
@@ -589,7 +656,7 @@ export class AgentDeviceSupervisor {
       return;
     }
     this.#o.logger.warn(
-      `agent-device daemon pid ${child.pid} is still alive after SIGKILL; its record is kept for the next start`,
+      `agent-device (${this.#o.role}) daemon pid ${child.pid} is still alive after SIGKILL; its record is kept for the next start`,
     );
     this.#fail(
       reason,
@@ -673,7 +740,7 @@ export class AgentDeviceSupervisor {
   ): Promise<"own" | "other" | "unknown"> {
     const line = await this.#psLine(pid);
     if (line === undefined) return "unknown";
-    if (!line.endsWith(` ${MARKER}${realHome}`)) return "other";
+    if (!line.endsWith(` ${this.#markerArgs(realHome).join(" ")}`)) return "other";
     if (entry !== undefined && !line.includes(entry)) return "other";
     if (await this.#stateDirIsOurs()) {
       const named = (await this.#readDaemonJson())?.["pid"];
