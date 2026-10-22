@@ -78,8 +78,8 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
         {page.system === undefined ? null : <> · {page.system}</>}
       </p>
       {page.banners.map((banner) => (
-        <p key={banner} className="worker-banner">
-          {banner}
+        <p key={banner.text} className="worker-banner">
+          {banner.text}
         </p>
       ))}
       <Overview page={page} />

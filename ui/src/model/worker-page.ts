@@ -406,12 +406,17 @@ function loadFigures(worker: WorkerView): readonly FigureCard[] {
 
 // why: a worker that is gone or drained is the first thing an operator should read on its page, so it
 // says so above everything else.
-function bannersOf(worker: WorkerView, now: number): readonly string[] {
+function bannersOf(worker: WorkerView, now: number): readonly WorkerBanner[] {
   return [
     ...(worker.connection === "disconnected"
-      ? [`Disconnected · last seen ${formatDuration(now - worker.lastSeenAt)} ago`]
+      ? [
+          {
+            text: `Disconnected · last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
+            tone: "warn" as const,
+          },
+        ]
       : []),
-    ...(worker.drained ? ["Drained"] : []),
+    ...(worker.drained ? [{ text: "Drained", tone: "warn" as const }] : []),
   ];
 }
 
@@ -596,10 +601,17 @@ export function writeWorkerTab(search: string, tab: WorkerTab): string {
   return `?${params.toString()}`;
 }
 
+export interface WorkerBanner {
+  readonly text: string;
+  readonly tone: "warn" | "error";
+  // why: the failure banner offers Update again, when the page's menu offers Update….
+  readonly failure?: true;
+}
+
 export interface WorkerPage {
   readonly id: string;
   readonly tab: WorkerTab;
-  readonly banners: readonly string[];
+  readonly banners: readonly WorkerBanner[];
   readonly title: string;
   readonly connection: WorkerView["connection"];
   readonly drained: boolean;

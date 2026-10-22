@@ -207,6 +207,52 @@ describe("a worker's row while it updates", () => {
   });
 });
 
+describe("a worker page's update banners", () => {
+  it("words the Updating banner per stage and the failure banner, in the order disconnected, failure, updating, drained, and shows none once both are null", () => {
+    const base = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+    const banners = (overrides: Partial<WorkerView>) =>
+      inspect(worker(overrides)).banners.map((banner) => [
+        banner.text,
+        banner.tone,
+        banner.failure ?? false,
+      ]);
+    expect(banners({ update: { ...base, leases: 2, stage: "waiting" } })).toEqual([
+      ["Updating to 0.4.0 · waiting for 2 leases. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, leases: 1, stage: "waiting" } })).toEqual([
+      ["Updating to 0.4.0 · waiting for 1 lease. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, stage: "installing" } })).toEqual([
+      ["Updating to 0.4.0 · installing. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, stage: "restarting" } })).toEqual([
+      ["Updating to 0.4.0 · restarting. It takes no new leases.", "warn", false],
+    ]);
+    const failure = (stage: "installing" | "restarting") => ({
+      at: NOW - 60_000,
+      from: "0.3.0",
+      message: "EACCES",
+      stage,
+      to: "0.4.0",
+    });
+    expect(banners({ lastUpdateFailure: failure("installing") })).toEqual([
+      ["Update to 0.4.0 failed (installing): EACCES", "error", true],
+    ]);
+    expect(banners({ lastUpdateFailure: failure("restarting") })).toEqual([
+      ["Update to 0.4.0 failed (restarting): EACCES", "error", true],
+    ]);
+    expect(
+      banners({
+        connection: "disconnected",
+        drained: true,
+        lastUpdateFailure: failure("installing"),
+        update: { ...base, stage: "installing" },
+      }).map(([text]) => String(text).split(" ")[0]),
+    ).toEqual(["Disconnected", "Update", "Updating", "Drained"]);
+    expect(banners({ lastUpdateFailure: null, update: null })).toEqual([]);
+  });
+});
+
 describe("the list's filters and header", () => {
   const busy = worker({
     id: "wrk_busy",
