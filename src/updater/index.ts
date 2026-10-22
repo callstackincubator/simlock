@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import type {
   Clock,
   DaemonRole,
@@ -29,6 +31,35 @@ export interface RunUpdaterOptions {
   readonly stdout: { write(chunk: string): void };
 }
 
-export async function runUpdater(_options: RunUpdaterOptions): Promise<number> {
-  return 1;
+const POLL_MS = 500;
+
+function sleep(clock: Clock, milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    clock.setTimer(milliseconds, resolve);
+  });
+}
+
+function writeLine(options: RunUpdaterOptions, line: unknown): void {
+  options.stdout.write(`${JSON.stringify(line)}\n`);
+}
+
+export async function runUpdater(options: RunUpdaterOptions): Promise<number> {
+  const { clock, npm, probe, processes, to } = options;
+  writeLine(options, { stage: "installing" });
+  await npm.install(`simlock@${to}`);
+  writeLine(options, { stage: "restarting" });
+  await probe.stop();
+  while (await probe.answers()) {
+    await sleep(clock, POLL_MS);
+  }
+  await processes.run(process.execPath, [
+    join(options.packageRoot, "dist", "cli", "main.js"),
+    "daemon",
+    "start",
+  ]);
+  for (;;) {
+    const state = await probe.state();
+    if (state?.health === "running" && state.version === to) return 0;
+    await sleep(clock, POLL_MS);
+  }
 }
