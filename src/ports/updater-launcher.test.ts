@@ -13,18 +13,21 @@ afterEach(async () => {
 });
 
 describe("NodeUpdaterLauncher", () => {
-  it("runs the entry with its arguments, streams stdout lines and logs stderr", async () => {
+  it("runs the entry detached with its arguments, streams stdout lines and appends stderr to the log", async () => {
     const tree = await realpath(await mkdtemp(join(tmpdir(), "simlock-updater-")));
     trees.push(tree);
     const entry = join(tree, "main.js");
     await writeFile(
       entry,
-      `console.log(JSON.stringify({ argv: process.argv.slice(2), home: process.env.SIMLOCK_HOME }));
+      `const { execFileSync } = require("node:child_process");
+const group = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)]));
+console.log(JSON.stringify({ argv: process.argv.slice(2), home: process.env.SIMLOCK_HOME, leader: group === process.pid }));
 console.log("second");
 console.error("to the log");
 process.exit(3);`,
     );
     const logPath = join(tree, "daemon.log");
+    await writeFile(logPath, "earlier\n");
 
     const updater = await new NodeUpdaterLauncher().launch({
       entry,
@@ -42,10 +45,11 @@ process.exit(3);`,
       JSON.stringify({
         argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "4242", "--gateway"],
         home: "/home/.simlock",
+        leader: true,
       }),
       "second",
     ]);
     await expect(updater.exited).resolves.toBe(3);
-    await expect(readFile(logPath, "utf8")).resolves.toBe("to the log\n");
+    await expect(readFile(logPath, "utf8")).resolves.toBe("earlier\nto the log\n");
   });
 });

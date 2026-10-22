@@ -23,8 +23,10 @@ const EPOCH = 1_700_000_000_000;
 class StopRecordingNpm extends FakeNpmCli {
   readonly stopsBeforeInstall: number[] = [];
   probe: FakeProbe | undefined;
+  onInstall: (() => Promise<void>) | undefined;
 
   override async install(spec: string): Promise<NpmOutcome> {
+    await this.onInstall?.();
     this.stopsBeforeInstall.push(this.probe?.stops ?? -1);
     return super.install(spec);
   }
@@ -70,11 +72,13 @@ interface Scenario {
     readonly startArgs: readonly (readonly string[])[];
     readonly signals: readonly string[];
     readonly waitedAtLeastMs: number;
+    readonly waitedAtMostMs?: number;
     readonly stderr?: readonly string[];
     readonly stopsBeforeEachInstall?: readonly number[];
     readonly database?: {
       readonly copiedBeforeStart: string;
       readonly restoredBeforeRollbackStart?: string;
+      readonly liveDuringRollbackInstall?: string;
       readonly backupLeft: boolean;
     };
     readonly resultFile?: { readonly message: string; readonly mode: number };
@@ -134,6 +138,21 @@ const SCENARIOS: readonly Scenario[] = [
       exit: 1,
       installs: ["simlock@0.4.0", "simlock@0.3.0"],
       stops: 1,
+      startArgs: [started(), started()],
+      signals: [],
+      waitedAtLeastMs: 120_000,
+      waitedAtMostMs: 130_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
+  {
+    name: "new daemon running another version than the one installed",
+    starts: [{ daemon: { health: "running", version: "0.3.9" } }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 2,
       startArgs: [started(), started()],
       signals: [],
       waitedAtLeastMs: 120_000,
@@ -231,6 +250,7 @@ const SCENARIOS: readonly Scenario[] = [
       database: {
         copiedBeforeStart: "original",
         restoredBeforeRollbackStart: "original",
+        liveDuringRollbackInstall: "migrated",
         backupLeft: false,
       },
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
@@ -248,6 +268,21 @@ const SCENARIOS: readonly Scenario[] = [
       startArgs: [started(), started()],
       signals: [],
       waitedAtLeastMs: 120_000,
+      resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
+    },
+  },
+  {
+    name: "new daemon ignores daemon.stop for 10 minutes",
+    oldDaemonStaysUp: true,
+    starts: [{ daemon: { health: "starting", version: "0.4.0" } }],
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 1,
+      installs: ["simlock@0.4.0", "simlock@0.3.0"],
+      stops: 2,
+      startArgs: [started(), started()],
+      signals: [`${PID}:SIGKILL`],
+      waitedAtLeastMs: 1_320_000,
       resultFile: { message: "0.4.0 did not start: did not answer within 2 minutes", mode: 0o600 },
     },
   },
@@ -296,9 +331,13 @@ describe("runUpdater", () => {
       await filesystem.writeFileAtomic(`${dataDirectory}/history.db`, "history");
       const copiedBeforeStart: string[] = [];
       const liveAtStart: string[] = [];
+      const liveAtInstall: string[] = [];
       const npm = new StopRecordingNpm(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp);
       npm.probe = probe;
+      npm.onInstall = async () => {
+        liveAtInstall.push(await filesystem.readFile(statePath));
+      };
       const processes = new ScriptedProcessRunner(
         expected.startArgs.map((args, index) => ({
           match: { command: process.execPath, args },
@@ -319,6 +358,7 @@ describe("runUpdater", () => {
                     : "missing",
                 );
                 await filesystem.writeFileAtomic(statePath, "migrated");
+                await filesystem.writeFileAtomic(`${statePath}-wal`, "written by the new version");
               }
             })();
           },
@@ -363,11 +403,19 @@ describe("runUpdater", () => {
         expected.signals,
       );
       expect(clock.now()).toBeGreaterThanOrEqual(EPOCH + expected.waitedAtLeastMs);
+      if (expected.waitedAtMostMs !== undefined) {
+        expect(clock.now()).toBeLessThanOrEqual(EPOCH + expected.waitedAtMostMs);
+      }
       if (expected.database !== undefined) {
         expect(copiedBeforeStart).toEqual([expected.database.copiedBeforeStart]);
         expect(await filesystem.exists(backupPath)).toBe(expected.database.backupLeft);
         if (expected.database.restoredBeforeRollbackStart !== undefined) {
           expect(liveAtStart[1]).toBe(expected.database.restoredBeforeRollbackStart);
+          // why: the backup held no -wal, so the one the new version wrote must go with the rollback.
+          expect(await filesystem.exists(`${statePath}-wal`)).toBe(false);
+        }
+        if (expected.database.liveDuringRollbackInstall !== undefined) {
+          expect(liveAtInstall[1]).toBe(expected.database.liveDuringRollbackInstall);
         }
       }
       if (expected.resultFile === undefined) {
@@ -404,6 +452,7 @@ describe("checkInstall", () => {
     { name: "npm global", layout: "npm", globalRoot: "ok", ok: true },
     { name: "pnpm global", layout: "pnpm", globalRoot: "ok", ok: false },
     { name: "source checkout", layout: "checkout", globalRoot: "ok", ok: false },
+    { name: "another copy under npm's root", layout: "stale", globalRoot: "ok", ok: false },
     { name: "npm root -g failing", layout: "npm", globalRoot: "fails", ok: false },
   ] as const)("tells npm installs from others: $name", async ({ layout, globalRoot, ok }) => {
     const tree = await realpath(await mkdtemp(join(tmpdir(), "simlock-install-")));
@@ -414,10 +463,12 @@ describe("checkInstall", () => {
       npm: join(npmModules, "simlock"),
       pnpm: join(tree, "pnpm", "store", "simlock"),
       checkout: join(tree, "checkout"),
+      stale: join(tree, "stale", "simlock"),
     }[layout];
     await mkdir(real, { recursive: true });
     // why: pnpm and a checkout run from a folder outside npm's global root, which then holds no simlock.
-    if (layout !== "npm") await rm(join(npmModules, "simlock"), { recursive: true });
+    if (layout === "pnpm" || layout === "checkout")
+      await rm(join(npmModules, "simlock"), { recursive: true });
     const packageRoot = join(tree, "running");
     await symlink(real, packageRoot);
     const npm = new FakeNpmCli({
