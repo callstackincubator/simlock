@@ -2,7 +2,7 @@
 // wording of each dialog and toast is fixed here, so no surface words it differently.
 import type { InboxItem } from "./inbox";
 import { type TokenRecord, leaseRows } from "./leases";
-import { isBehind, type UpdateFacts } from "./versions";
+import { isBehind, type UpdateFacts, updateFactsOf } from "./versions";
 import { requestedDevice } from "./waiting";
 import { type WorkerView, workerName } from "./workers";
 
@@ -281,6 +281,11 @@ export function workerActions(
   return actions;
 }
 
+const FIX_OF: Readonly<Partial<Record<InboxItem["condition"], ItemAction["id"]>>> = {
+  drained: "undrain",
+  "update failed": "update-worker",
+};
+
 export interface InboxActionContext {
   readonly mode: DaemonModeName | undefined;
   readonly now: number;
@@ -288,7 +293,7 @@ export interface InboxActionContext {
   readonly workers: readonly WorkerView[];
 }
 
-// why: only a drained worker's item has a fix button, and its fix is Undrain; every other action of
+// why: only a drained worker's item (its fix is Undrain) and a failed update's (Update…) has a fix button; every other action of
 // an item is in its menu. Device conditions (a quarantined or stalled device) are about a device, so
 // they offer no worker action.
 export function inboxActions(
@@ -321,6 +326,7 @@ export function inboxActions(
     case "disconnected":
     case "incompatible":
     case "drained":
+    case "update failed":
     case "over RAM budget": {
       const menu = workerActions(
         {
@@ -328,10 +334,12 @@ export function inboxActions(
           drained: item.worker.drained,
           id: item.worker.id,
           name: workerName(item.worker),
+          updateFacts: updateFactsOf(item.worker),
         },
         context.mode,
       );
-      const fix = item.condition === "drained" ? menu.find((a) => a.id === "undrain") : undefined;
+      const fixId = FIX_OF[item.condition];
+      const fix = fixId === undefined ? undefined : menu.find((a) => a.id === fixId);
       return fix === undefined ? { menu } : { fix, menu };
     }
   }

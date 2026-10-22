@@ -136,6 +136,17 @@ function checksInbox(): void {
     worker({ connection: "incompatible", id: "wrk_old" }),
     worker({ connection: "incompatible", drained: true, id: "wrk_old_drained" }),
     worker({
+      id: "wrk_failed",
+      lastUpdateFailure: { at: NOW, from: "0.3.0", message: "x", stage: "installing", to: "0.4.0" },
+      latestVersion: "0.4.0",
+      version: "0.3.0",
+    }),
+    worker({
+      connection: "disconnected",
+      id: "wrk_failed_gone",
+      lastUpdateFailure: { at: NOW, from: "0.3.0", message: "x", stage: "installing", to: "0.4.0" },
+    }),
+    worker({
       devices: [
         {
           id: "dev_1",
@@ -162,8 +173,12 @@ function checksInbox(): void {
   expect(shape(of("wrk_gone/disconnected").menu)).toEqual(["drain", "remove-worker!"]);
   expect(of("wrk_old/incompatible").fix).toBeUndefined();
   expect(of("wrk_old_drained/incompatible").fix).toBeUndefined();
-  expect(shape(of("wrk_old_drained/incompatible").menu)).toEqual(["undrain"]);
-  expect(shape(of("wrk_old/incompatible").menu)).toEqual(["drain"]);
+  expect(shape(of("wrk_old_drained/incompatible").menu)).toEqual(["undrain", "update-worker"]);
+  expect(shape(of("wrk_old/incompatible").menu)).toEqual(["drain", "update-worker"]);
+  const failed = of("wrk_failed/update-failed");
+  expect(failed.fix?.id).toBe("update-worker");
+  expect(shape(failed.menu)).toEqual(["drain", "update-worker"]);
+  expect(of("wrk_failed_gone/update-failed").fix).toBeUndefined();
   expect(of("request/req_1/waiting").fix).toBeUndefined();
   expect(shape(of("request/req_1/waiting").menu)).toEqual(["cancel-request!"]);
   const heldLease = of("lease/lse_1/ending");
