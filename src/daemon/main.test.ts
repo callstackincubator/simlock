@@ -4205,5 +4205,9 @@ describe("startDaemon version check", () => {
     disabled.clock.advance(2 * day);
     expect(off.calls).toEqual([]);
     expect(await latestOf(disabled.daemon)).toBeNull();
+
+    const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
+    const gateway = await startChecked(gatewayNpm, { role: "gateway" });
+    await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
   });
 });
