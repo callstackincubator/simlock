@@ -48,8 +48,10 @@ flowchart LR
 
 1. **One call, `daemon.update`, frozen like `daemon.stop`.** It is
    accepted at every protocol version from the one that adds it: it
-   skips the version gate, but still waits for the daemon to be ready, so
-   a starting worker answers once its leases are loaded. It needs
+   skips the version gate. A `query` call answers at once, also while the
+   daemon is starting (health `starting`); a call that starts an update
+   still waits for the daemon to be ready, so a starting worker starts
+   it once its leases are loaded. It needs
    `admin`. The client sends it on a mismatched connection, as it does
    `daemon.stop`. Its input (`version?`, `force?`, `query?`)
    and its answer (`started`, `upToDate`, `resolved`, `version`, `health`,
@@ -70,8 +72,8 @@ flowchart LR
    fleet calls.
 3. **The worker's own `updating` state, not the gateway's drain.** From
    the call until the daemon exits, a worker is `updating`. It refuses
-   new lease requests and cancels queued ones with `DAEMON_UPDATING`, on
-   every surface. The gateway's routing skips an `updating` worker as it
+   every lease request not yet provisioning (`new` or queued) with
+   `DAEMON_UPDATING`, on every surface; only provisioning ones finish. The gateway's routing skips an `updating` worker as it
    skips a drained one. The drain set is never touched, so an operator's
    own drain survives the update, and the state ends by itself: at the
    restart, or when the install fails.

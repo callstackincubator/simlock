@@ -60,27 +60,19 @@ async function waitingCount(host: RunningDaemon): Promise<number> {
 }
 
 // why: one waiter, one --no-wait refusal and one grant, so wait, rejections and requesters all have
-// something to show; the slots figures come from completed minutes, so the run waits for the one it
-// started in to end.
+// real daemon-generated rows to show.
 async function scriptedRun(host: RunningDaemon, completeMinute = false): Promise<void> {
-  const minute = Math.floor(Date.now() / 60_000);
   const held = await host.cli([...LEASE, "--agent-id", "holder", "--detach"]);
   expect(held.code, held.stderr).toBe(0);
   host.cliBackground([...LEASE, "--agent-id", "waiter"]);
   await waitFor(async () => (await waitingCount(host)) === 1, { label: "a request waiting" });
   const refused = await host.cli([...LEASE, "--agent-id", "refused", "--no-wait", "--detach"]);
   expect(refused.code).toBe(11);
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const released = await host.cli(["release", (held.json as { lease: { id: string } }).lease.id]);
   expect(released.code, released.stderr).toBe(0);
   await waitFor(async () => (await waitingCount(host)) === 0, { label: "the request granted" });
-  if (!completeMinute) return;
-  const minuteOver = (minute + 1) * 60_000 + 1_000;
-  await waitFor(() => Date.now() >= minuteOver, { label: "the minute over", timeout: 70_000 });
-  await waitFor(async () => (await statsOf(host, "1h")).totals.utilisation.slots.peak !== null, {
-    label: "the run in a completed minute",
-    timeout: 30_000,
-  });
+  if (completeMinute) await host.prepareHistoricalUsage();
 }
 
 async function openUsage(page: Page, host: RunningDaemon, path = "/usage"): Promise<void> {
@@ -133,7 +125,6 @@ test.describe("the Usage page", () => {
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
-      test.setTimeout(150_000);
       await scriptedRun(host, true);
       const cliStats = await host.cli(["stats", "--since", "24h", "--json"]);
       expect(cliStats.code, cliStats.stderr).toBe(0);

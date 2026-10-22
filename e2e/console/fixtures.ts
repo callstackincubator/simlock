@@ -10,6 +10,7 @@ import {
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { test as base, expect, type Page } from "@playwright/test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -53,6 +54,8 @@ export interface RunningDaemon extends ConsoleDaemon {
   start(): Promise<void>;
   /** Stops the daemon and deletes its home. */
   dispose(options?: { readonly preservePages?: readonly Page[] }): Promise<void>;
+  /** why: stats read completed minutes only, so this moves the usage rows two minutes back. */
+  prepareHistoricalUsage(): Promise<void>;
 }
 
 export interface StartOptions {
@@ -388,6 +391,27 @@ export async function startDaemon(
       socketPath,
       start,
       stop,
+      async prepareHistoricalUsage() {
+        await stop();
+        // why: the daemon writes history.db until its process exits, not until its socket goes.
+        await waitFor(
+          async () =>
+            !(await Promise.all([...daemonPids].map((pid) => isProcessAlive(pid)))).some(Boolean),
+          { timeout: 20_000, interval: 100, label: "daemon process exited" },
+        );
+        const database = new DatabaseSync(join(dataDirectory, "history.db"));
+        try {
+          // why: Usage reads whole minutes only; moving the real projection while stopped keeps
+          // presentation tests deterministic without changing the daemon's clock or live database.
+          database.exec(
+            "UPDATE minute_rows SET minute = minute - 120000, carryUntil = CASE WHEN carryUntil IS NULL THEN NULL ELSE carryUntil - 120000 END",
+          );
+          database.exec("UPDATE gaps SET at = at - 120000");
+        } finally {
+          database.close();
+        }
+        await start();
+      },
       tokens,
       url: url ?? "",
       writeDriverScript: (script) => writeFile(scriptPath, JSON.stringify(script)),
