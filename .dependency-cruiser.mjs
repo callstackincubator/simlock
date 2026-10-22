@@ -134,6 +134,12 @@ export default {
       { path: "^src/(core|leasing|gateway|drivers|contract|http|cli|mcp|daemon)/" },
     ),
     direction(
+      "updater-imports-little",
+      "the updater imports only ports, contract and admin: it runs while its own files are being replaced, so it carries nothing else",
+      "^src/updater/",
+      { path: "^src/", pathNot: "^src/(ports|contract|admin|updater)/" },
+    ),
+    direction(
       "not-host-load",
       "core, leasing, the drivers, the gateway and the contract import nothing from host-load",
       "^src/(core|leasing|drivers|gateway|contract)/",
