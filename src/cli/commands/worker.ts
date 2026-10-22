@@ -104,6 +104,16 @@ function followOutcome(
   return undefined;
 }
 
+function updateEnds(answer: Awaited<ReturnType<SimlockAdminClient["updateWorker"]>>): {
+  readonly from: string;
+  readonly to: string;
+} {
+  return {
+    from: answer.update?.from ?? answer.version,
+    to: answer.update?.to ?? answer.resolved ?? "",
+  };
+}
+
 async function runWorkerUpdate(
   argv: readonly string[],
   client: SimlockAdminClient,
@@ -135,9 +145,8 @@ async function runWorkerUpdate(
     environment.stdout.write(`${name} is already on the latest (${answer.version})\n`);
     return 0;
   }
-  const to = answer.update?.to ?? answer.resolved ?? "";
+  const { from, to } = updateEnds(answer);
   if (values.detach === true) {
-    const from = answer.update?.from ?? answer.version;
     environment.stdout.write(
       `Updating ${name} ${from} → ${to}. Follow it with simlock worker list.\n`,
     );
