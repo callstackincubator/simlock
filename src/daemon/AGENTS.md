@@ -10,19 +10,20 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Files
 
-| File                    | Role                                                                   |
-| ----------------------- | ---------------------------------------------------------------------- |
-| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks       |
-| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop    |
-| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`             |
-| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                    |
-| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery              |
-| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                     |
-| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                        |
-| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink              |
-| `error-code.ts`         | `classifyError`: thrown error → contract code                          |
-| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove` |
-| `test-relay-support.ts` | Test helpers for relay e2e tests                                       |
+| File                    | Role                                                                                                             |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                 |
+| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                              |
+| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                       |
+| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                              |
+| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                        |
+| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                               |
+| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                  |
+| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi` |
+| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                        |
+| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                    |
+| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                           |
+| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                 |
 
 ## Composition (`main.ts`)
 
