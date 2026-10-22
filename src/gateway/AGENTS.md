@@ -7,7 +7,7 @@ Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admi
 core and leasing only the names `.oxlintrc.json` allows (request book, in-memory store, wait queue).
 Never imports: drivers, the rest of daemon, core's registry, capacity or lifecycle.
 Imported by: `../daemon/main.ts`. This manual also covers the worker's end of the uplink.
-Flows: [device selection](../../docs/internal/flows/device-selection.md), [device.exec](../../docs/internal/flows/device-exec.md), [leasing](../leasing/AGENTS.md).
+Flows: [device selection](../../docs/internal/flows/device-selection.md), [device.exec](../../docs/internal/flows/device-exec.md), [worker update](../../docs/internal/flows/worker-update.md), [leasing](../leasing/AGENTS.md).
 
 ## Files
 
@@ -52,12 +52,10 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch →
    view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
-5. Refresh: an `incompatible` worker is asked `daemon.update {query}` only (its `update`, `lastUpdateFailure` and
-   `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus
-   `catalog.get` and `config.get` on the tick, after `component.installed`, or with no catalog yet.
-   One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
+5. Refresh: an `incompatible` worker is asked `daemon.update {query}` only (its `update`, `lastUpdateFailure`,
+   `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus `catalog.get` and `config.get` on the tick, after `component.installed`, or with no catalog yet. One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
 6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*`
-   trigger a refresh, and so do `daemon.update-started` and `daemon.update-failed`. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped.
+   and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped.
 
 **Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's
 `assess` and nine stages are in [routing](routing/AGENTS.md)):
@@ -100,12 +98,6 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
    the body (a live body runs while bytes come), both on the Clock → `WORKER_UNREACHABLE`, `relay.cancel`.
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
-
-**Updates.** `worker.update` sends `daemon.update` over that worker's uplink, bounded at 90 s (`WORKER_NOT_CONNECTED` at the limit), then
-refreshes the view. An unknown id → `UNKNOWN_WORKER`; a disconnected one → `WORKER_NOT_CONNECTED`. An `incompatible` worker gets the same frozen call.
-A view with `update` set is skipped by routing (`updating`; the request waits, it does not end `NO_CAPACITY`). The update and the drain set are separate:
-an update never calls `setDrained`, and `update: null` from the next status clears the view. `daemon.update` on the gateway itself goes through
-the `update` option (`../daemon/update-coordinator.ts`): no lease wait, straight to installing.
 
 **Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) answer from
 views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`,
