@@ -4341,7 +4341,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
       await runCli(["worker", "list"], environment);
 
-      expect(output.stdout, expected).toContain(expected);
+      expect(output.stdout.trimEnd().slice(-expected.length)).toBe(expected);
       if (!expected.includes("available")) expect(output.stdout).not.toContain("available");
       if (update === null) expect(output.stdout).not.toContain("updating");
     }
@@ -8482,6 +8482,7 @@ describe("simlock list --requests", () => {
       ["incompatible", "ios", undefined, "protocol mismatch"],
       ["not-ready", "ios", undefined, "not ready yet"],
       ["unhealthy", "ios", undefined, "not running"],
+      ["updating", "ios", undefined, "updating"],
       ["drained", "ios", undefined, "drained"],
       ["busy", "ios", undefined, "busy with its own queue"],
       ["no-driver", "ios", undefined, "no iOS support"],
@@ -9976,11 +9977,12 @@ describe("simlock worker update", () => {
           view({ update: { ...run, leases: 2, stage: "waiting" } }),
           view({ update: { ...run, stage: "installing" } }),
           view({ connection: "disconnected", update: { ...run, stage: "restarting" } }),
+          view({ update: { ...run, stage: "restarting" }, version: "0.4.0" }),
           view({ update: null, version: "0.4.0" }),
         ],
         code: 0,
         stdout: "mac-studio-2 (3f81a2c4) is running 0.4.0\n",
-        polls: 4,
+        polls: 5,
       },
       {
         name: "fails with the stage and message",
@@ -10043,7 +10045,12 @@ describe("simlock worker update", () => {
               return spec.answer;
             },
           }),
-        sleep: async (milliseconds) => clock.advance(milliseconds),
+        // why: a follow that never reaches an outcome fails on this line, not by timing out.
+        sleep: async (milliseconds) => {
+          if (polls > (spec.lists ?? []).length + 2)
+            throw new Error(`${spec.name}: the follow never ended`);
+          clock.advance(milliseconds);
+        },
       });
 
       const code = await runCli(spec.argv, environment);

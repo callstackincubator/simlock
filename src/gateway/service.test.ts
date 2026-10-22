@@ -1255,12 +1255,25 @@ describe("GatewayService", () => {
       startedAt: 1_000,
       to: "0.4.0",
     } as const;
-    worker.updateAnswer = { ...worker.updateAnswer, latestVersion: "0.4.0", update };
+    const lastUpdateFailure = {
+      at: 500,
+      from: "0.1.0",
+      message: "npm failed",
+      stage: "installing",
+      to: "0.2.0",
+    } as const;
+    worker.updateAnswer = {
+      ...worker.updateAnswer,
+      lastUpdateFailure,
+      latestVersion: "0.4.0",
+      update,
+    };
 
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
       expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        lastUpdateFailure,
         latestVersion: "0.4.0",
         update,
       }),
@@ -1272,6 +1285,46 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(worker.updateInputs).toHaveLength(2));
     expect(harness.service.workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
 
+    await harness.service.stop();
+  });
+
+  it("does not let a replaced incompatible link's late update query overwrite its successor's view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const stale = new ScriptedWorkerClient();
+    stale.failWith = protocolMismatchError({ min: 5, max: 5 });
+    await harness.join("wrk_1", stale);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    let answerQuery: (() => void) | undefined;
+    stale.updateDaemon = () =>
+      new Promise((resolve) => {
+        answerQuery = () =>
+          resolve({
+            ...stale.updateAnswer,
+            update: {
+              forced: false,
+              from: "0.2.0",
+              stage: "installing",
+              startedAt: 1,
+              to: "0.4.0",
+            },
+          });
+      });
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(answerQuery).toBeDefined());
+
+    await harness.join("wrk_1", new ScriptedWorkerClient("admin", "9.9.9"));
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+    answerQuery?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      connection: "connected",
+      update: null,
+      version: "9.9.9",
+    });
     await harness.service.stop();
   });
 

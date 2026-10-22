@@ -109,7 +109,7 @@ function updateEnds(answer: Awaited<ReturnType<SimlockAdminClient["updateWorker"
   readonly to: string;
 } {
   return {
-    from: answer.update?.from ?? answer.version,
+    from: answer.version,
     to: answer.update?.to ?? answer.resolved ?? "",
   };
 }

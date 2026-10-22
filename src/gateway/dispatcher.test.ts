@@ -156,6 +156,7 @@ const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] }
  * for the fuller doc comment; this file only ever needs one worker at a time. */
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();
+  readonly refreshCalls: string[] = [];
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -164,7 +165,12 @@ class FakeDirectory implements WorkerDirectory {
   target(workerId: string): WorkerDispatchTarget | undefined {
     const client = this.clients.get(workerId);
     if (client === undefined) return undefined;
-    return { client: () => client.asClient(), reachable: true, refresh: async () => {}, workerId };
+    return {
+      client: () => client.asClient(),
+      reachable: true,
+      refresh: async () => void this.refreshCalls.push(workerId),
+      workerId,
+    };
   }
 }
 
@@ -663,6 +669,7 @@ describe("GatewayDispatcher", () => {
     expect(client.updateInputs).toEqual([{ version: "0.4.0" }]);
     expect(answer).toMatchObject({ started: true, update, workerId: "wrk_1" });
     expect(workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
+    expect(directory.refreshCalls).toEqual(["wrk_1"]);
 
     workers.connected("wrk_2", "mac-mini-2", "0.3.0");
     workers.disconnected("wrk_2");

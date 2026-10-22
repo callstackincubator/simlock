@@ -4849,6 +4849,22 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
         build: () => fleet(["wrk_a", "wrk_b"], (id) => (id === "wrk_b" ? { queueDepth: 1 } : {})),
         row: "busy with a queue of its own",
       },
+      {
+        build: () => {
+          const built = fleet(["wrk_a", "wrk_b"]);
+          built.workers.refresh("wrk_b", {
+            update: {
+              forced: false,
+              from: "0.3.0",
+              stage: "installing",
+              startedAt: 1,
+              to: "0.4.0",
+            },
+          });
+          return built;
+        },
+        row: "updating",
+      },
     ])("leaves the request queued when the other worker is $row", async ({ build }) => {
       const { clients, coordinator } = build();
       clients["wrk_a"]?.requestLeaseQueue.push(provisionFailed("worker a: boom"));

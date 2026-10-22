@@ -253,6 +253,7 @@ describe("the waiting table on a gateway", () => {
     ["incompatible", undefined, "Protocol mismatch"],
     ["not-ready", undefined, "Not ready yet"],
     ["unhealthy", undefined, "Not running"],
+    ["updating", undefined, "Updating"],
     ["drained", undefined, "Drained"],
     ["busy", undefined, "Busy with its own queue"],
     ["no-driver", undefined, "No iOS support"],

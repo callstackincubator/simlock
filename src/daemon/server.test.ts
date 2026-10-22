@@ -2154,7 +2154,7 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     dispose.mockRestore();
   });
 
-  it("answers worker.install-component with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on", async () => {
+  it("answers worker.install-component and worker.update with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on or update", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
     const client = await createClient(harness.socketPath);
     await hello(client);
@@ -2170,6 +2170,10 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
         code: "UNSUPPORTED_IN_WORKER_MODE",
         details: { operation: "worker.install-component" },
       },
+      ok: false,
+    });
+    await expect(client.request("worker.update", { workerId: "wrk_1" })).resolves.toMatchObject({
+      error: { code: "UNSUPPORTED_IN_WORKER_MODE", details: { operation: "worker.update" } },
       ok: false,
     });
     await client.close();
