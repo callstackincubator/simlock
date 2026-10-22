@@ -473,6 +473,11 @@ interface DaemonStopResult {
   readonly stopError?: unknown;
 }
 
+interface PidDiscoveryResult {
+  readonly error?: unknown;
+  readonly pids: number[];
+}
+
 async function teardown(state: TeardownState): Promise<void> {
   const { backgroundProcesses, env, gatewayFlag, home, mcpClients, realDrivers, socketPath } =
     state;
@@ -515,42 +520,57 @@ async function stopDaemonForTeardown(
   // we can verify those specific pids actually exit -- checking only "is the
   // socket file still there" after `daemon stop` would miss a process that
   // unlinked its socket on the way out but never actually terminated.
-  let pidsBeforeStop: number[] = [];
-  let stopError: unknown;
-  let pidDiscoveryFailed = false;
+  const discovery = await discoverDaemonPids(socketPath);
+  const stopError = await requestDaemonStop(socketPath, env, gatewayFlag, discovery);
+  const socketError = await waitForDaemonSocketRemoval(socketPath, discovery);
+  return {
+    pidDiscoveryFailed: discovery.error !== undefined,
+    pidsBeforeStop: discovery.pids,
+    stopError: discovery.error ?? stopError ?? socketError,
+  };
+}
+
+async function discoverDaemonPids(socketPath: string): Promise<PidDiscoveryResult> {
   try {
-    pidsBeforeStop = await pidsHoldingSocket(socketPath);
+    return { pids: await pidsHoldingSocket(socketPath) };
   } catch (error: unknown) {
-    pidDiscoveryFailed = true;
-    stopError = error;
+    return { error, pids: [] };
   }
-  // why: attempt graceful shutdown even if lsof could not identify the process.
-  if (existsSync(socketPath) && (pidsBeforeStop.length > 0 || pidDiscoveryFailed)) {
-    try {
-      const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
-      if (stopped.code !== 0) {
-        stopError ??= new Error(
-          `daemon stop failed before teardown of ${socketPath}: ${stopped.stderr}`,
-        );
-      }
-    } catch (error: unknown) {
-      stopError ??= error;
-    }
+}
+
+async function requestDaemonStop(
+  socketPath: string,
+  env: NodeJS.ProcessEnv,
+  gatewayFlag: readonly string[],
+  discovery: PidDiscoveryResult,
+): Promise<unknown> {
+  if (!existsSync(socketPath) || (discovery.pids.length === 0 && discovery.error === undefined)) {
+    return undefined;
   }
-  if (pidsBeforeStop.length > 0 || (pidDiscoveryFailed && existsSync(socketPath))) {
-    try {
-      await waitFor(() => !existsSync(socketPath), {
-        timeout: 5_000,
-        label: "daemon socket removed during teardown",
-      });
-    } catch (error: unknown) {
-      stopError ??= error;
-    }
+  try {
+    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+    return stopped.code === 0
+      ? undefined
+      : new Error(`daemon stop failed before teardown of ${socketPath}: ${stopped.stderr}`);
+  } catch (error: unknown) {
+    return error;
   }
-  if (pidDiscoveryFailed) {
-    stopError ??= new Error(`could not verify daemon process ownership for ${socketPath}`);
+}
+
+async function waitForDaemonSocketRemoval(
+  socketPath: string,
+  discovery: PidDiscoveryResult,
+): Promise<unknown> {
+  if (discovery.pids.length === 0 && discovery.error === undefined) return undefined;
+  try {
+    await waitFor(() => !existsSync(socketPath), {
+      timeout: 5_000,
+      label: "daemon socket removed during teardown",
+    });
+    return undefined;
+  } catch (error: unknown) {
+    return error;
   }
-  return { pidDiscoveryFailed, pidsBeforeStop, stopError };
 }
 
 async function killAndVerifyDaemonPids(
@@ -650,7 +670,7 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
       .filter((pid) => Number.isInteger(pid));
   } catch (error: unknown) {
     const failure = error as NodeJS.ErrnoException & { stderr?: string };
-    if ((failure.code === 1 || failure.code === "1") && !failure.stderr?.trim()) return [];
+    if (failure.code === "1" && !failure.stderr?.trim()) return [];
     throw error;
   }
 }

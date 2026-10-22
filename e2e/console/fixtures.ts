@@ -79,7 +79,7 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
     execFile("lsof", ["-t", socketPath], (error, stdout) => {
       if (error) {
         const failure = error as NodeJS.ErrnoException & { stderr?: string };
-        if ((failure.code !== 1 && failure.code !== "1") || failure.stderr?.trim()) {
+        if (failure.code !== "1" || failure.stderr?.trim()) {
           reject(error);
           return;
         }
@@ -94,6 +94,55 @@ async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
       );
     });
   });
+}
+
+async function discoverDaemonPids(
+  socketPath: string,
+): Promise<{ error?: unknown; pids: number[] }> {
+  try {
+    return { pids: await pidsHoldingSocket(socketPath) };
+  } catch (error: unknown) {
+    return { error, pids: [] };
+  }
+}
+
+async function requestDaemonStop(
+  socketPath: string,
+  gatewayFlag: readonly string[],
+  env: NodeJS.ProcessEnv,
+  daemonStarted: boolean,
+  discovery: { readonly error?: unknown; readonly pids: readonly number[] },
+): Promise<unknown> {
+  if (!existsSync(socketPath)) return undefined;
+  if (discovery.pids.length === 0 && discovery.error === undefined) return undefined;
+  try {
+    const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
+    if (daemonStarted && stopped.code !== 0)
+      return new Error(`daemon stop failed: ${stopped.stderr}`);
+  } catch (error: unknown) {
+    return error;
+  }
+  try {
+    await waitFor(() => !existsSync(socketPath), {
+      timeout: 10_000,
+      label: "daemon socket removed",
+    });
+  } catch (error: unknown) {
+    return error;
+  }
+  return undefined;
+}
+
+async function captureCleanupError(
+  current: unknown,
+  action: () => Promise<unknown>,
+): Promise<unknown> {
+  try {
+    await action();
+    return current;
+  } catch (error: unknown) {
+    return current ?? error;
+  }
 }
 
 async function waitForDaemonPidsToExit(pids: ReadonlySet<number>): Promise<void> {
@@ -207,43 +256,21 @@ export async function startDaemon(
   let daemonPidDiscoveryFailed = false;
   const stop = async () => {
     if (!daemonMayBeRunning) return;
-    let pids: number[] = [];
-    let discoveryError: unknown;
-    try {
-      pids = await pidsHoldingSocket(socketPath);
-    } catch (error: unknown) {
-      daemonPidDiscoveryFailed = true;
-      discoveryError = error;
-    }
-    for (const pid of pids) daemonPids.add(pid);
-    if (pids.length === 0 && discoveryError === undefined) {
-      daemonMayBeRunning = false;
-      return;
-    }
-    let stopError: unknown;
-    if (existsSync(socketPath)) {
-      try {
-        const stopped = await cli([...gatewayFlag, "daemon", "stop"], env);
-        if (daemonStarted && stopped.code !== 0) {
-          stopError = new Error(`daemon stop failed: ${stopped.stderr}`);
-        }
-      } catch (error: unknown) {
-        stopError = error;
-      }
-      try {
-        await waitFor(() => !existsSync(socketPath), {
-          timeout: 10_000,
-          label: "daemon socket removed",
-        });
-      } catch (error: unknown) {
-        stopError ??= error;
-      }
-    }
+    const discovery = await discoverDaemonPids(socketPath);
+    for (const pid of discovery.pids) daemonPids.add(pid);
+    daemonPidDiscoveryFailed ||= discovery.error !== undefined;
+    const stopError = await requestDaemonStop(
+      socketPath,
+      gatewayFlag,
+      env,
+      daemonStarted,
+      discovery,
+    );
     if (!existsSync(socketPath)) {
       daemonStarted = false;
       daemonMayBeRunning = false;
     }
-    if (discoveryError !== undefined) throw discoveryError;
+    if (discovery.error !== undefined) throw discovery.error;
     if (stopError !== undefined) throw stopError;
   };
   const start = async () => {
@@ -282,16 +309,10 @@ export async function startDaemon(
     const preserved = new Set(options.preservePages ?? []);
     let cleanupError = await closeActivePages(preserved);
     for (const handle of background) handle.kill("SIGTERM");
-    try {
-      await Promise.all([...background].map((handle) => handle.waitForExit(10_000)));
-    } catch (error: unknown) {
-      cleanupError ??= error;
-    }
-    try {
-      await stop();
-    } catch (error: unknown) {
-      cleanupError ??= error;
-    }
+    cleanupError = await captureCleanupError(cleanupError, () =>
+      Promise.all([...background].map((handle) => handle.waitForExit(10_000))),
+    );
+    cleanupError = await captureCleanupError(cleanupError, stop);
     await waitForDaemonPidsToExit(daemonPids);
     if (daemonPidDiscoveryFailed) {
       throw cleanupError ?? new Error(`cannot verify daemon exit for ${socketPath}`);
