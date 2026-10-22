@@ -14,7 +14,7 @@ export { createDaemonProbe } from "./probe.js";
 
 export interface DaemonProbe {
   stop(): Promise<void>;
-  answers(): Promise<boolean>;
+  listening(): Promise<boolean>;
   state(): Promise<{ readonly health: string; readonly version: string } | undefined>;
 }
 
@@ -53,9 +53,13 @@ function sleep(clock: Clock, milliseconds: number): Promise<void> {
   });
 }
 
-async function waitUntilStopped({ clock, probe }: RunUpdaterOptions): Promise<boolean> {
+// why: a daemon that accepted daemon.stop still holds the socket and databases while it settles, so "stopped" is a refused connection (and, for the old daemon, an exited pid), never a failed handshake.
+async function waitUntilStopped(
+  { clock, probe, supervisor }: RunUpdaterOptions,
+  pid?: number,
+): Promise<boolean> {
   const deadline = clock.now() + STOP_LIMIT_MS;
-  while (await probe.answers()) {
+  while ((await probe.listening()) || (pid !== undefined && supervisor.isAlive(pid))) {
     if (clock.now() >= deadline) return false;
     await sleep(clock, POLL_MS);
   }
@@ -80,7 +84,7 @@ function boundProbe(clock: Clock, probe: DaemonProbe): DaemonProbe {
     stop: async () => {
       await within(clock, CALL_LIMIT_MS, probe.stop());
     },
-    answers: async () => (await within(clock, CALL_LIMIT_MS, probe.answers())) ?? false,
+    listening: async () => (await within(clock, CALL_LIMIT_MS, probe.listening())) ?? true,
     state: () => within(clock, CALL_LIMIT_MS, probe.state()),
   };
 }
@@ -100,7 +104,7 @@ export async function runUpdater(given: RunUpdaterOptions): Promise<number> {
   }
   writeLine(options, { stage: "restarting" });
   await probe.stop();
-  if (!(await waitUntilStopped(options))) {
+  if (!(await waitUntilStopped(options, options.pid))) {
     options.supervisor.signal(options.pid, "SIGKILL");
   }
   await backupDatabases(options);
@@ -132,7 +136,7 @@ export async function runUpdater(given: RunUpdaterOptions): Promise<number> {
       await restoreDatabases(options);
       rollbackFailure = await startDaemon({ ...options, to: options.from });
     } else {
-      rollbackFailure = "a daemon still answers, so the database copy was not restored";
+      rollbackFailure = "a daemon still holds the socket, so the database copy was not restored";
     }
   } else {
     rollbackFailure = reinstalled.message;
@@ -147,7 +151,7 @@ export async function runUpdater(given: RunUpdaterOptions): Promise<number> {
 
 // why: under a service manager the service may have restarted a daemon by now; its live databases must not be overwritten.
 async function stopAnsweringDaemon(options: RunUpdaterOptions): Promise<boolean> {
-  if (!(await options.probe.answers())) return true;
+  if (!(await options.probe.listening())) return true;
   await options.probe.stop();
   return waitUntilStopped(options);
 }

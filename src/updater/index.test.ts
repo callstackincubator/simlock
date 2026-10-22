@@ -42,9 +42,10 @@ class StopRecordingNpm extends FakeNpmCli {
 
 class FakeProbe implements DaemonProbe {
   stops = 0;
-  oldDaemonAnswers = true;
+  oldDaemonListening = true;
   newDaemon: { health: string; version: string } | "hangs" | undefined;
   onStop: (() => Promise<void>) | undefined;
+  drain: (() => void) | undefined;
 
   constructor(
     private readonly staysUp = false,
@@ -54,12 +55,13 @@ class FakeProbe implements DaemonProbe {
   async stop(): Promise<void> {
     this.stops += 1;
     await this.onStop?.();
-    if (!this.staysUp) this.oldDaemonAnswers = false;
+    if (!this.staysUp) this.drain?.();
     if (this.stopNeverReturns) await new Promise(() => undefined);
   }
 
-  async answers(): Promise<boolean> {
-    return this.oldDaemonAnswers;
+  // why: models a real stopping daemon: it holds the socket (accepting, then closing, connections) until it exits, and never completes a handshake again.
+  async listening(): Promise<boolean> {
+    return this.oldDaemonListening;
   }
 
   async state(): Promise<{ health: string; version: string } | undefined> {
@@ -80,6 +82,7 @@ interface Scenario {
   readonly install?: readonly NpmOutcome[];
   readonly oldDaemonStaysUp?: boolean;
   readonly daemonStopNeverReturns?: boolean;
+  readonly oldDaemonDrainsMs?: number;
   readonly serviceRestartsDaemonDuringRollbackInstall?: boolean;
   readonly starts?: readonly StartSpec[];
   readonly expected: {
@@ -93,6 +96,7 @@ interface Scenario {
     readonly waitedAtMostMs?: number;
     readonly stderr?: readonly string[];
     readonly stopsBeforeEachInstall?: readonly number[];
+    readonly oldDaemonGoneAtEveryStart?: boolean;
     readonly database?: {
       readonly copiedBeforeStart: string;
       readonly restoredBeforeRollbackStart?: string;
@@ -308,6 +312,21 @@ const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    name: "old daemon accepted daemon.stop and is still settling",
+    oldDaemonDrainsMs: 90_000,
+    expected: {
+      stdout: ['{"stage":"installing"}', '{"stage":"restarting"}'],
+      exit: 0,
+      installs: ["simlock@0.4.0"],
+      stops: 1,
+      startArgs: [started()],
+      signals: [],
+      waitedAtLeastMs: 90_000,
+      oldDaemonGoneAtEveryStart: true,
+      database: { copiedBeforeStart: "original", backupLeft: false },
+    },
+  },
+  {
     name: "new daemon ignores daemon.stop for 10 minutes",
     oldDaemonStaysUp: true,
     starts: [{ daemon: { health: "starting", version: "0.4.0" } }],
@@ -317,7 +336,7 @@ const SCENARIOS: readonly Scenario[] = [
       installs: ["simlock@0.4.0", "simlock@0.3.0"],
       stops: 3,
       stderr: [
-        "rollback to 0.3.0 failed: a daemon still answers, so the database copy was not restored",
+        "rollback to 0.3.0 failed: a daemon still holds the socket, so the database copy was not restored",
       ],
       startArgs: [started()],
       signals: [`${PID}:SIGKILL`],
@@ -486,6 +505,7 @@ describe("runUpdater", () => {
       install,
       oldDaemonStaysUp,
       daemonStopNeverReturns,
+      oldDaemonDrainsMs,
       serviceRestartsDaemonDuringRollbackInstall,
       starts = [],
       expected,
@@ -510,13 +530,23 @@ describe("runUpdater", () => {
       const npm = new StopRecordingNpm(install === undefined ? {} : { install });
       const probe = new FakeProbe(oldDaemonStaysUp, daemonStopNeverReturns);
       npm.probe = probe;
+      const supervisor = new FakeProcessSupervisor([PID]);
+      probe.drain = () => {
+        const exit = () => {
+          probe.oldDaemonListening = false;
+          supervisor.markDead(PID);
+        };
+        if (oldDaemonDrainsMs === undefined) exit();
+        else clock.setTimer(oldDaemonDrainsMs, exit);
+      };
+      const oldDaemonGoneAtStart: boolean[] = [];
       probe.onStop = async () => {
         liveAtStop.push(await filesystem.readFile(statePath));
       };
       npm.onInstall = async () => {
         liveAtInstall.push(await filesystem.readFile(statePath));
         if (serviceRestartsDaemonDuringRollbackInstall === true && liveAtInstall.length === 2) {
-          probe.oldDaemonAnswers = true;
+          probe.oldDaemonListening = true;
           probe.newDaemon = { health: "running", version: "0.3.0" };
         }
       };
@@ -526,6 +556,7 @@ describe("runUpdater", () => {
           result: { stdout: "", ...(starts[index]?.result ?? { code: 0, stderr: "" }) },
           ...(starts[index]?.hangs === true ? { hangs: true } : {}),
           onSpawn: () => {
+            oldDaemonGoneAtStart.push(!probe.oldDaemonListening && !supervisor.isAlive(PID));
             const spec = starts[index];
             probe.newDaemon =
               spec === undefined
@@ -552,7 +583,6 @@ describe("runUpdater", () => {
           },
         })),
       );
-      const supervisor = new FakeProcessSupervisor([PID]);
       const lines: string[] = [];
       const errors: string[] = [];
 
@@ -585,6 +615,9 @@ describe("runUpdater", () => {
       expect(probe.stops).toBe(expected.stops);
       if (expected.stopsBeforeEachInstall !== undefined) {
         expect(npm.stopsBeforeInstall).toEqual(expected.stopsBeforeEachInstall);
+      }
+      if (expected.oldDaemonGoneAtEveryStart === true) {
+        expect(oldDaemonGoneAtStart).toEqual([true]);
       }
       expect(processes.calls.map((call) => call.args)).toEqual(expected.startArgs);
       expect(supervisor.signals.map((sent) => `${sent.pid}:${sent.signal}`)).toEqual(
@@ -622,16 +655,35 @@ describe("runUpdater", () => {
 });
 
 describe("createDaemonProbe", () => {
-  it("counts a daemon as answering only when a connection completes: a socket file with nothing behind it is not an answer", async () => {
-    const dataDirectory = "/home/.simlock";
+  const dataDirectory = "/home/.simlock";
+  const endpoint = resolveDaemonSocketPath(dataDirectory);
+  const setup = async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp(dataDirectory);
     await filesystem.writeFileAtomic(`${dataDirectory}/admin.token`, "token\n");
-    await filesystem.writeFileAtomic(resolveDaemonSocketPath(dataDirectory), "");
-    const probe = createDaemonProbe({ dataDirectory, filesystem, ipc: new MemoryIpcTransport() });
+    await filesystem.writeFileAtomic(endpoint, "");
+    const ipc = new MemoryIpcTransport();
+    return { ipc, probe: createDaemonProbe({ dataDirectory, filesystem, ipc }) };
+  };
 
-    expect(await probe.answers()).toBe(false);
+  it("a socket file with nothing behind it is not listening and does not answer", async () => {
+    const { probe } = await setup();
+
+    expect(await probe.listening()).toBe(false);
     expect(await probe.state()).toBeUndefined();
+  });
+
+  it("a stopping daemon that accepts and closes connections is still listening, though it no longer answers", async () => {
+    const { ipc, probe } = await setup();
+    const listener = await ipc.listen(endpoint, (connection) => {
+      void connection.close();
+    });
+
+    expect(await probe.listening()).toBe(true);
+    expect(await probe.state()).toBeUndefined();
+
+    await listener.close();
+    expect(await probe.listening()).toBe(false);
   });
 });
 

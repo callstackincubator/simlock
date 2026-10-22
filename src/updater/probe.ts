@@ -1,6 +1,7 @@
 import { connectSimlockAdmin } from "../admin/index.js";
 import {
   NodeIpcTransport,
+  IpcError,
   resolveDaemonSocketPath,
   type Filesystem,
   type IpcConnector,
@@ -37,13 +38,14 @@ export function createDaemonProbe(options: DaemonProbeOptions): DaemonProbe {
       use(async (client) => {
         await client.stopDaemon();
       }),
-    // why: a socket file outlives its daemon, so only a connection that completes the handshake counts as an answer.
-    answers: async () => {
+    // why: a socket file outlives its daemon and a stopping daemon accepts then closes connections, so only a refused or missing endpoint proves no daemon holds it; any other failure cannot prove it.
+    listening: async () => {
       try {
-        await use(async () => undefined);
+        await (await ipc.connect(endpoint)).close();
         return true;
-      } catch {
-        return false;
+      } catch (error: unknown) {
+        if (!(error instanceof IpcError)) return true;
+        return error.code !== "connection-refused" && error.code !== "endpoint-not-found";
       }
     },
     state: async () => {
