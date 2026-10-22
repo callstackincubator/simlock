@@ -62,6 +62,8 @@ describe("the daemon's version facts", () => {
       path === "/v1/status"
         ? ((statusReads += 1), status())
         : Promise.resolve({ body: { workers: [] } as unknown, date: null });
+    // why: a stream that never opens cannot reconnect, so only the 10-minute timer re-reads.
+    daemon.holdStreams = true;
     const store = watchMode({ api: daemon, clock: fakeClock, connection });
     await settle();
     expect(store.daemon()).toEqual({ latestVersion: null, version: "0.3.0" });
