@@ -367,11 +367,7 @@ export class WorkerLink {
     try {
       const answer = await this.#withTimeout(client.updateDaemon({ query: true }), "daemon.update");
       if (this.#superseded()) return;
-      this.options.registry.refresh(this.workerId, {
-        lastUpdateFailure: answer.lastUpdateFailure,
-        latestVersion: answer.latestVersion,
-        update: answer.update,
-      });
+      this.options.registry.refreshUpdate(this.workerId, answer);
     } catch (error: unknown) {
       this.#logger.debug("Incompatible worker's update query failed", {
         workerId: this.workerId,

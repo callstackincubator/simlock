@@ -443,11 +443,7 @@ export class GatewayDispatcher {
     }
     const { workerId, ...request } = input;
     const answer = await this.#withinUplinkBound(client.updateDaemon(request), workerId);
-    this.options.workers.refresh(workerId, {
-      lastUpdateFailure: answer.lastUpdateFailure,
-      latestVersion: answer.latestVersion,
-      update: answer.update,
-    });
+    this.options.workers.refreshUpdate(workerId, answer);
     await target.refresh();
     return { ...answer, workerId };
   };

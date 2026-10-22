@@ -384,6 +384,18 @@ export class WorkerRegistry {
     this.#notifyViewsChanged();
   }
 
+  // why: both the operator's `worker.update` and an incompatible worker's query read these three fields from a `daemon.update` answer.
+  refreshUpdate(
+    workerId: string,
+    answer: Pick<WorkerView, "lastUpdateFailure" | "latestVersion" | "update">,
+  ): void {
+    this.refresh(workerId, {
+      lastUpdateFailure: answer.lastUpdateFailure,
+      latestVersion: answer.latestVersion,
+      update: answer.update,
+    });
+  }
+
   /**
    * ADR 0005 §15: the gateway's own `lease.maxTtlMs` decides a fleet lease's width at
    * admission, before any worker is chosen -- but what the gateway dispatches is an ordinary
