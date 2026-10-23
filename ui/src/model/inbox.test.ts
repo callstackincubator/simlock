@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { filterInboxRows, inboxItems, inboxPageOf } from "./inbox";
+import { inboxItems } from "../../../src/contract/inbox";
+import { filterInboxRows, inboxPageOf } from "./inbox";
 import type { ConsoleEvent } from "./events";
 import { filterLeaseRows, type LeaseRecord, leaseRows, type TokenRecord } from "./leases";
 import type { WaitingRequest } from "./waiting";
@@ -56,14 +57,29 @@ function event(seq: number, name: string, at: number, payload: unknown = {}): Co
   return { event: name, id: `e${seq}`, payload, seq, timestamp: at };
 }
 
-function summary(workers: readonly WorkerView[]): string[] {
-  return inboxItems(workers).map((item) =>
-    [
-      "worker" in item ? item.worker.id : "-",
-      "device" in item ? item.device.id : "-",
-      item.condition,
-    ].join(" "),
-  );
+// why: the items are the daemon's; the contract's own rules build them here, so a page is checked
+// against what `inbox.get` would send for the same fleet.
+function pageWith(input: {
+  readonly workers: readonly WorkerView[];
+  readonly events?: readonly ConsoleEvent[];
+  readonly key?: string | undefined;
+  readonly requests?: readonly WaitingRequest[];
+  readonly leases?: readonly LeaseRecord[];
+  readonly tokens?: readonly TokenRecord[];
+}) {
+  const { workers } = input;
+  return inboxPageOf({
+    events: input.events ?? [],
+    items: inboxItems(workers, {
+      leases: input.leases,
+      now: NOW,
+      requests: input.requests,
+      tokens: input.tokens,
+    }),
+    key: input.key,
+    now: NOW,
+    workers,
+  });
 }
 
 function pageOf(
@@ -71,7 +87,7 @@ function pageOf(
   key?: string,
   events: readonly ConsoleEvent[] = [],
 ) {
-  return inboxPageOf({ events, key, now: NOW, workers });
+  return pageWith({ events, key, workers });
 }
 
 function shownOf(page: ReturnType<typeof pageOf>) {
@@ -82,100 +98,6 @@ function shownOf(page: ReturnType<typeof pageOf>) {
 function factsOf(w: WorkerView, key: string) {
   return shownOf(pageOf([w], key)).facts;
 }
-
-describe("the Inbox items", () => {
-  it("hold a disconnected, an incompatible and a drained worker, one item per condition", () => {
-    const workers = [
-      worker({ id: "wrk_ok" }),
-      worker({ connection: "disconnected", id: "wrk_gone" }),
-      worker({ connection: "incompatible", id: "wrk_old" }),
-      worker({ drained: true, id: "wrk_drained" }),
-      worker({ connection: "disconnected", drained: true, id: "wrk_both" }),
-    ];
-
-    expect(summary(workers)).toEqual([
-      "wrk_gone - disconnected",
-      "wrk_old - incompatible",
-      "wrk_drained - drained",
-      "wrk_both - disconnected",
-      "wrk_both - drained",
-    ]);
-  });
-
-  it("hold a quarantined device and a stalled device, not one mid-transition", () => {
-    const workers = [
-      worker({
-        devices: [
-          device("dev_ready"),
-          device("dev_quarantined", { state: "quarantined" }),
-          device("dev_stuck", { stalled: true, state: "reclaiming", transitionAgeMs: 300_000 }),
-          device("dev_busy", { state: "provisioning", transitionAgeMs: 2_000 }),
-        ],
-      }),
-    ];
-
-    expect(summary(workers)).toEqual([
-      "wrk_1 dev_quarantined quarantined",
-      "wrk_1 dev_stuck stalled",
-    ]);
-  });
-
-  it("hold a quarantined physical device like any quarantined device", () => {
-    const physical: WorkerDevice = {
-      class: "phone",
-      id: "dev_phone",
-      physical: true,
-      servesDefaultMode: false,
-      spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
-      state: "quarantined",
-    };
-
-    expect(summary([worker({ devices: [physical] })])).toEqual(["wrk_1 dev_phone quarantined"]);
-  });
-
-  it("hold a worker over its RAM budget, not one under it or with no budget", () => {
-    const workers = [
-      worker({
-        capacity: capacity({ limitBytes: 12 * GIB, overLimit: true, usedBytes: 13 * GIB }),
-        id: "wrk_over",
-      }),
-      worker({
-        capacity: capacity({ limitBytes: 12 * GIB, overLimit: false, usedBytes: 4 * GIB }),
-        id: "wrk_under",
-      }),
-      worker({ capacity: capacity(), id: "wrk_none" }),
-      worker({ id: "wrk_unread" }),
-    ];
-
-    expect(summary(workers)).toEqual(["wrk_over - over RAM budget"]);
-  });
-
-  it("lose an item when its condition clears", () => {
-    const quarantined = device("dev_1", { state: "quarantined" });
-    const stalled = device("dev_2", { stalled: true, state: "provisioning" });
-    const ramBudget = { limitBytes: 12 * GIB, usedBytes: 13 * GIB };
-    const before = worker({
-      capacity: capacity({ ...ramBudget, overLimit: true }),
-      connection: "disconnected",
-      devices: [quarantined, stalled],
-      drained: true,
-    });
-    expect(inboxItems([before])).toHaveLength(5);
-
-    const cleared: [string, WorkerView][] = [
-      ["disconnected", { ...before, connection: "connected" }],
-      ["drained", { ...before, drained: false }],
-      ["over RAM budget", { ...before, capacity: capacity({ ...ramBudget, overLimit: false }) }],
-      ["quarantined", { ...before, devices: [{ ...quarantined, state: "ready" }, stalled] }],
-      ["stalled", { ...before, devices: [quarantined, device("dev_2", { state: "ready" })] }],
-    ];
-    for (const [condition, after] of cleared) {
-      const conditions = inboxItems([after]).map((item) => item.condition);
-      expect(conditions, condition).toHaveLength(4);
-      expect(conditions, condition).not.toContain(condition);
-    }
-  });
-});
 
 describe("the Inbox items of an absent phone", () => {
   it("hold an absent phone titled with its model and why, and not a phone in another state", () => {
@@ -227,10 +149,9 @@ describe("the Inbox items of a long wait", () => {
       stage: "queued",
     });
     const rowsAt = (waitedMs: number) =>
-      inboxPageOf({
+      pageWith({
         events: [],
         key: undefined,
-        now: NOW,
         requests: [waiting(waitedMs)],
         workers: [worker()],
       }).rows.map((row) => [row.key, row.word, row.tone, row.subject]);
@@ -240,9 +161,6 @@ describe("the Inbox items of a long wait", () => {
     expect(rowsAt(60_001)).toEqual([
       ["request/req_1/waiting", "waiting", "warn", "agent-b has waited 1 min"],
     ]);
-    expect(
-      inboxItems([worker()], { now: NOW, requests: [waiting(61_000)] }).map((item) => item.key),
-    ).toEqual(["request/req_1/waiting"]);
   });
 });
 
@@ -273,7 +191,7 @@ describe("the Inbox items of a lease about to end", () => {
       { ...lease("lse_lost", 10_000), deviceId: "dev_gone" },
     ];
 
-    const page = inboxPageOf({ events: [], key: undefined, leases, now: NOW, tokens, workers });
+    const page = pageWith({ events: [], key: undefined, leases, tokens, workers });
 
     expect(page.rows.map((row) => [row.key, row.word, row.subject])).toEqual([
       ["lease/lse_past/ending", "ending", "ci-runner-3 · iPhone 16 ends now"],
@@ -317,7 +235,7 @@ describe("the drawer of a waiting request and of a lease about to end", () => {
     ];
     const workers = [worker({ devices: [device("dev_1")] })];
     const shown = (key: string) =>
-      shownOf(inboxPageOf({ events: [], key, leases, now: NOW, requests, workers }));
+      shownOf(pageWith({ events: [], key, leases, requests, workers }));
 
     const waiting = shown("request/req_1/waiting");
     const ending = shown("lease/wrk_1.lse_1/ending");
@@ -348,50 +266,6 @@ describe("the drawer of a waiting request and of a lease about to end", () => {
   });
 });
 
-describe("the order of the Inbox items", () => {
-  it("keeps the order given for problems, puts the longest wait first and the least time left first", () => {
-    const request = (id: string, waitedMs: number): WaitingRequest => ({
-      createdAt: NOW - waitedMs,
-      id,
-      queuePosition: 1,
-      requesterId: "agent-b",
-      spec: { model: "iPhone 16", platform: "ios" },
-      stage: "queued",
-    });
-    const lease = (id: string, leftMs: number): LeaseRecord => ({
-      deviceId: "dev_1",
-      grantedAt: NOW - 60_000,
-      id,
-      idChosenByRequester: false,
-      lastRenewedAt: NOW - 30_000,
-      ownerId: "tok_1",
-      requesterId: "tok_1",
-      ttlDeadline: NOW + leftMs,
-      ttlMs: 900_000,
-    });
-    const workers = [
-      worker({ drained: true, id: "wrk_z" }),
-      worker({ drained: true, id: "wrk_a", devices: [device("dev_2", { state: "quarantined" })] }),
-    ];
-
-    const keys = inboxItems(workers, {
-      leases: [lease("lse_b", 200_000), lease("lse_a", 100_000)],
-      now: NOW,
-      requests: [request("req_new", 70_000), request("req_old", 90_000)],
-    }).map((item) => item.key);
-
-    expect(keys).toEqual([
-      "wrk_z/drained",
-      "wrk_a/drained",
-      "wrk_a/dev_2/quarantined",
-      "request/req_old/waiting",
-      "request/req_new/waiting",
-      "lease/lse_a/ending",
-      "lease/lse_b/ending",
-    ]);
-  });
-});
-
 describe("the Inbox groups", () => {
   it("group the rows as Broken, Needs a look, Heads-up, and count problems without the heads-ups", () => {
     const workers = [
@@ -418,11 +292,10 @@ describe("the Inbox groups", () => {
       ttlMs: 900_000,
     };
 
-    const page = inboxPageOf({
+    const page = pageWith({
       events: [],
       key: undefined,
       leases: [lease, { ...lease, id: "lse_2", ttlDeadline: NOW + 200_000 }],
-      now: NOW,
       requests: [request],
       workers,
     });
@@ -673,6 +546,21 @@ describe("the Inbox page", () => {
     const page = pageOf([worker({ drained: true, id: "wrk/1", label: "mac-mini-1" })]);
 
     expect(shownOf(page).about).toEqual({
+      name: "mac-mini-1",
+      open: "Open worker",
+      to: "/fleet/wrk%2F1",
+    });
+    const ofDevice = pageOf(
+      [
+        worker({
+          devices: [device("dev_1", { state: "quarantined" })],
+          id: "wrk/1",
+          label: "mac-mini-1",
+        }),
+      ],
+      "wrk/1/dev_1/quarantined",
+    );
+    expect(shownOf(ofDevice).about).toEqual({
       name: "mac-mini-1",
       open: "Open worker",
       to: "/fleet/wrk%2F1",

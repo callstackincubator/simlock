@@ -35,6 +35,8 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
    falls back to `index.html`. An unbuilt console answers 404 and logs one warning.
 2. Log middleware — one `request` line per answer (method, path, status, `durationMs`,
    `requesterId`). Not for `/v1/healthz`.
+   Inside it, a JSON `200` to a `GET` gets an `ETag`, and a matching `If-None-Match` turns it
+   into `304` with no body. Streams and mounts are skipped, so their bodies are never read.
 3. `requireAuth` on every route but `GET /v1/healthz`. It asks `src/auth` with the request's
    headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
    Neither valid → 401 `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
@@ -88,6 +90,7 @@ agent-device front and the stream (`/v1/stream`).
   subscribes to the `EventBus` itself.
 - `GET /v1/events` — reads `since`, `before` and `limit` through `eventsPageQuery` (contract), refused as 400 before dispatching `events.replay`; `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503 here too.
 - `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).
+- `GET /v1/inbox` → `inbox.get` (admin): the items that need the operator, decided by the daemon (`src/contract/inbox.ts`); an agent token gets 403 from the dispatcher.
 - `POST /v1/update` (optional body `{version, force}`, strict) → `daemon.update`: 202 when the call began the update (`started`), 200 when it followed one or found nothing to do (`upToDate`). The route declares both (`alsoStatus`). The role check is the dispatcher's; on a gateway it updates the gateway itself, with no lease wait.
 - `POST /v1/workers/{id}/update` (optional body `{version, force}`, strict) → `worker.update`: the same 202 and 200; `UNKNOWN_WORKER` 404, `WORKER_NOT_CONNECTED` 409, and a worker daemon answers 501.
 - `GET /v1/leases/{id}/events` — the lease's notices; ends on `lease_lost`.
@@ -138,7 +141,8 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
   daemon restart, so a polling client loses the health facts it had not drained. It needs
   a durable record of why a lease ended first.
 - **Single-lease reads answer 404, not 403, for an unowned lease.** `GET /v1/leases/{id}`
-  and its `/events` filter `lease.list` (`findOwnedLease`); there is no `lease.get`.
+  and its `/events` dispatch `lease.get` (`findOwnedLease`), which answers `UNKNOWN_LEASE` for a
+  lease that is not there and for one the caller does not own alike.
   Renew and release dispatch directly and answer 403.
 - **Error codes outside the contract union.** `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`,
   `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so

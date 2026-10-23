@@ -1,4 +1,4 @@
-import type { Locator, Page, Route } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import {
@@ -12,6 +12,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { addInboxItems, endingItem, waitingItem } from "./inbox-stub.js";
 
 /** why: What `GET /v1/workers` says, as far as these tests read. */
 interface WorkerView {
@@ -208,33 +209,13 @@ test.describe("the Inbox view", () => {
     }
   });
 
-  test("a waiting request stubbed with a createdAt 61 s before the daemon's now shows under Needs a look, and one at 30 s does not", async ({
+  test("a waiting request item shows under Needs a look with its requester and the wait", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      // why: a request cannot wait a minute on a real daemon quickly, so the list is stubbed, each
-      // age counted from the daemon's own clock (its Date header).
-      await page.route(
-        (url) => url.pathname === "/v1/lease-requests",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          const request = (id: string, waitedMs: number) => ({
-            createdAt: now - waitedMs,
-            id,
-            platform: "ios",
-            queuePosition: 1,
-            requesterId: id,
-            spec: { platform: "ios" },
-            stage: "queued",
-          });
-          await route.fulfill({
-            json: { requests: [request("long-waiter", 61_000), request("short-waiter", 30_000)] },
-            response,
-          });
-        },
-      );
+      // why: a request cannot wait a minute on a real daemon quickly, so the item is stubbed.
+      await addInboxItems(page, () => [waitingItem("long-waiter", 61_000)]);
 
       await openInbox(page, host);
 
@@ -242,41 +223,18 @@ test.describe("the Inbox view", () => {
       await expect(
         needsALook.getByRole("link", { name: /long-waiter has waited 1 min/ }),
       ).toBeVisible();
-      await expect(page.getByRole("link", { name: /short-waiter/ })).toHaveCount(0);
     } finally {
       await host.dispose();
     }
   });
 
-  test("a lease stubbed with 4 minutes left shows under Heads-up, and one with 10 minutes does not", async ({
+  test("a lease item with 4 minutes left shows under Heads-up with its holder, device and time left", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      // why: a lease cannot be 4 minutes from its deadline on a real daemon quickly, so the list is
-      // stubbed, each deadline counted from the daemon's own clock (its Date header).
-      await page.route(
-        (url) => url.pathname === "/v1/leases",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          const lease = (id: string, leftMs: number) => ({
-            deviceId: "dev_stub",
-            grantedAt: now - 60_000,
-            id,
-            idChosenByRequester: false,
-            lastRenewedAt: now - 30_000,
-            ownerId: "tok_stub",
-            requesterId: "tok_stub",
-            ttlDeadline: now + leftMs,
-            ttlMs: 900_000,
-          });
-          await route.fulfill({
-            json: { leases: [lease("lease-soon", 4 * 60_000), lease("lease-later", 10 * 60_000)] },
-            response,
-          });
-        },
-      );
+      // why: a lease cannot be 4 minutes from its deadline on a real daemon quickly, so the item is stubbed.
+      await addInboxItems(page, () => [endingItem("lease-soon", 4 * 60_000)]);
 
       await openInbox(page, host);
 
@@ -293,32 +251,8 @@ test.describe("the Inbox view", () => {
   test("an Inbox item whose key holds a . reloads at its address", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      // why: a gateway's lease id holds a `.`, which a single host never makes, so the list is stubbed.
-      await page.route(
-        (url) => url.pathname === "/v1/leases",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          await route.fulfill({
-            json: {
-              leases: [
-                {
-                  deviceId: "dev_stub",
-                  grantedAt: now - 60_000,
-                  id: "wrk_a.lse_1",
-                  idChosenByRequester: false,
-                  lastRenewedAt: now - 30_000,
-                  ownerId: "tok_stub",
-                  requesterId: "tok_stub",
-                  ttlDeadline: now + 4 * 60_000,
-                  ttlMs: 900_000,
-                },
-              ],
-            },
-            response,
-          });
-        },
-      );
+      // why: a gateway's lease id holds a `.`, which a single host never makes, so the item is stubbed.
+      await addInboxItems(page, () => [endingItem("wrk_a.lse_1", 4 * 60_000)]);
       await openInbox(page, host);
 
       await page.getByRole("region", { name: "Heads-up" }).getByRole("link").click();
@@ -368,22 +302,22 @@ test.describe("the Inbox view", () => {
     }
   });
 
-  test("with /v1/lease-requests stubbed to fail, the Inbox says Could not check: waiting requests and not Nothing needs you", async ({
+  test("with /v1/inbox stubbed to fail, the Inbox shows the daemon's refusal and not Nothing needs you", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await page.route(
-        (url) => url.pathname === "/v1/lease-requests",
+        (url) => url.pathname === "/v1/inbox",
         (route) =>
           route.fulfill({
-            json: { error: { code: "INTERNAL", message: "The queue is down." } },
+            json: { error: { code: "INTERNAL", message: "The inbox is down." } },
             status: 500,
           }),
       );
       await openInbox(page, host);
 
-      await expect(page.getByText("Could not check: waiting requests")).toBeVisible();
+      await expect(page.getByText("The inbox is down.")).toBeVisible();
       await expect(page.getByText("Nothing needs you.")).toHaveCount(0);
     } finally {
       await host.dispose();
@@ -612,55 +546,13 @@ test.describe("the Inbox view", () => {
         (views) => views.filter((view) => view.connection === "incompatible").length === 2,
       );
       // why: a request that has waited two minutes is a problem item and counts; a lease about to end
-      // is a heads-up and does not. Neither can be had quickly from a real daemon, so both are stubbed,
-      // the waiting list by `waiters` so that it can empty.
+      // is a heads-up and does not. Neither can be had quickly from a real daemon, so both are stubbed
+      // into the daemon's items, the waiting one by `waiters` so that it can empty.
       let waiters = ["long-waiter"];
-      await page.route(
-        (url) => url.pathname === "/v1/lease-requests",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          await route.fulfill({
-            json: {
-              requests: waiters.map((id) => ({
-                createdAt: now - 125_000,
-                id,
-                platform: "ios",
-                queuePosition: 1,
-                requesterId: id,
-                spec: { platform: "ios" },
-                stage: "queued",
-              })),
-            },
-            response,
-          });
-        },
-      );
-      await page.route(
-        (url) => url.pathname === "/v1/leases",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          await route.fulfill({
-            json: {
-              leases: [
-                {
-                  deviceId: "dev_stub",
-                  grantedAt: now - 60_000,
-                  id: "lease-soon",
-                  idChosenByRequester: false,
-                  lastRenewedAt: now - 30_000,
-                  ownerId: "tok_stub",
-                  requesterId: "tok_stub",
-                  ttlDeadline: now + 60_000,
-                  ttlMs: 900_000,
-                },
-              ],
-            },
-            response,
-          });
-        },
-      );
+      await addInboxItems(page, () => [
+        ...waiters.map((id) => waitingItem(id, 125_000)),
+        endingItem("lease-soon", 60_000),
+      ]);
       await page.goto(gateway.url);
       await signIn(page, gateway.tokens.operator);
 

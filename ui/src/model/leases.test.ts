@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { holderOf } from "../../../src/contract/inbox";
 import {
   eventsOfLease,
   filterLeaseRows,
-  holderOf,
   type LeaseDetails,
   type LeaseRecord,
   leaseInspection,

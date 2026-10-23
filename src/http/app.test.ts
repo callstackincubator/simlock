@@ -96,6 +96,16 @@ function buildHarness(
     ),
   });
 
+  dispatcher.handlers["lease.get"] = (input: { leaseId: string }, session) => {
+    const lease = registry.leases.find(
+      (candidate) =>
+        candidate.id === input.leaseId &&
+        (session.role === "admin" || candidate.ownerId === session.principal),
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    return { lease };
+  };
+
   const app = createHttpApp({
     clock,
     config,
@@ -280,7 +290,36 @@ describe("authentication and role/ownership (via the shared dispatcher)", () => 
     expect(response.status).toBe(403);
   });
 
-  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.list's own filter now, not a separate check", async () => {
+  it.each([
+    ["GET /v1/leases/{id}", "/v1/leases/lse_1"],
+    ["GET /v1/leases/{id}/events", "/v1/leases/lse_1/events"],
+  ])(
+    "%s finds the lease with lease.get under the caller's session, and a lease.get that answers UNKNOWN_LEASE is a 404",
+    async (_route, path) => {
+      const { app, dispatcher, registry } = buildHarness();
+      registry.devices = [makeDevice({ id: "dev_1" })];
+      registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+
+      const found = await app.request(path, { headers: agentAuth });
+      expect(found.status).toBe(200);
+      expect(dispatcher.calls).toEqual([
+        expect.objectContaining({
+          input: { leaseId: "lse_1" },
+          operation: "lease.get",
+          session: expect.objectContaining({ principal: "tok_agent", role: "agent" }),
+        }),
+      ]);
+
+      registry.leases = [];
+      const missing = await app.request(path, { headers: agentAuth });
+      expect(missing.status).toBe(404);
+      expect(((await missing.json()) as { error: { code: string } }).error.code).toBe(
+        "UNKNOWN_LEASE",
+      );
+    },
+  );
+
+  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.get's own answer, not a separate check", async () => {
     const { app, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
     registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" })];
@@ -1363,14 +1402,12 @@ describe("lease routes", () => {
         snapshot: { devices: [device("wrk_a", "UDID-A"), device("wrk_b", "UDID-B")] },
       },
     });
-    dispatcher.handlers["lease.list"] = () => ({
-      leases: [
-        {
-          ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
-          worker: { id: "wrk_b", label: "mac-b" },
-          workerId: "wrk_b",
-        },
-      ],
+    dispatcher.handlers["lease.get"] = () => ({
+      lease: {
+        ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
+        worker: { id: "wrk_b", label: "mac-b" },
+        workerId: "wrk_b",
+      },
     });
 
     const response = await app.request("/v1/leases/wrk_b.lse_1", { headers: agentAuth });
@@ -1445,14 +1482,12 @@ describe("lease routes", () => {
         },
       },
     });
-    dispatcher.handlers["lease.list"] = () => ({
-      leases: [
-        {
-          ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
-          worker: { id: "wrk_a" },
-          workerId: "wrk_a",
-        },
-      ],
+    dispatcher.handlers["lease.get"] = () => ({
+      lease: {
+        ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
+        worker: { id: "wrk_a" },
+        workerId: "wrk_a",
+      },
     });
 
     const response = await app.request("/v1/leases/wrk_a.lse_p", { headers: agentAuth });
@@ -2753,6 +2788,32 @@ describe("worker routes", () => {
     expect(await response.json()).toMatchObject({ workers: [{ id: "wrk_1" }] });
   });
 
+  it("GET /v1/inbox dispatches inbox.get for the caller and answers its items", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    const item = {
+      condition: "disconnected",
+      group: "Broken",
+      key: "wrk_1/disconnected",
+      worker: {
+        connection: "disconnected",
+        drained: false,
+        heldLeases: 0,
+        id: "wrk_1",
+        lastSeenAt: 1,
+        leasedDevices: 0,
+      },
+    };
+    dispatcher.handlers["inbox.get"] = () => ({ items: [item] });
+
+    const response = await app.request("/v1/inbox", { headers: operatorAuth });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ items: [item] });
+    expect(dispatcher.calls.map((call) => [call.operation, call.session.role])).toEqual([
+      ["inbox.get", "admin"],
+    ]);
+  });
+
   it("maps drain, undrain and remove onto their operations, with the id from the path", async () => {
     const { app, dispatcher } = gatewayHarness();
     dispatcher.handlers["worker.drain"] = (input: never) => ({
@@ -3227,5 +3288,66 @@ describe("the stream mount's listed route", () => {
     );
     expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_LEASE" } });
     await found.body?.cancel();
+  });
+});
+
+describe("ETag on a JSON read under /v1", () => {
+  it("answers an unchanged JSON read with 304 and no body, and anything else with 200", async () => {
+    const tokens: { id: string }[] = [{ id: "tok_1" }];
+    const { app, dispatcher, eventBus } = buildHarness({
+      mounts: [
+        {
+          prefix: "json-mount",
+          handle: () => Response.json({ ok: true }),
+        },
+      ] as never,
+    });
+    dispatcher.handlers["token.list"] = () => ({ tokens: [...tokens] });
+    dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+      subscribed: true,
+      subscriptionId: session.manageEventSubscription(true),
+    });
+    const read = (path: string, headers: Record<string, string> = {}) =>
+      app.request(path, { headers: { ...operatorAuth, ...headers } });
+
+    const first = await read("/v1/tokens");
+    const tag = first.headers.get("etag");
+    expect(first.status).toBe(200);
+    expect(tag).toMatch(/^"[^"]+"$/);
+
+    const unchanged = await read("/v1/tokens", { "If-None-Match": tag ?? "" });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe("");
+    expect(unchanged.headers.get("etag")).toBe(tag);
+
+    const stale = await read("/v1/tokens", { "If-None-Match": '"stale"' });
+    expect(stale.status).toBe(200);
+    expect(stale.headers.get("etag")).toBe(tag);
+
+    tokens.push({ id: "tok_2" });
+    const changed = await read("/v1/tokens", { "If-None-Match": tag ?? "" });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("etag")).not.toBe(tag);
+
+    const missing = await read("/v1/leases/lse_none");
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("etag")).toBeNull();
+
+    const mount = await read("/v1/json-mount/x");
+    expect(mount.status).toBe(200);
+    expect(mount.headers.get("content-type")).toContain("application/json");
+    expect(mount.headers.get("etag")).toBeNull();
+
+    const streamOrStall = await Promise.race([
+      read("/v1/events/stream"),
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 500)),
+    ]);
+    if (streamOrStall === "stalled") expect.fail("the event stream was buffered, not answered");
+    const stream = streamOrStall;
+    expect(stream.headers.get("etag")).toBeNull();
+    const framesPromise = readSseFrames(stream, 1);
+    await Promise.resolve();
+    eventBus.emit("daemon.stopping", { reason: "live" }, "test");
+    expect((await framesPromise)[0]?.event).toBe("daemon.stopping");
   });
 });

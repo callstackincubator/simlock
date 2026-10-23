@@ -63,6 +63,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
+import { UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
@@ -634,7 +635,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { clock, dispatcher, driver } = await buildDispatcher();
     const catalogReads = vi.spyOn(driver, "listCatalog");
 
-    // A console polls every second; every poll up to the last millisecond of the interval
+    // why: calls arrive every second; every call up to the last millisecond of the interval
     // answers from the one read.
     await dispatcher.dispatch("worker.list", {}, admin);
     for (let elapsed = 1_000; elapsed < WORKER_VIEW_REFRESH_INTERVAL_MS; elapsed += 1_000) {
@@ -1166,6 +1167,7 @@ describe("Dispatcher: ownership", () => {
       session({ principal: "tok_owner", role: "agent" }),
     );
     expect(own.leases).toHaveLength(1);
+    expect(own.leases[0]).not.toHaveProperty("workerLeaseId");
 
     const otherAgent = await dispatcher.dispatch(
       "lease.list",
@@ -1176,6 +1178,33 @@ describe("Dispatcher: ownership", () => {
 
     const admin = await dispatcher.dispatch("lease.list", {}, session({ role: "admin" }));
     expect(admin.leases).toHaveLength(1);
+  });
+
+  it("lease.get: an agent reads its own lease, another agent's or an unknown id is UNKNOWN_LEASE, admin reads any", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const leaseId = await grantLease(dispatcher);
+    const owner = session({ principal: "tok_owner", role: "agent" });
+
+    const own = await dispatcher.dispatch("lease.get", { leaseId }, owner);
+    expect(own).toEqual({ lease: (await dispatcher.dispatch("lease.list", {}, owner)).leases[0] });
+    expect(own.lease).toMatchObject({ id: leaseId, ownerId: "tok_owner" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.get",
+        { leaseId },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toBeInstanceOf(UnknownLeaseError);
+    await expect(
+      dispatcher.dispatch("lease.get", { leaseId: "lse_nope" }, owner),
+    ).rejects.toBeInstanceOf(UnknownLeaseError);
+    await expect(
+      dispatcher.dispatch(
+        "lease.get",
+        { leaseId },
+        session({ principal: "tok_other", role: "admin" }),
+      ),
+    ).resolves.toMatchObject({ lease: { id: leaseId } });
   });
 
   it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
@@ -2290,6 +2319,38 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
 
   const requests = (dispatcher: Dispatcher) =>
     dispatcher.dispatch("list.get", { kind: "requests" }, session({ role: "admin" }));
+
+  it("inbox.get on a worker answers a lease about to end and a request that has waited over 60 s, naming a holder by its token's label, or by its id when the daemon has no token store", async () => {
+    const holders = async (withoutTokens: boolean) => {
+      const { clock, dispatcher, engine, tokens } = await buildDispatcher({ withoutTokens });
+      const { record } = await tokens.create("agent", "ci-bot");
+      await request(dispatcher, record.id, { ttlMs: 250_000 });
+      await request(dispatcher, "holder-2");
+      void request(dispatcher, "agent-a");
+      await expect.poll(() => engine.queueDepth).toBe(1);
+      clock.advance(60_001);
+      const { items } = await dispatcher.dispatch("inbox.get", {}, session({ role: "admin" }));
+      return { id: record.id, items };
+    };
+
+    const labelled = await holders(false);
+    const bare = await holders(true);
+
+    expect(
+      labelled.items.map((item) => [item.key.replace(/\/[^/]+\//, "/id/"), item.condition]),
+    ).toEqual([
+      ["request/id/waiting", "waiting"],
+      ["lease/id/ending", "ending"],
+    ]);
+    expect(labelled.items).toContainEqual(
+      expect.objectContaining({
+        lease: expect.objectContaining({ holder: "ci-bot", model: "iPhone 17 Pro" }),
+      }),
+    );
+    expect(bare.items).toContainEqual(
+      expect.objectContaining({ lease: expect.objectContaining({ holder: bare.id }) }),
+    );
+  });
 
   it("list.get requests on a worker returns every open request with its queue position", async () => {
     const { clock, dispatcher, engine } = await buildDispatcher();

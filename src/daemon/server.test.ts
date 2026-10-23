@@ -2935,6 +2935,33 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await admin.close();
   });
 
+  it("lease.get over the socket answers the caller's own lease and UNKNOWN_LEASE for another agent's", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const alice = await createClient(harness.socketPath);
+    await helloAs(alice, "alice");
+    const grant = await alice.request("lease.request", {
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+    const bob = await createClient(harness.socketPath);
+    await helloAs(bob, "bob");
+
+    const own = await alice.request("lease.get", { leaseId });
+    expect(own.ok).toBe(true);
+    expect((own.payload as { lease: { id: string } }).lease).toMatchObject({
+      id: leaseId,
+      ownerId: "alice",
+    });
+    const other = await bob.request("lease.get", { leaseId });
+    expect(other.ok).toBe(false);
+    expect(other.error).toMatchObject({ code: "UNKNOWN_LEASE" });
+
+    await alice.close();
+    await bob.close();
+  });
+
   it("forwards ttlMs as the initial TTL of any lease, and stores it as the lease's width", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const client = await createClient(harness.socketPath);

@@ -52,6 +52,7 @@ import {
   tokenRoleSchema,
   usageOutputSchema,
   usageWindowSchema,
+  inboxItemSchema,
   waitingRequestSchema,
   capabilityListSchema,
   workerViewSchema,
@@ -533,6 +534,16 @@ export const leaseList = defineOperation({
   effect: "read",
   input: z.object({}),
   output: z.object({ leases: z.array(statusLeaseSchema) }),
+});
+
+// why: no `authorize` hook -- the handler answers `UNKNOWN_LEASE` for a lease the caller does not own, as `lease.list` hides it (ADR 0044 §3), so "not yours" and "not there" look the same.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const leaseGet = defineOperation({
+  name: "lease.get",
+  role: "agent",
+  effect: "read",
+  input: z.object({ leaseId: z.string() }),
+  output: z.object({ lease: statusLeaseSchema }),
 });
 
 // ---- doctor.run -------------------------------------------------------------------------------
@@ -1101,6 +1112,15 @@ export const alertsTest = defineOperation({
   output: z.object({ destination: z.string(), status: z.number() }),
 });
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const inboxGet = defineOperation({
+  name: "inbox.get",
+  role: "admin",
+  effect: "read",
+  input: z.object({}),
+  output: z.object({ items: z.array(inboxItemSchema) }),
+});
+
 const identityGet = defineOperation({
   name: "identity.get",
   role: "agent",
@@ -1124,6 +1144,7 @@ export const OPERATIONS = {
   "lease.renew": leaseRenew,
   "lease.release": leaseRelease,
   "lease.list": leaseList,
+  "lease.get": leaseGet,
   "driver.passthrough": driverPassthrough,
   "device.exec": deviceExec,
   "doctor.run": doctorRun,
@@ -1138,6 +1159,7 @@ export const OPERATIONS = {
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
   "usage.get": usageGet,
+  "inbox.get": inboxGet,
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,

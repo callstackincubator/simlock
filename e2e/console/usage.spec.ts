@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
+import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
@@ -201,12 +202,10 @@ test.describe("the Usage page", () => {
       const granted = await host.cli([...LEASE, "--agent-id", "late", "--detach"]);
       expect(granted.code, granted.stderr).toBe(0);
 
-      await expect(tile(page, "Requests").locator(".stat-value")).toHaveText("1", {
-        timeout: 10_000,
-      });
-      await expect(tile(page, "Granted").locator(".stat-value")).toHaveText("1", {
-        timeout: 10_000,
-      });
+      await returnToTab(page);
+
+      await expect(tile(page, "Requests").locator(".stat-value")).toHaveText("1");
+      await expect(tile(page, "Granted").locator(".stat-value")).toHaveText("1");
     } finally {
       await host.dispose();
     }

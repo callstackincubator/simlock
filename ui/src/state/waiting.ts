@@ -15,7 +15,7 @@ import {
 import type { WorkerList } from "../model/workers";
 import { useActions } from "./actions";
 import { useFigures } from "./figures";
-import { useLiveResource, useNow } from "./live";
+import { useRouteQuery, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { usePath, useSearch } from "./router";
@@ -38,8 +38,8 @@ export function useQueueMenu(): (row: WaitingRow) => readonly MenuEntry[] {
 }
 
 export function useWaiting(): LoadView<WaitingPage> {
-  const requests = loadView(useLiveResource<WaitingList>("/v1/lease-requests"));
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const requests = loadView(useRouteQuery<WaitingList>("/v1/lease-requests"));
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
   const figures = useFigures("1h");
   const now = useNow();
   const id = itemIdFrom("/queue", usePath());

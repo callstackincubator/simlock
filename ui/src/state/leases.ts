@@ -25,7 +25,7 @@ import type { WorkerList } from "../model/workers";
 import { useActions } from "./actions";
 import { useRecentEvents } from "./events";
 import { useListDrawer, type ListDrawerState } from "./drawer";
-import { useLiveResource, useNow } from "./live";
+import { useRouteQuery, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { setSearch, usePath, useSearch } from "./router";
@@ -67,9 +67,9 @@ export function useLeaseDrawerMenu(id: string): {
   readonly entries: readonly MenuEntry[];
 } {
   const { entries } = useActions();
-  const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
-  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const leases = useRouteQuery<LeaseList>("/v1/leases").data?.leases ?? [];
+  const tokens = useRouteQuery<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
   const now = useNow();
   const row = leaseRows({ leases, now: now.server, tokens, workers }).find(
     (candidate) => candidate.id === id,
@@ -87,9 +87,9 @@ export function useLeaseDrawer(urlId: string | undefined): ListDrawerState {
 // or were refused a holder shows its id alone and the leases still show.
 export function useLeases(): Leases {
   const urlId = itemIdFrom("/leases", usePath());
-  const leases = loadView(useLiveResource<LeaseList>("/v1/leases"));
-  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const leases = loadView(useRouteQuery<LeaseList>("/v1/leases"));
+  const tokens = useRouteQuery<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
   const now = useNow();
   const [filter, setFilter] = useState<LeaseFilter>("all");
   const all = mapView(leases, (list) =>
@@ -130,12 +130,12 @@ function isUnknownLease(error: unknown): boolean {
 // why: a lease that was released or has expired is gone, and the page says so instead of keeping
 // the details it last held; `undefined` is that answer.
 export function useLeaseInspection(id: string): LoadView<LeaseInspection | undefined> {
-  const details = useLiveResource<{ readonly lease: LeaseDetails }>(
+  const details = useRouteQuery<{ readonly lease: LeaseDetails }>(
     `/v1/leases/${encodeURIComponent(id)}`,
   );
-  const list = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
-  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const list = useRouteQuery<LeaseList>("/v1/leases").data?.leases ?? [];
+  const tokens = useRouteQuery<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
   const now = useNow();
   if (isUnknownLease(details.error)) return { data: undefined, kind: "ready" };
   return mapView(loadView(details), ({ lease }) =>
@@ -152,6 +152,6 @@ export function useLeaseInspection(id: string): LoadView<LeaseInspection | undef
 // why: the events the console holds, an hour of them, that name this lease, newest first.
 export function useLeaseEvents(id: string): LoadView<readonly EventRow[]> {
   const feed = useRecentEvents();
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
   return mapView(loadView(feed), (held) => eventRows(eventsOfLease(held, id), workers, "all"));
 }

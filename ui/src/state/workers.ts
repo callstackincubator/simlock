@@ -25,7 +25,7 @@ import { type EventRow, eventRows } from "../model/event-list";
 import { eventsOfWorker } from "../model/events";
 import { useActions } from "./actions";
 import { useRecentEvents } from "./events";
-import { useDaemonMode, useLiveResource, useNow } from "./live";
+import { useDaemonMode, useRouteQuery, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { navigate, setSearch, usePath, useSearch } from "./router";
@@ -99,7 +99,7 @@ export function useFleetAddress(): FleetAddress {
 }
 
 export function useFleet(): LoadView<FleetPage> {
-  const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
+  const workers = loadView(useRouteQuery<WorkerList>("/v1/workers"));
   const search = useSearch();
   const filter = readFilter(search);
   const ready = workers.kind === "ready";
@@ -127,9 +127,9 @@ export function useFleet(): LoadView<FleetPage> {
 // while either has not arrived or was refused, a holder shows its id and the devices still show.
 // `undefined` is a worker the fleet does not list.
 export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> {
-  const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
-  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
-  const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
+  const workers = loadView(useRouteQuery<WorkerList>("/v1/workers"));
+  const tokens = useRouteQuery<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const leases = useRouteQuery<LeaseList>("/v1/leases").data?.leases ?? [];
   const now = useNow();
   const search = useSearch();
   const chosen =
@@ -176,7 +176,7 @@ export function useDeviceDrawer(
 
 // why: a leased device's UDID is known to the console only through its lease.
 export function useLeaseUdid(leaseId: string): string | undefined {
-  return useLiveResource<{ readonly lease: LeaseDetails }>(
+  return useRouteQuery<{ readonly lease: LeaseDetails }>(
     `/v1/leases/${encodeURIComponent(leaseId)}`,
   ).data?.lease.udid;
 }
@@ -185,7 +185,7 @@ export function useLeaseUdid(leaseId: string): string | undefined {
 export function useWorkerEvents(workerId: string): LoadView<readonly EventRow[]> {
   const feed = useRecentEvents();
   const mode = useDaemonMode();
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
   return mapView(loadView(feed), (held) =>
     eventRows(eventsOfWorker(held, workerId, mode), workers, "all"),
   );
