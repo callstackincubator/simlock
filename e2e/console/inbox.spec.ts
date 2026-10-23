@@ -12,6 +12,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 /** why: What `GET /v1/workers` says, as far as these tests read. */
 interface WorkerView {
@@ -218,7 +219,7 @@ test.describe("the Inbox view", () => {
       await page.route(
         (url) => url.pathname === "/v1/lease-requests",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           const request = (id: string, waitedMs: number) => ({
             createdAt: now - waitedMs,
@@ -258,7 +259,7 @@ test.describe("the Inbox view", () => {
       await page.route(
         (url) => url.pathname === "/v1/leases",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           const lease = (id: string, leftMs: number) => ({
             deviceId: "dev_stub",
@@ -297,7 +298,7 @@ test.describe("the Inbox view", () => {
       await page.route(
         (url) => url.pathname === "/v1/leases",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {
@@ -618,7 +619,7 @@ test.describe("the Inbox view", () => {
       await page.route(
         (url) => url.pathname === "/v1/lease-requests",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {
@@ -639,7 +640,7 @@ test.describe("the Inbox view", () => {
       await page.route(
         (url) => url.pathname === "/v1/leases",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {

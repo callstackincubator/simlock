@@ -13,6 +13,7 @@ import {
   test,
   withActionSurfaces,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -269,7 +270,7 @@ test.describe("the shell", () => {
       await page.route(
         (url) => url.pathname === "/v1/lease-requests",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {
@@ -291,7 +292,7 @@ test.describe("the shell", () => {
       await page.route(
         (url) => url.pathname === "/v1/leases",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {

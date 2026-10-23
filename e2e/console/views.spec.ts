@@ -14,6 +14,7 @@ import {
   test,
   withActionSurfaces,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -288,7 +289,7 @@ test.describe("every view", () => {
       await page.route(
         (url) => url.pathname === "/v1/lease-requests",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {

@@ -10,12 +10,13 @@ import {
 import type { ApiPath } from "../data/api";
 import type { Clock, LiveConnection, Visibility } from "../data/live/connection";
 import { readEvent } from "../model/events";
-import type { LeaseList } from "../model/leases";
-import { readRenewal, renewLeases } from "../model/renewal";
+import { readRenewal, renewAnswer, type Renewal } from "../model/renewal";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
 const DROP_MS = 60_000;
 const FRESH_MS = 2_000;
+const RENEWAL_KEPT_MS = 60_000;
+const RENEWED_ROUTES: readonly string[] = ["leases", "workers"];
 
 interface Times {
   readonly pollMs?: number;
@@ -119,13 +120,26 @@ export function createQueries(options: QueriesOptions): Queries {
     }
   });
 
+  // why: a gateway relays a worker's event before it refreshes its view of that worker, so a read
+  // just after a renewal can still carry the old deadline.
+  const kept: { readonly renewal: Renewal; readonly until: number }[] = [];
+  const renewedAnswer = <T>(route: string, data: T): T => {
+    const now = clock.now();
+    for (let index = kept.length - 1; index >= 0; index -= 1) {
+      if ((kept[index]?.until ?? 0) <= now) kept.splice(index, 1);
+    }
+    return kept.reduce((answer, { renewal }) => renewAnswer(route, answer, renewal), data);
+  };
   const stopEvents = connection.onEvent((streamEvent) => {
     const event = readEvent(streamEvent.data);
     const renewal = event === undefined ? undefined : readRenewal(event);
     if (renewal === undefined) return;
-    client.setQueryData<LeaseList>(["leases"], (old) =>
-      old === undefined ? undefined : renewLeases(old, renewal),
-    );
+    kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
+    for (const route of RENEWED_ROUTES) {
+      client.setQueryData<unknown>([route], (old: unknown) =>
+        old === undefined ? undefined : renewAnswer(route, old, renewal),
+      );
+    }
   });
 
   return {
@@ -150,7 +164,9 @@ export function createQueries(options: QueriesOptions): Queries {
             if (answer.notModified !== true) {
               if (answer.tag === null) tags.delete(hash);
               else tags.set(hash, answer.tag);
-              return answer.body;
+              return RENEWED_ROUTES.includes(key[0] ?? "")
+                ? renewedAnswer(key[0] ?? "", answer.body)
+                : answer.body;
             }
             const kept = client.getQueryData<T>(key);
             if (kept !== undefined) return kept;

@@ -10,6 +10,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -673,7 +674,7 @@ test.describe("the console acts", () => {
       await page.route(
         (url) => url.pathname === "/v1/workers",
         async (route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const body = (await response.json()) as { workers: Record<string, unknown>[] };
           await route.fulfill({
             json: { ...body, workers: body.workers.map((view) => ({ ...view, drained: true })) },
