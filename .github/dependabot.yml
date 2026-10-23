@@ -13,3 +13,17 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+
+  # Without this, runtime and dev dependencies only move when someone bumps
+  # them by hand, so they drift past security advisories. Minor and patch
+  # bumps share one weekly PR; each major still gets its own.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
