@@ -34,6 +34,7 @@ Commands:
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
+  instructions [--json]       Print the rules an agent must follow, for its prompt
 Run 'simlock <command> --help' for command usage.
 
 Pass --token <secret> anywhere on the command line to connect as admin
@@ -163,6 +164,7 @@ const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["daemon", "uninstall"],
   ["config", "set"],
   ["mcp"],
+  ["instructions"],
 ];
 
 const GATEWAY_ALSO_HERE_HINT =
