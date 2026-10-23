@@ -54,6 +54,7 @@ interface Switches {
 }
 
 interface LaunchOptions extends Switches {
+  readonly refuseWrite?: boolean;
   readonly host?: string;
   readonly seed?: Parameters<typeof seedTokensDatabase>[1];
   readonly port?: number;
@@ -72,6 +73,9 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
     await seedTokensDatabase(directory, options.seed ?? []);
   }
   const port = options.port ?? (await freeLoopbackPort());
+  if (options.refuseWrite === true) {
+    filesystem.defineFailure(join(directory, "agent-device-profile.json"), "EACCES");
+  }
   const daemon = await startDaemon({
     clock,
     configOverrides: {
@@ -283,5 +287,21 @@ describe("the local agent-device profile", () => {
 
     const gateway = await launch({ role: "gateway" });
     expect(await gateway.filesystem.exists(gateway.profilePath)).toBe(false);
+  });
+
+  it("does not stop the worker when the profile cannot be written, and logs one warning", async () => {
+    const rig = await launch({ refuseWrite: true });
+
+    const warnings = rig.logs.records.filter((record) =>
+      record.message.startsWith("Could not prepare"),
+    );
+    expect(warnings.map((record) => [record.level, record.message])).toEqual([
+      [
+        "warn",
+        `Could not prepare the agent-device profile: Injected EACCES failure: ${rig.profilePath}`,
+      ],
+    ]);
+    const made = await rig.daemon.dispatch("token.create", { role: "agent" }, adminSession);
+    expect((await allocateWith(rig, made.secret, 1)).status).toBe(200);
   });
 });
