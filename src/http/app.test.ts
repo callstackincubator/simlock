@@ -3277,7 +3277,12 @@ describe("ETag on a JSON read under /v1", () => {
     expect(mount.headers.get("content-type")).toContain("application/json");
     expect(mount.headers.get("etag")).toBeNull();
 
-    const stream = await read("/v1/events/stream");
+    const streamOrStall = await Promise.race([
+      read("/v1/events/stream"),
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 500)),
+    ]);
+    if (streamOrStall === "stalled") expect.fail("the event stream was buffered, not answered");
+    const stream = streamOrStall;
     expect(stream.headers.get("etag")).toBeNull();
     const framesPromise = readSseFrames(stream, 1);
     await Promise.resolve();
