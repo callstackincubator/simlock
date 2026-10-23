@@ -88,7 +88,7 @@ no live link → `WORKER_UNREACHABLE`; a worker `UNKNOWN_LEASE` drops the entry.
 no TTL timer. Relayed `lease.expired`/`lease.released` remove the entry and push `lease-lost`.
 Exec forwards the namespaced requester; `gateway.execTimeoutMs` is a backstop over the worker's `exec.timeoutMs`.
 The lease index is in memory, rebuilt from each view's leases whose requester starts `gw:<id>:`;
-missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view.
+missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view. A lease the worker answered released or `UNKNOWN_LEASE` (even if its relayed event already forgot it) is not added back by a later snapshot that still lists it.
 
 **HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts` and `../stream/`):
 

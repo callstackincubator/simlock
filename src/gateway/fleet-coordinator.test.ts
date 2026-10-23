@@ -1619,6 +1619,60 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((retry as RequesterAlreadyLeasedError).existingLeaseId).toBe(grant.lease.id);
   });
 
+  it("grants a requester's next lease when a worker view read before its release lands after it (#898)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const first = await coordinator.request(REQUEST, requestOptions());
+    client.releaseLeaseQueue.push({ kind: "ok" });
+    await coordinator.release(first.lease.id);
+
+    workers.refresh("wrk_a", {
+      leases: [{ ...leaseFixture("lse_1", "dev_1"), requesterId: `${GATEWAY_PREFIX}agent-1` }],
+    });
+    workers.refresh("wrk_a", { leases: [] });
+
+    client.requestLeaseQueue.push({
+      grant: grantFixture({ lease: leaseFixture("lse_2", "dev_1") as LeaseRecord }),
+      kind: "grant",
+    });
+    const second = await coordinator
+      .request(REQUEST, requestOptions({ noWait: true }))
+      .catch((error: unknown) => error);
+    expect(second).toMatchObject({ lease: { id: "wrk_a.lse_2" } });
+  });
+
+  it.each(["release", "releaseAll"] as const)(
+    "grants the next lease when %s's relayed event came before the worker's answer and a stale view follows (#898)",
+    async (how) => {
+      const { coordinator, directory, workers, leaseIndex } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      connectWorker(workers, "wrk_a");
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const first = await coordinator.request(REQUEST, requestOptions());
+      client.onReleaseLease = (leaseId) => leaseIndex.removeByWorkerLease("wrk_a", leaseId);
+      if (how === "release") await coordinator.release(first.lease.id);
+      else await coordinator.releaseAll();
+
+      workers.refresh("wrk_a", {
+        leases: [{ ...leaseFixture("lse_1", "dev_1"), requesterId: `${GATEWAY_PREFIX}agent-1` }],
+      });
+      workers.refresh("wrk_a", { leases: [] });
+
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: leaseFixture("lse_2", "dev_1") as LeaseRecord }),
+        kind: "grant",
+      });
+      const second = await coordinator
+        .request(REQUEST, requestOptions({ noWait: true }))
+        .catch((error: unknown) => error);
+      expect(second).toMatchObject({ lease: { id: "wrk_a.lse_2" } });
+    },
+  );
+
   it("release-all attaches the leases it already released to a later failure's own details (H8)", async () => {
     const { coordinator, directory, workers, leaseIndex } = harness();
     const clientA = new ScriptedWorkerClient();
