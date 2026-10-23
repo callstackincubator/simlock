@@ -3264,3 +3264,64 @@ describe("the stream mount's listed route", () => {
     await found.body?.cancel();
   });
 });
+
+describe("ETag on a JSON read under /v1", () => {
+  it("answers an unchanged JSON read with 304 and no body, and anything else with 200", async () => {
+    const tokens: { id: string }[] = [{ id: "tok_1" }];
+    const { app, dispatcher, eventBus } = buildHarness({
+      mounts: [
+        {
+          prefix: "json-mount",
+          handle: () => Response.json({ ok: true }),
+        },
+      ] as never,
+    });
+    dispatcher.handlers["token.list"] = () => ({ tokens: [...tokens] });
+    dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+      subscribed: true,
+      subscriptionId: session.manageEventSubscription(true),
+    });
+    const read = (path: string, headers: Record<string, string> = {}) =>
+      app.request(path, { headers: { ...operatorAuth, ...headers } });
+
+    const first = await read("/v1/tokens");
+    const tag = first.headers.get("etag");
+    expect(first.status).toBe(200);
+    expect(tag).toMatch(/^"[^"]+"$/);
+
+    const unchanged = await read("/v1/tokens", { "If-None-Match": tag ?? "" });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe("");
+    expect(unchanged.headers.get("etag")).toBe(tag);
+
+    const stale = await read("/v1/tokens", { "If-None-Match": '"stale"' });
+    expect(stale.status).toBe(200);
+    expect(stale.headers.get("etag")).toBe(tag);
+
+    tokens.push({ id: "tok_2" });
+    const changed = await read("/v1/tokens", { "If-None-Match": tag ?? "" });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("etag")).not.toBe(tag);
+
+    const missing = await read("/v1/leases/lse_none");
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("etag")).toBeNull();
+
+    const mount = await read("/v1/json-mount/x");
+    expect(mount.status).toBe(200);
+    expect(mount.headers.get("content-type")).toContain("application/json");
+    expect(mount.headers.get("etag")).toBeNull();
+
+    const streamOrStall = await Promise.race([
+      read("/v1/events/stream"),
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 500)),
+    ]);
+    if (streamOrStall === "stalled") expect.fail("the event stream was buffered, not answered");
+    const stream = streamOrStall;
+    expect(stream.headers.get("etag")).toBeNull();
+    const framesPromise = readSseFrames(stream, 1);
+    await Promise.resolve();
+    eventBus.emit("daemon.stopping", { reason: "live" }, "test");
+    expect((await framesPromise)[0]?.event).toBe("daemon.stopping");
+  });
+});

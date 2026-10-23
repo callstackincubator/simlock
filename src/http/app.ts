@@ -1,5 +1,6 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
+import { etag } from "hono/etag";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
@@ -209,6 +210,19 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       requesterId: identity?.principal,
       status: c.res.status,
     });
+  });
+
+  // why: Hono's `etag()` buffers the body to hash it, so it runs only on a JSON answer to a GET that is not a mount's; a stream or a mount's own body is never read.
+  const mountPrefixes = (deps.mounts ?? []).map((mount) => `/v1/${mount.prefix}`);
+  const etagStep = etag();
+  app.use("/v1/*", async (c, next) => {
+    await next();
+    const path = c.req.path;
+    const mounted = mountPrefixes.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+    );
+    if (mounted || !c.res.headers.get("content-type")?.startsWith("application/json")) return;
+    await etagStep(c, () => Promise.resolve());
   });
 
   app.openapi(healthzRoute, (c) => c.json({ ok: true as const }, 200));
