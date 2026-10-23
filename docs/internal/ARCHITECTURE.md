@@ -61,6 +61,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | history | The durable event history: `history.db`, prune, set-aside, projections (usage: request, minute and device fact rows) | [history](../../src/history/AGENTS.md) |
 | ports | Every external API behind an interface, with a fake | [ports](../../src/ports/AGENTS.md) |
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
+| instructions | The static rules text for agents: `simlock instructions`, the MCP server instructions and resource | [instructions](../../src/instructions/AGENTS.md) |
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
 | daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
 | test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |

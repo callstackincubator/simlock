@@ -39,29 +39,13 @@ Do not put a fixed `SIMLOCK_AGENT_ID` in a shared shell profile or a shared MCP 
 
 ## Use the CLI
 
-Add instructions like these to your project's `AGENTS.md` or `CLAUDE.md`. Change the platform and model to the ones your project needs.
+Run `simlock instructions` and paste its output into your project's `AGENTS.md` or `CLAUDE.md`. It prints the current rules for using Simlock: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it again after you update Simlock, so your agents follow the rules your version has.
 
-```md title="AGENTS.md"
-## Devices
-
-Never use `xcrun simctl`, `adb` or `emulator` directly, and never use a device
-you did not lease. Get a device from Simlock:
-
-1. Lease one:
-   `simlock lease --platform ios --device "iPhone 16" --detach --ttl 1h`
-   It prints one JSON line. Keep `lease.id` and `device.address`.
-2. Use only that device, through Simlock, always naming it by `device.address`:
-   `simlock simctl install <device.address> <path-to-.app>`
-   `simlock simctl launch <device.address> <bundle-id>`
-   (Android: `simlock adb -s <device.address> ...`)
-3. The lease ends at `lease.ttlDeadline`. For long work, run
-   `simlock lease renew <lease.id>` before then.
-4. When you are done, run `simlock release <lease.id>`.
-
-If `simlock lease` fails with REQUESTER_ALREADY_LEASED, you already hold a
-lease: the error names it. Use that device, or release it first.
-If a command fails because the lease is gone, lease a new device.
+```sh
+simlock instructions >> AGENTS.md
 ```
+
+`simlock instructions --json` prints the same text as one JSON object. The command needs no running daemon.
 
 `--detach` makes `simlock lease` return as soon as it prints the lease, which suits agents that run one command per tool call. Without it, the command stays running, renews the lease and releases it when it exits. Use that form when the agent can run a command in the background.
 
@@ -78,7 +62,7 @@ While the request waits in the queue or a device boots, `simlock lease` blocks a
 | `release_simulator` | Releases this session's lease. |
 | `lease_status` | Reports this session's lease, or `held: false` when it has none. Safe to call any time, for example after the agent's context was compacted. |
 
-The server renews its lease while it runs, and releases it when the agent tool closes the connection. It also starts the daemon if it is not running.
+The server sends the short version of the rules to the client when it connects, and the full text as the resource `simlock://instructions`. It renews its lease while it runs, and releases it when the agent tool closes the connection. It also starts the daemon if it is not running.
 
 <Tabs syncKey="agent-tool">
 <TabItem label="Claude Code">

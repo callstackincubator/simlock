@@ -17,6 +17,7 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
+| [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock status`](#simlock-status) | Show the daemon, its devices and its leases | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock events`](#simlock-events) | Print business events | [Events reference](/simlock/docs/reference/events) |
@@ -57,7 +58,7 @@ The CLI takes these flags out of the whole command line, including the arguments
 
 With `--gateway`, the command goes to the gateway. With `--local`, it goes to the worker. With neither, it goes to the gateway only when this machine has a gateway (`~/.simlock/gateway` holds an `instance.json` or `config.json`) and no worker has started here yet (`~/.simlock/instance.json` does not exist). Otherwise it goes to the worker.
 
-`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. Five commands are exempt, because they create the gateway or run before it: `daemon start`, `daemon install`, `daemon uninstall`, `config set` and `mcp`.
+`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp` and `instructions`.
 
 When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
 
@@ -202,6 +203,20 @@ simlock mcp
 ```
 
 Takes no flags other than the [global flags](#global-flags). Stdout carries only MCP messages; diagnostics go to stderr. The server starts the daemon on the first tool call that needs it, and releases its lease when it exits.
+
+## simlock instructions
+
+Print the rules for using Simlock as one Markdown text: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it into your agent's instructions. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+
+```text
+simlock instructions [--json]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--json` | Print one JSON object, `{"instructions": "..."}`, instead of the text. |
+
+The text is the same on every machine, and the command never contacts a daemon, so it works with no daemon running.
 
 ## simlock status
 
