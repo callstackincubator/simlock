@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, type ApiPath, RequestTimeoutError } from "../data/api";
 import { connect, fakeClock, settle } from "../data/live/test-support";
-import { createQueries, type Queries, routeKey } from "./queries";
+import { createQueries, type Queries, resourceOf, routeKey } from "./queries";
 
 const EVENT = 'event: lease.granted\ndata: {"seq":1,"timestamp":1,"event":"lease.granted"}\n\n';
 
@@ -258,6 +258,36 @@ describe("a read's answers and failures", () => {
 
     expect(connection.state().phase).toBe("disconnected");
     expect(daemon.openStream()).toBeUndefined();
+  });
+
+  it("a read lost to the network leaves the page its data, or its loading, and no error", async () => {
+    const lost = () => Promise.reject(new TypeError("Failed to fetch"));
+    const refused = () => Promise.reject(new ApiError(500, "INTERNAL", "Internal error"));
+    for (const [fails, error] of [
+      [refused, expect.any(ApiError)],
+      [lost, undefined],
+    ] as const) {
+      const { connection, daemon, queries } = start(false);
+      const observer = new QueryObserver(queries.client, queries.options<unknown>("/v1/workers"));
+      observer.subscribe(() => undefined);
+      await settle();
+      expect(resourceOf(observer.getCurrentResult())).toEqual({ data: { read: 1 } });
+
+      daemon.reads = fails;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(resourceOf(observer.getCurrentResult())).toEqual({
+        data: { read: 1 },
+        ...(error === undefined ? {} : { error }),
+      });
+      expect(connection.state().phase).toBe(error === undefined ? "disconnected" : "connected");
+    }
+
+    const { daemon, queries } = start(false);
+    daemon.reads = lost;
+    const observer = new QueryObserver(queries.client, queries.options<unknown>("/v1/workers"));
+    observer.subscribe(() => undefined);
+    await settle();
+    expect(resourceOf(observer.getCurrentResult())).toEqual({});
   });
 
   it("a read that gives up after 10 seconds marks the console disconnected", async () => {

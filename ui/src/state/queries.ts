@@ -7,7 +7,13 @@ import {
 } from "@tanstack/react-query";
 
 import type { ApiPath } from "../data/api";
-import type { Clock, LiveConnection, StreamEvent, Visibility } from "../data/live/connection";
+import type {
+  Clock,
+  LiveConnection,
+  ResourceState,
+  StreamEvent,
+  Visibility,
+} from "../data/live/connection";
 import { type StaleKey, staleKeys } from "../model/stale-keys";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
@@ -56,6 +62,13 @@ export function routeKey(path: ApiPath): readonly string[] {
   if (head === "stats") return ["stats", new URLSearchParams(search).get("since") ?? ""];
   if (head === "leases" && id !== undefined) return ["lease", decodeURIComponent(id)];
   return [head];
+}
+
+export function resourceOf<T>(_result: {
+  readonly data: T | undefined;
+  readonly error: unknown;
+}): ResourceState<T> {
+  return {};
 }
 
 function timesOf(key: readonly unknown[]): Times {
