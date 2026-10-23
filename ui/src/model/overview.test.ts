@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { inboxItems } from "../../../src/contract/inbox";
 import { figuresOf } from "./figures";
 import { overviewOf } from "./overview";
 import { statsOf } from "./test-support";
@@ -135,15 +136,17 @@ describe("the overview", () => {
       ttlDeadline: NOW + 100_000,
       ttlMs: 900_000,
     };
+    const workers = [
+      ...fleet,
+      worker("down-2", [], { connection: "disconnected" }),
+      worker("down-3", [], { connection: "disconnected" }),
+    ];
     const { inbox } = overviewOf({
-      leases: [lease],
+      items: inboxItems(workers, { leases: [lease], now: NOW }),
+      leases: [],
       now: NOW,
       requests: [],
-      workers: [
-        ...fleet,
-        worker("down-2", [], { connection: "disconnected" }),
-        worker("down-3", [], { connection: "disconnected" }),
-      ],
+      workers,
     });
 
     expect(inbox.problems).toBe(5);
@@ -153,6 +156,20 @@ describe("the overview", () => {
       ["disconnected", "error", "down-2", "/inbox/down-2%2Fdisconnected"],
       ["disconnected", "error", "down-3", "/inbox/down-3%2Fdisconnected"],
     ]);
+
+    // why: the Needs you panel reads only /v1/inbox and /v1/workers; the Waiting and Ending soon
+    // tiles read requests and leases, so a lease about to end or a queued request must not move it.
+    const expiring = { ...lease, ttlDeadline: NOW + 1_000 };
+    const request = { createdAt: NOW - 5_000 } as unknown as WaitingRequest;
+    const items = inboxItems(workers, { leases: [lease], now: NOW });
+    const withOthers = overviewOf({
+      items,
+      leases: [expiring],
+      now: NOW,
+      requests: [request],
+      workers,
+    });
+    expect(withOthers.inbox).toEqual(inbox);
   });
 
   it("gives each worker the row Fleet draws: its health, its slots and its use, and a lost worker no use", () => {

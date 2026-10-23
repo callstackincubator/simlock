@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page, Route } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import {
   expect,
@@ -14,6 +14,7 @@ import {
   test,
   withActionSurfaces,
 } from "./fixtures.js";
+import { addInboxItems, waitingItem } from "./inbox-stub.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -285,28 +286,7 @@ test.describe("every view", () => {
       }
       // why: a healthy host has nothing in its Inbox, so a request that has waited two minutes is
       // stubbed to give the Inbox a row and its drawer something to open.
-      await page.route(
-        (url) => url.pathname === "/v1/lease-requests",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          await route.fulfill({
-            json: {
-              requests: [
-                {
-                  createdAt: now - 125_000,
-                  id: "req_busy",
-                  queuePosition: 1,
-                  requesterId: "busy-agent",
-                  spec: { platform: "ios" },
-                  stage: "queued",
-                },
-              ],
-            },
-            response,
-          });
-        },
-      );
+      await addInboxItems(page, () => [waitingItem("req_busy", 125_000)]);
       for (const path of [
         "/inbox",
         "/",

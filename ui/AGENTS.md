@@ -2,7 +2,7 @@
 
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
 Entry: `src/main.tsx` → `App` (`src/app/app.tsx`).
-Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and `version-order.ts`'s `isNewerVersion` as a value, imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle); this one `past-index` exemption in `.dependency-cruiser.mjs` is maintainer-authorized (#825 Decisions).
+Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and two files as values, each imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle): `version-order.ts`'s `isNewerVersion` and `inbox.ts`'s helpers (`holderOf`, `isExpiring`, `problemCount`, ...), which the daemon's Inbox rules share. Both `past-index` exemptions in `.dependency-cruiser.mjs` are maintainer-authorized (#825 Decisions, ADR 0044 §3).
 Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 ## Layers
@@ -31,7 +31,7 @@ Each layer imports only the layers below it. `.dependency-cruiser.mjs` enforces 
    (`overviewOf` in `overview.ts`). Shared rules live once: `workerHealth`, `workerSlots`
    (`fleet.ts`), `eventSummary`, `eventTone` (`activity.ts`), `inboxTone`
    (`inbox.ts`), the word → tone tables (`tones.ts`), page paths (`paths.ts`).
-2. State: a hook in `src/state/<page>.ts` reads routes with `useLiveResource`, turns each into a
+2. State: a hook in `src/state/<page>.ts` reads routes with `useRouteQuery`, turns each into a
    `LoadView` (`resource.ts`: `loadView`, `mapView`, `bothViews`), and maps it through the
    builder. It re-exports the view-model types the screen needs.
 3. Screen: `src/screens/<page>/index.tsx` exports `<Page>Screen`, wraps content in `Loaded`, and
@@ -54,6 +54,31 @@ read that fails leaves none. The same read repeats every 10 minutes (the daily c
 a failed repeat keeps the last values, and the timer stops with the live connection. `useDaemonMode`
 and `useDaemonFacts` (`state/live.tsx`) give them to state and to the sidebar's update notice
 (ADR 0037 §4, ADR 0042).
+
+## Reads
+
+The Inbox is the daemon's: `GET /v1/inbox` (`inbox.get`, rules in `src/contract/inbox.ts`) answers the items, and `['inbox']` is the only key the sidebar's count reads, on every page. The Inbox page and the Overview's Needs you read it and `['workers']` (for names, links and lease counts); a read that fails shows the page's refusal. `model/inbox.ts` only draws rows, tones, filters and the drawer from the items, counting a wait or the time left from the item's own timestamp against the daemon's clock. Events that mark workers, leases or requests stale mark `['inbox']` too.
+
+A page reads a route only while it is on screen (`useRouteQuery`, `state/live.tsx`). `state/queries.ts`
+holds the TanStack `QueryClient` (the dependency rules keep it out of `data/` and `model/`) and the keys and times of ADR 0044:
+`['workers']` every 15 s, `['leases']`, `['lease', id]` and `['inbox']` 10 s, `['lease-requests']` 5 s,
+`['stats', range]` 60 s, `['tokens']` never; a read stays fresh 2 s (stats 30 s, tokens 5 min);
+data no page uses is dropped after 60 s. A key polls only while a page uses it, the tab is shown and
+the connection is up; a hidden tab or a lost connection reads nothing, and coming back reads each key
+on screen once. An event marks keys stale through `model/stale-keys.ts`, and the burst window reads
+them once, 300 ms after the last event of a burst (at most 1 s after its first), and again 1.5 s later;
+a key no page shows is only marked. `LiveConnection` (`data/live/connection.ts`) keeps the stream, the
+phase, the health checks and the clock offset, and does one classified GET for a read
+(`connection.read`): a refusal is the route's own answer, a timeout while the daemon starts is asked
+again, any other failure is the connection lost (`ConnectionLost`), which a page never shows as an
+error. A refused stream is asked for again a second later.
+
+A read sends back the ETag of the route's last answer (`ApiClient.get(path, { tag })`, kept per key in
+`state/queries.ts`); a `304` keeps the cached data object, so nothing re-renders, and one that finds
+its data dropped is read again without a tag. A `lease.renewed` event moves the lease's `ttlDeadline`,
+`lastRenewedAt` and `ttlMs` in `['leases']` and `['workers']` in place (`model/renewal.ts`) with no read,
+and the deadline is kept for 60 s against an older answer. Console browser stubs fetch through
+`e2e/console/full-fetch.ts`, which drops `If-None-Match`.
 
 ## Actions
 
@@ -100,6 +125,9 @@ Activity's `EventFeed` (`data/event-feed.ts`) holds the events: the stream, the 
 newer ones, and `loadOlder` adds the 100 before the oldest held (`GET /v1/events?before=&limit=100`, or `?limit=100` with
 none held). It reports how the history stands (`HistoryState`: more, start, gone, failed); `ds/feed.tsx` calls `onNearEnd`
 within 20 rows of the end and draws the end row.
+
+The Inbox drawer and the lease drawer share one list of the last hour per tab (`data/recent-feed.ts`, held by `LiveProvider`): it starts at the first user, reads `since=1h` once, takes the stream and the reconnect gap, and is dropped 60 s after the last user closes (ADR 0044 §1). The worker's Events tab reads the same list until #911.
+
 Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
 ## Design system

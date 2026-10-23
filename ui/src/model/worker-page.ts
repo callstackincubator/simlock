@@ -10,7 +10,8 @@ import {
 } from "./fleet";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
-import { holderOf, leasePath, type TokenRecord } from "./leases";
+import { holderOf, platformName, stateEnteredAt } from "../../../src/contract/inbox";
+import { leasePath, type TokenRecord } from "./leases";
 import { devicePath } from "./paths";
 import { formatDuration } from "./time";
 import { type UpdateFacts, updateFactsOf, versionLine } from "./versions";
@@ -25,8 +26,6 @@ import {
 } from "./tones";
 import {
   capacityByPlatform,
-  platformName,
-  stateEnteredAt,
   type WarmPoolRow,
   warmPoolRows,
   type WorkerDevice,

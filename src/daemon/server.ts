@@ -1053,6 +1053,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "lease.get":
+        return this.#dispatcher.dispatch(
+          "lease.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "lease.list":
         return this.#dispatcher.dispatch(
           "lease.list",
@@ -1104,6 +1110,12 @@ export class DaemonServer {
       case "usage.get":
         return this.#dispatcher.dispatch(
           "usage.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "inbox.get":
+        return this.#dispatcher.dispatch(
+          "inbox.get",
           frame.payload ?? {},
           this.#session(connection),
         );

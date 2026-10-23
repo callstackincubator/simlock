@@ -12,6 +12,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
@@ -361,22 +362,22 @@ test.describe("the Overview's Inbox lines", () => {
     }
   });
 
-  test("with /v1/lease-requests stubbed to fail, Overview says Could not check: waiting requests and not Nothing needs you", async ({
+  test("with /v1/inbox stubbed to fail, Overview shows the daemon's refusal and not Nothing needs you", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
       await page.route(
-        (url) => url.pathname === "/v1/lease-requests",
+        (url) => url.pathname === "/v1/inbox",
         (route) =>
           route.fulfill({
-            json: { error: { code: "INTERNAL", message: "The queue is down." } },
+            json: { error: { code: "INTERNAL", message: "The inbox is down." } },
             status: 500,
           }),
       );
       await openOverview(page, host);
 
-      await expect(page.getByText("Could not check: waiting requests")).toBeVisible();
+      await expect(page.getByText("The inbox is down.")).toBeVisible();
       await expect(page.getByText("Nothing needs you")).toHaveCount(0);
     } finally {
       await host.dispose();
@@ -385,7 +386,7 @@ test.describe("the Overview's Inbox lines", () => {
 });
 
 test.describe("the Overview when the workers cannot be read", () => {
-  test("with /v1/workers stubbed to fail, Overview says Could not check: workers and shows no capacity", async ({
+  test("with /v1/workers stubbed to fail, Overview shows the daemon's refusal and no capacity", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -402,7 +403,7 @@ test.describe("the Overview when the workers cannot be read", () => {
       );
       await page.reload();
 
-      await expect(page.getByText("Could not check: workers")).toBeVisible();
+      await expect(page.getByText("The fleet is down.")).toBeVisible();
       await expect(page.getByRole("region", { name: "Capacity · all workers" })).toHaveCount(0);
       await expect(page.getByText("Nothing needs you")).toHaveCount(0);
     } finally {
@@ -445,7 +446,7 @@ test.describe("the Overview's five numbers", () => {
       await page.route(
         (url) => url.pathname === "/v1/lease-requests",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {
@@ -467,7 +468,7 @@ test.describe("the Overview's five numbers", () => {
       await page.route(
         (url) => url.pathname === "/v1/leases",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           const { leases } = (await response.json()) as {
             leases: { id: string; ttlDeadline: number }[];

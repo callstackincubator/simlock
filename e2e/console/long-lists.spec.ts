@@ -11,6 +11,8 @@ import {
   startDaemon,
   test as base,
 } from "./fixtures.js";
+import { answer, leases, pad } from "./stub-answers.js";
+import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -112,20 +114,6 @@ async function open(page: Page, host: RunningDaemon, path: string): Promise<void
   await expect(page.locator("#main")).not.toContainText("Loading…");
 }
 
-/**
- * Answers `GET <pathname>` with what `body` returns at the time of the request, on top of the
- * daemon's own response, so its headers (its `Date` among them) stay real.
- */
-async function answer(page: Page, pathname: string, body: () => unknown): Promise<void> {
-  await page.route(
-    (url) => url.pathname === pathname,
-    async (route: Route) => {
-      const response = await route.fetch();
-      await route.fulfill({ json: body(), response });
-    },
-  );
-}
-
 // why: a page before the last hour answers with no events, so the stubbed list ends where it did
 // before Activity scrolled back.
 async function answerEvents(page: Page, replay: readonly unknown[]): Promise<void> {
@@ -136,26 +124,6 @@ async function answerEvents(page: Page, replay: readonly unknown[]): Promise<voi
       await route.fulfill({ json: { events: since ? replay : [] } });
     },
   );
-}
-
-/** `count` leases on the one host, `lse_0001` granted first. */
-function leases(count: number): unknown[] {
-  const now = Date.now();
-  return Array.from({ length: count }, (_, index) => ({
-    deviceId: `dev_${pad(index + 1)}`,
-    grantedAt: now - 3_600_000 + index * 1_000,
-    id: `lse_${pad(index + 1)}`,
-    lastRenewedAt: now - 60_000,
-    idChosenByRequester: false,
-    ownerId: "tok_load",
-    requesterId: "tok_load",
-    ttlDeadline: now + 600_000,
-    ttlMs: 900_000,
-  }));
-}
-
-function pad(n: number): string {
-  return String(n).padStart(4, "0");
 }
 
 function rowIds(list: Locator, section: string): Promise<string[]> {
@@ -276,6 +244,7 @@ test.describe("long lists page", () => {
     await expect(range).toHaveText("51–60 of 60");
 
     count = 30;
+    await returnToTab(page);
 
     // why: the list refresh is asynchronous; its final page may take more than one poll cycle.
     // The next refresh leaves no third page: the second, now the last, shows.
@@ -310,6 +279,7 @@ test.describe("long lists page", () => {
     // Twice: the daemon answers once more, then the row's countdown moves, so a render follows.
     for (let refresh = 0; refresh < 2; refresh += 1) {
       const since = served;
+      await returnToTab(page);
       await expect.poll(() => served, { timeout: 3_000 }).toBeGreaterThan(since);
       const before = await expires.textContent();
       await expect.poll(() => expires.textContent(), { timeout: 3_000 }).not.toBe(before);
@@ -372,6 +342,7 @@ test.describe("long lists page", () => {
 
     // One row more and the list needs a second page: the pager shows.
     count = 26;
+    await returnToTab(page);
     await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
   });
 

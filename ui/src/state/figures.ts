@@ -4,7 +4,7 @@ import { type ConsoleRange, statsPath } from "../model/range";
 export type { FiguresState } from "../model/figures";
 import { useRef } from "react";
 
-import { useLiveResource, useNow } from "./live";
+import { useRouteQuery, useNow } from "./live";
 import { loadView } from "./resource";
 
 // why: the stats are their own read, not joined with the fleet's: a refused read hides only the
@@ -22,7 +22,7 @@ export function useStats<T>(
   | { readonly kind: "loading" }
   | { readonly kind: "refused"; readonly message: string }
   | { readonly kind: "ready"; readonly data: T; readonly refusal?: string } {
-  const view = loadView(useLiveResource<UsageOutput>(statsPath(range)));
+  const view = loadView(useRouteQuery<UsageOutput>(statsPath(range)));
   const now = useNow();
   // why: a new range is a new read; until it answers, the last answer stays drawn, so switching
   // the range does not swap every chart and tile for a loading note and back.

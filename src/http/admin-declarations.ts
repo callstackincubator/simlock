@@ -18,6 +18,17 @@ export const workerListRoute = declareRoute({
   reply: OPERATIONS["worker.list"].output,
 });
 
+export const inboxRoute = declareRoute({
+  method: "get",
+  path: "/v1/inbox",
+  tag: "Workers",
+  summary: "What needs the operator: the Inbox items",
+  role: "admin",
+  notes:
+    "The daemon decides: workers that are lost, incompatible, drained, failed to update or over their RAM budget; devices that are quarantined, stalled or absent; requests that have waited over 60 s; leases with under 5 minutes left. A gateway answers for its fleet, a worker for itself.",
+  reply: OPERATIONS["inbox.get"].output,
+});
+
 export const workerDrainRoute = declareRoute({
   method: "post",
   path: "/v1/workers/{id}/drain",
@@ -222,6 +233,7 @@ export const componentInstallRoute = declareRoute({
 export const ADMIN_ROUTES = [
   updateRoute,
   workerListRoute,
+  inboxRoute,
   workerDrainRoute,
   workerUndrainRoute,
   workerUpdateRoute,

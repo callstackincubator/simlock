@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -12,7 +13,7 @@ async function showWorkerFields(page: Page, fields: () => WorkerFields): Promise
   await page.route(
     (url) => url.pathname === "/v1/workers",
     async (route) => {
-      const response = await route.fetch();
+      const response = await fetchFull(route);
       const body = (await response.json()) as { workers: Record<string, unknown>[] };
       await route.fulfill({
         json: { ...body, workers: body.workers.map((view) => ({ ...view, ...fields() })) },
@@ -41,7 +42,7 @@ test.describe("the console updates a worker", () => {
       await page.route(
         (url) => url.pathname === "/v1/status",
         async (route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const body = (await response.json()) as { daemon: Record<string, unknown> };
           await route.fulfill({
             json: { ...body, daemon: { ...body.daemon, latestVersion: "0.4.0", version: "0.3.0" } },

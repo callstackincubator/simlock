@@ -7,7 +7,7 @@ import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } fr
 /**
  * why: reproduces #642. The workers page's response helpers (`answerWithoutLoad`, `answerMemory`)
  * answer the page's re-reads of `/v1/workers` by fetching them from the gateway through
- * `route.fetch()`, and the page re-reads every second. A re-read intercepted but not yet fetched
+ * `route.fetch()`, and the page re-reads every 15 seconds. A re-read intercepted but not yet fetched
  * when the test's `finally` disposes the fleet gets a refused connect — a listener destroyed
  * mid-request reads the same way as a socket hang up — and Playwright attributes the handler's
  * rejection to the test, so the spec dies on the helper's `route.fetch()` line although every
@@ -133,6 +133,7 @@ test.describe("what the workers page response helper drops and what it lets thro
       abort: async () => {
         aborted = true;
       },
+      request: () => ({ headers: () => ({}) }),
       fetch: async () => {
         throw new Error("getaddrinfo ENOTFOUND gateway.invalid");
       },
@@ -161,6 +162,7 @@ test.describe("what the workers page response helper drops and what it lets thro
           abort: async () => {
             aborted = true;
           },
+          request: () => ({ headers: () => ({}) }),
           fetch: async () => {
             throw new Error(message);
           },

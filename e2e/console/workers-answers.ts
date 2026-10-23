@@ -1,4 +1,5 @@
 import type { Page, Route } from "@playwright/test";
+import { fetchFull } from "./full-fetch.js";
 
 interface WorkerPayload {
   connection?: string;
@@ -9,7 +10,7 @@ interface LoadPayload {
   memory?: { availableBytes?: number; pressure?: string; totalBytes?: number } | undefined;
 }
 
-// why: the page re-reads the list every second, so a re-read can be intercepted just as the test's
+// why: the page re-reads the list every 15 seconds, so a re-read can be intercepted just as the test's
 // `finally` stops the gateway; the refused connect it gets is the fleet going away, not a failure of
 // the test, and Playwright would otherwise charge the rejection to it. Only connect-level errors are
 // dropped: any other error is a real fault and must still kill the test.
@@ -17,7 +18,7 @@ const CONNECT_ERROR = /ECONNREFUSED|ECONNRESET|socket hang up/i;
 
 async function fetchOrDrop(route: Route): Promise<Awaited<ReturnType<Route["fetch"]>> | undefined> {
   try {
-    return await route.fetch();
+    return await fetchFull(route);
   } catch (error) {
     if (!(error instanceof Error) || !CONNECT_ERROR.test(error.message)) throw error;
     await route.abort().catch(() => undefined);

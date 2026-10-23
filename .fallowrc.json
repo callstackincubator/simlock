@@ -54,6 +54,7 @@
     "@fontsource-variable/geist-mono",
     "recharts",
     "@base-ui/react",
+    "@tanstack/react-query",
     "@tanstack/react-table",
     "@tanstack/react-virtual",
     // Recharts' peer dependency: installed for it, never imported by the console itself.

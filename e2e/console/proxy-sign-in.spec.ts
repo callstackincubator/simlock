@@ -1,4 +1,5 @@
 import { expect, NAV_LABELS, openFromNav, signIn, startProxiedDaemon, test } from "./fixtures.js";
+import { returnToTab } from "./tab.js";
 
 const EXPIRED_LINE =
   "Your sign-in proxy's identity was refused: it has expired. You can still sign in with an operator token.";
@@ -96,8 +97,10 @@ test.describe("signing in through a proxy", () => {
     await page.goto(proxied.url);
     await expect(page.getByText("Signed in as Alice")).toBeVisible();
 
-    // why: the console polls every second, so the next request can come before any click.
+    // why: the console reads again when the operator returns to the tab, so the next request can
+    // come before any click.
     proxied.setMode("expired");
+    await returnToTab(page);
 
     await expect(page.getByLabel("Operator token")).toBeVisible();
     await expect(page.getByRole("alert")).toHaveText(EXPIRED_LINE);
@@ -112,6 +115,7 @@ test.describe("signing in through a proxy", () => {
     await redirected.goto(proxied.url);
     await expect(redirected.getByText("Signed in as Alice")).toBeVisible();
     proxied.setMode("redirect");
+    await returnToTab(redirected);
     await expect(redirected).toHaveURL(proxied.loginUrl);
     await expect(redirected.getByRole("heading", { name: "Proxy login" })).toBeVisible();
     await redirected.close();
@@ -121,6 +125,7 @@ test.describe("signing in through a proxy", () => {
     await reloaded.goto(proxied.url);
     await expect(reloaded.getByText("Signed in as Alice")).toBeVisible();
     proxied.setMode("html");
+    await returnToTab(reloaded);
     await expect(reloaded.getByRole("heading", { name: "Proxy sign-in" })).toBeVisible();
 
     proxied.setMode("signed-in");
@@ -130,6 +135,7 @@ test.describe("signing in through a proxy", () => {
       (window as unknown as { loadedOnce: boolean }).loadedOnce = true;
     });
     proxied.setMode("html");
+    await returnToTab(reloaded);
 
     await expect(reloaded.getByText("Your sign-in has ended.")).toBeVisible();
     await expect(reloaded.getByRole("button", { name: "Sign in again" })).toBeVisible();

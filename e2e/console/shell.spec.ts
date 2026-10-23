@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page, Route } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import {
   expect,
@@ -13,6 +13,7 @@ import {
   test,
   withActionSurfaces,
 } from "./fixtures.js";
+import { addInboxItems, endingItem, waitingItem } from "./inbox-stub.js";
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -43,6 +44,36 @@ test.describe("the shell", () => {
     await page.goto("/no-such-page");
     await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
     expect(await hasHorizontalScroll(page)).toBe(false);
+  });
+
+  test("the sidebar's Inbox count reads only /v1/inbox on every page, and the Inbox page reads no leases, tokens or requests", async ({
+    daemon,
+    page,
+  }) => {
+    const asked = new Map<string, number>();
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      if (pathname.startsWith("/v1/")) asked.set(pathname, (asked.get(pathname) ?? 0) + 1);
+    });
+    await page.goto("/usage");
+    await signIn(page, daemon.tokens.operator);
+    await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
+    await expect.poll(() => asked.get("/v1/inbox")).toBe(1);
+
+    // why: the sign-in check and the token check at start each read /v1/workers outside the query
+    // layer, so two are allowed.
+    expect(asked.get("/v1/workers") ?? 0).toBeLessThanOrEqual(2);
+    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
+      expect(asked.get(path) ?? 0, path).toBe(0);
+    }
+
+    // why: the Inbox page reads the items and the worker list, and the page is drawn once both are in,
+    // so a read of leases, tokens or requests would have been asked by then.
+    await page.getByRole("link", { name: /^Inbox/ }).click();
+    await expect(page.getByText("Nothing needs you.")).toBeVisible();
+    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
+      expect(asked.get(path) ?? 0, path).toBe(0);
+    }
   });
 
   test("every control in the shell is reachable and usable with the keyboard alone", async ({
@@ -266,53 +297,10 @@ test.describe("the shell", () => {
 
       // why: a request that has waited two minutes and a lease about to end fill the Inbox's groups
       // and the Overview's panel; neither can be had quickly from a real daemon, so both are stubbed.
-      await page.route(
-        (url) => url.pathname === "/v1/lease-requests",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          await route.fulfill({
-            json: {
-              requests: [
-                {
-                  createdAt: now - 125_000,
-                  id: "req_busy",
-                  queuePosition: 1,
-                  requesterId: "busy-agent",
-                  spec: { platform: "ios" },
-                  stage: "queued",
-                },
-              ],
-            },
-            response,
-          });
-        },
-      );
-      await page.route(
-        (url) => url.pathname === "/v1/leases",
-        async (route: Route) => {
-          const response = await route.fetch();
-          const now = new Date(response.headers().date ?? "").getTime();
-          await route.fulfill({
-            json: {
-              leases: [
-                {
-                  deviceId: "dev_busy",
-                  grantedAt: now - 60_000,
-                  id: "lse_busy",
-                  idChosenByRequester: false,
-                  lastRenewedAt: now - 30_000,
-                  ownerId: "tok_busy",
-                  requesterId: "tok_busy",
-                  ttlDeadline: now + 60_000,
-                  ttlMs: 900_000,
-                },
-              ],
-            },
-            response,
-          });
-        },
-      );
+      await addInboxItems(page, () => [
+        waitingItem("req_busy", 125_000),
+        endingItem("lse_busy", 60_000, { holder: "tok_busy", model: "dev_busy" }),
+      ]);
       await page.goto("/inbox");
       await expect(page.getByRole("region", { name: "Needs a look" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Heads-up" })).toBeVisible();
