@@ -50,8 +50,12 @@ the Simlock user can skip the edge through agent-device's own loopback port.
 A trusted loopback request with no credential is the identity
 `{ principal: "local", name: "Local agent", role: "agent", via: "loopback", ambient: false }`.
 Every local agent shares it, and so shares the agent-device tenant `local`.
-Agents keep apart by their agent-device `--session` names, as on the CLI
-path. Leases it opens are owned by `local`; the requester stays the
+Agents keep apart by their agent-device sessions, so every command passes
+the agent's own `--session`: agent-device 0.21.28 runs a command with no
+`--session` flag in the session that connected last
+(`dist/src/cli.js`, `allowActiveFallback`), on every path. A per-session
+identity would not help there, because the fallback brings that session's
+tenant with it. Leases it opens are owned by `local`; the requester stays the
 agent-device lease id, as today.
 
 ### 2. Where it applies
