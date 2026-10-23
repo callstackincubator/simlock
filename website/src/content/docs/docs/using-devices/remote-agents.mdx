@@ -90,7 +90,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
    While it waits, `state` is `queued` (with `queuePosition`), `downloading`, `reclaiming`, `provisioning` or `booting` (with `etaSeconds`). A granted request carries the lease:
 
    ```json
-   {"request":{"createdAt":"2026-10-21T09:12:00.000Z","id":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","state":"granted","lease":{"id":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","requestId":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","platform":"ios","device":"iPhone 16","os":"18.6","udid":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","deviceId":"dev_8c1f2e7a-4b6d-4e0f-9a3c-5d2b7e1f0a64","createdAt":"2026-10-21T09:12:41.000Z","expiresAt":"2026-10-21T09:42:41.000Z","ttlMs":1800000,"dataPlane":null,"mode":"full"}}}
+   {"request":{"createdAt":"2026-10-21T09:12:00.000Z","id":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","state":"granted","lease":{"id":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","requestId":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","platform":"ios","device":"iPhone 16","os":"18.6","udid":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","address":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","deviceId":"dev_8c1f2e7a-4b6d-4e0f-9a3c-5d2b7e1f0a64","createdAt":"2026-10-21T09:12:41.000Z","expiresAt":"2026-10-21T09:42:41.000Z","ttlMs":1800000,"dataPlane":null,"mode":"full"}}}
    ```
 
    A failed request carries `error` with a `code` and `message`, such as `QUEUE_TIMEOUT` when `timeoutMs` ran out.
