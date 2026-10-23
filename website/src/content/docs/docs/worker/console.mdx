@@ -13,41 +13,26 @@ On a gateway the same console shows every worker in the fleet. See [Fleet consol
 
 ## Turn on the console
 
-The console comes with the HTTP API. It is on whenever HTTP is on, and there is no separate switch. On a worker, HTTP is off by default. A worker that has joined a gateway cannot turn it on: use the gateway's console instead.
+The console comes with the HTTP API. It is on whenever HTTP is on, and there is no separate switch. A standalone worker has HTTP on by default. A worker that has joined a gateway cannot turn it on: use the gateway's console instead.
 
 <Aside type="caution">
-Turning on HTTP opens a network listener. By default it listens on `127.0.0.1:4701`, so only this machine can reach it. If you set `http.host` to `0.0.0.0` or another address, anyone who can reach that port can load the sign-in page and call the HTTP API with a token. Simlock does not do TLS: to reach the console from another machine, put a reverse proxy or a tunnel in front of it.
+HTTP is a network listener, on by default on a standalone worker. By default it listens on `127.0.0.1:4701`, so only this machine can reach it. If you set `http.host` to `0.0.0.0` or another address, anyone who can reach that port can load the sign-in page and call the HTTP API with a token. Simlock does not do TLS: to reach the console from another machine, put a reverse proxy or a tunnel in front of it.
 </Aside>
 
-<Steps>
+Start the daemon. `simlock daemon start` prints the console's address:
 
-1. Turn on HTTP:
+```sh
+simlock daemon start
+```
 
-   ```sh
-   simlock config set http.enabled true
-   ```
+```text
+Daemon running
+Console: http://127.0.0.1:4701/
+```
 
-   ```text
-   Updated http.enabled in /Users/alex/.simlock/config.json; takes effect on daemon restart.
-   ```
+To turn HTTP off, run `simlock config set http.enabled false` and restart the daemon.
 
-2. Restart the daemon so the setting takes effect:
-
-   ```sh
-   simlock daemon stop
-   simlock daemon start
-   ```
-
-   `simlock daemon start` prints the console's address:
-
-   ```text
-   Daemon running
-   Console: http://127.0.0.1:4701/
-   ```
-
-</Steps>
-
-To listen on another address or port, set `http.host` and `http.port` the same way, then restart. See [Configuration](/simlock/docs/worker/configuration).
+To listen on another address or port, set `http.host` and `http.port` with `simlock config set`, then restart. See [Configuration](/simlock/docs/worker/configuration).
 
 ## Open the console
 

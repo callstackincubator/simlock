@@ -330,8 +330,8 @@ export const home = {
       },
       {
         icon: "network",
-        title: "Nothing listens by default",
-        body: "The HTTP API and the console are off until you set `http.enabled`, and bind to loopback.",
+        title: "Loopback only by default",
+        body: "The HTTP API and the console listen on loopback only, and both ask for a token. Nothing is reachable from another machine until you change `http.host`.",
       },
       {
         icon: "faders",

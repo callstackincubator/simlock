@@ -4,7 +4,7 @@ Does: runs two agent-device daemons per worker (the simulator daemon over Simloc
 Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds one `AgentDeviceSupervisor` per role). The module host loads both.
 Uses: ports, auth (`Identity`), http (session, errors), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
 Imported by: the module registry (`index.ts` only); `daemon/main.ts` imports nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
-Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.
+On unless `capabilities.agent-device.enabled` is set false, on a standalone worker (`definition.ts` declares `enabledByDefault: "standalone-worker"`); off on a joined worker and a gateway unless set true. Off: nothing mounted, no daemon. When on only by default and the command is not found, the capability reads `off` and `agentDeviceFindings` says nothing (`isAbsentByDefault`); every other trouble, and a not-found with `enabled: true` set, stays `unavailable` with its finding.
 
 ## Files
 

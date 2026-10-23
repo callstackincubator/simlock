@@ -14,7 +14,7 @@ Simlock runs two agent-device daemons on each worker and watches both: one over 
 On each worker:
 
 - agent-device 0.21.28 or later, installed so the daemon's user can run `agent-device`. Simlock never installs or updates it.
-- HTTP turned on, since agents reach agent-device over HTTP.
+- HTTP on, since agents reach agent-device over HTTP. A standalone worker has it on by default.
 
 On each agent's machine:
 
@@ -29,14 +29,13 @@ The phone daemon runs `adb` without Simlock's version check, so its `adb` must c
 
 <Steps>
 
-1. On a standalone worker, turn on agent-device and HTTP. A worker that joins a gateway turns on only agent-device, and keeps HTTP off:
+1. A standalone worker serves agent-device by default, with HTTP on `127.0.0.1:4701`: there is nothing to turn on. Install agent-device so the daemon's user can run it, then restart the worker (`simlock daemon stop`, then `simlock daemon start`); the worker looks for the command only when it starts. Until agent-device is installed, the worker's agent-device capability is `off` and `simlock doctor` says nothing. A worker that joins a gateway has agent-device off, and HTTP off for good; turn on only agent-device there:
 
    ```sh
    simlock config set capabilities.agent-device.enabled true
-   simlock config set http.enabled true
    ```
 
-   HTTP listens on `127.0.0.1:4701` by default. For agents on other machines, set `http.host` and put a reverse proxy with TLS in front; Simlock does not do HTTPS itself (see [Configuration reference](/simlock/docs/reference/configuration)). If `agent-device` is not on the daemon's `PATH`, set `capabilities.agent-device.command` to its full path.
+   For agents on other machines, set `http.host` and put a reverse proxy with TLS in front; Simlock does not do HTTPS itself (see [Configuration reference](/simlock/docs/reference/configuration)). If `agent-device` is not on the daemon's `PATH`, set `capabilities.agent-device.command` to its full path. Setting `capabilities.agent-device.enabled` to `true` yourself makes a missing command show up as a `simlock doctor` finding.
 
 2. With a gateway, turn agent-device on there too. The gateway runs no agent-device of its own; it sends each agent to a worker where agent-device is available:
 
@@ -100,7 +99,7 @@ The URL is the worker's HTTP address, or the gateway's (port 4700 by default), f
 
 ## On the same Mac
 
-On a standalone worker with HTTP and agent-device turned on, an agent on the same Mac, running as the same user, needs no token of its own. At each start the worker writes `agent-device-profile.json` in its data directory (`~/.simlock/` for a user session), readable only by its user. It holds the worker's agent-device URL and one agent token, labelled `agent-device on this Mac`. Connect with that file:
+On a standalone worker, where HTTP and agent-device are on by default, an agent on the same Mac, running as the same user, needs no token of its own. At each start the worker writes `agent-device-profile.json` in its data directory (`~/.simlock/` for a user session), readable only by its user. It holds the worker's agent-device URL and one agent token, labelled `agent-device on this Mac`. Connect with that file:
 
 ```sh
 agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1
@@ -111,7 +110,7 @@ agent-device close --session s1
 
 Pass `--session` on every command. All local agents share the profile's one token, so they share one Simlock identity: give each agent its own `--session` name, or two agents will see each other's devices.
 
-The worker keeps the same token across restarts, so a saved connection keeps working. If the file changes anyway (you changed `http.port`, or revoked the token with `simlock token revoke`), agent-device refuses the saved connection with `Active remote connection config changed`. Run `agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1 --force` to refresh it. The worker removes the file and revokes the token when HTTP or agent-device is turned off. A worker that joins a gateway writes none. Do not give your own tokens the label `agent-device on this Mac`: the worker revokes them at the next start.
+The worker keeps the same token across restarts, so a saved connection keeps working. If the file changes anyway (you changed `http.port`, or revoked the token with `simlock token revoke`), agent-device refuses the saved connection with `Active remote connection config changed`. Run `agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1 --force` to refresh it. The worker removes the file and revokes the token when HTTP or agent-device is turned off (`http.enabled` or `capabilities.agent-device.enabled` set to `false`). A worker that joins a gateway writes none. Do not give your own tokens the label `agent-device on this Mac`: the worker revokes them at the next start.
 
 ## Through a gateway
 

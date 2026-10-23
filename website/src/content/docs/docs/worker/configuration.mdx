@@ -89,7 +89,7 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 
 | Goal | Key | Default |
 | --- | --- | --- |
-| Turn on the HTTP API and the console | `http.enabled` | `false` |
+| Turn off the HTTP API and the console | `http.enabled` | `true` on a standalone worker |
 | Choose the address and port HTTP listens on | `http.host`, `http.port` | `127.0.0.1`, `4701` |
 | Keep idle devices booted longer | `idle.shutdownAfterMs` | `600000` (10 min) |
 | Keep shut-down devices on disk longer | `idle.deleteAfterMs` | `3600000` (60 min) |
@@ -107,13 +107,15 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 
 The sections below show the common changes. Each needs a restart.
 
-### Turn on HTTP
+### Turn off HTTP
+
+A standalone worker serves the HTTP API and the [console](/simlock/docs/worker/console) on `127.0.0.1:4701` with no setting. Both still ask for a token. To stop it:
 
 ```sh
-simlock config set http.enabled true
+simlock config set http.enabled false
 ```
 
-This is what remote agents and the [console](/simlock/docs/worker/console) need. A worker that has joined a gateway (`gateway.url` is set) refuses it: set `http.enabled` to `false` there and use the gateway instead.
+A worker that has joined a gateway (`gateway.url` is set) has HTTP off, and refuses `true`: use the gateway instead. Agent-device is on by default on a standalone worker too; see [agent-device](/simlock/docs/using-devices/agent-device).
 
 <Aside type="caution">
 Turning on HTTP opens a network listener. It listens on `127.0.0.1` by default, so only this machine can reach it. Setting `http.host` to `0.0.0.0` lets any machine that can reach the port try to connect. Simlock does not do TLS: put a reverse proxy in front of it for HTTPS. See [Remote agents](/simlock/docs/using-devices/remote-agents).

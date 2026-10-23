@@ -15,7 +15,7 @@ Imported by: `daemon/main.ts` (the factory and types); on a gateway it is handed
 
 ## Rules
 
-- A module is on only under `capabilities.<name>.enabled`; off, nothing of it is loaded and its capability reads `off`.
+- A module is on only under `capabilities.<name>.enabled`; off, nothing of it is loaded and its capability reads `off`. `enabled` defaults to false; a definition with `enabledByDefault: "standalone-worker"` gets true on a worker with no `gateway.url` when no layer sets it. The loader reports those names (`loadConfigWithDefaults`), and the host hands the module `ctx.enabledByDefault`.
 - Names: the capability name pattern, unique, not a core route segment, at most 16 capabilities.
 - Creating starts nothing. A start that fails before the socket is claimed drops created modules; after it, the normal stop runs their stop hooks.
 - Hooks are direct calls. `afterSocketClaimed` is not awaited; `beforeDrain` and `beforeDriversDispose` share one 30 s budget per step; a throw is logged and the step goes on.
