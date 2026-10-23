@@ -1,4 +1,4 @@
-# 0046. `device.exec` fills in the lease's device, and refuses another
+# 0047. `device.exec` fills in the lease's device, and refuses another
 
 - **Status:** Proposed
 - **Date:** 2026-10-23
