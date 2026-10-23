@@ -7,6 +7,8 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
   await setupAgentTools({
     filesystem: environment.filesystem,
     homeDirectory: environment.homeDirectory,
+    workingDirectory: "",
+    scope: "user",
     tool: values.tool as AgentTool,
   });
   return 0;

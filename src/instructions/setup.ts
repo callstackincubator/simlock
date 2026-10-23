@@ -30,6 +30,8 @@ export interface SetupReport {
 export interface SetupAgentToolsOptions {
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
+  readonly workingDirectory: string;
+  readonly scope: SetupScope;
   readonly tool: AgentTool;
 }
 
