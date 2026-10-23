@@ -319,7 +319,7 @@ describe("authentication and role/ownership (via the shared dispatcher)", () => 
     },
   );
 
-  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.list's own filter now, not a separate check", async () => {
+  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.get's own answer, not a separate check", async () => {
     const { app, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
     registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" })];

@@ -405,9 +405,9 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const id = c.req.valid("param").id;
     const { ttlMs } = c.req.valid("json");
 
-    // why: Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
+    // why: Dispatched directly (not via `findOwnedLease`/`lease.get`) so `lease.renew`'s own
     // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
-    // socket transport, rather than the `UNKNOWN_LEASE`/404 a `lease.list` filter would produce
+    // socket transport, rather than the `UNKNOWN_LEASE`/404 `lease.get`'s hidden-lease answer would produce
     // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself, and a
     // `ttlMs` above `lease.maxTtlMs` as `BAD_REQUEST`/400 -- the cap lives in the shared
     // dispatcher, and this route awaits it, so there is nothing to restate here. Answering it
@@ -443,10 +443,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     // unix socket or a future uplink gets the same `FORBIDDEN` this route now inherits
     // rather than defining.
 
-    // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
+    // why: dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
     // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
     // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
-    // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
+    // `lease.get` would produce (see `findOwnedLease`'s comment).
     // Where a chunk goes at each stage of this request's life, including after the client
     // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
     // and is tested.
@@ -594,14 +594,13 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const session = buildHttpSession(identity);
     const id = c.req.valid("param").id;
 
-    // Best-effort lookup, only to decorate the response with the device id/state --
+    // why: best-effort lookup, only to decorate the response with the device id/state --
     // `lease.release`'s output schema is `{ leaseId }` alone (no `deviceId`), so this is still
     // needed for the response body. It is *not* the authorization decision: `lease.release`
     // below is dispatched directly and is the sole source of truth for whether this request is
     // allowed (S6). Its `ownsLease` hook answers `FORBIDDEN`/403 for someone else's lease and
     // the handler answers `UNKNOWN_LEASE`/404 for a nonexistent one, matching the socket
-    // transport exactly -- unlike the `lease.list`-filtered `findOwnedLease`, which always
-    // answered 404 for both cases.
+    // transport exactly.
     const lease = await findLeaseForDecoration(deps, session, id);
 
     await deps.dispatch("lease.release", { leaseId: id }, session);
