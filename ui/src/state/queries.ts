@@ -131,11 +131,20 @@ export function createQueries(options: QueriesOptions): Queries {
       const hash = hashKey(key);
       return {
         queryFn: async () => {
-          const answer = await connection.read<T>(path, { tag: tags.get(hash) });
-          if (answer.notModified === true) return client.getQueryData<T>(key) as T;
-          if (answer.tag === null) tags.delete(hash);
-          else tags.set(hash, answer.tag);
-          return answer.body;
+          let tag = tags.get(hash);
+          for (;;) {
+            const answer = await connection.read<T>(path, { tag });
+            if (answer.notModified !== true) {
+              if (answer.tag === null) tags.delete(hash);
+              else tags.set(hash, answer.tag);
+              return answer.body;
+            }
+            const kept = client.getQueryData<T>(key);
+            if (kept !== undefined) return kept;
+            // why: the data this tag stood for was dropped while the read was out, so the tag
+            // describes nothing and the whole answer is read again.
+            tag = undefined;
+          }
         },
         queryKey: key,
         staleTime: timesOf(key).freshMs,
