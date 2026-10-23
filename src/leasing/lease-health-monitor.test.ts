@@ -63,6 +63,7 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
       ...overrides,
     },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 100,
       maxTtlMs: 100,

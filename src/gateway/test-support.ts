@@ -11,6 +11,8 @@ import type { z } from "zod";
 import type {
   ComponentInstallInput,
   ComponentInstallOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   ExecInput,
   ExecOptions,
   ExecOutput,
@@ -73,7 +75,14 @@ export function statusFixture(overrides: Partial<RunningStatus> = {}): RunningSt
       global: { maxRunning: 4, overLimit: false, reserved: 0, running: 0, warm: 0 },
       ios: { ...emptyPlatformCapacity },
     },
-    daemon: { health: "running", mode: "worker" },
+    daemon: {
+      health: "running",
+      mode: "worker",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    },
     devices: [],
     host: hostFixture(),
     leases: [],
@@ -391,6 +400,29 @@ export class ScriptedWorkerClient {
       this.#statusHold = undefined;
       release();
     };
+  }
+
+  readonly updateInputs: DaemonUpdateInput[] = [];
+  updateAnswer: DaemonUpdateOutput = {
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+  };
+
+  // why: the degraded client lets `daemon.update` through (ADR 0042 §1), so this answers even when `failWith` is set.
+  updateFailWith: unknown;
+
+  async updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
+    this.calls.push("daemon.update");
+    this.updateInputs.push(input);
+    if (this.hangingCalls.has("daemon.update")) return new Promise<never>(() => {});
+    if (this.updateFailWith !== undefined) throw this.updateFailWith;
+    return this.updateAnswer;
   }
 
   async getStatus(): Promise<StatusGetOutput> {

@@ -109,7 +109,7 @@ The **Gateway** column below says what a gateway shows for each event:
 | `lease.renewed` | A lease was renewed. | `leaseId`, `newDeadline` | Relayed |
 | `lease.released` | A lease ended because someone or something ended it. | `leaseId`, `deviceId`, `reason` (`explicit`: released; `killed`: `release --all` or `nuke`; `device-lost`: the device crashed and could not be brought back, or a physical device went away), `ownerId` | Relayed |
 | `lease.expired` | A lease reached its deadline without a renew. | `leaseId`, `deviceId`, `ownerId` | Relayed |
-| `lease.rejected` | A request ended without a device. A worker records it only for its own requests. | `requestId`, `requester`, `requestSpec`, `reason` (`timeout`, `no-wait`, `unresolvable-spec`, `no-worker`, `already-leased`, `lease-id-taken`, `boot-timeout`, `killed`, `cancelled`, `daemon-restarted`, `worker-failed`), and on `worker-failed` the error `code` and the `worker` | Own and relayed |
+| `lease.rejected` | A request ended without a device. A worker records it only for its own requests. | `requestId`, `requester`, `requestSpec`, `reason` (`timeout`, `no-wait`, `unresolvable-spec`, `no-worker`, `already-leased`, `lease-id-taken`, `boot-timeout`, `killed`, `updating`, `cancelled`, `daemon-restarted`, `worker-failed`), and on `worker-failed` the error `code` and the `worker` | Own and relayed |
 | `lease.declined` | A worker refused or failed a request a gateway sent it. The gateway may try another worker. | `requestId`, `fleetRequestId`, `requester`, `requestSpec`, `reason` (the `lease.rejected` values) | Relayed |
 | `request.granted` | The gateway handed a worker's grant to the caller. | `requestId`, `worker`, `leaseId` (the gateway's), `workerLeaseId` | Own |
 | `request.dispatched` | The gateway sent a queued request to a worker and the worker took it. | `requestId`, `workerId`, `requesterId`, `platform`, `model` or `class` when named, `mode` when named, `physical` for a physical request, `reason` (`warm-hit` or `free-capacity`), `stage`, `queuedMs` | Own |
@@ -180,6 +180,8 @@ as `incompatible` in `simlock --gateway worker list`.
 | Event | When it fires | Payload | Gateway |
 | --- | --- | --- | --- |
 | `daemon.started` | The daemon finished starting. | `version`, `configSnapshot` (tokens, alert URLs and secrets shown as `[redacted]`) | Own (a worker records its own before the gateway starts listening to it, so it is not relayed) |
+| `daemon.update-started` | An update began: the daemon resolved the version and now waits for its leases to end or installs. | `from`, `to`, `forced` | Relayed |
+| `daemon.update-failed` | An update ended without a new daemon: the install failed and this daemon serves again, or the new version did not start and the old one was started again. | `stage` (`installing` or `restarting`), `from`, `to`, `message` | Relayed |
 | `daemon.stopping` | The daemon began to stop. | `reason` (`signal` when the daemon process received SIGTERM) | Own and relayed |
 | `doctor.reconciled` | Simlock compared its records with the devices on disk (at start and on `simlock doctor`). | `driftFindings` | Relayed |
 | `cleanup.executed` | Cleanup shut down or deleted an idle device. | `ruleName` (`idle-shutdown` or `idle-destroy`), `action` (`shutdown` or `destroy`), `target`, `reason` | Relayed |

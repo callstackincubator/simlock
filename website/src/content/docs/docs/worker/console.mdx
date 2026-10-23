@@ -87,7 +87,7 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**.
+The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
 
 Every page but the overview is a list on the left and the item you chose on the right. Lists show 25 rows at a time, with a pager for 50 or 100.
 
@@ -128,6 +128,14 @@ Select the worker to see three tabs:
 - **Overview**: CPU, memory and disk, each with a bar; how many leases it holds; a square per device slot for iOS and Android (leased, ready, booting, quarantined or free); and every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
 - **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
+
+### Update a worker
+
+On a gateway, a worker that runs an older version than the gateway knows of shows `simlock 0.3.0 · 0.4.0 available` beside its name. Its **⋯** menu, and the search (⌘K), offer **Update…**. The dialog says how many leases the worker holds: with none it installs at once; otherwise it takes no new leases and waits for them to end, then restarts by itself. Confirm with **Update** and a toast says `Updating <name> to <version>`; if the worker already updates you see `<name> is already updating to <version>`, and if it already runs the version, `<name> already runs <version>`.
+
+While an update runs, the worker's state reads `updating` and the row says its stage: `waiting for 2 leases`, `installing` or `restarting`. A worker that waits for leases also offers **Update now**, which asks `Install <version> on <name> now?`; **Install now** restarts it at once, and its leases keep running through the restart. A disconnected worker offers no **Update now**. An incompatible worker, one that cannot talk to the gateway until it is updated, offers **Update…** whatever the latest version, and **Update now** once its update is waiting for leases.
+
+If an update fails, the worker's page shows a red banner, `Update to 0.4.0 failed (installing): <message>`, with an **Update again** button, and the [Attention](#attention) page lists it. The worker runs its old version again.
 
 While the daemon is still starting, devices, capacity and the warm pool are left out. They appear once startup finishes.
 
@@ -182,7 +190,7 @@ A request leaves the list as soon as it gets its device, fails or is cancelled. 
 | `quarantined` | Simlock could not clean up a device. Its **Cause** says what failed: `Purge failed`, `Shutdown failed`, `Delete failed`, or `Stalled while provisioning` or `reclaiming`. Simlock retries the cleanup in the background and leases the device to no one meanwhile. | Wait for the retry, or see [Troubleshooting](/simlock/docs/worker/troubleshooting). |
 | `stalled` | A device has been `provisioning` or `reclaiming` for longer than it should take, with nothing working on it. `simlock doctor` reports the same devices. | See [Troubleshooting](/simlock/docs/worker/troubleshooting). |
 
-On a gateway the list also has `disconnected`, `incompatible` and `drained` workers; a single worker never shows those. See [Fleet console](/simlock/docs/gateway/fleet-console).
+On a gateway the list also has `update failed`: the update of a worker failed, with **Update…** as its fix. The facts are **From**, **To**, **Stage** and **When**. The list also has `disconnected`, `incompatible` and `drained` workers; a single worker never shows those. See [Fleet console](/simlock/docs/gateway/fleet-console).
 
 Select an item to see the facts that matter for it, such as how much RAM the worker uses of its budget, and the events of the last hour about that device or worker.
 
