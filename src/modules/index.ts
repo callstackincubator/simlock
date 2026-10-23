@@ -13,7 +13,6 @@ export type {
   ModuleFinding,
   ModuleHttpResponse,
   ModuleLeaseEndParticipant,
-  ModuleLocalProfile,
   ModuleMount,
   ModuleRegistryView,
   ModuleRelayTarget,

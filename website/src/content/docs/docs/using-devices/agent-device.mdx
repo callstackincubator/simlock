@@ -19,7 +19,7 @@ On each worker:
 On each agent's machine:
 
 - agent-device 0.21.28 or later. An older CLI is refused with `refused: this agent-device is too old for simlock; upgrade it`.
-- Its own Simlock agent token. Simlock tells agents apart by token: two agents that share a token share one agent-device session and see each other's devices.
+- Its own Simlock agent token, unless it runs on the worker's Mac (see [On the same Mac](#on-the-same-mac)). Simlock tells agents apart by token: two agents that share a token share one agent-device session and see each other's devices.
 
 agent-device through Simlock drives simulators, emulators and, with `--physical`, phones enrolled in Simlock (see [Physical devices](/simlock/docs/using-devices/physical-devices)). `open --physical` leases an enrolled phone: the command goes to the phone daemon and the reply names the device with `physical: true`. Simlock picks the phone, so name no `--udid` or `--serial`.
 

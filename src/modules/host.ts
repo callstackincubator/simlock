@@ -10,8 +10,10 @@ import type {
   ModuleHost,
   ModuleHostOptions,
   ModuleLeaseEndParticipant,
+  ModuleLocalProfile,
   ModuleMount,
   ModuleRelayTarget,
+  ModuleTokens,
   MountDeps,
   OptionalModuleDefinition,
   WorkerModule,
@@ -22,19 +24,50 @@ function profileOrigin(host: string, port: number): string {
   return `http://${reachable.includes(":") ? `[${reachable}]` : reachable}:${String(port)}`;
 }
 
-async function readProfileSecret(
+// why: a missing, unreadable or malformed file all mean "make a new token".
+async function readStoredProfile(
   filesystem: Filesystem,
   path: string,
-): Promise<string | undefined> {
+): Promise<{ readonly text: string; readonly secret: string } | undefined> {
   try {
-    const parsed: unknown = JSON.parse(await filesystem.readFile(path));
+    const text = await filesystem.readFile(path);
+    const parsed: unknown = JSON.parse(text);
     const secret =
       typeof parsed === "object" && parsed !== null
         ? (parsed as { daemonAuthToken?: unknown }).daemonAuthToken
         : undefined;
-    return typeof secret === "string" ? secret : undefined;
+    return typeof secret === "string" ? { secret, text } : undefined;
   } catch {
     return undefined;
+  }
+}
+
+async function revokeLabelled(tokens: ModuleTokens, label: string, keep?: string): Promise<void> {
+  for (const other of await tokens.list()) {
+    if (other.label === label && other.id !== keep) await tokens.revoke(other.id);
+  }
+}
+
+async function publishLocalProfile(
+  localProfile: ModuleLocalProfile,
+  path: string,
+  options: ModuleHostOptions,
+): Promise<void> {
+  const { tokens } = options;
+  const { filesystem } = options.context;
+  const stored = await readStoredProfile(filesystem, path);
+  const verified = stored === undefined ? undefined : await tokens.verify(stored.secret);
+  const live = verified?.label === localProfile.tokenLabel ? verified : undefined;
+  const made =
+    live === undefined ? await tokens.create("agent", localProfile.tokenLabel) : undefined;
+  const id = live?.id ?? made?.record.id;
+  await revokeLabelled(tokens, localProfile.tokenLabel, id);
+  const contents = localProfile.render(
+    profileOrigin(options.config.http.host, options.config.http.port),
+    made?.secret ?? stored?.secret ?? "",
+  );
+  if (live === undefined || stored?.text !== contents) {
+    await filesystem.writeFileAtomic(path, contents, { mode: 0o600 });
   }
 }
 
@@ -44,35 +77,12 @@ async function prepareLocalProfile(
 ): Promise<void> {
   const { localProfile } = definition;
   if (localProfile === undefined) return;
-  const { tokens } = options;
-  const { filesystem } = options.context;
   const path = join(options.context.dataDirectory, localProfile.fileName);
-  if (
-    options.config.capabilities[definition.name]?.enabled !== true ||
-    !options.config.http.enabled
-  ) {
-    if (await filesystem.exists(path)) await filesystem.rm(path);
-    for (const other of await tokens.list()) {
-      if (other.label === localProfile.tokenLabel) await tokens.revoke(other.id);
-    }
-    return;
-  }
-  const stored = await readProfileSecret(filesystem, path);
-  const verified = stored === undefined ? undefined : await tokens.verify(stored);
-  const kept = verified?.label === localProfile.tokenLabel ? verified : undefined;
-  const made =
-    kept === undefined ? await tokens.create("agent", localProfile.tokenLabel) : undefined;
-  const id = kept?.id ?? made?.record.id;
-  const secret = made?.secret ?? stored ?? "";
-  for (const other of await tokens.list()) {
-    if (other.label === localProfile.tokenLabel && other.id !== id) await tokens.revoke(other.id);
-  }
-  const contents = localProfile.render(
-    profileOrigin(options.config.http.host, options.config.http.port),
-    secret,
-  );
-  if (kept !== undefined && (await filesystem.readFile(path)) === contents) return;
-  await filesystem.writeFileAtomic(path, contents, { mode: 0o600 });
+  const applies =
+    options.config.capabilities[definition.name]?.enabled === true && options.config.http.enabled;
+  if (applies) return publishLocalProfile(localProfile, path, options);
+  if (await options.context.filesystem.exists(path)) await options.context.filesystem.rm(path);
+  await revokeLabelled(options.tokens, localProfile.tokenLabel);
 }
 
 const HOOK_DEADLINE_MS = 30_000;

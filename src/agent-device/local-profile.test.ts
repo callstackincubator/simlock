@@ -61,17 +61,21 @@ interface LaunchOptions extends Switches {
   readonly resume?: { readonly directory: string; readonly filesystem: MemoryFilesystem };
 }
 
+async function dataDirectoryFor(
+  options: LaunchOptions,
+): Promise<{ directory: string; filesystem: MemoryFilesystem }> {
+  if (options.resume !== undefined) return options.resume;
+  const directory = await mkdtemp(join(tmpdir(), "simlock-local-profile-"));
+  temporaryDirectories.push(directory);
+  await seedTokensDatabase(directory, options.seed ?? []);
+  return { directory, filesystem: new MemoryFilesystem() };
+}
+
 async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const host = options.host ?? "127.0.0.1";
-  const directory =
-    options.resume?.directory ?? (await mkdtemp(join(tmpdir(), "simlock-local-profile-")));
+  const { directory, filesystem } = await dataDirectoryFor(options);
   const clock = new FakeClock(1_000);
-  const filesystem = options.resume?.filesystem ?? new MemoryFilesystem();
   const logs = new MemoryLogSink();
-  if (options.resume === undefined) {
-    temporaryDirectories.push(directory);
-    await seedTokensDatabase(directory, options.seed ?? []);
-  }
   const port = options.port ?? (await freeLoopbackPort());
   if (options.refuseWrite === true) {
     filesystem.defineFailure(join(directory, "agent-device-profile.json"), "EACCES");

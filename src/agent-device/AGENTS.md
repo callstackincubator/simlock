@@ -133,7 +133,7 @@ under leasing's signal (`lease.endWaitMs`).
 Disk: `<data dir>/agent-device/` and `<data dir>/agent-device-phones/` (agent-device's own files) and the two pid records. Front map,
 renewals and release scopes: memory only.
 
-Local profile: a standalone worker with HTTP and this module on keeps `<data dir>/agent-device-profile.json` (0600) so an agent on the same Mac connects with `agent-device connect --remote-config <file>` and no token of its own ([ADR 0046](../../docs/internal/adr/0046-a-local-agent-reaches-agent-device-without-a-token.md)). `definition.ts` declares the file as plain data; the module host writes it at each start, reuses the one `agent`-role token labelled `agent-device on this Mac` (so an agent's saved connection stays valid), revokes other tokens with that label, and deletes the file and revokes the token when HTTP or the module is off. No worker code runs for it.
+Local profile: a standalone worker with HTTP and this module on keeps `<data dir>/agent-device-profile.json` (0600) so an agent on the same Mac connects with `agent-device connect --remote-config <file>` and no token of its own ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)). `definition.ts` declares the file as plain data; the module host writes it at each start, reuses the one `agent`-role token labelled `agent-device on this Mac` (so an agent's saved connection stays valid), revokes other tokens with that label, and deletes the file and revokes the token when HTTP or the module is off. No worker code runs for it.
 
 ## Rules
 
