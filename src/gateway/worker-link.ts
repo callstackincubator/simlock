@@ -20,6 +20,7 @@ import {
   grantedDeviceSchema,
   isSimlockError,
   WORKER_VIEW_CATALOG_EVENTS,
+  WORKER_VIEW_UPDATE_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
 import type { StatusGetOutput } from "../admin/index.js";
@@ -134,6 +135,8 @@ export class WorkerLink {
    * (inside `#rebuildView`) rather than only once a whole refresh completes -- see
    * `MAX_CONSECUTIVE_REFRESH_TIMEOUTS`'s comment for why liveness is judged on that one call. */
   #consecutiveRefreshTimeouts = 0;
+  // why: an incompatible worker is asked only the frozen `daemon.update` (ADR 0005 §31, ADR 0042 §1), so its refresh is that query.
+  #incompatible = false;
 
   constructor(private readonly options: WorkerLinkOptions) {
     this.workerId = options.uplink.workerId;
@@ -210,6 +213,7 @@ export class WorkerLink {
       await this.#withTimeout(client.getStatus(), "status.get");
     } catch (error: unknown) {
       if (isSimlockError(error) && error.code === "PROTOCOL_VERSION_UNSUPPORTED") {
+        this.#incompatible = true;
         // ADR 0005 §31: marked `incompatible`, with both ranges, and never asked anything else.
         // The uplink stays open on purpose -- the worker is running and will reconnect on its
         // own schedule after an upgrade; closing it here would just make it redial.
@@ -306,6 +310,7 @@ export class WorkerLink {
   async refresh(options: RefreshOptions = {}): Promise<void> {
     const client = this.#client;
     if (client === undefined || this.#closed) return;
+    if (this.#incompatible) return this.#queryUpdate(client);
     if (this.#refreshing) {
       this.#queuedRefresh = queueRefresh(this.#queuedRefresh, options);
       return this.#queuedRefresh.done;
@@ -326,25 +331,7 @@ export class WorkerLink {
         workerId: this.workerId,
         message: errorMessage(error),
       });
-      // P1: a `WorkerCallTimeoutError` here is not "anything else" -- it is the one failure this
-      // class already knows means "the socket is not answering", and it used to mean nothing
-      // happened at all: `registry.refresh` was never reached, so `connection` stayed
-      // `connected` and `lastSeenAt` stayed stale, forever, on a half-open uplink. After
-      // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` in a row, close the link -- which routes through
-      // `#handleClosed` into `registry.disconnected` -- rather than let it keep confidently
-      // reporting a machine nothing can reach. `close()` is fire-and-forget here on purpose: it
-      // flips `#closed` synchronously before its own first `await`, which is what the `finally`
-      // block below needs to skip queuing another refresh behind a link that is on its way out.
-      if (error instanceof WorkerCallTimeoutError) {
-        this.#consecutiveRefreshTimeouts += 1;
-        if (this.#consecutiveRefreshTimeouts >= MAX_CONSECUTIVE_REFRESH_TIMEOUTS) {
-          this.#logger.warn("Worker stopped answering; closing its uplink", {
-            workerId: this.workerId,
-            consecutiveTimeouts: this.#consecutiveRefreshTimeouts,
-          });
-          void this.close();
-        }
-      }
+      this.#countTimeout(error);
     } finally {
       this.#refreshing = false;
       const queued = this.#queuedRefresh;
@@ -354,6 +341,42 @@ export class WorkerLink {
         if (this.#closed) queued.resolve();
         else void this.refresh(queued.options).then(queued.resolve);
       }
+    }
+  }
+
+  #countTimeout(error: unknown): void {
+    // why: P1: a `WorkerCallTimeoutError` here is not "anything else" -- it is the one failure this
+    // class already knows means "the socket is not answering", and it used to mean nothing
+    // happened at all: `registry.refresh` was never reached, so `connection` stayed
+    // `connected` and `lastSeenAt` stayed stale, forever, on a half-open uplink. After
+    // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` in a row, close the link -- which routes through
+    // `#handleClosed` into `registry.disconnected` -- rather than let it keep confidently
+    // reporting a machine nothing can reach. `close()` is fire-and-forget here on purpose: it
+    // flips `#closed` synchronously before its own first `await`, which is what the `finally`
+    // block below needs to skip queuing another refresh behind a link that is on its way out.
+    if (error instanceof WorkerCallTimeoutError) {
+      this.#consecutiveRefreshTimeouts += 1;
+      if (this.#consecutiveRefreshTimeouts >= MAX_CONSECUTIVE_REFRESH_TIMEOUTS) {
+        this.#logger.warn("Worker stopped answering; closing its uplink", {
+          workerId: this.workerId,
+          consecutiveTimeouts: this.#consecutiveRefreshTimeouts,
+        });
+        void this.close();
+      }
+    }
+  }
+
+  // why: a failed query keeps the last view, so its error is dropped.
+  async #queryUpdate(client: GatewayWorkerClient): Promise<void> {
+    try {
+      const answer = await this.#withTimeout(client.updateDaemon({ query: true }), "daemon.update");
+      if (this.#superseded()) return;
+      this.options.registry.refreshUpdate(this.workerId, answer);
+    } catch (error: unknown) {
+      this.#logger.debug("Incompatible worker's update query failed", {
+        workerId: this.workerId,
+        message: errorMessage(error),
+      });
     }
   }
 
@@ -581,7 +604,12 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
  * progress, and an install that starts or ends changes that list.
  */
 function changesCapacityOrLeases(event: string): boolean {
-  return event.startsWith("lease.") || event.startsWith("device.") || INSTALL_EVENTS.has(event);
+  return (
+    event.startsWith("lease.") ||
+    event.startsWith("device.") ||
+    INSTALL_EVENTS.has(event) ||
+    (WORKER_VIEW_UPDATE_EVENTS as readonly string[]).includes(event)
+  );
 }
 
 const INSTALL_EVENTS: ReadonlySet<string> = new Set([

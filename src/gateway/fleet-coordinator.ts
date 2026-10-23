@@ -119,7 +119,11 @@ const COULD_TAKE_LATER: ReadonlySet<WorkerReason["reason"]> = new Set([
   "full",
   "not-ready",
   "unhealthy",
+  "updating",
 ]);
+
+// why: ADR 0042 §3: a worker that began its update after the gateway's last read refuses with `DAEMON_UPDATING`, and its view is as stale as after `NO_CAPACITY`.
+const STALE_VIEW_CODES: ReadonlySet<string> = new Set(["NO_CAPACITY", "DAEMON_UPDATING"]);
 
 const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "UNKNOWN_MODEL",
@@ -1050,7 +1054,7 @@ export class FleetLeaseCoordinator {
       // that is this request's own terminal failure -- not a stale view to retry, because device
       // work already started means the request was this worker's (§11's own wording). Re-queuing
       // it anyway silently reversed a dispatch the caller had already been told about.
-      if (isSimlockError(error) && error.code === "NO_CAPACITY" && !announced) {
+      if (isSimlockError(error) && STALE_VIEW_CODES.has(error.code) && !announced) {
         this.#rememberRefusal(waiter, workerId, {
           capacityReason: refusedCapacityReason(error.details),
         });

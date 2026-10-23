@@ -20,6 +20,7 @@ export const statusRoute = declareRoute({
   tag: "System",
   summary: "The daemon's devices, leases and capacity",
   role: "agent",
+  notes: "With an agent token, leases and waiting hold only that token's own.",
   reply: OPERATIONS["status.get"].output,
 });
 

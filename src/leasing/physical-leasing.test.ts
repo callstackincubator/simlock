@@ -61,6 +61,7 @@ function config(leaseOverrides: object = {}): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 3_600_000,
       maxTtlMs: 14_400_000,

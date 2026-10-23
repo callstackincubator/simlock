@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { inboxActions, leaseActions, requestActions, workerActions } from "./actions";
 import { inboxItems } from "./inbox";
 import type { LeaseRecord } from "./leases";
+import type { UpdateFacts } from "./versions";
 import type { WaitingRequest } from "./waiting";
 import type { WorkerView } from "./workers";
 
@@ -136,6 +137,21 @@ function checksInbox(): void {
     worker({ connection: "incompatible", drained: true, id: "wrk_old_drained" }),
     worker({
       devices: [
+        { id: "dev_a", spec: { model: "iPhone 16", platform: "ios" }, state: "leased" },
+        { id: "dev_b", spec: { model: "iPhone 16", platform: "ios" }, state: "ready" },
+      ] as unknown as WorkerView["devices"],
+      id: "wrk_failed",
+      lastUpdateFailure: { at: NOW, from: "0.3.0", message: "x", stage: "installing", to: "0.4.0" },
+      latestVersion: "0.4.0",
+      version: "0.3.0",
+    }),
+    worker({
+      connection: "disconnected",
+      id: "wrk_failed_gone",
+      lastUpdateFailure: { at: NOW, from: "0.3.0", message: "x", stage: "installing", to: "0.4.0" },
+    }),
+    worker({
+      devices: [
         {
           id: "dev_1",
           mode: "full",
@@ -161,8 +177,15 @@ function checksInbox(): void {
   expect(shape(of("wrk_gone/disconnected").menu)).toEqual(["drain", "remove-worker!"]);
   expect(of("wrk_old/incompatible").fix).toBeUndefined();
   expect(of("wrk_old_drained/incompatible").fix).toBeUndefined();
-  expect(shape(of("wrk_old_drained/incompatible").menu)).toEqual(["undrain"]);
-  expect(shape(of("wrk_old/incompatible").menu)).toEqual(["drain"]);
+  expect(shape(of("wrk_old_drained/incompatible").menu)).toEqual(["undrain", "update-worker"]);
+  expect(shape(of("wrk_old/incompatible").menu)).toEqual(["drain", "update-worker"]);
+  const failed = of("wrk_failed/update-failed");
+  expect(failed.fix?.id).toBe("update-worker");
+  expect(failed.fix?.confirm?.body).toBe(
+    "It takes no new leases and waits for its 1 lease to end. It restarts by itself.",
+  );
+  expect(shape(failed.menu)).toEqual(["drain", "update-worker"]);
+  expect(of("wrk_failed_gone/update-failed").fix).toBeUndefined();
   expect(of("request/req_1/waiting").fix).toBeUndefined();
   expect(shape(of("request/req_1/waiting").menu)).toEqual(["cancel-request!"]);
   const heldLease = of("lease/lse_1/ending");
@@ -175,6 +198,228 @@ function checksInbox(): void {
   if (drainedItem === undefined) throw new Error("no drained item");
   expect(inboxActions(drainedItem, { ...context, mode: undefined })).toEqual({ menu: [] });
 }
+
+function facts(overrides: Partial<UpdateFacts> = {}): UpdateFacts {
+  return { latestVersion: "0.4.0", leased: 0, update: null, version: "0.3.0", ...overrides };
+}
+
+const STARTED = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+
+describe("the update actions a worker offers", () => {
+  it("offers Update… and Update now as the table says, and keeps Drain and Undrain", () => {
+    const cases: readonly {
+      readonly name: string;
+      readonly connection?: WorkerView["connection"];
+      readonly mode?: "gateway" | "worker";
+      readonly facts: UpdateFacts;
+      readonly offered: readonly string[];
+    }[] = [
+      { name: "a worker's mode", mode: "worker", facts: facts(), offered: [] },
+      {
+        name: "disconnected",
+        connection: "disconnected",
+        facts: facts(),
+        offered: ["drain", "remove-worker"],
+      },
+      {
+        name: "waiting",
+        facts: facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }),
+        offered: ["drain", "force-update"],
+      },
+      {
+        name: "disconnected and waiting",
+        connection: "disconnected",
+        facts: facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }),
+        offered: ["drain", "remove-worker"],
+      },
+      {
+        name: "installing",
+        facts: facts({ update: { ...STARTED, stage: "installing" } }),
+        offered: ["drain"],
+      },
+      {
+        name: "restarting",
+        facts: facts({ update: { ...STARTED, stage: "restarting" } }),
+        offered: ["drain"],
+      },
+      {
+        name: "incompatible whatever the latest",
+        connection: "incompatible",
+        facts: facts({ latestVersion: null }),
+        offered: ["drain", "update-worker"],
+      },
+      { name: "newer", facts: facts(), offered: ["drain", "update-worker"] },
+      { name: "equal", facts: facts({ latestVersion: "0.3.0" }), offered: ["drain"] },
+      { name: "older", facts: facts({ latestVersion: "0.2.0" }), offered: ["drain"] },
+      { name: "no latest", facts: facts({ latestVersion: null }), offered: ["drain"] },
+      {
+        name: "no version",
+        facts: { latestVersion: "0.4.0", leased: 0, update: null },
+        offered: ["drain"],
+      },
+    ];
+    for (const row of cases) {
+      const offered = workerActions(
+        {
+          connection: row.connection ?? "connected",
+          drained: false,
+          id: "wrk_1",
+          name: "mac-mini-1",
+          updateFacts: row.facts,
+        },
+        row.mode ?? "gateway",
+      ).map((action) => action.id);
+      expect(offered, row.name).toEqual(row.offered);
+    }
+    const drained = workerActions(
+      { connection: "connected", drained: true, id: "wrk_1", name: "m", updateFacts: facts() },
+      "gateway",
+    );
+    expect(drained.map((action) => action.id)).toEqual(["undrain", "update-worker"]);
+  });
+});
+
+describe("the Update… dialog", () => {
+  it("words its title and body for leases, none, an incompatible worker, no version and no latest, and sends {} to the worker's update route", () => {
+    const update = (connection: WorkerView["connection"], updateFacts: UpdateFacts) =>
+      workerActions(
+        { connection, drained: false, id: "wrk/1", name: "mac-mini-1", updateFacts },
+        "gateway",
+      ).find((action) => action.id === "update-worker");
+    const cases: readonly [string, WorkerView["connection"], UpdateFacts, string, string][] = [
+      [
+        "2 leased devices",
+        "connected",
+        facts({ leased: 2 }),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "It takes no new leases and waits for its 2 leases to end. It restarts by itself.",
+      ],
+      [
+        "1 leased device",
+        "connected",
+        facts({ leased: 1 }),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "It takes no new leases and waits for its 1 lease to end. It restarts by itself.",
+      ],
+      [
+        "no leases",
+        "connected",
+        facts(),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "It has no leases, so it installs at once. It restarts by itself.",
+      ],
+      [
+        "incompatible",
+        "incompatible",
+        facts({ leased: 2 }),
+        "Update mac-mini-1 from 0.3.0 to 0.4.0?",
+        "The gateway can't talk to it until then. It finishes its leases first.",
+      ],
+      [
+        "incompatible, no version",
+        "incompatible",
+        { latestVersion: "0.4.0", leased: 0, update: null },
+        "Update mac-mini-1 to 0.4.0?",
+        "The gateway can't talk to it until then. It finishes its leases first.",
+      ],
+      [
+        "incompatible, no latest",
+        "incompatible",
+        facts({ latestVersion: null }),
+        "Update mac-mini-1 from 0.3.0 to the latest version?",
+        "The gateway can't talk to it until then. It finishes its leases first.",
+      ],
+    ];
+    for (const [name, connection, given, title, body] of cases) {
+      const action = update(connection, given);
+      expect(action?.confirm, name).toEqual({ body, busy: "Starting…", confirm: "Update", title });
+      expect([action?.method, action?.path, action?.body], name).toEqual([
+        "POST",
+        "/v1/workers/wrk%2F1/update",
+        {},
+      ]);
+    }
+  });
+});
+
+describe("the Update now dialog", () => {
+  it("counts the update's leases in its body and sends {\"force\":true} to the worker's update route", () => {
+    const cases: readonly [number, string][] = [
+      [2, "Its 2 leases keep running through the restart."],
+      [1, "Its lease keeps running through the restart."],
+    ];
+    for (const [leases, body] of cases) {
+      const action = workerActions(
+        {
+          connection: "connected",
+          drained: false,
+          id: "wrk/1",
+          name: "mac-mini-1",
+          updateFacts: facts({ update: { ...STARTED, leases, stage: "waiting" } }),
+        },
+        "gateway",
+      ).find((candidate) => candidate.id === "force-update");
+      expect(action?.confirm, String(leases)).toEqual({
+        body,
+        busy: "Starting…",
+        confirm: "Install now",
+        title: "Install 0.4.0 on mac-mini-1 now?",
+      });
+      expect([action?.method, action?.path, action?.body]).toEqual([
+        "POST",
+        "/v1/workers/wrk%2F1/update",
+        { force: true },
+      ]);
+    }
+  });
+});
+
+describe("the toast an update earns", () => {
+  it("words the daemon's answer: started, following, upToDate and Update now accepted, and a refusal's title", () => {
+    const running = { ...STARTED, stage: "installing" } as const;
+    const offered = (updateFacts: UpdateFacts) => {
+      const [, action] = workerActions(
+        { connection: "connected", drained: false, id: "wrk_1", name: "mac-mini-1", updateFacts },
+        "gateway",
+      );
+      if (action?.outcome === undefined) throw new Error("no update action");
+      return { ...action, outcome: action.outcome };
+    };
+    const update = offered(facts());
+    const force = offered(facts({ update: { ...STARTED, leases: 2, stage: "waiting" } }));
+    const upToDate = { started: false, update: null, upToDate: true, version: "0.3.0" };
+    const cases: readonly [typeof update, string, unknown, string][] = [
+      [
+        update,
+        "started",
+        { started: true, update: running, upToDate: false, version: "0.3.0" },
+        "Updating mac-mini-1 to 0.4.0",
+      ],
+      [
+        update,
+        "following",
+        { started: false, update: running, upToDate: false, version: "0.3.0" },
+        "mac-mini-1 is already updating to 0.4.0",
+      ],
+      [update, "upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
+      [update, "no body", undefined, "Updating mac-mini-1 to the latest version"],
+      [
+        force,
+        "force accepted",
+        { started: true, update: running, upToDate: false },
+        "mac-mini-1 installs 0.4.0 now",
+      ],
+      [force, "force upToDate", upToDate, "mac-mini-1 already runs 0.3.0"],
+    ];
+    for (const [action, name, answer, title] of cases) {
+      expect(action.outcome(answer), name).toEqual({ title });
+    }
+    expect(force.id).toBe("force-update");
+    expect(force.success).toEqual({ title: "mac-mini-1 installs 0.4.0 now" });
+    expect([update.timeoutMs, force.timeoutMs]).toEqual([100_000, 100_000]);
+    expect([update.failure, force.failure]).toEqual(Array(2).fill("Couldn't update mac-mini-1"));
+  });
+});
 
 describe("the actions each kind of item offers", () => {
   it("offers exactly the table's actions: dangerous ones last and marked, worker actions only on a gateway, and the Inbox's one fix", () => {

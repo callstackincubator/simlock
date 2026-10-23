@@ -169,4 +169,20 @@ describe("RELAY_TARGET_MISSING", () => {
       kind: "domain",
     });
   });
+
+  it("gives the update codes their exit code and HTTP status: DAEMON_UPDATING 1 and 503, UPDATE_RESOLVE_FAILED 1 and 502, UPDATE_UNSUPPORTED_INSTALL and UPDATE_SHARED_INSTALL 2 and 409", () => {
+    const expected = {
+      DAEMON_UPDATING: { cliExitCode: 1, httpStatus: 503 },
+      UPDATE_RESOLVE_FAILED: { cliExitCode: 1, httpStatus: 502 },
+      UPDATE_UNSUPPORTED_INSTALL: { cliExitCode: 2, httpStatus: 409 },
+      UPDATE_SHARED_INSTALL: { cliExitCode: 2, httpStatus: 409 },
+    } as const;
+    for (const [code, entry] of Object.entries(expected)) {
+      expect(ERROR_TABLE[code as keyof typeof expected]).toEqual({
+        code,
+        kind: "domain",
+        ...entry,
+      });
+    }
+  });
 });

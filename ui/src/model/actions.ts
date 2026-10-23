@@ -2,6 +2,7 @@
 // wording of each dialog and toast is fixed here, so no surface words it differently.
 import type { InboxItem } from "./inbox";
 import { type TokenRecord, leaseRows } from "./leases";
+import { isBehind, type UpdateFacts, updateFactsOf } from "./versions";
 import { requestedDevice } from "./waiting";
 import { type WorkerView, workerName } from "./workers";
 
@@ -22,7 +23,14 @@ export interface ActionToast {
 }
 
 export interface ItemAction {
-  readonly id: "release-lease" | "cancel-request" | "drain" | "undrain" | "remove-worker";
+  readonly id:
+    | "release-lease"
+    | "cancel-request"
+    | "drain"
+    | "undrain"
+    | "remove-worker"
+    | "update-worker"
+    | "force-update";
   readonly itemKey: string;
   readonly label: string;
   readonly danger: boolean;
@@ -30,6 +38,11 @@ export interface ItemAction {
   readonly path: `/v1/${string}`;
   readonly confirm?: ActionConfirm;
   readonly success: ActionToast;
+  // why: an action that sends a JSON body, `{}` for an update to the latest version.
+  readonly body?: Readonly<Record<string, unknown>>;
+  // why: the daemon's answer to the request, when the toast it earns depends on what it says.
+  readonly outcome?: (answer: unknown) => ActionToast;
+  readonly timeoutMs?: number;
   // why: the title of the error toast when the daemon refuses, word for word from the spec.
   readonly failure: string;
   // why: an action that asks nothing can be undone from its toast, by running this one.
@@ -106,6 +119,115 @@ export interface WorkerActionInput {
   readonly name: string;
   readonly connection: WorkerView["connection"];
   readonly drained: boolean;
+  readonly updateFacts?: UpdateFacts;
+}
+
+// why: the daemon's answer to an update request: `daemon.update`'s answer with the worker's id.
+interface UpdateAnswer {
+  readonly started?: boolean;
+  readonly upToDate?: boolean;
+  readonly version?: string;
+  readonly update?: { readonly to?: string } | null;
+}
+
+function updateToast(name: string): (answer: unknown) => ActionToast {
+  return (raw) => {
+    // why: the answer is the daemon's JSON, or nothing when it sent no body; either words a toast.
+    const answer = (typeof raw === "object" && raw !== null ? raw : {}) as UpdateAnswer;
+    const to = answer.update?.to ?? "the latest version";
+    if (answer.upToDate === true) return { title: `${name} already runs ${answer.version ?? ""}` };
+    return {
+      title:
+        answer.started === false
+          ? `${name} is already updating to ${to}`
+          : `Updating ${name} to ${to}`,
+    };
+  };
+}
+
+// why: above the gateway's 90 s uplink limit, so the gateway's answer arrives before the console
+// gives up.
+const UPDATE_TIMEOUT_MS = 100_000;
+
+function updateBase(worker: WorkerActionInput) {
+  return {
+    danger: false,
+    failure: `Couldn't update ${worker.name}`,
+    itemKey: `worker/${worker.id}`,
+    method: "POST",
+    path: `/v1/workers/${encodeURIComponent(worker.id)}/update`,
+    timeoutMs: UPDATE_TIMEOUT_MS,
+  } as const;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function updateBody(worker: WorkerActionInput, facts: UpdateFacts): string {
+  if (worker.connection === "incompatible") {
+    return "The gateway can't talk to it until then. It finishes its leases first.";
+  }
+  return facts.leased > 0
+    ? `It takes no new leases and waits for its ${plural(facts.leased, "lease")} to end. It restarts by itself.`
+    : "It has no leases, so it installs at once. It restarts by itself.";
+}
+
+function updateAction(worker: WorkerActionInput, facts: UpdateFacts): ItemAction {
+  const from = facts.version === undefined ? "" : ` from ${facts.version}`;
+  return {
+    ...updateBase(worker),
+    body: {},
+    confirm: {
+      body: updateBody(worker, facts),
+      busy: "Starting…",
+      confirm: "Update",
+      title: `Update ${worker.name}${from} to ${facts.latestVersion ?? "the latest version"}?`,
+    },
+    id: "update-worker",
+    label: "Update…",
+    outcome: updateToast(worker.name),
+    success: { title: `Updating ${worker.name}` },
+  };
+}
+
+function forceAction(
+  worker: WorkerActionInput,
+  update: { readonly to: string; readonly leases: number },
+): ItemAction {
+  const { leases, to } = update;
+  return {
+    ...updateBase(worker),
+    body: { force: true },
+    confirm: {
+      body: `Its ${leases === 1 ? "lease keeps" : `${leases} leases keep`} running through the restart.`,
+      busy: "Starting…",
+      confirm: "Install now",
+      title: `Install ${to} on ${worker.name} now?`,
+    },
+    id: "force-update",
+    label: "Update now",
+    // why: a worker that already runs the version answers upToDate, and the toast says so rather
+    // than that something installs.
+    outcome: (raw) =>
+      (raw as UpdateAnswer | undefined)?.upToDate === true
+        ? updateToast(worker.name)(raw)
+        : { title: `${worker.name} installs ${to} now` },
+    success: { title: `${worker.name} installs ${to} now` },
+  };
+}
+
+// why: the table of #839: an update in flight offers only Update now, and only while it waits; a
+// worker that shows `incompatible` is offered Update… whatever the latest version, since the
+// gateway cannot compare versions with it; a connected one only when the latest is newer.
+function updateEntry(worker: WorkerActionInput): ItemAction | undefined {
+  const facts = worker.updateFacts;
+  if (facts === undefined || worker.connection === "disconnected") return undefined;
+  if (facts.update !== null) {
+    return facts.update.stage === "waiting" ? forceAction(worker, facts.update) : undefined;
+  }
+  if (worker.connection === "incompatible" || isBehind(facts)) return updateAction(worker, facts);
+  return undefined;
 }
 
 // why: ADR 0037 §4. On a single host the three worker routes answer 501, and when the mode is not
@@ -142,6 +264,8 @@ export function workerActions(
     undo: undrain,
   };
   const actions: ItemAction[] = [worker.drained ? undrain : drain];
+  const entry = updateEntry(worker);
+  if (entry !== undefined) actions.push(entry);
   if (worker.connection === "disconnected") {
     actions.push({
       confirm: {
@@ -164,6 +288,11 @@ export function workerActions(
   return actions;
 }
 
+const FIX_OF: Readonly<Partial<Record<InboxItem["condition"], ItemAction["id"]>>> = {
+  drained: "undrain",
+  "update failed": "update-worker",
+};
+
 export interface InboxActionContext {
   readonly mode: DaemonModeName | undefined;
   readonly now: number;
@@ -171,9 +300,9 @@ export interface InboxActionContext {
   readonly workers: readonly WorkerView[];
 }
 
-// why: only a drained worker's item has a fix button, and its fix is Undrain; every other action of
-// an item is in its menu. Device conditions (a quarantined or stalled device) are about a device, so
-// they offer no worker action.
+// why: only a drained worker's item (its fix is Undrain) and a failed update's (its fix is Update…)
+// have a fix button; every other action of an item is in its menu. Device conditions (a quarantined
+// or stalled device) are about a device, so they offer no worker action.
 export function inboxActions(
   item: InboxItem,
   context: InboxActionContext,
@@ -204,6 +333,7 @@ export function inboxActions(
     case "disconnected":
     case "incompatible":
     case "drained":
+    case "update failed":
     case "over RAM budget": {
       const menu = workerActions(
         {
@@ -211,10 +341,12 @@ export function inboxActions(
           drained: item.worker.drained,
           id: item.worker.id,
           name: workerName(item.worker),
+          updateFacts: updateFactsOf(item.worker),
         },
         context.mode,
       );
-      const fix = item.condition === "drained" ? menu.find((a) => a.id === "undrain") : undefined;
+      const fixId = FIX_OF[item.condition];
+      const fix = fixId === undefined ? undefined : menu.find((a) => a.id === fixId);
       return fix === undefined ? { menu } : { fix, menu };
     }
   }

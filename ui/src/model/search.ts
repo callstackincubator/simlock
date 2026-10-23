@@ -7,6 +7,7 @@ import {
 } from "./actions";
 import type { LeaseRowView } from "./leases";
 import { devicePath } from "./paths";
+import { updateFactsOf } from "./versions";
 import type { WaitingRow } from "./waiting";
 import { type WorkerView, workerName, workerPath } from "./workers";
 
@@ -108,6 +109,7 @@ function actionResults(input: SearchInput): readonly SearchResult[] {
           drained: worker.drained,
           id: worker.id,
           name: workerName(worker),
+          updateFacts: updateFactsOf(worker),
         },
         input.mode,
       ).map((action) => actionResult(action, workerName(worker))),

@@ -1,5 +1,6 @@
 import {
   ActionBar,
+  Button,
   Card,
   type Column,
   DataTable,
@@ -62,9 +63,11 @@ function MissingWorker() {
 
 export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
   const entries = useWorkerPageMenu(page);
+  const again = entries.find((entry) => entry.key === "update-worker");
   return (
     <Page
       title={page.title}
+      {...(page.version === undefined ? {} : { note: page.version })}
       actions={<ActionBar label={`Actions for ${page.title}`} entries={entries} />}
     >
       <nav className="crumbs" aria-label="Breadcrumb">
@@ -77,8 +80,16 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
         {page.system === undefined ? null : <> · {page.system}</>}
       </p>
       {page.banners.map((banner) => (
-        <p key={banner} className="worker-banner">
-          {banner}
+        <p
+          key={banner.text}
+          className={
+            banner.tone === "error" ? "worker-banner worker-banner-error" : "worker-banner"
+          }
+        >
+          {banner.text}
+          {banner.failure === true && again !== undefined ? (
+            <Button onClick={again.onSelect}>Update again</Button>
+          ) : null}
         </p>
       ))}
       <Overview page={page} />

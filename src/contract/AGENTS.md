@@ -9,19 +9,20 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 
 ## Files
 
-| File             | Role                                                                          |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `operations.ts`  | Every operation: name, role, effect, input, output, `authorize`; `OPERATIONS` |
-| `schemas.ts`     | Wire shapes, re-declared by hand from core; `fit*` bounders                   |
-| `roles.ts`       | `Role`, `AuthorizeContext`, `ownsLease`                                       |
-| `errors.ts`      | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`             |
-| `pushes.ts`      | `PUSH_SCHEMAS`: every push kind                                               |
-| `protocol.ts`    | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                        |
-| `worker-view.ts` | `workerViewFields`, view refresh interval and events                          |
-| `os-range.ts`    | OS constraint grammar: parse, `satisfies`, `compareVersions`                  |
-| `duration.ts`    | `parseDurationMs`, for the CLI and HTTP                                       |
-| `relay.ts`       | Bounded relay ids, channel ids, headers                                       |
-| `console-url.ts` | The console address `status.get` reports                                      |
+| File               | Role                                                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operations.ts`    | Every operation: name, role, effect, input, output, `authorize`; `OPERATIONS`                                                                                                     |
+| `schemas.ts`       | Wire shapes, re-declared by hand from core; `fit*` bounders                                                                                                                       |
+| `roles.ts`         | `Role`, `AuthorizeContext`, `ownsLease`                                                                                                                                           |
+| `errors.ts`        | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`                                                                                                                 |
+| `pushes.ts`        | `PUSH_SCHEMAS`: every push kind                                                                                                                                                   |
+| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                                                                                                                            |
+| `worker-view.ts`   | `workerViewFields`, view refresh interval and events                                                                                                                              |
+| `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                      |
+| `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod) |
+| `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                           |
+| `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                           |
+| `console-url.ts`   | The console address `status.get` reports                                                                                                                                          |
 
 ## Operations
 
@@ -55,14 +56,14 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 55, max: 55 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 58, max: 58 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
   helpers its `NOT_SHAPES` lists. A new helper that carries no wire shape goes in that list.
 - `hello` picks the highest overlap. None → `PROTOCOL_VERSION_UNSUPPORTED` with both ranges.
   A protocol-2 daemon is mapped by `mapLegacyProtocolMismatch`.
-- `daemon.stop` is accepted at any version, so the upgrade path exists.
+- `daemon.stop` and `daemon.update` are accepted at any version (`DaemonServer` skips the version gate for them; the role check still runs, and readiness too except for `daemon.update {query}`), so the upgrade path exists. Their input and answer never change shape; `operations.test.ts` pins `daemon.update`'s JSON schemas.
 
 ## Errors
 
@@ -91,9 +92,12 @@ Three identities:
 - `workerViewFields` builds it from `status.get`, `list.get`, `catalog.get` and `config.get`
   answers. A gateway's `WorkerLink` and a worker answering about itself both call it; the
   caller adds `id`, `label`, `connection`, `drained`, `lastSeenAt`, `version`.
+- `update`, `lastUpdateFailure` and `latestVersion` come from `status.get`'s `daemon` block; `null` when there
+  is nothing to show, and absent until the first status read. A status without an update clears `update`.
 - A `starting` worker's view is `health`, `host` and `load` only. Absent, never empty.
 - Full re-read every `WORKER_VIEW_REFRESH_INTERVAL_MS` (30 s); catalog at once on
-  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`).
+  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`); status at once on
+  `WORKER_VIEW_UPDATE_EVENTS` (`daemon.update-started`, `daemon.update-failed`).
 
 ## OS ranges and durations
 

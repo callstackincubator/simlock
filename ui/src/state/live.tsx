@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import type { ApiPath } from "../data/api";
-import { type DaemonMode, type ModeStore, watchMode } from "../data/mode";
+import { type DaemonFacts, type DaemonMode, type ModeStore, watchMode } from "../data/mode";
 import { useApi, useSession } from "./services";
 import { browserClock, documentVisibility } from "../data/live/browser";
 import {
@@ -47,8 +47,10 @@ export function LiveProvider({ children }: { readonly children: ReactNode }) {
       whenLost: session.lost,
     });
     const ticker = createTicker(browserClock, () => connection.serverNow());
-    setLive({ connection, mode: watchMode({ api, connection }), ticker });
+    const mode = watchMode({ api, clock: browserClock, connection });
+    setLive({ connection, mode, ticker });
     return () => {
+      mode.dispose();
       ticker.dispose();
       connection.dispose();
     };
@@ -77,6 +79,12 @@ export function useLiveResource<T>(path: ApiPath): ResourceState<T> {
 export function useDaemonMode(): DaemonMode | undefined {
   const { mode } = useLive();
   return useSyncExternalStore(mode.subscribe, mode.mode, mode.mode);
+}
+
+// why: the version the daemon runs and the latest it knows, for the sidebar's notice.
+export function useDaemonFacts(): DaemonFacts {
+  const { mode } = useLive();
+  return useSyncExternalStore(mode.subscribe, mode.daemon, mode.daemon);
 }
 
 export function useConnection(): ConnectionState {

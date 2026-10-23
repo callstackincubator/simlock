@@ -793,13 +793,14 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
-  it("worker.drain, worker.undrain, worker.remove, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
+  it("worker.drain, worker.undrain, worker.remove, worker.update, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const install = vi.spyOn(components, "install");
     const calls = [
       ["worker.drain", { workerId: "instance-1" }],
       ["worker.undrain", { workerId: "instance-1" }],
       ["worker.remove", { workerId: "instance-1" }],
+      ["worker.update", { workerId: "instance-1" }],
       ["worker.install-component", { platform: "ios", version: "27.0", workers: "all" }],
       ["alerts.test", { destination: "ops" }],
     ] as const;
@@ -825,10 +826,10 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     // The refusal is the whole answer: nothing was installed on this host instead, and the
     // message says how to install here.
     expect(install).not.toHaveBeenCalled();
-    expect(String((refusals[3] as { error?: unknown } | undefined)?.error)).toContain(
+    expect(String((refusals[4] as { error?: unknown } | undefined)?.error)).toContain(
       "install on this host without naming workers",
     );
-    expect((refusals[4] as { error?: Error } | undefined)?.error?.message).toBe(
+    expect((refusals[5] as { error?: Error } | undefined)?.error?.message).toBe(
       "alerts.test sends to a gateway's alert destinations, and this daemon is not a gateway; run it against the gateway",
     );
   });
@@ -1175,6 +1176,57 @@ describe("Dispatcher: ownership", () => {
 
     const admin = await dispatcher.dispatch("lease.list", {}, session({ role: "admin" }));
     expect(admin.leases).toHaveLength(1);
+  });
+
+  it("status.get: an agent sees only the leases and waiting requests it owns, one that owns none sees empty lists, admin sees all", async () => {
+    const { dispatcher, engine } = await buildDispatcher();
+    const IOS = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const ask = (principal: string, requesterId: string) =>
+      dispatcher.dispatch(
+        "lease.request",
+        { ...IOS, requesterId },
+        session({ principal, role: "agent" }),
+      );
+    // why: two leases fill iOS (maxRunning: 2, see testConfig), so the next two requests wait.
+    await ask("tok_owner1", "owner1-lease");
+    await ask("tok_owner2", "owner2-lease");
+    void ask("tok_owner1", "owner1-waiting").catch(() => undefined);
+    void ask("host", "agent-7").catch(() => undefined);
+    await expect.poll(() => engine.queueDepth).toBe(2);
+
+    const cases = [
+      [
+        "admin",
+        { principal: "tok_admin", role: "admin" },
+        ["owner1-lease", "owner2-lease"],
+        ["owner1-waiting", "agent-7"],
+      ],
+      [
+        "an agent with a lease and a waiting request",
+        { principal: "tok_owner1", role: "agent" },
+        ["owner1-lease"],
+        ["owner1-waiting"],
+      ],
+      [
+        "an agent whose request waits under another requesterId",
+        { principal: "host", role: "agent" },
+        [],
+        ["agent-7"],
+      ],
+      ["an agent that owns nothing", { principal: "tok_nobody", role: "agent" }, [], []],
+    ] as const;
+    const seen = await Promise.all(
+      cases.map(async ([name, who]) => {
+        const status = await dispatcher.dispatch("status.get", {}, session(who));
+        return {
+          leases: status.leases?.map((lease) => lease.requesterId),
+          name,
+          waiting: status.waiting?.map((request) => request.requesterId),
+        };
+      }),
+    );
+
+    expect(seen).toEqual(cases.map(([name, , leases, waiting]) => ({ leases, name, waiting })));
   });
 
   it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
@@ -2380,7 +2432,7 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
     await expect.poll(() => engine.queueDepth).toBe(1);
 
     const listed = await requests(dispatcher);
-    const { waiting } = await dispatcher.dispatch("status.get", {}, session());
+    const { waiting } = await dispatcher.dispatch("status.get", {}, session({ role: "admin" }));
 
     expect(listed.map((entry) => ("stage" in entry ? entry.stage : undefined))).toEqual([
       "starting",
@@ -2811,8 +2863,19 @@ describe("Dispatcher: status.get console address", () => {
       consoleUrl: "http://127.0.0.1:4711/",
       health: "running",
       mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
-    expect(off.daemon).toEqual({ health: "running", mode: "worker" });
+    expect(off.daemon).toEqual({
+      health: "running",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect("consoleUrl" in off.daemon).toBe(false);
   });
 });
@@ -3828,6 +3891,7 @@ function testConfig(
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -4181,7 +4245,14 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
     const status = await dispatcher.dispatch("status.get", {}, session());
 
     expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
-    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.daemon).toEqual({
+      health: "starting",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
   });
 

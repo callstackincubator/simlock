@@ -79,6 +79,7 @@ import {
   type ErasedHandler,
 } from "./dispatch.js";
 import type { RelayConnection } from "./relay.js";
+import type { UpdateCoordinator, UpdateProgress } from "./update-coordinator.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 
@@ -203,6 +204,7 @@ export interface DispatcherOptions {
    * without it the kept catalog is only re-read on the interval.
    */
   readonly eventBus?: Pick<EventBus, "subscribe">;
+  readonly update?: UpdateCoordinator;
 }
 
 /**
@@ -325,10 +327,12 @@ export class Dispatcher {
       "component.remove": this.#componentRemove,
       "device.add": this.#deviceAdd,
       "device.remove": this.#deviceRemove,
+      "daemon.update": this.#daemonUpdate,
       "worker.list": this.#workerList,
       "worker.drain": unsupportedOnWorker("worker.drain"),
       "worker.undrain": unsupportedOnWorker("worker.undrain"),
       "worker.remove": unsupportedOnWorker("worker.remove"),
+      "worker.update": unsupportedOnWorker("worker.update"),
       "worker.install-component": unsupportedOnWorker(
         "worker.install-component",
         "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",
@@ -390,6 +394,8 @@ export class Dispatcher {
       health: this.options.health(),
       mode: this.options.config.mode,
       ...consoleUrlField(this.options.config.http),
+      version: this.options.version,
+      ...this.#updateFields(),
     };
     const host = this.options.hostFacts();
     const load = this.options.load?.();
@@ -409,13 +415,31 @@ export class Dispatcher {
       host,
       ...loadField,
       installs: [...this.options.components.inProgress()],
-      leases: [...snapshot.leases],
+      leases: this.#leasesFor(session),
       physicalQueueDepth: this.options.queue.physicalQueueDepth,
       queueDepth: this.options.queue.queueDepth,
-      waiting: [...this.options.queue.waitingRequests()],
+      waiting: this.#waitingFor(session),
       warmPool: this.options.warmPool.figures(),
     };
     return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
+  };
+
+  #updateFields(): UpdateProgress {
+    return (
+      this.options.update?.state() ?? { update: null, lastUpdateFailure: null, latestVersion: null }
+    );
+  }
+
+  #daemonUpdate: Handler<"daemon.update"> = async (input) => {
+    const update = this.options.update;
+    if (update === undefined) {
+      throw new DispatchError("UNKNOWN_REQUEST", "This daemon does not update itself");
+    }
+    return {
+      ...(await update.request(input)),
+      version: this.options.version,
+      health: this.options.health(),
+    };
   };
 
   // why: a module can never make status.get fail or hang, which would cut the worker off from its gateway.
@@ -600,12 +624,25 @@ export class Dispatcher {
     return { leaseIds: [...leaseIds] };
   };
 
-  #leaseList: Handler<"lease.list"> = (_input, session) => {
-    const leases = this.options.registry.snapshot.leases.filter(
+  #leaseList: Handler<"lease.list"> = (_input, session) => ({ leases: this.#leasesFor(session) });
+
+  // why: an agent token must not learn other principals' leases or requester ids; admin sees all.
+  #leasesFor(session: DispatchSession) {
+    return this.options.registry.snapshot.leases.filter(
       (lease) => session.role === "admin" || lease.ownerId === session.principal,
     );
-    return { leases };
-  };
+  }
+
+  // why: a waiting entry carries no owner, so the queue's recorded owner of its requester decides.
+  #waitingFor(session: DispatchSession) {
+    return this.options.queue
+      .waitingRequests()
+      .filter(
+        (request) =>
+          session.role === "admin" ||
+          this.options.queue.pendingRequestOwner(request.requesterId) === session.principal,
+      );
+  }
 
   /**
    * Resolution only: the daemon builds the command and never runs it. Spawning it here would
@@ -701,7 +738,7 @@ export class Dispatcher {
     );
     const execEnv: NodeJS.ProcessEnv = { ...this.options.execEnv, ...command.env };
     for (const key of command.unsetEnv ?? []) {
-      // why: the daemon's own environment is the base, so a key it inherited could re-aim the command.
+      // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
     const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {

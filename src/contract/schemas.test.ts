@@ -713,7 +713,14 @@ describe("a worker status's capabilities list", () => {
   const status = (capabilities: unknown) =>
     statusGet.output.safeParse({
       capabilities,
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "26.0", tools: [] },
     });
   const entry = (overrides: Record<string, unknown> = {}) => ({
@@ -799,7 +806,14 @@ describe("a status answer's load block", () => {
   };
   const answer = (block: unknown) =>
     statusGet.output.safeParse({
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "26.0", tools: [] },
       load: block,
     });

@@ -7,7 +7,7 @@ import type {
   IpcListenerFactory,
   Logger,
 } from "../ports/index.js";
-import { IpcError, NoopLogger } from "../ports/index.js";
+import { DATA_DIRECTORY_MODE, IpcError, NoopLogger } from "../ports/index.js";
 
 export interface ConnectionHost {
   readonly endpoint: string;
@@ -40,6 +40,22 @@ export async function refuseWhenDaemonAnswers(options: {
   throw new DaemonAlreadyRunningError(options.endpoint);
 }
 
+/**
+ * why: the daemon makes its data directory owner-only before anything writes into it (the log,
+ * `state.db`, the socket). One that already exists is never chmod'ed, since the user chose its
+ * mode: this only returns the warning the daemon logs when the group or others can reach it.
+ */
+export async function prepareDataDirectory(
+  filesystem: Filesystem,
+  path: string,
+): Promise<string | undefined> {
+  await filesystem.mkdirp(path, { mode: DATA_DIRECTORY_MODE });
+  const mode = ((await filesystem.stat(path)).mode ?? DATA_DIRECTORY_MODE) & 0o777;
+  if ((mode & 0o077) === 0) return undefined;
+  const octal = mode.toString(8).padStart(3, "0");
+  return `data directory ${path} is accessible to other users (mode ${octal}); run chmod 700 ${path}`;
+}
+
 export interface DaemonEndpointHostOptions {
   readonly connector: IpcConnector;
   readonly endpoint: string;
@@ -65,7 +81,7 @@ export class DaemonEndpointHost implements ConnectionHost {
   async start(accept: (connection: IpcConnection) => void): Promise<void> {
     if (this.#listener !== undefined || this.#stopped)
       throw new Error("Daemon endpoint host has already been started");
-    await this.options.filesystem.mkdirp(dirname(this.endpoint));
+    await this.options.filesystem.mkdirp(dirname(this.endpoint), { mode: DATA_DIRECTORY_MODE });
     if (await this.options.filesystem.exists(this.endpoint)) {
       try {
         const live = await this.options.connector.connect(this.endpoint);

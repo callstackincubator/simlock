@@ -142,6 +142,117 @@ describe("a worker's row in the list", () => {
   });
 });
 
+describe("a worker's version line", () => {
+  it("shows the version and the latest when newer, on the row and beside the page title, and nothing without a version", () => {
+    const cases: readonly [
+      string,
+      string | undefined,
+      string | null | undefined,
+      string | undefined,
+    ][] = [
+      ["newer", "0.3.0", "0.4.0", "simlock 0.3.0 · 0.4.0 available"],
+      ["equal", "0.4.0", "0.4.0", "simlock 0.4.0"],
+      ["older", "0.5.0", "0.4.0", "simlock 0.5.0"],
+      ["no latest known", "0.3.0", null, "simlock 0.3.0"],
+      ["latest not reported", "0.3.0", undefined, "simlock 0.3.0"],
+      ["no version", undefined, "0.4.0", undefined],
+      [
+        "prerelease is behind its release",
+        "0.4.0-rc.1",
+        "0.4.0",
+        "simlock 0.4.0-rc.1 · 0.4.0 available",
+      ],
+      ["release is not behind its prerelease", "0.4.0", "0.4.0-rc.1", "simlock 0.4.0"],
+    ];
+    for (const [name, version, latestVersion, line] of cases) {
+      const view = worker({
+        ...(version === undefined ? {} : { version }),
+        ...(latestVersion === undefined ? {} : { latestVersion }),
+      });
+      expect(workerRow(view).version, `${name}, row`).toBe(line);
+      expect(inspect(view).version, `${name}, page`).toBe(line);
+    }
+  });
+});
+
+describe("a worker's row while it updates", () => {
+  it("reads amber updating with the stage under it, over drained, under a red finding, and drained again once the update ends", () => {
+    const base = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+    const waiting = (leases: number) => ({ ...base, leases, stage: "waiting" as const });
+    const cases: readonly [string, Partial<WorkerView>, string, string | undefined][] = [
+      ["waiting, two", { update: waiting(2) }, "updating", "waiting for 2 leases"],
+      ["waiting, one", { update: waiting(1) }, "updating", "waiting for 1 lease"],
+      ["installing", { update: { ...base, stage: "installing" } }, "updating", "installing"],
+      ["restarting", { update: { ...base, stage: "restarting" } }, "updating", "restarting"],
+      [
+        "drained and updating",
+        { drained: true, update: waiting(1) },
+        "updating",
+        "waiting for 1 lease",
+      ],
+      ["drained, update over", { drained: true, update: null }, "drained", undefined],
+      [
+        "disconnected",
+        { connection: "disconnected", update: waiting(1) },
+        "disconnected",
+        undefined,
+      ],
+      ["failed", { health: "failed", update: waiting(1) }, "failed", undefined],
+    ];
+    for (const [name, overrides, word, stage] of cases) {
+      const row = workerRow(worker(overrides));
+      expect([row.health.word, row.stage], name).toEqual([word, stage]);
+    }
+    expect(workerRow(worker({ update: waiting(1) })).health.tone).toBe("warn");
+  });
+});
+
+describe("a worker page's update banners", () => {
+  it("words the Updating banner per stage and the failure banner, in the order disconnected, failure, updating, drained, and shows none once both are null", () => {
+    const base = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+    const banners = (overrides: Partial<WorkerView>) =>
+      inspect(worker(overrides)).banners.map((banner) => [
+        banner.text,
+        banner.tone,
+        banner.failure ?? false,
+      ]);
+    expect(banners({ update: { ...base, leases: 2, stage: "waiting" } })).toEqual([
+      ["Updating to 0.4.0 · waiting for 2 leases. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, leases: 1, stage: "waiting" } })).toEqual([
+      ["Updating to 0.4.0 · waiting for 1 lease. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, stage: "installing" } })).toEqual([
+      ["Updating to 0.4.0 · installing. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, stage: "restarting" } })).toEqual([
+      ["Updating to 0.4.0 · restarting. It takes no new leases.", "warn", false],
+    ]);
+    const failure = (stage: "installing" | "restarting") => ({
+      at: NOW - 60_000,
+      from: "0.3.0",
+      message: "EACCES",
+      stage,
+      to: "0.4.0",
+    });
+    expect(banners({ lastUpdateFailure: failure("installing") })).toEqual([
+      ["Update to 0.4.0 failed (installing): EACCES", "error", true],
+    ]);
+    expect(banners({ lastUpdateFailure: failure("restarting") })).toEqual([
+      ["Update to 0.4.0 failed (restarting): EACCES", "error", true],
+    ]);
+    expect(
+      banners({
+        connection: "disconnected",
+        drained: true,
+        lastUpdateFailure: failure("installing"),
+        update: { ...base, stage: "installing" },
+      }).map(([text]) => String(text).split(" ")[0]),
+    ).toEqual(["Disconnected", "Update", "Updating", "Drained"]);
+    expect(banners({ lastUpdateFailure: null, update: null })).toEqual([]);
+  });
+});
+
 describe("the list's filters and header", () => {
   const busy = worker({
     id: "wrk_busy",
