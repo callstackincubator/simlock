@@ -191,8 +191,9 @@ describe.skipIf(process.platform !== "darwin")(
           let warmId = "";
           await waitFor(
             async () => {
-              warmId =
-                (await listDevices(env)).find((device) => device.state === "ready")?.id ?? "";
+              const listed = await env.cli(["list", "--devices"]);
+              const devices = (listed.json ?? []) as { id: string; state: string }[];
+              warmId = devices.find((device) => device.state === "ready")?.id ?? "";
               return warmId !== "";
             },
             {
