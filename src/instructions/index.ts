@@ -26,7 +26,7 @@ const IOS_BUILDS = `## iOS builds
 
 Simlock's simulators live in a device set of their own, not the default set that Xcode and \`xcrun simctl\` use. A tool that picks a simulator from the default set cannot find them.
 
-- Build for any simulator: \`xcodebuild -destination id=<udid>\`, \`react-native run-ios\`, \`expo run:ios\`, Detox and Maestro all need the udid of your device, so give them that instead of letting them choose. When the build needs no device, use \`-destination 'generic/platform=iOS Simulator'\`.
+- Do not build against your leased device: \`xcodebuild -destination id=<udid>\`, \`react-native run-ios\`, \`expo run:ios\`, Detox and Maestro cannot find it, so they fail. Build for any simulator instead with \`-destination 'generic/platform=iOS Simulator'\`.
 - Then install the \`.app\` with \`agent-device install\`, or with \`simlock simctl install <device.address> <path-to-.app>\` when the path is on the machine that runs Simlock.`;
 
 const SIMLOCK_CLI = `## simlock CLI
