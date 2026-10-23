@@ -410,5 +410,16 @@ describe("createWorkerStream", () => {
       expect(refused.status).toBe(409);
       expect(feeds[0]?.closes).toBe(1);
     }
+
+    {
+      const { emit, feeds, stream } = worker([], false);
+      const asked = stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      await settledWithin(asked);
+      expect(feeds).toHaveLength(1);
+      emit("device.shutdown", "dev_ready");
+      const refused = await asked;
+      expect(refused.status).toBe(409);
+      expect(feeds[0]?.closes).toBe(1);
+    }
   });
 });
