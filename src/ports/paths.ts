@@ -74,8 +74,9 @@ export interface DaemonHome {
 
 /**
  * why: owner-only, because every socket peer counts as the same OS user and the directory's
- * mode is what keeps other users away from the socket and the files beside it. Only the data
- * directory gets it: `<root>` for a worker, `<root>/gateway` for a gateway, never their parents.
+ * mode is what keeps other users away from the socket and the files beside it. Whoever creates
+ * the data directory gives it, and any parent it creates on the way, this mode: a gateway made
+ * first leaves `<root>` owner-only too, which is the worker's data directory.
  */
 export const DATA_DIRECTORY_MODE = 0o700;
 
