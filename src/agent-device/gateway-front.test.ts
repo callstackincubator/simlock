@@ -738,7 +738,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(await failed.text()).toContain(`${notAvailable}Worker is not reachable`);
   });
 
-  it("with the only capable worker drained, allocate answers the notAvailable reply, while a command on a lease it already holds still works", async () => {
+  it("with the only capable worker drained, allocate answers `refused by simlock: No worker in the fleet can currently serve this request`, while a command on a lease it already holds still works", async () => {
     const rig = await setUp();
     const member = first(rig);
     await granted(rig, 1);
@@ -748,8 +748,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
 
     const refused = await allocate(rig, 2);
 
-    expect(refused.status).toBe(503);
-    expect((await envelopeOf(refused)).error?.message).toBe(`${notAvailable}${noWorker}`);
+    expect(refused.status).toBe(400);
+    expect((await envelopeOf(refused)).error?.message).toBe(
+      "refused by simlock: No worker in the fleet can currently serve this request",
+    );
     const before = member.fake.rpcRequests("agent_device.command").length;
     const held = await envelopeOf(await command(rig, "snapshot", 1));
     expect(held.result).toMatchObject({ command: "snapshot", ok: true });

@@ -12,7 +12,7 @@ import {
 } from "./relay-host-link.js";
 
 const agent: Identity = tokenIdentity("tok_a");
-const worker: FleetWorker = { id: "w1", leaseMaxTtlMs: 1_000, platforms: ["ios"] };
+const worker: FleetWorker = { drained: false, id: "w1", leaseMaxTtlMs: 1_000, platforms: ["ios"] };
 const maxTtlMs = 120_000;
 
 function setUp() {
