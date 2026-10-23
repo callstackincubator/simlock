@@ -120,7 +120,7 @@ describe("loadConfig", () => {
         maxBytes: 256 * 1024 * 1024,
       },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-      http: { enabled: false, host: "127.0.0.1", port: 4701 },
+      http: { enabled: true, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 2,
@@ -1656,11 +1656,11 @@ describe("loadConfig modes (ADR 0005)", () => {
     });
   }
 
-  it("defaults to worker mode, with HTTP off and a 24h disconnected-view retention", async () => {
+  it("defaults to worker mode, with HTTP on and a 24h disconnected-view retention", async () => {
     const config = await load({});
 
     expect(config.mode).toBe("worker");
-    expect(config.http.enabled).toBe(false);
+    expect(config.http.enabled).toBe(true);
     expect(config.gateway).toEqual({
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
@@ -1876,7 +1876,7 @@ describe("loadConfig modes (ADR 0005)", () => {
       { name: "wss URL, HTTP omitted", contents: { gateway: joined }, http: false },
       { name: "standalone, HTTP true", contents: { http: { enabled: true } }, http: true },
       { name: "standalone, HTTP false", contents: { http: { enabled: false } }, http: false },
-      { name: "standalone, HTTP omitted", contents: {}, http: false },
+      { name: "standalone, HTTP omitted", contents: {}, http: true },
       { name: "gateway, HTTP omitted", contents: {}, role: "gateway", http: true },
       {
         name: "gateway, HTTP true",
