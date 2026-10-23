@@ -871,8 +871,12 @@ test.describe("the workers page", () => {
 
       await feed.evaluate((element) => element.scrollTo({ top: 0 }));
       const newest = await feed.getByRole("listitem").first().innerText();
+      expect((await fleet.gateway.cli(["worker", "undrain", idOf("worker-b")])).code).toBe(0);
+      await lease(fleet.gateway, "console-e2e-other", "iPhone 17");
       await lease(fleet.gateway, "console-e2e-new");
       await expect.poll(() => feed.getByRole("listitem").first().innerText()).not.toBe(newest);
+      await expect(feed.getByText("console-e2e-new").first()).toBeVisible();
+      await expect(feed.getByText("console-e2e-other")).toHaveCount(0);
 
       const replay = (url: URL) => url.pathname === "/v1/events";
       await page.route(replay, async (route) => {
