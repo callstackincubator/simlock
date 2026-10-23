@@ -22,7 +22,7 @@ export function ScreenPanel(props: {
   );
 }
 
-export function ScreenView(props: { readonly screen: Screen }) {
+function ScreenView(props: { readonly screen: Screen }) {
   const { screen } = props;
   const { live, note, readout, waiting } = screen;
   const title = useId();
