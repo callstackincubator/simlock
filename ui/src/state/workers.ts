@@ -178,7 +178,7 @@ export function useDeviceDrawer(
 } {
   const page = useWorkerPage(workerId);
   const search = useSearch();
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers;
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers;
   return {
     // why: each choice replaces the entry rather than adding one, as the worker page's tabs do.
     chooseTab: (tab) => setSearch(writeDrawerTab(search, tab), { replace: true }),
