@@ -836,6 +836,37 @@ describe("GatewayDispatcher", () => {
     );
   });
 
+  it("lease.get reads one lease by its gateway id for its owner or an admin, a worker's own local lease for an admin only, and answers UNKNOWN_LEASE otherwise", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const issued = {
+      ...leaseFixture("lease_1", "dev_1"),
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+    };
+    const local = { ...leaseFixture("local_1", "dev_2"), ownerId: "worker-agent" };
+    workers.refresh("wrk_1", { leases: [issued, local] });
+    const owner = session({ principal: "agent-1", role: "agent" });
+    const stranger = session({ principal: "agent-2", role: "agent" });
+    const get = (leaseId: string, who: ReturnType<typeof session>) =>
+      dispatcher.dispatch("lease.get", { leaseId }, who);
+
+    await expect(get("wrk_1.lease_1", owner)).resolves.toEqual({
+      lease: expect.objectContaining({ id: "wrk_1.lease_1", workerId: "wrk_1" }),
+    });
+    await expect(get("wrk_1.lease_1", session())).resolves.toMatchObject({
+      lease: { id: "wrk_1.lease_1" },
+    });
+    await expect(get("local_1", session())).resolves.toMatchObject({
+      lease: { id: "local_1", workerId: "wrk_1" },
+    });
+    const unknown = { code: "UNKNOWN_LEASE", details: { leaseId: expect.any(String) } };
+    await expect(get("wrk_1.lease_1", stranger)).rejects.toMatchObject(unknown);
+    await expect(get("local_1", stranger)).rejects.toMatchObject(unknown);
+    await expect(get("wrk_1.lease_nope", session())).rejects.toMatchObject(unknown);
+    await expect(get("lease_1", session())).rejects.toMatchObject(unknown);
+  });
+
   it("lists no device or lease for a worker that is starting, whether the session is an admin or the owner of a lease the gateway indexed on it, and answers worker.list with the view as it is", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);
