@@ -251,6 +251,14 @@ describe.skipIf(process.platform !== "darwin")(
           expect(kept.length, "the stream sent nothing for 10 s after the lease").toBeGreaterThan(
             0,
           );
+          // why: a stream that closed at the grant ends the read loop early with frames already
+          // buffered, so frames alone do not prove it kept going; the next read must still be open.
+          const stillOpen = await within(
+            reader.read(),
+            KEY_FRAME_BOUND,
+            "the stream's next read after the lease",
+          );
+          expect(stillOpen.done, "the stream ended when the lease was granted").toBe(false);
           viewer.abort();
         } finally {
           await env
