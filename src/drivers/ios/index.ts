@@ -131,11 +131,13 @@ const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]
  * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
  * exactly the capability the device set exists to take away (ADR 0001, decision 7).
  */
-const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
+export const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
 
-const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
+export const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
 
-const SHUTDOWN_ALL_TARGET = "all";
+export const SHUTDOWN_ALL_TARGET = "all";
+
+export const REFUSED_RUNTIME_OPERATION = "delete";
 
 const RECLAIM_INSTEAD =
   "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
@@ -1387,9 +1389,12 @@ export class IosSimctlDriver implements Driver {
     // why: A bare `simctl` reaches this too, so refusing it takes no capability away. The
     // wrapper is advertised as the safe path, and being the convenient route to a
     // multi-gigabyte deletion of a runtime Xcode shares is not that.
-    if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
+    if (
+      verb === "runtime" &&
+      operands.find((operand) => !operand.startsWith("-")) === REFUSED_RUNTIME_OPERATION
+    ) {
       this.#refuse(
-        "runtime delete",
+        `runtime ${REFUSED_RUNTIME_OPERATION}`,
         "it deletes a runtime shared with Xcode and other tools. To remove a runtime Simlock added, use `simlock component remove ios <version>`; delete any other through Xcode.",
       );
     }

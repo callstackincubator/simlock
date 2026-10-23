@@ -213,6 +213,9 @@ export const CODES_WITH_DECLARED_DETAILS: ReadonlySet<SimlockErrorCode> = new Se
   Object.keys(CODES_WITH_DECLARED_DETAILS_BY_CODE) as CodeWithDeclaredDetails[],
 );
 
+/** why: the CLI exit code of a background `simlock lease` whose lease Simlock took back; it is no error code, so it has no row in `ERROR_TABLE`. */
+export const LEASE_LOST_EXIT_CODE = 14;
+
 export interface ErrorTableEntry<Code extends SimlockErrorCode = SimlockErrorCode> {
   readonly code: Code;
   readonly kind: ErrorKind;
