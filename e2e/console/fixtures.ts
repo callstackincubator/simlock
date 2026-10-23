@@ -250,6 +250,8 @@ export async function startDaemon(
     join(dataDirectory, "config.json"),
     JSON.stringify({
       ...(mode === "worker" ? FAKE_CAPACITY : {}),
+      // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it.
+      ...(mode === "worker" ? { capabilities: { "agent-device": { enabled: false } } } : {}),
       http: httpConfig,
       ...extraConfig,
     }),

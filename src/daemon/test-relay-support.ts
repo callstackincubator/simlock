@@ -166,6 +166,11 @@ export async function startWorker(
   directories.push(directory);
   const logger = new RecordingLogger();
   const options: StartDaemonOptions = {
+    // why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a relay test asks for neither.
+    configOverrides: {
+      capabilities: { "agent-device": { enabled: false } },
+      http: { enabled: false },
+    },
     dataDirectory: directory,
     deviceDataTables: fakeDeviceDataTables,
     drivers: [

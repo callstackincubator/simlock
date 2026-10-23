@@ -86,6 +86,12 @@ afterEach(async () => {
   );
 });
 
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test that asks for neither pins them off, and two daemons would clash on port 4701.
+const STANDALONE_OFF = {
+  capabilities: { "agent-device": { enabled: false } },
+  http: { enabled: false },
+} as const;
+
 /** `drivers: undefined` is spelled out by a caller that wants real (module-substituted)
  * discovery rather than the fake driver below. */
 async function start(
@@ -94,6 +100,7 @@ async function start(
     readonly drivers?: StartDaemonOptions["drivers"] | undefined;
   } = {},
 ) {
+  const { configOverrides, ...rest } = overrides;
   const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
@@ -108,7 +115,9 @@ async function start(
     hostLoadProbe: null,
     logger,
     version: "1.2.3",
-    ...overrides,
+    ...rest,
+    configOverrides:
+      overrides.role === "gateway" ? configOverrides : { ...STANDALONE_OFF, ...configOverrides },
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
   return { daemon, directory, sink };
@@ -297,6 +306,7 @@ describe("the version a daemon reports", () => {
     const clock = new FakeClock(1_000);
     const socketPath = join(directory, "daemon.sock");
     const daemon = await startDaemon({
+      configOverrides: STANDALONE_OFF,
       deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
@@ -1080,6 +1090,7 @@ describe("startDaemon wires core and leasing together", () => {
 
     const daemon = await startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       deviceDataTables: fakeDeviceDataTables,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
@@ -1103,6 +1114,7 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         clock,
+        configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
@@ -1157,6 +1169,7 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         clock,
+        configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [driver],
@@ -1343,6 +1356,7 @@ describe("startDaemon startup readiness", () => {
     const socketPath = join(directory, "daemon.sock");
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -1406,6 +1420,7 @@ describe("startDaemon stopped while starting", () => {
     const filesystem = new MemoryFilesystem();
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -3572,6 +3587,7 @@ describe("startDaemon host load", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const daemon = await startDaemon({
+      configOverrides: STANDALONE_OFF,
       deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
@@ -3606,6 +3622,7 @@ describe("startDaemon host load", () => {
     const socketPath = join(directory, "daemon.sock");
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -3757,6 +3774,7 @@ describe("startDaemon host load", () => {
       await expect(
         startDaemon({
           clock,
+          configOverrides: STANDALONE_OFF,
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
           deviceDataTables: fakeDeviceDataTables,
@@ -4005,7 +4023,10 @@ describe("startDaemon state.db", () => {
     const launch = (now: number) =>
       startDaemon({
         clock: new FakeClock(now),
-        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        configOverrides: {
+          ...STANDALONE_OFF,
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [],
@@ -4164,6 +4185,7 @@ describe("startDaemon version check", () => {
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
+      configOverrides: overrides.role === "gateway" ? {} : STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
@@ -4198,7 +4220,7 @@ describe("startDaemon version check", () => {
       await expect(
         startDaemon({
           clock,
-          configOverrides: { update: { check } },
+          configOverrides: { ...STANDALONE_OFF, update: { check } },
           dataDirectory: directory,
           drivers: [],
           filesystem: new SecretRefusingFilesystem(),
