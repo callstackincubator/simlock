@@ -359,7 +359,11 @@ test.describe("the leases page", () => {
 
       const drawer = page.getByRole("dialog");
       await expect(drawer).toBeVisible();
-      expect((await drawer.boundingBox())?.width).toBeCloseTo(360, 0);
+      // why: the page reserves a scrollbar gutter, so the page is narrower than the 360px viewport.
+      const available = await page.evaluate(
+        () => document.documentElement.getBoundingClientRect().width,
+      );
+      expect((await drawer.boundingBox())?.width).toBeCloseTo(available, 0);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();
