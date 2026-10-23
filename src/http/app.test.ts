@@ -2389,7 +2389,7 @@ describe("operator-only listing routes", () => {
         oldestTs: 1_234,
       });
     };
-    const notKept = await app.request("/v1/events?before=evt_abc&limit=50", {
+    const notKept = await app.request("/v1/events?before=evt_abc&limit=50&worker=w1", {
       headers: operatorAuth,
     });
     dispatcher.handlers["events.replay"] = () => {
@@ -2397,7 +2397,7 @@ describe("operator-only listing routes", () => {
     };
     const unavailable = await app.request("/v1/events?before=evt_abc", { headers: operatorAuth });
 
-    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50 }]);
+    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50, workerId: "w1" }]);
     expect(notKept.status).toBe(422);
     expect(await notKept.json()).toMatchObject({
       error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
@@ -2414,6 +2414,8 @@ describe("operator-only listing routes", () => {
     ["since=abc", "Invalid duration: abc"],
     ["before=evt_abc&since=1h", "before and since cannot be used together"],
     ["limit=50&since=1h", "limit and since cannot be used together"],
+    ["worker=", "worker must be a worker id of 1 to 128 characters"],
+    [`worker=${"w".repeat(129)}`, "worker must be a worker id of 1 to 128 characters"],
   ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["events.replay"] = () => {
