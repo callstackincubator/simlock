@@ -118,6 +118,8 @@ Activity's `EventFeed` (`data/event-feed.ts`) holds the events: the stream, the 
 newer ones, and `loadOlder` adds the 100 before the oldest held (`GET /v1/events?before=&limit=100`, or `?limit=100` with
 none held). It reports how the history stands (`HistoryState`: more, start, gone, failed); `ds/feed.tsx` calls `onNearEnd`
 within 20 rows of the end and draws the end row.
+
+The Inbox drawer and the lease drawer share one list of the last hour per tab (`data/recent-feed.ts`, held by `LiveProvider`): it starts at the first user, reads `since=1h` once, takes the stream and the reconnect gap, and is dropped 60 s after the last user closes (ADR 0044 §1). The worker's Events tab reads the same list until #911.
 Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
 ## Design system
