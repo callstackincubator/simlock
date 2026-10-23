@@ -79,9 +79,10 @@ export interface Filesystem {
     options?: WriteFileExclusiveOptions,
   ): Promise<void>;
   /**
-   * why: a `mode` applies only to the last directory and only when this call creates it, so a
-   * caller can make its own directory owner-only without tightening a parent it does not own,
-   * or overriding the mode a user chose for a directory that is already there.
+   * why: a `mode` applies to every directory this call creates, parents included, and to none
+   * that is already there, so a caller can make its own directories owner-only (a gateway's
+   * `<root>/gateway` makes `<root>` too) without tightening one it does not own, or overriding
+   * the mode a user chose for a directory that exists.
    */
   mkdirp(path: string, options?: MkdirpOptions): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
@@ -114,6 +115,31 @@ export interface Filesystem {
    * anything under it, cannot be read.
    */
   directorySize(path: string): Promise<number>;
+}
+
+// why: only the directories that are absent get the mode, so one that is already there keeps its own.
+async function missingDirectories(path: string): Promise<string[]> {
+  const missing: string[] = [];
+  for (let at = path; ; at = dirname(at)) {
+    try {
+      await stat(at);
+      return missing;
+    } catch (error: unknown) {
+      if (!hasCode(error, "ENOENT") || dirname(at) === at) throw error;
+      missing.unshift(at);
+    }
+  }
+}
+
+// why: false means another process made it first, and its mode is left alone.
+async function createDirectory(directory: string, mode: number): Promise<boolean> {
+  try {
+    await mkdir(directory, { mode });
+    return true;
+  } catch (error: unknown) {
+    if (hasCode(error, "EEXIST") && (await stat(directory)).isDirectory()) return false;
+    throw error;
+  }
 }
 
 export class NodeFilesystem implements Filesystem {
@@ -198,16 +224,13 @@ export class NodeFilesystem implements Filesystem {
       await mkdir(path, { recursive: true });
       return;
     }
-    await mkdir(dirname(path), { recursive: true });
-    try {
-      await mkdir(path, { mode: options.mode });
-    } catch (error: unknown) {
-      if (hasCode(error, "EEXIST") && (await stat(path)).isDirectory()) return;
-      throw error;
+    for (const directory of await missingDirectories(path)) {
+      if (await createDirectory(directory, options.mode)) {
+        // why: the umask can only take bits from `mkdir`'s mode, so a restrictive one would leave the
+        // directory short of what was asked; `chmod` sets exactly those bits, as the device root does.
+        await chmod(directory, options.mode);
+      }
     }
-    // why: the umask can only take bits from `mkdir`'s mode, so a restrictive one would leave the
-    // directory short of what was asked; `chmod` sets exactly those bits, as the device root does.
-    await chmod(path, options.mode);
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -394,7 +417,6 @@ export class MemoryFilesystem implements Filesystem {
   async mkdirp(path: string, options: MkdirpOptions = {}): Promise<void> {
     this.#failIfDefined(path);
     let currentPath = "";
-    let created: MemoryEntry | undefined;
 
     for (const segment of path.split("/")) {
       if (segment === "") {
@@ -404,17 +426,15 @@ export class MemoryFilesystem implements Filesystem {
 
       currentPath = joinMemoryPath(currentPath, segment);
       const entry = this.#entries.get(currentPath);
-      created = undefined;
 
       if (entry === undefined) {
-        created = this.#newEntry({ kind: "directory" });
-        this.#entries.set(currentPath, created);
+        const directory = this.#newEntry({ kind: "directory" });
+        if (options.mode !== undefined) directory.mode = options.mode & 0o777;
+        this.#entries.set(currentPath, directory);
       } else if (entry.kind !== "directory") {
         throw new Error(`Cannot create directory over file: ${currentPath}`);
       }
     }
-
-    if (created !== undefined && options.mode !== undefined) created.mode = options.mode & 0o777;
   }
 
   /**
