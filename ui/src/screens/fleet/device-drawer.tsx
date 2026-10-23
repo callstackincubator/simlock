@@ -15,7 +15,7 @@ import { ScreenPanel } from "./screen-panel";
 // somewhere.
 export function DeviceDrawer(props: { readonly workerId: string; readonly deviceId: string }) {
   const { deviceId, workerId } = props;
-  const { chooseTab, close, tab, view } = useDeviceDrawer(workerId, deviceId);
+  const { chooseTab, close, stream, tab, view } = useDeviceDrawer(workerId, deviceId);
   const device = view.kind === "ready" ? view.data : undefined;
   return (
     <Drawer
@@ -37,7 +37,14 @@ export function DeviceDrawer(props: { readonly workerId: string; readonly device
                 tabs={[
                   { content: <DeviceFacts device={row} />, label: "Details", value: "details" },
                   {
-                    content: <ScreenPanel workerId={workerId} deviceId={deviceId} />,
+                    content: (
+                      <ScreenPanel
+                        workerId={workerId}
+                        deviceId={deviceId}
+                        state={row.status.word}
+                        offer={stream}
+                      />
+                    ),
                     label: "Screen",
                     value: "screen",
                   },

@@ -49,7 +49,6 @@ function inspection(overrides: Partial<LeaseInspection> = {}): LeaseInspection {
     renewed: "30 s ago",
     requestId: "req_7d1a",
     runtime: "18.4",
-    stream: { offered: true },
     title: "ci-runner-3",
     worker: { name: "mac-mini-1", to: "/fleet/wrk_host" },
     ...overrides,

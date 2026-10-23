@@ -10,10 +10,17 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { ApiError } from "../data/api";
 import { readStream, type StreamMeta, type StreamStats } from "../data/stream";
-import { type Readout, type ScreenPhase, screenView } from "../model/screen";
+import {
+  deviceScreen,
+  type Readout,
+  type ScreenPhase,
+  screenView,
+  type StreamOffer,
+  streamsDevice,
+} from "../model/screen";
 import { useApi } from "./services";
 
-export type { Readout } from "../model/screen";
+export type { Readout, StreamOffer } from "../model/screen";
 
 const EMPTY: StreamStats = {
   dropped: 0,
@@ -40,9 +47,29 @@ export interface Screen {
   readonly waiting: string | undefined;
   readonly readout: Readout;
   readonly note: string | undefined;
+  // why: the daemon's 409 message, kept apart from `note` because the panel words it with the device's
+  // state and the row may be about to say the same.
+  readonly conflict: string | undefined;
 }
 
-export function useScreen(workerId: string, deviceId: string): Screen {
+export type DeviceScreenView =
+  | { readonly kind: "picture"; readonly screen: Screen }
+  | { readonly kind: "sentence"; readonly text: string };
+
+// why: the tab shows the picture only for a device the daemon streams, and says in words why it
+// shows none for any other, so the decision sits here and the panel only draws.
+export function useDeviceScreen(
+  workerId: string,
+  deviceId: string,
+  state: string,
+  offer: StreamOffer,
+): DeviceScreenView {
+  const screen = useScreen(workerId, deviceId, streamsDevice(state, offer));
+  const shown = deviceScreen({ conflict: screen.conflict, offer, state });
+  return shown.kind === "picture" ? { kind: "picture", screen } : shown;
+}
+
+function useScreen(workerId: string, deviceId: string, enabled: boolean): Screen {
   const api = useApi();
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const controller = useRef<AbortController | undefined>(undefined);
@@ -50,6 +77,7 @@ export function useScreen(workerId: string, deviceId: string): Screen {
   const [meta, setMeta] = useState<StreamMeta | undefined>(undefined);
   const [stats, setStats] = useState<StreamStats>(EMPTY);
   const [note, setNote] = useState<string | undefined>(undefined);
+  const [conflict, setConflict] = useState<string | undefined>(undefined);
 
   const stop = useCallback(() => {
     controller.current?.abort();
@@ -63,11 +91,16 @@ export function useScreen(workerId: string, deviceId: string): Screen {
     const abort = new AbortController();
     controller.current = abort;
     setNote(undefined);
+    setConflict(undefined);
     setMeta(undefined);
     setStats(EMPTY);
     setPhase("starting");
     void capture(api, workerId, deviceId, abort.signal, {
       canvas,
+      conflict: (message) => {
+        setConflict(message);
+        setPhase("stopped");
+      },
       ended: (reason) => {
         setNote(reason);
         setPhase("stopped");
@@ -80,12 +113,15 @@ export function useScreen(workerId: string, deviceId: string): Screen {
 
   // why: the picture starts when the panel is drawn and stops when it is not, so leaving the tab,
   // closing the drawer and navigating away are one event and a capture cannot outlive its viewer.
+  // A change of the device's state between two that stream does not change `enabled`, so it asks
+  // for nothing again; one that stops and then allows streaming does.
   useEffect(() => {
+    if (!enabled) return undefined;
     start();
     return stop;
-  }, [start, stop]);
+  }, [enabled, start, stop]);
 
-  return { canvas, ...screenView({ meta, note, phase, stats }) };
+  return { canvas, conflict, ...screenView({ meta, note, phase, stats }) };
 }
 
 /**
@@ -112,6 +148,7 @@ export function refusalOf(error: unknown): string {
 
 interface CaptureSinks {
   readonly canvas: RefObject<HTMLCanvasElement | null>;
+  readonly conflict: (message: string) => void;
   readonly live: () => void;
   readonly ended: (reason: string) => void;
   readonly setMeta: (meta: StreamMeta) => void;
@@ -151,7 +188,9 @@ async function capture(
       signal,
     );
   } catch (error) {
-    if (!signal.aborted) sinks.ended(refusalOf(error));
+    if (signal.aborted) return;
+    if (error instanceof ApiError && error.status === 409) sinks.conflict(error.message);
+    else sinks.ended(refusalOf(error));
   }
 }
 

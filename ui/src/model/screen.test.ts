@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { deviceScreen, readout, type ScreenPhase, screenView } from "./screen";
+import { deviceScreen, readout, type ScreenPhase, screenView, streamOffer } from "./screen";
+import type { WorkerView } from "./workers";
 
 const NONE = { dropped: 0, framesPerSecond: 0, kilobitsPerSecond: 0, painted: 0 };
 const META = { codec: "mjpeg", height: 240, width: 120 };
@@ -114,5 +115,34 @@ describe("what a device's Screen tab shows", () => {
     expect(deviceScreen({ conflict, offer, state: "shutdown" })).toEqual(
       sentence("The device is shut down. Its screen shows while it runs."),
     );
+  });
+});
+
+describe("whether a worker offers the live screen", () => {
+  const worker = (capabilities: WorkerView["capabilities"]): WorkerView =>
+    ({ capabilities, id: "wrk_1", label: "mac-mini-1" }) as WorkerView;
+
+  it("offers it when the stream capability is available or the worker is not known, and says why not when it is off, unreported or unavailable", () => {
+    expect(streamOffer(worker([{ name: "stream", state: "available" }]))).toEqual({
+      offered: true,
+    });
+    expect(streamOffer(undefined)).toEqual({ offered: true });
+    const silent: WorkerView["capabilities"][] = [
+      [{ name: "stream", state: "off" }],
+      [],
+      undefined,
+    ];
+    for (const capabilities of silent) {
+      expect(streamOffer(worker(capabilities))).toEqual({
+        offered: false,
+        reason: "Streaming is off on mac-mini-1.",
+      });
+    }
+    expect(
+      streamOffer(worker([{ name: "stream", reason: "ffmpeg is missing", state: "unavailable" }])),
+    ).toEqual({
+      offered: false,
+      reason: "Streaming is unavailable on mac-mini-1. ffmpeg is missing",
+    });
   });
 });
