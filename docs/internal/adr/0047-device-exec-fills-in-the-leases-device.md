@@ -1,6 +1,6 @@
 # 0047. `device.exec` fills in the lease's device, and refuses another
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-23
 - **Issue:** [#951](https://github.com/callstackincubator/simlock/issues/951)
 - **Extends:** [ADR 0005](0005-gateway-and-worker-modes.md) §19a (the
