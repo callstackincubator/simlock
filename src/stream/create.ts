@@ -46,6 +46,7 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
     link: createWorkerStreamLink({
       bounds: { clock: options.clock, silenceMs: DEFAULT_SILENCE_MS, startMs: DEFAULT_START_MS },
       captures,
+      instanceId: options.instanceId,
       registry: options.registry,
       screens: options.screens,
       settings: options.settings,

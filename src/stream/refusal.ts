@@ -5,8 +5,8 @@
 export class StreamRefusalError extends Error {
   // why: `code` is a free string rather than a closed union, because a gateway forwards the code its
   // worker answered with and that worker may be a build this one has never seen. The codes this
-  // service raises itself are `UNKNOWN_LEASE`, `BAD_REQUEST`, `STREAM_NOT_SUPPORTED`,
-  // `STREAM_UNAVAILABLE` and `INTERNAL`, and the HTTP API promises exactly these.
+  // service raises itself are `UNKNOWN_LEASE`, `UNKNOWN_DEVICE`, `UNKNOWN_WORKER`, `DEVICE_NOT_RUNNING`,
+  // `BAD_REQUEST`, `STREAM_NOT_SUPPORTED`, `STREAM_UNAVAILABLE` and `INTERNAL`, and the HTTP API promises exactly these.
   constructor(
     readonly status: number,
     readonly code: string,
@@ -19,6 +19,22 @@ export class StreamRefusalError extends Error {
 
 export function unknownLease(leaseId: string): StreamRefusalError {
   return new StreamRefusalError(404, "UNKNOWN_LEASE", `Unknown lease: ${leaseId}`);
+}
+
+export function unknownDevice(deviceId: string): StreamRefusalError {
+  return new StreamRefusalError(404, "UNKNOWN_DEVICE", `Unknown device: ${deviceId}`);
+}
+
+export function unknownWorker(workerId: string): StreamRefusalError {
+  return new StreamRefusalError(404, "UNKNOWN_WORKER", `Unknown worker: ${workerId}`);
+}
+
+export function deviceNotRunning(state: string): StreamRefusalError {
+  return new StreamRefusalError(
+    409,
+    "DEVICE_NOT_RUNNING",
+    `The device is ${state}; only a ready or leased device streams`,
+  );
 }
 
 export function noSuchStream(): StreamRefusalError {

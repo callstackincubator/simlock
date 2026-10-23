@@ -13,7 +13,15 @@ import {
 import type { CaptureRegistry } from "./captures.js";
 import type { StreamCaller } from "./caller.js";
 import { type CapturedStream, type FeedBounds, readScreenFeed } from "./feed.js";
-import { notStreamable, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
+import {
+  deviceNotRunning,
+  notStreamable,
+  StreamRefusalError,
+  streamUnavailable,
+  unknownDevice,
+  unknownLease,
+  unknownWorker,
+} from "./refusal.js";
 import type { StreamLink, StreamTarget } from "./service.js";
 
 export interface StreamRegistry {
@@ -33,6 +41,7 @@ export interface ScreenOpener {
 }
 
 export interface WorkerStreamLinkOptions {
+  readonly instanceId: string;
   readonly registry: StreamRegistry;
   readonly screens: ScreenOpener;
   readonly captures: CaptureRegistry;
@@ -46,7 +55,7 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
       // why: ownership is proved before anything is asked of the machine. A link that looked for its
       // capture first would answer an agent one way for a lease this worker holds and another for a
       // lease that does not exist, which is a way of listing the fleet's leases.
-      const { device, lease } = requireTarget(options.registry, target, caller);
+      const { device, lease } = requireTarget(options, target, caller);
       const slot = options.captures.begin(lease?.id ?? device.id);
       // why: the listener, and not only the body's cancel, because a request aborted before its
       // first frame has no body being read yet -- which is what a page opened and closed quickly does.
@@ -108,14 +117,21 @@ function refusalFor(error: unknown): StreamRefusalError {
 }
 
 function requireTarget(
-  registry: StreamRegistry,
+  options: WorkerStreamLinkOptions,
   target: StreamTarget,
   caller: StreamCaller,
 ): { readonly lease?: LeaseRecord; readonly device: DeviceRecord } {
-  if (typeof target === "string") return requireLease(registry, target, caller);
-  const device = registry.snapshot.devices.find((candidate) => candidate.id === target.deviceId);
-  if (device === undefined)
-    throw new StreamRefusalError(404, "UNKNOWN_DEVICE", `Unknown device: ${target.deviceId}`);
+  if (typeof target === "string") return requireLease(options.registry, target, caller);
+  // why: a worker answers only for its own id (ADR 0012 section 1); a gateway names the worker it relays to,
+  // and a request that reaches the wrong worker is refused rather than answered with the wrong screen.
+  if (target.workerId !== undefined && target.workerId !== options.instanceId) {
+    throw unknownWorker(target.workerId);
+  }
+  const device = options.registry.snapshot.devices.find(
+    (candidate) => candidate.id === target.deviceId,
+  );
+  if (device === undefined) throw unknownDevice(target.deviceId);
+  if (device.state !== "ready" && device.state !== "leased") throw deviceNotRunning(device.state);
   return { device };
 }
 

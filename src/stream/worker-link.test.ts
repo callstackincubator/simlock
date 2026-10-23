@@ -35,6 +35,7 @@ function setup(options: { refuseWith?: Error } = {}) {
   const captures = createCaptureRegistry();
   const opened: Opened[] = [];
   const link = createWorkerStreamLink({
+    instanceId: "w1",
     bounds: { clock, silenceMs: 1_000, startMs: 5_000 },
     captures,
     registry,
@@ -174,6 +175,7 @@ describe("the worker's stream link", () => {
     );
     const captures = createCaptureRegistry();
     const link = createWorkerStreamLink({
+      instanceId: "w1",
       bounds: { clock: new FakeClock(), silenceMs: 1_000, startMs: 5_000 },
       captures,
       registry,
@@ -218,6 +220,7 @@ describe("the worker's stream link", () => {
     );
     const captures = createCaptureRegistry();
     const link = createWorkerStreamLink({
+      instanceId: "w1",
       bounds: { clock: new FakeClock(), silenceMs: 1_000, startMs: 5_000 },
       captures,
       registry,
@@ -251,6 +254,7 @@ describe("the worker's stream link", () => {
     );
     const captures = createCaptureRegistry();
     const link = createWorkerStreamLink({
+      instanceId: "w1",
       bounds: { clock: new FakeClock(), silenceMs: 1_000, startMs: 5_000 },
       captures,
       registry,
