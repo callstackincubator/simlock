@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { EventFeed } from "../data/event-feed";
 import { browserClock } from "../data/live/browser";
@@ -214,11 +214,15 @@ export interface WorkerEventsPage {
 // alone and scrolled back through its history; the stream adds the worker's new ones.
 export function useWorkerEvents(workerId: string): LoadView<WorkerEventsPage> {
   const api = useApi();
-  const mode = useDaemonMode();
+  // why: the feed outlives the render that built it, and the mode may arrive after the tab mounts,
+  // so the filter reads the mode as it is when each event comes.
+  const daemonMode = useDaemonMode();
+  const mode = useRef(daemonMode);
+  mode.current = daemonMode;
   const [feed] = useState(
     () =>
       new EventFeed((path) => api.getJson(path), browserClock, true, {
-        keeps: (event) => eventsOfWorker([event], workerId, mode).length > 0,
+        keeps: (event) => eventsOfWorker([event], workerId, mode.current).length > 0,
         workerId,
       }),
   );
