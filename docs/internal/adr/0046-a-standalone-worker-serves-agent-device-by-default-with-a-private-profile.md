@@ -23,6 +23,12 @@
   §4 ("Agents sharing a token share a tenant; the docs say not to"): the
   local profile gives every local agent one token on purpose (§4 below);
   the warning still holds for tokens an operator mints by hand.
+  [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md)
+  §4 ("a simulator daemon that is not running makes the worker unavailable
+  for agent-device" and "`simlock doctor` prints one line per daemon"):
+  when agent-device is on only by default and its command is not found, the
+  capability is `off` and doctor prints no line for either daemon (§1
+  below).
 - **Builds on:** ADR 0023 §4 (one simlock token is one tenant), ADR 0033
   (auth is unchanged: the profile carries an ordinary agent token).
 
