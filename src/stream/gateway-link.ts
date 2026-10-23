@@ -8,6 +8,7 @@ import {
   streamUnavailable,
   unknownDevice,
   unknownLease,
+  unknownWorker,
 } from "./refusal.js";
 import type { StreamDeviceTarget, StreamLink } from "./service.js";
 
@@ -56,7 +57,7 @@ export function createGatewayStreamLink(options: GatewayStreamLinkOptions): Stre
       // a caller cannot reach a screen by naming someone else, and the worker proves ownership
       // against its own registry instead of trusting this relay.
       const namespacedRequesterId = `${options.fleet.requesterPrefix}${held.requesterId}`;
-      const response = await relayed(held.workerId, leaseId, () =>
+      const response = await relayed(held.workerId, `lease ${leaseId}`, () =>
         options.fleet.relay(held.workerId, {
           leaseId: held.workerLeaseId,
           request: new Request(
@@ -69,7 +70,7 @@ export function createGatewayStreamLink(options: GatewayStreamLinkOptions): Stre
           tenant: namespacedRequesterId,
         }),
       );
-      return fromResponse(held.workerId, leaseId, response);
+      return fromResponse(held.workerId, `lease ${leaseId}`, response);
     },
   };
 }
@@ -84,7 +85,8 @@ async function serveDevice(
   // by naming a device.
   if (caller.role !== "operator") throw unknownDevice(target.deviceId);
   const workerId = target.workerId ?? "";
-  const response = await relayed(workerId, target.deviceId, () =>
+  if (!options.fleet.knowsWorker(workerId)) throw unknownWorker(workerId);
+  const response = await relayed(workerId, `device ${target.deviceId}`, () =>
     options.fleet.relay(workerId, {
       request: new Request(
         `http://simlock-worker/stream/devices/${encodeURIComponent(target.deviceId)}`,
@@ -93,7 +95,7 @@ async function serveDevice(
       tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
     }),
   );
-  return fromResponse(workerId, target.deviceId, response);
+  return fromResponse(workerId, `device ${target.deviceId}`, response);
 }
 
 // why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker
@@ -101,7 +103,7 @@ async function serveDevice(
 // that reason rather than a 500 that says nothing; anything without a code is a real fault.
 async function relayed(
   workerId: string,
-  leaseId: string,
+  subject: string,
   relay: () => Promise<Response>,
 ): Promise<Response> {
   try {
@@ -110,7 +112,7 @@ async function relayed(
     const code = (error as { readonly code?: unknown }).code;
     if (code === "RELAY_TARGET_MISSING") {
       throw streamUnavailable(
-        `Worker ${workerId} does not serve screen streams for lease ${leaseId}; turn on capabilities.stream.enabled there`,
+        `Worker ${workerId} does not serve screen streams for ${subject}; turn on capabilities.stream.enabled there`,
       );
     }
     if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
@@ -130,7 +132,7 @@ const MAX_REFUSAL_BYTES = 16 * 1024;
 
 async function fromResponse(
   workerId: string,
-  leaseId: string,
+  subject: string,
   response: Response,
 ): Promise<CapturedStream> {
   // why: the codec header is what tells a relayed stream from a relayed refusal -- a gateway reads a
@@ -139,7 +141,7 @@ async function fromResponse(
   const codec = response.headers.get("simlock-stream-codec");
   if (!response.ok || codec === null || response.body === null) {
     const reason = await readCapped(response, MAX_REFUSAL_BYTES);
-    throw relayedRefusal(workerId, leaseId, response.status, reason);
+    throw relayedRefusal(workerId, subject, response.status, reason);
   }
   let meta: ScreenMeta;
   try {
@@ -152,7 +154,7 @@ async function fromResponse(
   } catch (error) {
     await response.body.cancel().catch(() => undefined);
     throw streamUnavailable(
-      `Worker ${workerId} answered the stream for lease ${leaseId} with a picture it cannot describe: ${
+      `Worker ${workerId} answered the stream for ${subject} with a picture it cannot describe: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );

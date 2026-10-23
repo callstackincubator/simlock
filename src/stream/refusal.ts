@@ -59,7 +59,7 @@ const MAX_RELAYED_MESSAGE = 1_000;
 
 export function relayedRefusal(
   workerId: string,
-  leaseId: string,
+  subject: string,
   status: number,
   body: string,
 ): StreamRefusalError {
@@ -80,7 +80,7 @@ export function relayedRefusal(
   return new StreamRefusalError(
     relayedStatus,
     "STREAM_UNAVAILABLE",
-    `Worker ${workerId} refused the stream for lease ${leaseId} with status ${String(status)}`,
+    `Worker ${workerId} refused the stream for ${subject} with status ${String(status)}`,
   );
 }
 
