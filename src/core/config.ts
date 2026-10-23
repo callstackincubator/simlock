@@ -540,11 +540,6 @@ export async function loadConfig(options: LoadConfigOptions): Promise<Config> {
   return (await loadConfigWithDefaults(options)).config;
 }
 
-export interface LoadedConfig {
-  readonly config: Config;
-  readonly defaulted: ReadonlySet<string>;
-}
-
 export async function loadConfigWithDefaults({
   authStrategies = registeredAuthStrategies,
   configPath = DEFAULT_CONFIG_PATH,
@@ -554,7 +549,10 @@ export async function loadConfigWithDefaults({
   role = "worker",
   systemStats,
   warn = () => {},
-}: LoadConfigOptions): Promise<LoadedConfig> {
+}: LoadConfigOptions): Promise<{
+  readonly config: Config;
+  readonly defaulted: ReadonlySet<string>;
+}> {
   const fromFile = await readConfigFile(filesystem, configPath);
   const fromOverrides = overrides ?? {};
 

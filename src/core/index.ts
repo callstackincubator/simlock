@@ -12,7 +12,6 @@ export {
   effectiveAllowDownload,
   loadConfig,
   loadConfigWithDefaults,
-  type LoadedConfig,
   type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,

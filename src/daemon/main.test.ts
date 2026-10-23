@@ -3382,6 +3382,11 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
+    const findingLabel = (finding: { readonly module?: string; readonly message?: string }) => {
+      if (finding.module === "alpha") return "alpha";
+      return finding.message?.startsWith("phone daemon: ") === true ? "phones" : "simulator";
+    };
+
     it.each([
       {
         name: "both daemons down: agent-device is found nowhere",
@@ -3486,14 +3491,7 @@ describe("startDaemon with the agent-device edge", () => {
               }[];
             }
           ).findings.filter((finding) => finding.kind === "module-unavailable");
-        const labelled = async () =>
-          (await unavailable()).map((finding) =>
-            finding.module === "alpha"
-              ? "alpha"
-              : finding.message?.startsWith("phone daemon: ") === true
-                ? "phones"
-                : "simulator",
-          );
+        const labelled = async () => (await unavailable()).map(findingLabel);
         // why: the simulator daemon's polls sleep on the fake clock, so the test advances it until the findings settle.
         for (let tick = 0; tick < 400; tick += 1) {
           if (JSON.stringify(await labelled()) === JSON.stringify(findings)) break;
