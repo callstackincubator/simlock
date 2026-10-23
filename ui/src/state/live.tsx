@@ -11,6 +11,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 
 import type { ApiPath } from "../data/api";
+import { createRecentFeed, type RecentFeed } from "../data/recent-feed";
 import { type DaemonFacts, type DaemonMode, type ModeStore, watchMode } from "../data/mode";
 import { useApi, useSession } from "./services";
 import { createQueries, type Queries, resourceOf } from "./queries";
@@ -33,6 +34,8 @@ export interface Live {
   readonly connection: LiveConnection;
   readonly mode: ModeStore;
   readonly queries: Queries;
+  // why: the last hour of events, read once for every drawer of the tab that shows them.
+  readonly recent: RecentFeed;
   readonly ticker: Ticker;
 }
 
@@ -57,7 +60,12 @@ export function LiveProvider({ children }: { readonly children: ReactNode }) {
       connection,
       visibility: documentVisibility,
     });
-    setLive({ connection, mode, queries, ticker });
+    const recent = createRecentFeed({
+      clock: browserClock,
+      connection,
+      get: (path) => api.getJson(path),
+    });
+    setLive({ connection, mode, queries, recent, ticker });
     return () => {
       queries.dispose();
       mode.dispose();
@@ -90,6 +98,10 @@ export function useDaemonMode(): DaemonMode | undefined {
 export function useDaemonFacts(): DaemonFacts {
   const { mode } = useLive();
   return useSyncExternalStore(mode.subscribe, mode.daemon, mode.daemon);
+}
+
+export function useRecentFeed(): RecentFeed {
+  return useLive().recent;
 }
 
 export function useConnection(): ConnectionState {

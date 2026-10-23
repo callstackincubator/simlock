@@ -23,7 +23,7 @@ import type { LeaseList, LeaseRecord } from "../model/leases";
 import { itemIdFrom } from "../model/paths";
 import type { WaitingList, WaitingRequest } from "../model/waiting";
 import type { WorkerList, WorkerView } from "../model/workers";
-import { useLiveEvents, useRouteQuery, useNow, useStreamOpened } from "./live";
+import { useLiveEvents, useRecentFeed, useRouteQuery, useNow, useStreamOpened } from "./live";
 import { loadView, mapView } from "./resource";
 import { setSearch, usePath, useSearch } from "./router";
 import { useApi } from "./services";
@@ -31,17 +31,15 @@ import { useApi } from "./services";
 export type { Chosen, EventDetail, EventRow, EventsChart, HistoryEnd, SubjectFilter };
 export { SUBJECT_CHOICES };
 
-// why: each screen that reads events holds its own feed, filled from the last hour and then the
-// stream while it is on screen, so a screen opened later still starts from a full hour.
-function useEventFeed(showsHistory: boolean): {
+// why: Activity holds its own feed with history, filled from the last hour and then the stream
+// while it is on screen.
+function useEventFeed(): {
   readonly feed: EventFeed;
   readonly state: ResourceState<readonly ConsoleEvent[]>;
   readonly history: HistoryState;
 } {
   const api = useApi();
-  const [feed] = useState(
-    () => new EventFeed((path) => api.getJson(path), browserClock, showsHistory),
-  );
+  const [feed] = useState(() => new EventFeed((path) => api.getJson(path), browserClock, true));
   useLiveEvents(feed.streamEvent);
   useStreamOpened(feed.streamOpened);
   useEffect(() => feed.start(), [feed]);
@@ -52,8 +50,12 @@ function useEventFeed(showsHistory: boolean): {
   };
 }
 
+// why: the drawers of one tab share one list of the last hour, kept a minute after the last of
+// them closes.
 export function useRecentEvents(): ResourceState<readonly ConsoleEvent[]> {
-  return useEventFeed(false).state;
+  const recent = useRecentFeed();
+  useEffect(() => recent.acquire(), [recent]);
+  return useSyncExternalStore(recent.subscribe, recent.snapshot);
 }
 
 const NO_WORKERS: readonly WorkerView[] = [];
@@ -79,7 +81,7 @@ export interface EventsPage {
 }
 
 export function useEvents(): LoadView<EventsPage> {
-  const { feed: source, history, state: feed } = useEventFeed(true);
+  const { feed: source, history, state: feed } = useEventFeed();
   const events = feed.data;
   // why: the places an event links to are read for the links only; a route that is slow, refused
   // or not served here costs the feed nothing, only the link.
