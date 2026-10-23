@@ -347,7 +347,7 @@ describe("a lease renewal", () => {
       timestamp: Date.now(),
     })}\n\n`;
 
-  it("moves the lease's deadline in place with no read: a worker event matches by id, lastRenewedAt and ttlMs follow, no match changes nothing", async () => {
+  it("moves the lease's deadline in place with no read: a worker event matches by id, a gateway event by worker and the worker's lease id in both lists, lastRenewedAt and ttlMs follow, a later answer with the old deadline keeps the new one for 60 seconds, no match changes nothing", async () => {
     const { daemon, reads, state, watch } = start();
     daemon.reads = () =>
       Promise.resolve({ body: { leases: [lease("l_1"), lease("l_2")] }, date: null });
@@ -371,5 +371,48 @@ describe("a lease renewal", () => {
     await settle();
     expect(state("/v1/leases").data).toBe(after);
     expect(reads("/v1/leases")).toBe(1);
+
+    const gateway = start();
+    const old = {
+      leases: [
+        lease("w1.l_1", { workerId: "w1", workerLeaseId: "l_1" }),
+        lease("w2.l_1", { workerId: "w2", workerLeaseId: "l_1" }),
+      ],
+    };
+    const fleet = {
+      workers: [
+        { id: "w1", leases: [lease("l_1")] },
+        { id: "w2", leases: [lease("l_1")] },
+      ],
+    };
+    gateway.daemon.reads = (path) =>
+      Promise.resolve({ body: path === "/v1/leases" ? old : fleet, date: null });
+    gateway.watch("/v1/leases");
+    gateway.watch("/v1/workers");
+    await settle();
+    const deadline = Date.now() + 120_000;
+    gateway.daemon
+      .openStream()
+      ?.send(renewed({ leaseId: "l_1", newDeadline: deadline, workerId: "w1" }, 4));
+    await settle();
+
+    const moved = { lastRenewedAt: Date.now(), ttlDeadline: deadline, ttlMs: 120_000 };
+    expect(gateway.state("/v1/leases").data).toEqual({
+      leases: [lease("w1.l_1", { ...moved, workerId: "w1", workerLeaseId: "l_1" }), old.leases[1]],
+    });
+    expect(gateway.state("/v1/workers").data).toEqual({
+      workers: [{ id: "w1", leases: [lease("l_1", moved)] }, fleet.workers[1]],
+    });
+    expect(gateway.reads("/v1/leases") + gateway.reads("/v1/workers")).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(gateway.reads("/v1/leases")).toBe(2);
+    const kept = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
+    expect(kept.leases[0]?.ttlDeadline).toBe(deadline);
+    expect(kept.leases[1]?.ttlDeadline).toBe(NOW + 60_000);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const dropped = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
+    expect(dropped.leases[0]?.ttlDeadline).toBe(NOW + 60_000);
   });
 });
