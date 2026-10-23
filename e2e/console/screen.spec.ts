@@ -242,6 +242,9 @@ test.describe("the device drawer's Screen tab", () => {
 
         await drawer(page).getByRole("tab", { name: "Screen" }).click();
         await logReached(dir, "opened", 2);
+        // why: Escape comes once the picture is up, so the test closes a capture that is streaming,
+        // as the Details click above does, and not one still starting.
+        await expect.poll(() => averageColour(page), { timeout: 10_000 }).not.toBe("0,0,0");
         await page.keyboard.press("Escape");
         await logReached(dir, "closed", 2);
         await expect(drawer(page)).toBeHidden();
