@@ -2322,7 +2322,7 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
 
   it("inbox.get on a worker answers a lease about to end and a request that has waited over 60 s", async () => {
     const { clock, dispatcher, engine } = await buildDispatcher();
-    await request(dispatcher, "holder-1", { ttlMs: 1_000 });
+    await request(dispatcher, "holder-1", { ttlMs: 250_000 });
     await request(dispatcher, "holder-2");
     void request(dispatcher, "agent-a");
     await expect.poll(() => engine.queueDepth).toBe(1);
