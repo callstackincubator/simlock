@@ -1113,6 +1113,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "inbox.get":
+        return this.#dispatcher.dispatch(
+          "inbox.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "events.subscribe":
         return this.#dispatcher.dispatch(
           "events.subscribe",
