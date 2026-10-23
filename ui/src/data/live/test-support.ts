@@ -42,7 +42,10 @@ class FakeDaemon implements LiveApi {
   readonly gets: { readonly path: ApiPath; readonly at: number; readonly tag?: string }[] = [];
   readonly healthChecks: number[] = [];
   readonly streams: FakeStream[] = [];
-  reads: "answer" | "hold" | ((path: ApiPath) => Promise<ApiResponse<unknown>>) = "answer";
+  reads:
+    | "answer"
+    | "hold"
+    | ((path: ApiPath) => Promise<ApiResponse<unknown> | ConditionalResponse<unknown>>) = "answer";
   holdStreams = false;
   refuseStreams: (() => Promise<never>) | undefined;
   health: "up" | "down" | "unreachable" = "up";
@@ -68,7 +71,7 @@ class FakeDaemon implements LiveApi {
     if (reads === "answer" && this.etag !== undefined && options?.tag === this.etag) {
       return Promise.resolve({ date: this.date, notModified: true });
     }
-    if (typeof reads === "function") return reads(path) as Promise<ApiResponse<unknown>>;
+    if (typeof reads === "function") return reads(path);
     if (reads === "hold") return this.#hold() as Promise<ApiResponse<unknown>>;
     return Promise.resolve({
       body: { read: this.gets.length },

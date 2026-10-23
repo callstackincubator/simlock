@@ -268,7 +268,7 @@ describe("a read's answers and failures", () => {
 });
 
 describe("a route's ETag", () => {
-  it("a re-read of an unchanged route sends the first tag, and a 304 keeps the same data object with no update", async () => {
+  it("a re-read of an unchanged route sends the first tag: a 304 keeps the same data object with no update, a 200 brings new data and its tag, a 304 after the data was dropped is read again without a tag", async () => {
     const { daemon, queries } = start();
     daemon.etag = '"v1"';
     const observer = new QueryObserver(queries.client, {
@@ -288,5 +288,38 @@ describe("a route's ETag", () => {
     expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"']);
     expect(observer.getCurrentResult().data).toBe(first);
     expect(updates).not.toHaveBeenCalled();
+
+    daemon.etag = '"v2"';
+    await vi.advanceTimersByTimeAsync(15_000);
+    const second = observer.getCurrentResult().data;
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"', '"v1"']);
+    expect(second).not.toBe(first);
+    expect(second).toEqual({ read: 3 });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"', '"v1"', '"v2"']);
+    expect(observer.getCurrentResult().data).toBe(second);
+
+    let release: () => void = () => {};
+    daemon.reads = () =>
+      new Promise((resolve) => {
+        release = () => {
+          daemon.reads = "answer";
+          resolve({ date: null, notModified: true });
+        };
+      });
+    await vi.advanceTimersByTimeAsync(15_000);
+    queries.client.removeQueries({ queryKey: routeKey("/v1/workers") });
+    release();
+    await settle();
+
+    expect(daemon.gets.map((get) => get.tag)).toEqual([
+      undefined,
+      '"v1"',
+      '"v1"',
+      '"v2"',
+      '"v2"',
+      undefined,
+    ]);
   });
 });
