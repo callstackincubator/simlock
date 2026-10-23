@@ -3215,9 +3215,10 @@ describe("the stream mount's listed route", () => {
     const answer = (path: string, method = "GET") =>
       app.request(path, { headers: agentAuth, method });
 
-    const found = await answer(route.path.replace("{id}", "lse_1"));
+    const listedPath = route.path.replace("{workerId}", "w1").replace("{deviceId}", "dev_1");
+    const found = await answer(listedPath);
     const other = await answer("/v1/stream/x");
-    const wrongMethod = await answer(route.path.replace("{id}", "lse_1"), "POST");
+    const wrongMethod = await answer(listedPath, "POST");
 
     expect(found.status).toBe(200);
     expect(found.headers.get("content-type")).toBe("application/vnd.simlock.stream+h264");
@@ -3225,7 +3226,7 @@ describe("the stream mount's listed route", () => {
     expect(listed).toEqual(
       expect.arrayContaining([found.status, other.status, wrongMethod.status]),
     );
-    expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_LEASE" } });
+    expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_DEVICE" } });
     await found.body?.cancel();
   });
 });
