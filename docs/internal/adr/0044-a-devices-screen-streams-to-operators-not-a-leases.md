@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-23
 - **Issue:** [#906](https://github.com/callstackincubator/simlock/issues/906)
-- **Depends on:** ADR 0030 (stream is an optional module), ADR 0031 (screen-source seam), ADR 0039 (joined workers serve no HTTP of their own).
+- **Depends on:** ADR 0012 (a worker answers fleet routes as a fleet of one), ADR 0030 (stream is an optional module), ADR 0031 (screen-source seam), ADR 0039 (joined workers serve no HTTP of their own).
 
 ## Context
 
@@ -15,9 +15,9 @@ The console is the only caller (`ui/src/state/screen.ts:129`). An operator there
 
 ## Decision
 
-1. **The route names a device.** A worker serves `GET /v1/stream/devices/{deviceId}`. A gateway serves `GET /v1/stream/workers/{workerId}/devices/{deviceId}` and relays it to that worker. A device id is unique only within one worker, so the gateway's path names the worker. `GET /v1/stream/leases/{id}` is removed. Nothing published depends on it.
+1. **The route names a worker and a device.** Every daemon serves `GET /v1/stream/workers/{workerId}/devices/{deviceId}`. A device id is unique only within one worker, so the path names the worker. A gateway relays the request to that worker over its uplink, to the worker's internal `/stream/devices/{deviceId}`. A worker answers the same public path as a fleet of one, as ADR 0012 has it: `{workerId}` is its own instance id, the id `worker.list` gives it. The console therefore builds one URL on either daemon. `GET /v1/stream/leases/{id}` is removed. Nothing published depends on it.
 2. **Operators only.** An agent token gets 404 `UNKNOWN_DEVICE` for any device, so an agent cannot list a fleet's devices this way. On a gateway the gateway checks the role. The worker serves any relayed device stream: a relay arrives only on a gateway's uplink session, so it is trusted as far as that session is. The uplink message does not change.
-3. **A running device streams.** A device in state `ready` or `leased` streams. Any other state (`provisioning`, `shutdown`, `reclaiming`, `quarantined`, `absent`, `deleted`) gets 409 `DEVICE_NOT_RUNNING`, with the device's state in the message. An unknown device gets 404 `UNKNOWN_DEVICE`. A driver that cannot capture keeps 415 `STREAM_NOT_SUPPORTED`. Every other refusal stays as it is.
+3. **A running device streams.** A device in state `ready` or `leased` streams. Any other state (`provisioning`, `shutdown`, `reclaiming`, `quarantined`, `absent`, `deleted`) gets 409 `DEVICE_NOT_RUNNING`, with the device's state in the message. An unknown device gets 404 `UNKNOWN_DEVICE`. An unknown worker (on a gateway, an id not in its fleet; on a worker, any id but its own) gets 404 `UNKNOWN_WORKER`, the code the other `/v1/workers/{id}` routes use. A driver that cannot capture keeps 415 `STREAM_NOT_SUPPORTED`. Every other refusal stays as it is.
 4. **A stream outlives a lease grant, not a reclaim.** A device that gets leased while it is watched keeps streaming, a physical iPhone included. A stream ends when:
    - the viewer closes it;
    - the capture ends or goes silent past the existing bound, which is also how a warm simulator that shuts down ends its stream;
@@ -34,6 +34,8 @@ sequenceDiagram
   C->>G: GET /v1/stream/workers/w1/devices/d1
   alt not an operator
     G-->>C: 404 UNKNOWN_DEVICE
+  else unknown worker
+    G-->>C: 404 UNKNOWN_WORKER
   else operator
     G->>W: relay GET /stream/devices/d1
     alt unknown device
@@ -68,8 +70,9 @@ stateDiagram-v2
 
 - **Keep the lease route beside the device route.** Rejected: only the console calls it, and it keeps a second access model (lease owners) to secure and test.
 - **The relay carries the caller's role.** Rejected: it changes the uplink message, and it only defends against a gateway that is already trusted with every lease.
+- **A second, worker-only path `/v1/stream/devices/{deviceId}`.** Rejected: the console would build two URLs by mode, against ADR 0012's one console for one host and for a fleet.
 - **Reuse 415 for a device that is not running.** Rejected: 415 says the device can never stream, and 409 says it cannot stream now.
 
 ## Verification
 
-The stream module's tests drive both routes with faked drivers: role, state and lifetime cases. The slow-lane stream tests move to the device routes. The feature's tasks name them.
+The stream module's tests drive the route on a worker and through a gateway with faked drivers: role, state and lifetime cases. The slow-lane stream tests move to the device routes. The feature's tasks name them.
