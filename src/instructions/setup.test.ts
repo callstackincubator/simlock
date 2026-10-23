@@ -81,7 +81,7 @@ async function tree(filesystem: MemoryFilesystem, root: string): Promise<string[
   if (!(await filesystem.exists(root))) return [];
   const paths: string[] = [];
   for (const name of await filesystem.readdir(root)) {
-    const path = `${root}/${name}`;
+    const path = root === "/" ? `/${name}` : `${root}/${name}`;
     paths.push(path);
     if ((await filesystem.lstat(path)).kind === "directory")
       paths.push(...(await tree(filesystem, path)));
