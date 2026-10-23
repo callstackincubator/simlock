@@ -4,7 +4,8 @@ Does: the `simlock` command surface over `simlock/admin` — parse, render, hold
 Entry: `main.ts` (the `simlock` bin) → `index.ts` `runCli(argv)`.
 Uses: admin, bus (event key, type), client (types), agent-identity, lease-policy, history (reader), core
 (`loadConfig` only), contract, ports, module-registry (`optionalModules` only); instructions
-(`commands/instructions.ts` and `commands/setup.ts` only); mcp, loaded on demand. Never imports: daemon, drivers, gateway, http.
+(`commands/instructions.ts` and `commands/setup.ts` for values; `types.ts` for a type; `index.ts` and
+`errors.ts` load it on demand); mcp, loaded on demand. Never imports: daemon, drivers, gateway, http.
 
 Everything except `agent-identity` (the requester-id resolver, the one cheap component) is
 loaded **on demand**: the CLI's own shared files (`main.ts`, `index.ts`, `tree.ts`,

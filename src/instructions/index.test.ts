@@ -159,10 +159,7 @@ describe("the router skill", () => {
       "iOS simulator",
       "Android emulator",
       "test phone",
-      "simctl",
-      "adb",
-      "emulator",
-      "xcodebuild",
+      "simctl, adb, emulator or xcodebuild",
       "agent-device",
     ]) {
       expect(description, trigger).toContain(trigger);
