@@ -42,7 +42,7 @@ export const UPLINK_PING_INTERVAL_MS = 15_000;
 
 /** why: a dial into a host that drops packets would otherwise wait for the OS connect timeout
  * (about 75s on macOS) before the next backoff step. */
-export const UPLINK_HANDSHAKE_TIMEOUT_MS = 10_000;
+const UPLINK_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 function rawBytes(data: RawData): Buffer {
   if (Array.isArray(data)) return Buffer.concat(data);
