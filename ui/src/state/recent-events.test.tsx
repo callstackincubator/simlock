@@ -141,14 +141,32 @@ describe("the recent events of a tab", () => {
     expect([inboxEvents(inbox.read()), leaseRows(drawer.read())]).toEqual([1, 1]);
 
     inbox.unmount();
+    await vi.advanceTimersByTimeAsync(61_000);
+    daemon.openStream()?.send(streamed("e1b", 2));
+    await settle();
+    expect(leaseRows(drawer.read())).toBe(2);
+
     drawer.unmount();
     await vi.advanceTimersByTimeAsync(30_000);
-    daemon.openStream()?.send(streamed("e2", 2));
+    daemon.openStream()?.send(streamed("e2", 3));
     await vi.advanceTimersByTimeAsync(20_000);
     const back = mount(() => useLeaseEvents(LEASE));
     await settle();
-    expect(leaseRows(back.read())).toBe(2);
+    expect(leaseRows(back.read())).toBe(3);
     expect(recentReads()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    // why: the quiet stream was dropped at 40 s and is open again after its 1 s retry.
+    await vi.advanceTimersByTimeAsync(2_000);
+    daemon.openStream()?.send(streamed("e3", 4));
+    await settle();
+    console.log(
+      "DBG",
+      daemon.streams.length,
+      daemon.openStream() === undefined,
+      daemon.gets.map((g) => g.path),
+    );
+    expect(leaseRows(back.read())).toBe(4);
 
     back.unmount();
     await vi.advanceTimersByTimeAsync(61_000);
