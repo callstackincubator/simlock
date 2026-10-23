@@ -194,18 +194,19 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
     leaseKeyOf(renewal),
     ...(endsInInbox(client.getQueryData(["inbox"]), renewal) ? [["inbox"]] : []),
   ];
+  const patchRenewal = (renewal: Renewal): void => {
+    kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
+    for (const route of RENEWED_ROUTES) {
+      client.setQueryData<unknown>([route], (old: unknown) =>
+        old === undefined ? undefined : renewAnswer(route, old, renewal),
+      );
+    }
+  };
   const stopEvents = connection.onEvent((event: StreamEvent) => {
     const { data } = event;
     const parsed = readEvent(data);
     const renewal = parsed === undefined ? undefined : readRenewal(parsed);
-    if (renewal !== undefined) {
-      kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
-      for (const route of RENEWED_ROUTES) {
-        client.setQueryData<unknown>([route], (old: unknown) =>
-          old === undefined ? undefined : renewAnswer(route, old, renewal),
-        );
-      }
-    }
+    if (renewal !== undefined) patchRenewal(renewal);
     const payload =
       typeof data === "object" && data !== null
         ? (data as { payload?: unknown }).payload
