@@ -1,6 +1,5 @@
 import {
   type DeviceRecord,
-  type LeaseRecord,
   type Platform,
   type PhysicalDriverDevice,
   type ScreenFeed,
@@ -20,7 +19,6 @@ import {
   StreamRefusalError,
   streamUnavailable,
   unknownDevice,
-  unknownLease,
   unknownWorker,
 } from "./refusal.js";
 import type { StreamLink, StreamTarget } from "./service.js";
@@ -28,7 +26,6 @@ import type { StreamLink, StreamTarget } from "./service.js";
 export interface StreamRegistry {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
-    readonly leases: readonly LeaseRecord[];
   };
 }
 
@@ -53,14 +50,11 @@ export interface WorkerStreamLinkOptions {
 export function createWorkerStreamLink(options: WorkerStreamLinkOptions): StreamLink {
   return {
     async serve(target, caller, signal): Promise<CapturedStream> {
-      // why: ownership is proved before anything is asked of the machine. A link that looked for its
-      // capture first would answer an agent one way for a lease this worker holds and another for a
-      // lease that does not exist, which is a way of listing the fleet's leases.
-      const { device, lease } = requireTarget(options, target, caller);
-      const slot =
-        lease === undefined
-          ? options.captures.beginOnDevice(device.id)
-          : options.captures.begin(lease.id);
+      // why: the caller and the device are checked before anything is asked of the machine. A link that
+      // looked for its capture first would answer an agent one way for a device this worker has and
+      // another for one it does not, which is a way of listing the fleet's devices.
+      const device = requireDevice(options, target, caller);
+      const slot = options.captures.beginOnDevice(device.id);
       // why: the listener, and not only the body's cancel, because a request aborted before its
       // first frame has no body being read yet -- which is what a page opened and closed quickly does.
       if (signal.aborted) void slot.release();
@@ -80,38 +74,25 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
         stream = await readScreenFeed(feed, options.bounds);
       } catch (error) {
         slot.abandon();
-        if (slot.ended.aborted) throw stopped(lease);
+        if (slot.ended.aborted) throw deviceStopped();
         throw refusalFor(error);
       }
-      // why: the lease is read again once there is a picture, because a capture can take seconds to
-      // start and the lease it was asked for can end and the device be granted to someone else in
-      // that time; a slot that was stopped says so even if a new lease reused the id.
+      // why: a capture can take seconds to start and the device can stop meanwhile; a slot that was
+      // stopped says so, so the viewer is refused rather than handed a picture of a device that is gone.
       if (signal.aborted) {
         await slot.release();
         throw streamUnavailable("The viewer went away before the picture started");
       }
-      if (slot.ended.aborted || !leaseHolds(options.registry, lease)) {
+      if (slot.ended.aborted) {
         await slot.release();
-        throw stopped(lease);
+        throw deviceStopped();
       }
       return { ...stream, close: () => slot.release() };
     },
   };
 }
 
-// why: a stream of a device has no lease to lose, so it is only ever stopped; a lease's stream is also
-// refused when the lease is gone or has been granted to another device since the capture began.
-function leaseHolds(registry: StreamRegistry, lease: LeaseRecord | undefined): boolean {
-  if (lease === undefined) return true;
-  const still = registry.snapshot.leases.find((candidate) => candidate.id === lease.id);
-  return still?.deviceId === lease.deviceId;
-}
-
-function stopped(lease: LeaseRecord | undefined): StreamRefusalError {
-  return lease === undefined ? deviceStopped() : unknownLease(lease.id);
-}
-
-// why: the feed's reader, the viewer and the lease's end can each close a capture, and a driver's
+// why: the feed's reader, the viewer and the device's end can each close a capture, and a driver's
 // close stops processes on a device; it runs once, and every later caller waits on the same stop.
 function closedOnce(feed: ScreenFeed): ScreenFeed {
   let closing: Promise<void> | undefined;
@@ -122,19 +103,18 @@ function refusalFor(error: unknown): StreamRefusalError {
   if (error instanceof StreamRefusalError) return error;
   if (error instanceof ScreenNotSupportedError) return notStreamable(error.message);
   // why: a capture that failed before its first frame is a picture that is not available right now
-  // rather than a broken request -- the lease is fine and a retry needs no different ask.
+  // rather than a broken request -- the device is fine and a retry needs no different ask.
   if (error instanceof ScreenUnavailableError || error instanceof Error) {
     return streamUnavailable(error.message);
   }
   return streamUnavailable(String(error));
 }
 
-function requireTarget(
+function requireDevice(
   options: WorkerStreamLinkOptions,
   target: StreamTarget,
   caller: StreamCaller,
-): { readonly lease?: LeaseRecord; readonly device: DeviceRecord } {
-  if (typeof target === "string") return requireLease(options.registry, target, caller);
+): DeviceRecord {
   // why: only an operator watches a device, and an agent gets the answer an unknown device gets, so
   // it cannot learn which devices exist or which one its lease holds.
   if (caller.role !== "operator") throw unknownDevice(target.deviceId);
@@ -148,30 +128,5 @@ function requireTarget(
   );
   if (device === undefined) throw unknownDevice(target.deviceId);
   if (device.state !== "ready" && device.state !== "leased") throw deviceNotRunning(device.state);
-  return { device };
-}
-
-// why: ownership is proved against this worker's own registry rather than taken from whoever relayed
-// the request. A caller that names a requester is checked against the lease's requester (the rule
-// `device.exec` follows); one that names none is checked against the principal that owns the lease.
-// An unknown lease and one held by someone else get the same answer, because an agent must not be
-// able to discover which leases exist by asking for pictures of them.
-function requireLease(
-  registry: StreamRegistry,
-  leaseId: string,
-  caller: StreamCaller,
-): { readonly lease: LeaseRecord; readonly device: DeviceRecord } {
-  const snapshot = registry.snapshot;
-  const lease = snapshot.leases.find((candidate) => candidate.id === leaseId);
-  if (lease === undefined) throw unknownLease(leaseId);
-  if (caller.role !== "operator") {
-    const held =
-      caller.requesterId === undefined
-        ? lease.ownerId === caller.principal
-        : lease.requesterId === caller.requesterId;
-    if (!held) throw unknownLease(leaseId);
-  }
-  const device = snapshot.devices.find((candidate) => candidate.id === lease.deviceId);
-  if (device === undefined) throw unknownLease(leaseId);
-  return { device, lease };
+  return device;
 }

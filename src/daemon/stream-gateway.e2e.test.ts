@@ -143,16 +143,12 @@ describe("a screen stream through a gateway", () => {
     const deviceId = (granted as { lease: { deviceId: string } }).lease.deviceId;
     const { workers } = await gateway.dispatch("worker.list", {}, admin);
     const workerId = workers[0]?.id ?? "";
-    const deviceStream = (path = `${workerId}/devices/${deviceId}`) =>
-      fetch(`http://127.0.0.1:${String(port)}/v1/stream/workers/${path}`, {
-        headers: { authorization: `Bearer ${operator}` },
-      });
     const stream = (signal?: AbortSignal) =>
-      fetch(`http://127.0.0.1:${String(port)}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+      fetch(`http://127.0.0.1:${String(port)}/v1/stream/workers/${workerId}/devices/${deviceId}`, {
         headers: { authorization: `Bearer ${operator}` },
         ...(signal === undefined ? {} : { signal }),
       });
-    return { deviceStream, gateway, leaseId, screen, stream };
+    return { gateway, leaseId, screen, stream };
   }
 
   it(
@@ -178,22 +174,6 @@ describe("a screen stream through a gateway", () => {
         },
         { timeout: 10_000 },
       );
-    },
-  );
-
-  it(
-    "relays an operator's device stream through the gateway: the worker's frames",
-    { timeout: 30_000 },
-    async () => {
-      const { deviceStream } = await fleet(true);
-      const response = await deviceStream();
-      expect(response.status).toBe(200);
-      expect(response.headers.get("simlock-stream-codec")).toBe("h264");
-      const reader = response.body?.getReader();
-      if (reader === undefined) throw new Error("no body");
-      const first = await reader.read();
-      expect(first.value?.[4]).toBe(SCREEN_FRAME_TAG.meta);
-      await reader.cancel();
     },
   );
 

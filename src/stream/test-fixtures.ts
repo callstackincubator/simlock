@@ -2,19 +2,11 @@ import {
   type DeviceRecord,
   encodeScreenFrame,
   encodeScreenMeta,
-  type LeaseRecord,
   type Platform,
   type ScreenFeed,
   SCREEN_FRAME_TAG,
 } from "../core/index.js";
 import type { StreamRegistry } from "./worker-link.js";
-
-export interface TestLease {
-  readonly id: string;
-  readonly deviceId: string;
-  readonly ownerId: string;
-  readonly requesterId: string;
-}
 
 export interface TestDevice {
   readonly id: string;
@@ -24,11 +16,9 @@ export interface TestDevice {
 }
 
 export class TestRegistry implements StreamRegistry {
-  leases: TestLease[];
   devices: TestDevice[];
 
-  constructor(leases: TestLease[], devices: TestDevice[]) {
-    this.leases = leases;
+  constructor(devices: TestDevice[]) {
     this.devices = devices;
   }
 
@@ -47,7 +37,6 @@ export class TestRegistry implements StreamRegistry {
             spec: { platform: device.platform },
           }) as unknown as DeviceRecord,
       ),
-      leases: this.leases.map((lease) => lease as unknown as LeaseRecord),
     };
   }
 }

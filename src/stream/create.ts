@@ -46,7 +46,7 @@ export interface WorkerStream {
 }
 
 // why: the mount, the relay target and the lease-end participant sit on one link and one registry, so
-// a stream asked for on this host and one relayed by a gateway go through the same lease check, and a
+// a stream asked for on this host and one relayed by a gateway go through the same device check, and a
 // lease that ends has one place to stop its captures whichever door the picture came in by.
 export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
   const captures = createCaptureRegistry();

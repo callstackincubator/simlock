@@ -350,12 +350,11 @@ describe("buildOpenApiDocument with a module that carries http", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("an integrator reads GET /v1/stream/leases/{id} and GET /v1/stream/workers/{workerId}/devices/{deviceId} under stream, with its headers, binary 200, 405 and refusals, and no agent-device or uplink path", () => {
+  it("an integrator reads GET /v1/stream/workers/{workerId}/devices/{deviceId} under stream, with its headers, binary 200, 405 and refusals, and no lease stream, agent-device or uplink path", () => {
     const document = buildOpenApiDocument(optionalModules);
-    const operation = document.paths?.["/v1/stream/leases/{id}"]?.get;
-    const ok = (operation?.responses ?? {})["200"] as OkResponse;
+    const device = document.paths?.["/v1/stream/workers/{workerId}/devices/{deviceId}"]?.get;
+    const ok = (device?.responses ?? {})["200"] as OkResponse;
 
-    expect(operation?.tags).toEqual(["stream"]);
     expect(document.tags?.find((tag) => tag.name === "stream")?.description).toContain(
       "capabilities.stream.enabled",
     );
@@ -363,31 +362,9 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "application/vnd.simlock.stream+h264",
       "application/vnd.simlock.stream+mjpeg",
     ]);
-    expect(sortedKeys(ok.headers)).toEqual([
-      "simlock-stream-codec",
-      "simlock-stream-fps",
-      "simlock-stream-height",
-      "simlock-stream-width",
-      "x-simlock-lease",
+    expect(sortedKeys(document.paths).filter((path) => path.startsWith("/v1/stream"))).toEqual([
+      "/v1/stream/workers/{workerId}/devices/{deviceId}",
     ]);
-    expect(
-      Object.fromEntries(
-        ["401", "403", "404", "405", "415", "500", "502", "503"].map((status) => [
-          status,
-          errorCodes(operation, status),
-        ]),
-      ),
-    ).toEqual({
-      "401": ["UNAUTHENTICATED"],
-      "403": ["FORBIDDEN"],
-      "404": ["UNKNOWN_LEASE"],
-      "405": ["BAD_REQUEST"],
-      "415": ["STREAM_NOT_SUPPORTED"],
-      "500": ["INTERNAL"],
-      "502": ["STREAM_UNAVAILABLE"],
-      "503": ["STREAM_UNAVAILABLE", "WORKER_UNREACHABLE"],
-    });
-    const device = document.paths?.["/v1/stream/workers/{workerId}/devices/{deviceId}"]?.get;
     expect(device?.tags).toEqual(["stream"]);
     expect(
       Object.fromEntries(

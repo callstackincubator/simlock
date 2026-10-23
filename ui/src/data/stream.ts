@@ -1,5 +1,5 @@
 /**
- * why: this file reads a wire format it does not own. The body of `GET /v1/stream/leases/<id>` is the
+ * why: this file reads a wire format it does not own. The body of `GET /v1/stream/workers/<worker>/devices/<device>` is the
  * capture program's own envelope, byte for byte — a 4-byte big-endian length covering the tag byte that
  * follows it, a tag, then the payload — because nothing between a simulator's framebuffer and a browser
  * re-frames it: a gateway relays a stream as bytes and never reads one. So the reader has to match the

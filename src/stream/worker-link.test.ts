@@ -14,10 +14,10 @@ import { StreamRefusalError } from "./refusal.js";
 import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
 import { createWorkerStreamLink } from "./worker-link.js";
 
-const AGENT: StreamCaller = { principal: "tok_agent", requesterId: "agent-1", role: "agent" };
-const OTHER_AGENT: StreamCaller = { principal: "tok_agent", requesterId: "agent-2", role: "agent" };
+const AGENT: StreamCaller = { principal: "tok_agent", role: "agent" };
 const OPERATOR: StreamCaller = { principal: "tok_op", role: "operator" };
 const SETTINGS: ScreenSettings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
+const DEVICE = { deviceId: "dev_1" };
 
 interface Opened {
   readonly platform: Platform;
@@ -27,10 +27,7 @@ interface Opened {
 }
 
 function setup(options: { refuseWith?: Error } = {}) {
-  const registry = new TestRegistry(
-    [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
-    [{ id: "dev_1", platform: "android" }],
-  );
+  const registry = new TestRegistry([{ id: "dev_1", platform: "android" }]);
   const clock = new FakeClock();
   const captures = createCaptureRegistry();
   const opened: Opened[] = [];
@@ -67,10 +64,10 @@ async function flush(): Promise<void> {
 
 async function opening(
   setupValue: ReturnType<typeof setup>,
-  caller: StreamCaller = AGENT,
+  caller: StreamCaller = OPERATOR,
   signal = new AbortController().signal,
 ): Promise<{ served: Promise<CapturedStream>; feed: ScriptedFeed }> {
-  const served = setupValue.link.serve("lse_mine", caller, signal);
+  const served = setupValue.link.serve(DEVICE, caller, signal);
   await flush();
   const feed = setupValue.opened.at(-1)?.feed;
   if (feed === undefined) throw new Error("no screen was opened");
@@ -78,27 +75,27 @@ async function opening(
 }
 
 describe("the worker's stream link", () => {
-  it("refuses a lease it does not hold with the answer every other route gives", async () => {
+  it("refuses a device it does not have with the answer every other route gives", async () => {
     const { link, opened } = setup();
-    const refusal = await refusalOf(link.serve("lse_nope", OPERATOR, new AbortController().signal));
-    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
+    const refusal = await refusalOf(
+      link.serve({ deviceId: "dev_nope" }, OPERATOR, new AbortController().signal),
+    );
+    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_DEVICE"]);
     expect(opened).toEqual([]);
   });
 
-  it("answers an agent reaching for another requester's lease exactly as if it did not exist, opening nothing", async () => {
+  it("answers an agent exactly as if the device did not exist, opening nothing", async () => {
     const { link, opened } = setup();
-    const refusal = await refusalOf(
-      link.serve("lse_mine", OTHER_AGENT, new AbortController().signal),
-    );
+    const refusal = await refusalOf(link.serve(DEVICE, AGENT, new AbortController().signal));
     expect([refusal.status, refusal.code, refusal.message]).toEqual([
       404,
-      "UNKNOWN_LEASE",
-      "Unknown lease: lse_mine",
+      "UNKNOWN_DEVICE",
+      "Unknown device: dev_1",
     ]);
     expect(opened).toEqual([]);
   });
 
-  it("opens the leased device's screen through its platform's driver, with the configured settings", async () => {
+  it("opens the device's screen through its platform's driver, with the configured settings", async () => {
     const harness = setup();
     const { feed, served } = await opening(harness, OPERATOR);
     feed.meta();
@@ -111,7 +108,7 @@ describe("the worker's stream link", () => {
 
   it("refuses a device whose driver cannot stream it as not supported", async () => {
     const { link } = setup({ refuseWith: new ScreenNotSupportedError("A physical phone cannot") });
-    const refusal = await refusalOf(link.serve("lse_mine", AGENT, new AbortController().signal));
+    const refusal = await refusalOf(link.serve(DEVICE, OPERATOR, new AbortController().signal));
     expect([refusal.status, refusal.code, refusal.message]).toEqual([
       415,
       "STREAM_NOT_SUPPORTED",
@@ -121,7 +118,7 @@ describe("the worker's stream link", () => {
 
   it("refuses a capture that cannot run right now as unavailable", async () => {
     const { link } = setup({ refuseWith: new ScreenUnavailableError("No capture program") });
-    const refusal = await refusalOf(link.serve("lse_mine", AGENT, new AbortController().signal));
+    const refusal = await refusalOf(link.serve(DEVICE, OPERATOR, new AbortController().signal));
     expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
   });
 
@@ -134,45 +131,31 @@ describe("the worker's stream link", () => {
     expect(feed.closes).toBe(1);
   });
 
-  it("refuses with an unknown lease, and closes the capture, when the lease ends while the capture is starting", async () => {
+  it("refuses with 409 DEVICE_NOT_RUNNING, and closes the capture, when the device stops while the capture is starting", async () => {
     const harness = setup();
     const { feed, served } = await opening(harness);
-    await harness.captures.stop("lse_mine");
-    harness.registry.leases = [];
+    await harness.captures.stopOnDevice("dev_1");
     feed.meta();
     const refusal = await refusalOf(served);
-    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
+    expect([refusal.status, refusal.code]).toEqual([409, "DEVICE_NOT_RUNNING"]);
     expect(feed.closes).toBeGreaterThan(0);
-    expect(harness.captures.leases()).toEqual([]);
-  });
-
-  it("refuses a picture whose lease is gone by its first frame even if nothing stopped the capture", async () => {
-    const harness = setup();
-    const { feed, served } = await opening(harness);
-    harness.registry.leases = [];
-    feed.meta();
-    const refusal = await refusalOf(served);
-    expect(refusal.code).toBe("UNKNOWN_LEASE");
-    expect(feed.closes).toBe(1);
+    expect(await harness.captures.stopOnDevice("dev_1")).toBe(0);
   });
 
   it("closes a capture whose request was aborted before its first frame", async () => {
     const harness = setup();
     const abort = new AbortController();
-    const { feed, served } = await opening(harness, AGENT, abort.signal);
+    const { feed, served } = await opening(harness, OPERATOR, abort.signal);
     abort.abort();
     await refusalOf(served);
     expect(feed.closes).toBe(1);
-    expect(harness.captures.leases()).toEqual([]);
+    expect(await harness.captures.stopOnDevice("dev_1")).toBe(0);
   });
 
   it("closes a capture that finishes opening after its viewer already went away", async () => {
     let finishOpening!: (feed: ScriptedFeed) => void;
     const feed = new ScriptedFeed();
-    const registry = new TestRegistry(
-      [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
-      [{ id: "dev_1", platform: "android" }],
-    );
+    const registry = new TestRegistry([{ id: "dev_1", platform: "android" }]);
     const captures = createCaptureRegistry();
     const link = createWorkerStreamLink({
       instanceId: "w1",
@@ -183,7 +166,7 @@ describe("the worker's stream link", () => {
       settings: SETTINGS,
     });
     const abort = new AbortController();
-    const served = link.serve("lse_mine", AGENT, abort.signal);
+    const served = link.serve(DEVICE, OPERATOR, abort.signal);
     await flush();
     abort.abort();
     await flush();
@@ -191,10 +174,10 @@ describe("the worker's stream link", () => {
     feed.meta();
     await refusalOf(served);
     expect(feed.closes).toBe(1);
-    expect(captures.leases()).toEqual([]);
+    expect(await captures.stopOnDevice("dev_1")).toBe(0);
   });
 
-  it("gives two viewers of one lease two captures: one leaving keeps the other, and the lease ending stops both", async () => {
+  it("gives two viewers of one device two captures: one leaving keeps the other, and the device stopping stops both", async () => {
     const harness = setup();
     const first = await opening(harness);
     first.feed.meta();
@@ -205,19 +188,16 @@ describe("the worker's stream link", () => {
     expect(harness.opened).toHaveLength(2);
     await one.close();
     expect([first.feed.closes, second.feed.closes]).toEqual([1, 0]);
-    await harness.captures.stop("lse_mine");
+    await harness.captures.stopOnDevice("dev_1");
     expect([first.feed.closes, second.feed.closes]).toEqual([1, 1]);
     await two.close();
     expect(second.feed.closes).toBe(1);
   });
 
-  it("tells the driver to stop opening when the lease ends, and the lease end waits for the open to settle", async () => {
+  it("tells the driver to stop opening when the device stops, and the stop waits for the open to settle", async () => {
     let finishOpening!: () => void;
     let openSignal: AbortSignal | undefined;
-    const registry = new TestRegistry(
-      [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
-      [{ id: "dev_1", platform: "android" }],
-    );
+    const registry = new TestRegistry([{ id: "dev_1", platform: "android" }]);
     const captures = createCaptureRegistry();
     const link = createWorkerStreamLink({
       instanceId: "w1",
@@ -234,24 +214,21 @@ describe("the worker's stream link", () => {
       },
       settings: SETTINGS,
     });
-    const served = link.serve("lse_mine", AGENT, new AbortController().signal);
+    const served = link.serve(DEVICE, OPERATOR, new AbortController().signal);
     await flush();
     let ended = false;
-    const stopping = captures.stop("lse_mine").then(() => (ended = true));
+    const stopping = captures.stopOnDevice("dev_1").then(() => (ended = true));
     await flush();
     expect(openSignal?.aborted).toBe(true);
     expect(ended).toBe(false);
     finishOpening();
     await stopping;
-    expect((await refusalOf(served)).code).toBe("UNKNOWN_LEASE");
+    expect((await refusalOf(served)).code).toBe("DEVICE_NOT_RUNNING");
   });
 
-  it("a lease that ends after the viewer left, while the open is still running, still waits for that open", async () => {
+  it("a device that stops after the viewer left, while the open is still running, still waits for that open", async () => {
     let finishOpening!: () => void;
-    const registry = new TestRegistry(
-      [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
-      [{ id: "dev_1", platform: "android" }],
-    );
+    const registry = new TestRegistry([{ id: "dev_1", platform: "android" }]);
     const captures = createCaptureRegistry();
     const link = createWorkerStreamLink({
       instanceId: "w1",
@@ -267,34 +244,33 @@ describe("the worker's stream link", () => {
       settings: SETTINGS,
     });
     const viewer = new AbortController();
-    const served = link.serve("lse_mine", AGENT, viewer.signal);
+    const served = link.serve(DEVICE, OPERATOR, viewer.signal);
     await flush();
     viewer.abort();
     await flush();
     let ended = false;
-    const stopping = captures.stop("lse_mine").then(() => (ended = true));
+    const stopping = captures.stopOnDevice("dev_1").then(() => (ended = true));
     await flush();
     expect(ended).toBe(false);
     finishOpening();
     await stopping;
     await refusalOf(served);
-    expect(captures.leases()).toEqual([]);
+    expect(await captures.stopOnDevice("dev_1")).toBe(0);
   });
 
-  it("registers a running capture under its lease, and a lease that ends under a viewer ends its picture", async () => {
+  it("a device that stops under a viewer ends its picture", async () => {
     const harness = setup();
     const { feed, served } = await opening(harness);
     feed.meta();
     const stream = await served;
-    expect(harness.captures.leases()).toEqual(["lse_mine"]);
-    await harness.captures.stop("lse_mine");
+    expect(await harness.captures.stopOnDevice("dev_1")).toBe(1);
     expect(feed.closes).toBe(1);
     const reader = stream.body.getReader();
     await reader.read();
     expect((await reader.read()).done).toBe(true);
   });
 
-  it("closing the stream releases its lease's registration and closes the capture once", async () => {
+  it("closing the stream releases its registration and closes the capture once", async () => {
     const harness = setup();
     const { feed, served } = await opening(harness);
     feed.meta();
@@ -302,6 +278,6 @@ describe("the worker's stream link", () => {
     await stream.close();
     await stream.close();
     expect(feed.closes).toBe(1);
-    expect(harness.captures.leases()).toEqual([]);
+    expect(await harness.captures.stopOnDevice("dev_1")).toBe(0);
   });
 });

@@ -7,31 +7,18 @@ import {
   StreamRefusalError,
   streamUnavailable,
   unknownDevice,
-  unknownLease,
   unknownWorker,
 } from "./refusal.js";
-import type { StreamDeviceTarget, StreamLink } from "./service.js";
-
-export interface StreamLeasePlacement {
-  readonly ownerId: string;
-  readonly requesterId: string;
-  readonly workerLeaseId: string;
-  readonly workerId: string;
-}
+import type { StreamLink, StreamTarget } from "./service.js";
 
 export interface FleetPort {
-  holder(leaseId: string): StreamLeasePlacement | undefined;
   knowsWorker(workerId: string): boolean;
   // why: `gw:<this gateway's instance id>:`, the exact prefix this index recognizes a requester it
   // sent by, so a stream namespaces with the same value its leases do.
   readonly requesterPrefix: string;
   relay(
     workerId: string,
-    call: {
-      readonly request: Request;
-      readonly tenant: string;
-      readonly leaseId?: string;
-    },
+    call: { readonly request: Request; readonly tenant: string },
   ): Promise<Response>;
 }
 
@@ -39,45 +26,13 @@ export interface GatewayStreamLinkOptions {
   readonly fleet: FleetPort;
 }
 
-const WORKER_STREAM_PATH = "/stream/leases/";
-
 export function createGatewayStreamLink(options: GatewayStreamLinkOptions): StreamLink {
-  return {
-    async serve(target, caller, signal): Promise<CapturedStream> {
-      if (typeof target !== "string") return serveDevice(options, target, caller, signal);
-      const leaseId = target;
-      const held = options.fleet.holder(leaseId);
-      if (held === undefined) throw unknownLease(leaseId);
-      if (caller.role !== "operator" && held.ownerId !== caller.principal) {
-        throw unknownLease(leaseId);
-      }
-
-      // why: the tenant is the same namespaced requester id `device.exec` forwards (ADR 0005 §27),
-      // namespaced from the lease's own recorded requester rather than from the caller's claim -- so
-      // a caller cannot reach a screen by naming someone else, and the worker proves ownership
-      // against its own registry instead of trusting this relay.
-      const namespacedRequesterId = `${options.fleet.requesterPrefix}${held.requesterId}`;
-      const response = await relayed(held.workerId, `lease ${leaseId}`, () =>
-        options.fleet.relay(held.workerId, {
-          leaseId: held.workerLeaseId,
-          request: new Request(
-            // why: the worker's own name for the lease, not the fleet id. A fleet id is this gateway's
-            // naming and a worker knows nothing of it, so a request that reached the wrong lease would
-            // be answered with the wrong screen rather than refused.
-            `http://simlock-worker${WORKER_STREAM_PATH}${encodeURIComponent(held.workerLeaseId)}`,
-            { method: "GET", signal },
-          ),
-          tenant: namespacedRequesterId,
-        }),
-      );
-      return fromResponse(held.workerId, `lease ${leaseId}`, response);
-    },
-  };
+  return { serve: (target, caller, signal) => serveDevice(options, target, caller, signal) };
 }
 
 async function serveDevice(
   options: GatewayStreamLinkOptions,
-  target: StreamDeviceTarget,
+  target: StreamTarget,
   caller: StreamCaller,
   signal: AbortSignal,
 ): Promise<CapturedStream> {

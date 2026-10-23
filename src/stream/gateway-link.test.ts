@@ -4,14 +4,13 @@ import type { StreamCaller } from "./caller.js";
 import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import { StreamRefusalError } from "./refusal.js";
 
-const AGENT: StreamCaller = { principal: "tok_agent", role: "agent" };
-const STRANGER: StreamCaller = { principal: "tok_other", role: "agent" };
+const OPERATOR: StreamCaller = { principal: "tok_op", role: "operator" };
+const DEVICE = { deviceId: "dev_9", workerId: "w1" };
 
 interface Relayed {
   readonly workerId: string;
   readonly url: string;
   readonly tenant: string;
-  readonly leaseId: string | undefined;
 }
 
 class CodedError extends Error {
@@ -27,18 +26,9 @@ function fleet(answer: () => Response): { port: FleetPort; relayed: Relayed[] } 
   const relayed: Relayed[] = [];
   return {
     port: {
-      holder: (leaseId) =>
-        leaseId === "w1.lse_9"
-          ? { ownerId: "tok_agent", requesterId: "agent-1", workerId: "w1", workerLeaseId: "lse_9" }
-          : undefined,
       knowsWorker: () => true,
       relay: async (workerId, call) => {
-        relayed.push({
-          leaseId: call.leaseId,
-          tenant: call.tenant,
-          url: call.request.url,
-          workerId,
-        });
+        relayed.push({ tenant: call.tenant, url: call.request.url, workerId });
         return answer();
       },
       requesterPrefix: "gw:inst:",
@@ -69,40 +59,17 @@ async function refusalOf(served: Promise<unknown>): Promise<StreamRefusalError> 
 const signal = () => new AbortController().signal;
 
 describe("the gateway's stream link", () => {
-  it("relays to the worker holding the lease, by the worker's own lease id, as the lease's namespaced requester", async () => {
+  it("relays to the worker named, for the operator's namespaced principal, and describes the picture from its headers", async () => {
     const { port, relayed } = fleet(() => new Response("bytes", { headers: streamHeaders() }));
-    const stream = await createGatewayStreamLink({ fleet: port }).serve(
-      "w1.lse_9",
-      AGENT,
-      signal(),
-    );
+    const stream = await createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal());
     expect(relayed).toEqual([
       {
-        leaseId: "lse_9",
-        tenant: "gw:inst:agent-1",
-        url: "http://simlock-worker/stream/leases/lse_9",
+        tenant: "gw:inst:tok_op",
+        url: "http://simlock-worker/stream/devices/dev_9",
         workerId: "w1",
       },
     ]);
     expect(stream.meta).toEqual({ codec: "h264", fps: 30, height: 720, width: 330 });
-  });
-
-  it("answers a lease the fleet does not hold with 404 UNKNOWN_LEASE, relaying nothing", async () => {
-    const { port, relayed } = fleet(() => new Response("bytes", { headers: streamHeaders() }));
-    const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_ended", AGENT, signal()),
-    );
-    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
-    expect(relayed).toEqual([]);
-  });
-
-  it("answers a caller who does not own the lease exactly as an unknown lease, relaying nothing", async () => {
-    const { port, relayed } = fleet(() => new Response("bytes", { headers: streamHeaders() }));
-    const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", STRANGER, signal()),
-    );
-    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
-    expect(relayed).toEqual([]);
   });
 
   it("forwards the worker's own refusal code and status", async () => {
@@ -113,7 +80,7 @@ describe("the gateway's stream link", () => {
       ),
     );
     const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+      createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
     );
     expect([refusal.status, refusal.code, refusal.message]).toEqual([
       415,
@@ -127,7 +94,7 @@ describe("the gateway's stream link", () => {
       Response.json({ error: { code: "<script>", message: "x" } }, { status: 503 }),
     );
     const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+      createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
     );
     expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
     expect(refusal.message).not.toContain("<script>");
@@ -142,14 +109,14 @@ describe("the gateway's stream link", () => {
       },
     });
     const { port } = fleet(() => new Response(endless, { status: 503 }));
-    await refusalOf(createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()));
+    await refusalOf(createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()));
     expect(pulled).toBeLessThanOrEqual(17);
   });
 
   it("calls a 2xx answer without a picture the gateway's own failure, not the worker refusing", async () => {
     const { port } = fleet(() => new Response("ok", { status: 200 }));
     const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+      createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
     );
     expect([refusal.status, refusal.code]).toEqual([502, "STREAM_UNAVAILABLE"]);
   });
@@ -157,7 +124,7 @@ describe("the gateway's stream link", () => {
   it("calls a 2xx answer with a picture's headers but no body the gateway's own failure", async () => {
     const { port } = fleet(() => new Response(null, { headers: streamHeaders(), status: 200 }));
     const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+      createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
     );
     expect([refusal.status, refusal.code]).toEqual([502, "STREAM_UNAVAILABLE"]);
   });
@@ -170,7 +137,7 @@ describe("the gateway's stream link", () => {
     ]) {
       const { port } = fleet(() => new Response("bytes", { headers }));
       const refusal = await refusalOf(
-        createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+        createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
       );
       expect(refusal.code).toBe("STREAM_UNAVAILABLE");
     }
@@ -181,7 +148,7 @@ describe("the gateway's stream link", () => {
       throw new CodedError("WORKER_UNREACHABLE", "worker w1 is not connected");
     });
     const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+      createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
     );
     expect([refusal.status, refusal.code, refusal.message]).toEqual([
       503,
@@ -195,7 +162,7 @@ describe("the gateway's stream link", () => {
       throw new CodedError("RELAY_TARGET_MISSING", "No module on this worker serves stream");
     });
     const refusal = await refusalOf(
-      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+      createGatewayStreamLink({ fleet: port }).serve(DEVICE, OPERATOR, signal()),
     );
     expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
     expect(refusal.message).toContain("Worker w1");

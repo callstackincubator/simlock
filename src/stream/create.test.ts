@@ -12,19 +12,16 @@ function worker(
   openGate: Promise<void> = Promise.resolve(),
 ) {
   const clock = new FakeClock();
-  const registry = new TestRegistry(
-    [{ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent", requesterId: "gw:inst:agent-1" }],
-    [
-      { id: "dev_1", platform: "ios" },
-      { id: "dev_ready", platform: "ios", state: "ready" },
-      { id: "dev_leased", platform: "ios", state: "leased" },
-      { id: "dev_shutdown", platform: "ios", state: "shutdown" },
-      { id: "dev_provisioning", platform: "ios", state: "provisioning" },
-      { id: "dev_reclaiming", platform: "ios", state: "reclaiming" },
-      { id: "dev_quarantined", platform: "ios", state: "quarantined" },
-      { id: "dev_absent", physical: true, platform: "ios", state: "absent" },
-    ],
-  );
+  const registry = new TestRegistry([
+    { id: "dev_1", platform: "ios" },
+    { id: "dev_ready", platform: "ios", state: "ready" },
+    { id: "dev_leased", platform: "ios", state: "leased" },
+    { id: "dev_shutdown", platform: "ios", state: "shutdown" },
+    { id: "dev_provisioning", platform: "ios", state: "provisioning" },
+    { id: "dev_reclaiming", platform: "ios", state: "reclaiming" },
+    { id: "dev_quarantined", platform: "ios", state: "quarantined" },
+    { id: "dev_absent", physical: true, platform: "ios", state: "absent" },
+  ]);
   const feeds: ScriptedFeed[] = [];
   let opened = 0;
   const handlers = new Map<string, ((envelope: { payload: { deviceId: string } }) => void)[]>();
@@ -74,7 +71,7 @@ const OPERATOR = { principal: "tok_op", role: "operator" };
 const deviceRequest = (worker: string, device: string) =>
   new Request(`http://daemon/v1/stream/workers/${worker}/devices/${device}`);
 
-const relayed = () => new Request("http://simlock-worker/stream/leases/lse_1");
+const relayed = () => new Request("http://simlock-worker/stream/devices/dev_1");
 
 async function settledWithin<T>(promise: Promise<T>): Promise<T | "pending"> {
   for (let flush = 0; flush < 10; flush += 1) await new Promise((resolve) => setImmediate(resolve));
@@ -95,7 +92,7 @@ describe("createWorkerStream", () => {
 
   it("gives a capture 30 s to send its first frame", async () => {
     const { clock, feeds, stream } = worker([], false);
-    const served = stream.relayTarget(relayed(), "gw:inst:agent-1", "lse_1");
+    const served = stream.relayTarget(relayed(), "gw:inst:agent-1");
     await settledWithin(served);
     clock.advance(29_999);
     expect(await settledWithin(served)).toBe("pending");
@@ -107,7 +104,7 @@ describe("createWorkerStream", () => {
 
   it("ends a stream whose capture sends nothing for 30 s", async () => {
     const { clock, feeds, stream } = worker();
-    const served = await stream.relayTarget(relayed(), "gw:inst:agent-1", "lse_1");
+    const served = await stream.relayTarget(relayed(), "gw:inst:agent-1");
     const reader = served.body!.getReader();
     await reader.read();
     const next = reader.read().then(
@@ -140,26 +137,12 @@ describe("createWorkerStream", () => {
     });
   });
 
-  it("serves a relayed request for the requester the gateway names, checked against this worker's registry", async () => {
-    const { stream } = worker();
-    const request = () => new Request("http://simlock-worker/stream/leases/lse_1");
-    const served = await stream.relayTarget(request(), "gw:inst:agent-1", "lse_1");
-    expect(served.status).toBe(200);
-    await served.body?.cancel();
-    const refused = await stream.relayTarget(request(), "gw:inst:agent-2", "lse_1");
-    expect(refused.status).toBe(404);
-  });
-
   it("stops a relayed capture when its lease ends", async () => {
     const { feeds, stream } = worker();
-    const served = await stream.relayTarget(
-      new Request("http://simlock-worker/stream/leases/lse_1"),
-      "gw:inst:agent-1",
-      "lse_1",
-    );
+    const served = await stream.relayTarget(relayed(), "gw:inst:agent-1");
     expect(served.status).toBe(200);
     await stream.leaseEnd.leaseEnded(
-      { leaseId: "lse_1" } as Parameters<typeof stream.leaseEnd.leaseEnded>[0],
+      { deviceId: "dev_1", leaseId: "lse_1" } as Parameters<typeof stream.leaseEnd.leaseEnded>[0],
       new AbortController().signal,
     );
     expect(feeds[0]?.closes).toBe(1);
@@ -241,7 +224,6 @@ describe("createWorkerStream", () => {
     const relays: string[] = [];
     const gateway = createGatewayStream({
       fleet: {
-        holder: () => undefined,
         knowsWorker: () => true,
         relay: async (workerId) => {
           relays.push(workerId);
@@ -282,7 +264,6 @@ describe("createWorkerStream", () => {
     const relays: { workerId: string; url: string; tenant: string }[] = [];
     const gateway = createGatewayStream({
       fleet: {
-        holder: () => undefined,
         knowsWorker: (workerId) => workerId in answers,
         relay: async (workerId, call) => {
           relays.push({ tenant: call.tenant, url: call.request.url, workerId });
@@ -338,12 +319,6 @@ describe("createWorkerStream", () => {
       registry.devices = registry.devices.map((device) =>
         device.id === "dev_ready" ? { ...device, state: "leased" } : device,
       );
-      registry.leases.push({
-        deviceId: "dev_ready",
-        id: "lse_2",
-        ownerId: "tok_agent",
-        requesterId: "agent-2",
-      });
       feeds[0]?.keyframe([9]);
       expect((await reader.read()).done).toBe(false);
       expect(feeds[0]?.closes).toBe(0);
