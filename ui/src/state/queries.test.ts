@@ -323,3 +323,53 @@ describe("a route's ETag", () => {
     ]);
   });
 });
+
+describe("a lease renewal", () => {
+  const NOW = Date.parse("2026-10-02T12:00:00Z");
+  const lease = (id: string, over: Record<string, unknown> = {}) => ({
+    deviceId: `dev_${id}`,
+    grantedAt: NOW,
+    id,
+    idChosenByRequester: false,
+    lastRenewedAt: NOW,
+    ownerId: "owner",
+    requesterId: "agent",
+    ttlDeadline: NOW + 60_000,
+    ttlMs: 60_000,
+    ...over,
+  });
+  const renewed = (payload: Record<string, unknown>, seq = 2) =>
+    `event: lease.renewed\ndata: ${JSON.stringify({
+      event: "lease.renewed",
+      id: `evt_${String(seq)}`,
+      payload,
+      seq,
+      timestamp: Date.now(),
+    })}\n\n`;
+
+  it("moves the lease's deadline in place with no read: a worker event matches by id, lastRenewedAt and ttlMs follow, no match changes nothing", async () => {
+    const { daemon, reads, state, watch } = start();
+    daemon.reads = () =>
+      Promise.resolve({ body: { leases: [lease("l_1"), lease("l_2")] }, date: null });
+    watch("/v1/leases");
+    await settle();
+    const before = state("/v1/leases").data as { leases: object[] };
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const newDeadline = Date.now() + 120_000;
+    daemon.openStream()?.send(renewed({ leaseId: "l_1", newDeadline }));
+    await settle();
+
+    const after = state("/v1/leases").data as { leases: object[] };
+    expect(after.leases[0]).toEqual(
+      lease("l_1", { lastRenewedAt: Date.now(), ttlDeadline: newDeadline, ttlMs: 120_000 }),
+    );
+    expect(after.leases[1]).toBe(before.leases[1]);
+    expect(reads("/v1/leases")).toBe(1);
+
+    daemon.openStream()?.send(renewed({ leaseId: "l_9", newDeadline: newDeadline + 1_000 }, 3));
+    await settle();
+    expect(state("/v1/leases").data).toBe(after);
+    expect(reads("/v1/leases")).toBe(1);
+  });
+});
