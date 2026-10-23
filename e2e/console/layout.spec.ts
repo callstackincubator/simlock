@@ -66,4 +66,43 @@ test.describe("the console's layout", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("a fleet row's ⋯ lies inside its cell with 24px to the table's right edge, and an Inbox row's button has 8px above and below", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
+    try {
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      await openPage(page, fleet.gateway, "/fleet", "Fleet", false);
+      const menu = page.locator("main tbody tr").getByRole("button", { name: /^Actions for/ });
+      const box = await menu.evaluate((button) => {
+        const cell = button.closest("td")?.getBoundingClientRect();
+        const table = button.closest("table")?.getBoundingClientRect();
+        const own = button.getBoundingClientRect();
+        return {
+          cellLeft: cell?.left ?? 0,
+          cellRight: cell?.right ?? 0,
+          left: own.left,
+          right: own.right,
+          tableRight: table?.right ?? 0,
+        };
+      });
+      expect(box.left).toBeGreaterThanOrEqual(box.cellLeft);
+      expect(box.right).toBeLessThanOrEqual(box.cellRight);
+      expect(box.tableRight - box.right).toBe(24);
+
+      expect((await fleet.gateway.cli(["worker", "drain", id])).code).toBe(0);
+      await openPage(page, fleet.gateway, "/inbox", "Inbox", true);
+      const undrain = page.getByRole("button", { name: "Undrain", exact: true });
+      const gaps = await undrain.evaluate((button) => {
+        const row = button.closest("li")?.getBoundingClientRect();
+        const own = button.getBoundingClientRect();
+        return { bottom: (row?.bottom ?? 0) - own.bottom, top: own.top - (row?.top ?? 0) };
+      });
+      expect(gaps).toEqual({ bottom: 8, top: 8 });
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
