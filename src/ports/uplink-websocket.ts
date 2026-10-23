@@ -302,8 +302,28 @@ export class WebSocketUplinkConnector implements UplinkConnector {
       socket.terminate();
       throw error;
     }
+    watchLiveness(socket);
     return connection;
   }
+}
+
+/** why: over the uplink only the gateway writes, so a worker whose gateway vanished sees no
+ * `close` unless it pings; terminating makes the `close` that drives `GatewayUplink`'s redial. */
+function watchLiveness(socket: WebSocket): void {
+  let awaitingPong = false;
+  socket.on("pong", () => {
+    awaitingPong = false;
+  });
+  const timer = setInterval(() => {
+    if (awaitingPong) {
+      socket.terminate();
+      return;
+    }
+    awaitingPong = true;
+    socket.ping();
+  }, UPLINK_PING_INTERVAL_MS);
+  timer.unref();
+  socket.once("close", () => clearInterval(timer));
 }
 
 function waitForOpen(socket: WebSocket): Promise<void> {

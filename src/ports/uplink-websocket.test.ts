@@ -231,11 +231,9 @@ async function startMuteGateway(): Promise<{
   url: string;
   peers: WebSocket[];
   pings: () => number;
-  nextPeer: (count: number) => Promise<void>;
 }> {
   const peers: WebSocket[] = [];
   let pingCount = 0;
-  const waiting: Array<{ count: number; resolve: () => void }> = [];
   const wss = new WebSocketServer({ noServer: true, autoPong: false });
   server = createServer();
   server.on("upgrade", (request, socket, head) => {
@@ -245,7 +243,6 @@ async function startMuteGateway(): Promise<{
       peer.on("ping", () => {
         pingCount += 1;
       });
-      for (const w of waiting) if (peers.length >= w.count) w.resolve();
     });
   });
   await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
@@ -254,10 +251,6 @@ async function startMuteGateway(): Promise<{
     url: `ws://127.0.0.1:${port}`,
     peers,
     pings: () => pingCount,
-    nextPeer: (count) =>
-      peers.length >= count
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => waiting.push({ count, resolve })),
   };
 }
 
@@ -270,18 +263,21 @@ describe("WebSocketUplinkConnector liveness", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const gateway = await startMuteGateway();
     const clock = new FakeClock();
+    let accepted = 0;
     const uplink = new GatewayUplink({
       clock,
       connector: new WebSocketUplinkConnector(),
       url: gateway.url,
       token: "join",
       workerId: "wrk_1",
-      accept: () => {},
+      accept: () => {
+        accepted += 1;
+      },
       backoff: { initialMs: 1_000, maxMs: 1_000, multiplier: 1 },
       random: () => 1,
     });
     uplink.start();
-    await gateway.nextPeer(1);
+    await vi.waitFor(() => expect(accepted).toBe(1));
     const first = gateway.peers[0];
     const firstClosed = new Promise<void>((resolve) => first?.on("close", () => resolve()));
 
@@ -291,7 +287,7 @@ describe("WebSocketUplinkConnector liveness", () => {
     await firstClosed;
 
     clock.advance(1_000);
-    await gateway.nextPeer(2);
+    await vi.waitFor(() => expect(accepted).toBe(2));
     expect(gateway.peers).toHaveLength(2);
     await uplink.stop();
   });
