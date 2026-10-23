@@ -4,9 +4,15 @@ import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } fr
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
-async function openPage(page: Page, daemon: RunningDaemon, path: string, title: string) {
+async function openPage(
+  page: Page,
+  daemon: RunningDaemon,
+  path: string,
+  title: string,
+  signedIn: boolean,
+) {
   await page.goto(new URL(path, daemon.url).toString());
-  await signIn(page, daemon.tokens.operator);
+  if (!signedIn) await signIn(page, daemon.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
 }
 
@@ -21,8 +27,8 @@ test.describe("the console's layout", () => {
         { path: "/fleet", title: "Fleet" },
         { path: `/fleet/${id}`, title: "layout-a" },
       ];
-      for (const { path, title } of pages) {
-        await openPage(page, fleet.gateway, path, title);
+      for (const [index, { path, title }] of pages.entries()) {
+        await openPage(page, fleet.gateway, path, title, index > 0);
         const gutter = await page.evaluate(
           () => getComputedStyle(document.documentElement).scrollbarGutter,
         );
