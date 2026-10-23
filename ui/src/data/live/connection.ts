@@ -2,6 +2,7 @@ import {
   ApiError,
   type ApiClient,
   type ApiPath,
+  type ConditionalResponse,
   type ReadOptions,
   RequestTimeoutError,
 } from "../api";
@@ -82,6 +83,12 @@ export type ConditionalRead<T> =
   | { readonly notModified: true }
   | { readonly notModified?: false; readonly body: T; readonly tag: string | null };
 
+function conditional<T>(response: ConditionalResponse<T>): ConditionalRead<T> {
+  return response.notModified === true
+    ? { notModified: true }
+    : { body: response.body, tag: response.tag };
+}
+
 export class LiveConnection {
   readonly #api: LiveApi;
   readonly #clock: Clock;
@@ -143,9 +150,7 @@ export class LiveConnection {
         this.#answeredAt = this.#clock.now();
         this.#daemonAnswered();
       }
-      return response.notModified === true
-        ? { notModified: true }
-        : { body: response.body, tag: response.tag };
+      return conditional(response);
     }
   }
 

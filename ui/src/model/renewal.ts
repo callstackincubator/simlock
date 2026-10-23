@@ -57,7 +57,7 @@ export function renewLeases(list: LeaseList, renewal: Renewal): LeaseList {
 }
 
 // why: a worker's own page lists leases under their worker, by the worker's own lease id.
-export function renewWorkers(list: WorkerList, renewal: Renewal): WorkerList {
+function renewWorkers(list: WorkerList, renewal: Renewal): WorkerList {
   const workers = list.workers.map((worker) => {
     if (worker.leases === undefined) return worker;
     if (renewal.workerId !== undefined && worker.id !== renewal.workerId) return worker;

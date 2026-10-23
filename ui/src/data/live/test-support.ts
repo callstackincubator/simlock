@@ -62,13 +62,10 @@ class FakeDaemon implements LiveApi {
     path: ApiPath,
     options?: ReadOptions,
   ): Promise<ApiResponse<unknown> | ConditionalResponse<unknown>> {
-    this.gets.push({
-      at: Date.now(),
-      path,
-      ...(options?.tag === undefined ? {} : { tag: options.tag }),
-    });
+    const tag = options?.tag;
+    this.gets.push({ at: Date.now(), path, ...(tag === undefined ? {} : { tag }) });
     const reads = this.reads;
-    if (reads === "answer" && this.etag !== undefined && options?.tag === this.etag) {
+    if (reads === "answer" && tag !== undefined && tag === this.etag) {
       return Promise.resolve({ date: this.date, notModified: true });
     }
     if (typeof reads === "function") return reads(path);
