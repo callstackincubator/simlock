@@ -9,7 +9,9 @@
 
 ADR 0001 puts every Simlock simulator in its own CoreSimulator device set, and every `simctl` call carries `--set <deviceRoot>` (`src/drivers/ios/index.ts:1566` at `3de46d1ff`). Being in the set is what proves a device is Simlock's (`src/drivers/ios/index.ts:726-729`). It is an accident boundary, not a security boundary (`src/drivers/AGENTS.md:44-46`).
 
-The set has a cost ADR 0001 did not weigh. `xcodebuild -destination "platform=iOS Simulator,id=<udid>"` finds a simulator outside Xcode's own set only through the per-user default `DVTSimulatorSetLocation`. This was checked on Xcode 26.4.1, 2026-09-14. Every per-process route fails: a `-DVTSimulatorSetLocation` argument, an environment variable of that name, `HOME` or `CFFIXED_USER_HOME` redirection (with or without `__CFPREFERENCES_AVOID_DAEMON=1`), and `DVT_TOOLCHAIN_USER_DEFAULTS_SUFFIX`. agent-device's XCTest runner passes the argument route (`packages/platform-apple/src/runner/runner-device-set.ts:24-26` at agent-device `v0.21.28`), so it cannot drive a Simlock simulator either. Neither can `react-native run-ios --udid`, Expo `run:ios`, Detox or Maestro. Today the only route is to build for `generic/platform=iOS Simulator` and install with `simlock simctl install`.
+The set has a cost ADR 0001 did not weigh. `xcodebuild -destination "platform=iOS Simulator,id=<udid>"` finds a simulator outside Xcode's own set only through the per-user default `DVTSimulatorSetLocation`. This was checked on Xcode 26.4.1, 2026-09-14. Every per-process route fails: a `-DVTSimulatorSetLocation` argument, an environment variable of that name, `HOME` or `CFFIXED_USER_HOME` redirection (with or without `__CFPREFERENCES_AVOID_DAEMON=1`), and `DVT_TOOLCHAIN_USER_DEFAULTS_SUFFIX`. agent-device's XCTest runner passes the argument route (`packages/platform-apple/src/runner/runner-device-set.ts:24-26` at agent-device `v0.21.28`), so it cannot drive a Simlock simulator either. Neither can `react-native run-ios --udid`, Expo `run:ios`, Detox or Maestro. On that Xcode the only route is to build for `generic/platform=iOS Simulator` and install with `simlock simctl install`.
+
+Xcode 27.0 changed this, checked 2026-10-23 with a simulator in a temporary set: `xcodebuild build -destination "platform=iOS Simulator,id=<udid>"` fails with "Unable to find a device matching the provided destination specifier", and the same command with `-DVTSimulatorSetLocation=<set>` prints `** BUILD SUCCEEDED **`. The argument applies to that one command: `-showdestinations` with it lists only that set's simulators, and no user default is written. agent-device's runner passes the same argument. A tool that lets the caller add `xcodebuild` arguments can then reach Simlock's set (`react-native run-ios --extra-params`). One that does not, such as Expo `run:ios`, still cannot. Simlock names no minimum Xcode version (`website/src/content/docs/docs/introduction/requirements.mdx:15`).
 
 Android has no such cost: `adb`, Gradle and the React Native CLI honour `ANDROID_ADB_SERVER_PORT`, which the grant exports.
 
@@ -79,11 +81,12 @@ flowchart LR
 - Under `default`, a worker's simulators show in Xcode's destination picker and in plain `xcrun simctl list`.
 - A careless `xcrun simctl shutdown all` reboots leased devices under their leases. A careless `erase all` ends their leases as `provenance-drift`, and the holder loses installed apps.
 - `driver.root-rejected` gains two reasons, `invalid-device-set` and `device-set-changed`; `docs/internal/EVENTS.md` and the website's cleanup page list them.
-- The website gains a "Build and run your app" page: the generic build and install under `simlock`, direct Xcode targeting under `default`, and the adb serial on Android.
+- The website gains a "Build and run your app" page. Under `simlock`: the `-DVTSimulatorSetLocation="$SIMLOCK_IOS_DEVICE_SET"` argument on Xcode 27 or later, and the generic build and install on older Xcode or with a tool that takes no `xcodebuild` arguments. Under `default`: direct targeting by UDID. On Android: the adb serial.
 
 ## Alternatives considered
 
 - **Write `DVTSimulatorSetLocation` for the user.** Rejected by the maintainer on 2026-09-14 and again on 2026-10-23. It applies to every `xcodebuild` run of that user, and it hides the user's own simulators while it is set.
+- **No switch: Xcode 27's per-command argument is enough.** Rejected: it does not help older Xcode, or a tool that takes no `xcodebuild` arguments (Expo `run:ios`). The docs give the argument as the first route under `simlock`.
 - **Make `default` the default now.** Rejected for now: recovery after an external erase has no slow-lane test yet. §6 says when to flip it.
 - **Migrate devices when the setting changes.** Rejected: rare, and a lot of code for one switch. §3's refusal and steps are enough.
 - **Under `default`, make `simlock simctl` a plain passthrough.** Rejected: agents told to use it would lose their guard for nothing.
