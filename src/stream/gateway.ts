@@ -17,6 +17,7 @@ export function createGateway(ctx: GatewayContext<StreamModuleConfig>): GatewayM
               workerLeaseId: entry.workerLeaseId,
             };
       },
+      knowsWorker: (workerId) => ctx.worker(workerId) !== undefined,
       relay: (workerId, call) => ctx.relay(workerId, call.request, call.tenant, call.leaseId),
       requesterPrefix: ctx.requesterPrefix,
     },

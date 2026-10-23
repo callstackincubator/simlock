@@ -20,6 +20,7 @@ export interface StreamLeasePlacement {
 
 export interface FleetPort {
   holder(leaseId: string): StreamLeasePlacement | undefined;
+  knowsWorker(workerId: string): boolean;
   // why: `gw:<this gateway's instance id>:`, the exact prefix this index recognizes a requester it
   // sent by, so a stream namespaces with the same value its leases do.
   readonly requesterPrefix: string;

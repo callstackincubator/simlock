@@ -48,6 +48,13 @@ function worker(
   return { clock, feeds, opened: () => opened, stream };
 }
 
+const STREAM_HEADERS = {
+  "simlock-stream-codec": "h264",
+  "simlock-stream-fps": "30",
+  "simlock-stream-height": "720",
+  "simlock-stream-width": "330",
+};
+
 const OPERATOR = { principal: "tok_op", role: "operator" };
 
 const deviceRequest = (worker: string, device: string) =>
@@ -221,6 +228,7 @@ describe("createWorkerStream", () => {
     const gateway = createGatewayStream({
       fleet: {
         holder: () => undefined,
+        knowsWorker: () => true,
         relay: async (workerId) => {
           relays.push(workerId);
           return new Response(null, { status: 500 });
@@ -237,5 +245,70 @@ describe("createWorkerStream", () => {
     expect(relays).toEqual([]);
     await gateway.mount.handle(deviceRequest("w1", "dev_1"), OPERATOR);
     expect(relays).toEqual(["w1"]);
+  });
+
+  it("relays an operator's device stream through a gateway, keeping the worker's refusal code, and refuses an unknown or disconnected worker", async () => {
+    const refusal = (status: number, code: string, message: string) =>
+      new Response(JSON.stringify({ error: { code, message } }), { status });
+    const answers: Record<string, () => Response | Promise<Response>> = {
+      w1: () => new Response(new ReadableStream(), { headers: STREAM_HEADERS }),
+      w_busy: () =>
+        refusal(
+          409,
+          "DEVICE_NOT_RUNNING",
+          "The device is shutdown; only a ready or leased device streams",
+        ),
+      w_missing: () => refusal(404, "UNKNOWN_DEVICE", "Unknown device: dev_9"),
+      w_gone: () => {
+        throw Object.assign(new Error("Worker w_gone is not connected"), {
+          code: "WORKER_UNREACHABLE",
+        });
+      },
+    };
+    const relays: { workerId: string; url: string; tenant: string }[] = [];
+    const gateway = createGatewayStream({
+      fleet: {
+        holder: () => undefined,
+        knowsWorker: (workerId) => workerId in answers,
+        relay: async (workerId, call) => {
+          relays.push({ tenant: call.tenant, url: call.request.url, workerId });
+          return (answers[workerId] ?? (() => new Response(null, { status: 500 })))();
+        },
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const ask = (workerId: string) =>
+      gateway.mount.handle(deviceRequest(workerId, "dev_9"), OPERATOR);
+
+    const served = await ask("w1");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("simlock-stream-codec")).toBe("h264");
+    await served.body?.cancel();
+    expect(relays).toEqual([
+      {
+        tenant: "gw:inst:tok_op",
+        url: "http://simlock-worker/stream/devices/dev_9",
+        workerId: "w1",
+      },
+    ]);
+
+    const expected: [string, number, string, string][] = [
+      [
+        "w_busy",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is shutdown; only a ready or leased device streams",
+      ],
+      ["w_missing", 404, "UNKNOWN_DEVICE", "Unknown device: dev_9"],
+      ["w_gone", 503, "WORKER_UNREACHABLE", "Worker w_gone is not connected"],
+      ["w_nobody", 404, "UNKNOWN_WORKER", "Unknown worker: w_nobody"],
+    ];
+    for (const [workerId, status, code, message] of expected) {
+      const refused = await ask(workerId);
+      expect(refused.status, workerId).toBe(status);
+      expect(await refused.json(), workerId).toEqual({ error: { code, message } });
+    }
+    expect(relays.map((relay) => relay.workerId)).toEqual(["w1", "w_busy", "w_missing", "w_gone"]);
   });
 });
