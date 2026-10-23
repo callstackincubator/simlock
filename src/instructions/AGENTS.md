@@ -2,8 +2,8 @@
 
 Does: the rules for using Simlock as one static Markdown text, for agents and operators.
 Entry: `index.ts` → `AGENT_INSTRUCTIONS`, `MCP_SERVER_INSTRUCTIONS`, `renderInstructions(format)`.
-Uses: nothing. Called by: CLI (`simlock instructions`, `commands/instructions.ts` only), MCP
-(`server.ts`: the server instructions and the resource `simlock://instructions`).
+Uses: nothing. Called by: CLI (`simlock instructions`, `cli/commands/instructions.ts` only), MCP
+(`mcp/server.ts`: the server instructions and the resource `simlock://instructions`).
 
 `AGENT_INSTRUCTIONS` is a title, an intro, five `##` sections (rules for every agent, agent-device,
 iOS builds, the `simlock` CLI, MCP) and the website link. `MCP_SERVER_INSTRUCTIONS` is built from the
