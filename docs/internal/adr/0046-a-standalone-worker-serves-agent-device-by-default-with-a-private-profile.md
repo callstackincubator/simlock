@@ -15,6 +15,14 @@
   [ADR 0039](0039-joined-workers-refuse-their-own-http-listener.md)'s
   "A standalone worker retains optional HTTP": it stays optional, but is on
   by default.
+  [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
+  §3 ("While the edge is turned on ... `simlock doctor` says the same"):
+  when agent-device is on only by default and its command is not found,
+  the capability is `off` and doctor says nothing (§1 below).
+  [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
+  §4 ("Agents sharing a token share a tenant; the docs say not to"): the
+  local profile gives every local agent one token on purpose (§4 below);
+  the warning still holds for tokens an operator mints by hand.
 - **Builds on:** ADR 0023 §4 (one simlock token is one tenant), ADR 0033
   (auth is unchanged: the profile carries an ordinary agent token).
 
