@@ -370,33 +370,32 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
       expect(await installedBundles(udid)).not.toContain(bundle);
     });
 
-    // why: the Physical iOS row of the toolchain requires CoreDevice 642 (Xcode 27), so a lane that
+    // why: the Physical iOS row of the toolchain requires CoreDevice 642 or later (Xcode 27 or later), so a lane that
     // got this far has the toolchain the device program needs; a missing program is a broken build,
     // not a machine that cannot run the lane, and skipping it would hide that.
     it("the device capture program is built", { timeout: MINUTE }, () => {
       expect(
         existsSync(DEVICE_PROGRAM),
-        `no ${DEVICE_PROGRAM} -- run pnpm build on a Mac with Xcode 27`,
+        `no ${DEVICE_PROGRAM} -- run pnpm build on a Mac with Xcode 27 or later`,
       ).toBe(true);
     });
 
     it(
-      "the device program refuses a Mac whose CoreDevice major is not 642, and names the version, the missing framework or the unreadable version as its reason",
+      "the device program refuses a Mac whose CoreDevice major is below 642 or not a number, and names the version, the missing framework or the unreadable version as its reason",
       { timeout: 5 * MINUTE },
       async () => {
         const rows = [
-          ["650.3", "this Mac has CoreDevice 650.3"],
           ["641.9", "this Mac has CoreDevice 641.9"],
-          ["6420.1", "this Mac has CoreDevice 6420.1"],
           ["64.2", "this Mac has CoreDevice 64.2"],
+          ["beta.1", "this Mac has CoreDevice beta.1"],
           ["", "this Mac's CoreDevice version cannot be read"],
         ] as const;
         for (const [version, reason] of rows) {
           const plist = await aCoreDevicePlist(version);
           const run = await runDeviceProgram(plist, udid);
-          expect(run.code, `CoreDevice ${version} is not 642: ${run.stderr}`).toBe(69);
+          expect(run.code, `CoreDevice "${version}" is not 642 or later: ${run.stderr}`).toBe(69);
           expect(lastLineOf(run.stderr)).toBe(
-            `Physical iPhone streams need Xcode 27 (CoreDevice 642.x); ${reason}`,
+            `Physical iPhone streams need Xcode 27 or later (CoreDevice 642 or later); ${reason}`,
           );
         }
 
@@ -406,23 +405,23 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         );
         expect(absent.code, "a Mac without CoreDevice cannot stream an iPhone").toBe(69);
         expect(lastLineOf(absent.stderr)).toBe(
-          "Physical iPhone streams need Xcode 27 (CoreDevice 642.x); this Mac has no CoreDevice",
+          "Physical iPhone streams need Xcode 27 or later (CoreDevice 642 or later); this Mac has no CoreDevice",
         );
       },
     );
 
     it(
-      "the device program goes on for every CoreDevice 642.x spelling and, for a UDID it cannot find, exits 1 within 26 s naming it as not connected",
+      "the device program goes on for every CoreDevice 642 or later spelling and, for a UDID it cannot find, exits 1 within 26 s naming it as not connected",
       { timeout: 10 * MINUTE },
       async () => {
         const unknown = "FFFFFFFF-0000-4000-8000-000000000000";
-        for (const version of ["642.16", "642.0", "642", " 642.3 "]) {
+        for (const version of ["642.16", "642.0", "642", " 642.3 ", "651.13.5", "6420.1"]) {
           const plist = await aCoreDevicePlist(version);
           const started = Date.now();
           const run = await runDeviceProgram(plist, unknown);
           expect(
             run.code,
-            `CoreDevice ${version} is 642.x, so the version is not what refused`,
+            `CoreDevice ${version} is 642 or later, so the version is not what refused`,
           ).toBe(1);
           const elapsed = Date.now() - started;
           expect(

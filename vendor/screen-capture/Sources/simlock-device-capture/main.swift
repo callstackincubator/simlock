@@ -12,7 +12,7 @@
 // simulator's framebuffer goes into.
 //
 // Version gate: the first thing this program does, before any CoreDevice call, is read CoreDevice's
-// own version and refuse a Mac it was not written against (exit 69). The framework is linked `weak`,
+// own version and refuse a Mac whose CoreDevice is older than the one it was written against (exit 69). The framework is linked `weak`,
 // so the program starts on a Mac without it long enough to say so.
 //
 // SIMLOCK_COREDEVICE_INFO_PLIST names another Info.plist to read that version from, for the slow lane

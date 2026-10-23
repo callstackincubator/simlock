@@ -114,7 +114,7 @@ describe("iOS screen capture", () => {
       capture.open(physical, settings, new AbortController().signal),
     ).rejects.toBeInstanceOf(ScreenUnavailableError);
     await expect(capture.open(physical, settings, new AbortController().signal)).rejects.toThrow(
-      `Physical iPhone streams need simlock-device-capture, which did not build on this Mac (it needs Xcode 27, CoreDevice 642.x); there is none at ${DEVICE_COMMAND}`,
+      `Physical iPhone streams need simlock-device-capture, which did not build on this Mac (it needs Xcode 27 or later, CoreDevice 642 or later); there is none at ${DEVICE_COMMAND}`,
     );
     expect(launcher.starts).toEqual([]);
     await expect(

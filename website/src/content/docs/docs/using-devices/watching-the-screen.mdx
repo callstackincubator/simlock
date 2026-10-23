@@ -11,7 +11,7 @@ The console can show the live screen of any leased device: an iOS simulator, an 
 
 - The console is on, and you can sign in with an operator token. See [Console](/simlock/docs/worker/console).
 - Screen streaming is turned on for the worker that holds the device. It is off by default.
-- For a physical iPhone: the worker runs Xcode 27, and the iPhone runs iOS 27 or later.
+- For a physical iPhone: the worker runs Xcode 27 or later, and the iPhone runs iOS 27 or later.
 
 ## Turn screen streaming on
 
@@ -75,7 +75,7 @@ When streaming is off on the lease's worker, the button cannot be pressed and th
 
 A physical iPhone streams only when both of these hold:
 
-- The worker it is plugged into runs Xcode 27.
+- The worker it is plugged into runs Xcode 27 or later.
 - The iPhone runs iOS 27 or later.
 
 Otherwise the panel shows the reason, for example:
@@ -107,7 +107,7 @@ Anything with an agent or operator token can read a lease's screen over HTTP at 
 | What you see | Why | What to do |
 | --- | --- | --- |
 | "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` is not `true` on that worker. | Turn it on and restart the worker's daemon. |
-| The panel says the screen cannot be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker without Xcode 27. | Update the iPhone or the worker's Xcode. |
+| The panel says the screen cannot be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker on an Xcode older than 27. | Update the iPhone or the worker's Xcode. |
 | "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone and press **Show screen** again. |
 | The panel gives up waiting for the first picture | The device painted nothing for 30 seconds. | Press **Show screen** again. |
 | The picture stops on a lease that is still active | The device stopped sending frames. | Press **Stop**, then **Show screen** again. |
