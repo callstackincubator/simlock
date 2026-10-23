@@ -37,6 +37,8 @@ interface MadeAgent {
   readonly env: SharedTestEnv;
   readonly agent: Agent;
   readonly background: Set<CliBackgroundHandle>;
+  // why: the profile token belongs to the worker, not to the agent, so cleanup leaves it.
+  readonly keepToken?: boolean;
 }
 
 const made: MadeAgent[] = [];
@@ -159,16 +161,75 @@ export async function makeAgent(env: SharedTestEnv, name: string): Promise<Agent
   return agent;
 }
 
+const PROFILE_TOKEN_LABEL = "agent-device on this Mac";
+
+// why: the agent a local user is, per ADR 0046: no token in its environment, the worker's profile file named once at connect, and its own --session on every command.
+export async function makeProfileAgent(env: SharedTestEnv, name: string): Promise<Agent> {
+  const profilePath = join(env.dataDirectory, "agent-device-profile.json");
+  const secret = (JSON.parse(await readFile(profilePath, "utf8")) as { daemonAuthToken: string })
+    .daemonAuthToken;
+  const listed = await env.cli(["token", "list"], { timeout: 60_000 });
+  const labelled = (
+    listed.json as { tokens: readonly { id: string; label?: string }[] }
+  ).tokens.filter((token) => token.label === PROFILE_TOKEN_LABEL);
+  const tokenId = labelled[0]?.id;
+  if (labelled.length !== 1 || tokenId === undefined) {
+    throw new Error(
+      `expected one "${PROFILE_TOKEN_LABEL}" token, found ${String(labelled.length)}`,
+    );
+  }
+  const home = await mkdtemp(join(tmpdir(), `simlock-ad-${name}-`));
+  const entry = agentDeviceEntry();
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("AGENT_DEVICE_")),
+  );
+  const childEnv: NodeJS.ProcessEnv = {
+    ...inherited,
+    HOME: home,
+    AGENT_DEVICE_STATE_DIR: home,
+    AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1",
+  };
+  const background = new Set<CliBackgroundHandle>();
+  const agent: Agent = {
+    name,
+    home,
+    token: secret,
+    tokenId,
+    async run(args, options = {}) {
+      const result = await cli(["--json", ...args, "--session", name], childEnv, {
+        entry,
+        timeout: options.timeout ?? 60_000,
+      });
+      return parseResult(result.code, result.stdout, result.stderr);
+    },
+    start(args) {
+      const handle = cliBackground(["--json", ...args, "--session", name], childEnv, { entry });
+      background.add(handle);
+      return handle;
+    },
+  };
+  made.push({ env, agent, background, keepToken: true });
+  const connected = await agent.run(["connect", "--remote-config", profilePath]);
+  if (connected.code !== 0) {
+    throw new Error(`agent-device connect failed: ${connected.stdout}\n${connected.stderr}`);
+  }
+  return agent;
+}
+
 export async function cleanupAgents(): Promise<void> {
   const agents = made.splice(0);
   await Promise.allSettled(
-    agents.map(async ({ env, agent, background }) => {
+    agents.map(async ({ env, agent, background, keepToken }) => {
       for (const handle of background) handle.kill("SIGKILL");
       await Promise.all(
         [...background].map((handle) => handle.waitForExit(10_000).catch(() => undefined)),
       );
       await agent.run(["disconnect"], { timeout: 60_000 }).catch(() => undefined);
-      await env.cli(["token", "revoke", agent.tokenId], { timeout: 30_000 }).catch(() => undefined);
+      if (keepToken !== true) {
+        await env
+          .cli(["token", "revoke", agent.tokenId], { timeout: 30_000 })
+          .catch(() => undefined);
+      }
       await rm(agent.home, { force: true, recursive: true });
     }),
   );
