@@ -9,6 +9,7 @@ import {
   MIB,
   KIB,
   patternDigest,
+  patternBytes,
   patternDigestSwapped,
   patternStream,
   readParts,
@@ -142,7 +143,7 @@ describe("transfers through a gateway keep their promises", () => {
   }, 180_000);
 
   // fallow-ignore-next-line complexity -- one measurement: its windows and delays are read in order, and splitting them would hide what each number is measured against.
-  it("while 10 relays each upload 64 MiB and 10 each download 64 MiB to one worker, a forwarded `lease.renew` and a relayed request whose target answers at once each answer at most 1 s later than with nothing running, and each of the 20 relays carried at least 1 MiB in the second before and the second after each answer came back", async () => {
+  it("while 10 relays each upload and 10 each download to one worker, sending until a second after the last answer, a forwarded `lease.renew` and a relayed request whose target answers at once each answer at most 1 s later than with nothing running, and each of the 20 relays carried at least 1 MiB in the second before and the second after each answer came back", async () => {
     const samples = new Map<string, { at: number; total: number }[]>();
     const progress = (id: string, total: number) => {
       const list = samples.get(id) ?? [];
@@ -150,23 +151,41 @@ describe("transfers through a gateway keep their promises", () => {
       samples.set(id, list);
     };
     const finishedAt = new Map<string, number>();
+    // why: a fixed body size ends on fast hardware before the probes' windows close, so every body runs until the measurement is over.
+    let sending = true;
+    const untilStopped = (seed: number): ReadableStream<Uint8Array> => {
+      let offset = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!sending) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(patternBytes(MIB, seed, offset));
+          offset += MIB;
+        },
+      });
+    };
+    const measure = async (id: string, stream: ReadableStream<Uint8Array> | null) => {
+      const reader = stream?.getReader();
+      let total = 0;
+      for (;;) {
+        const step = await reader?.read();
+        if (step === undefined || step.done) break;
+        total += step.value.length;
+        progress(id, total);
+      }
+      finishedAt.set(id, performance.now());
+    };
     behavior = async (request) => {
       const url = new URL(request.url);
       const id = url.searchParams.get("id") ?? "";
       if (url.pathname.endsWith("/upload")) {
-        const reader = request.body?.getReader();
-        let total = 0;
-        for (;;) {
-          const step = await reader?.read();
-          if (step === undefined || step.done) break;
-          total += step.value.length;
-          progress(id, total);
-        }
-        finishedAt.set(id, performance.now());
+        await measure(id, request.body);
         return new Response("done");
       }
       if (url.pathname.endsWith("/download")) {
-        return new Response(patternStream(64 * MIB, 6));
+        return new Response(untilStopped(6));
       }
       return new Response("ok");
     };
@@ -183,6 +202,10 @@ describe("transfers through a gateway keep their promises", () => {
     };
     const renew = () => gateway.dispatch("lease.renew", { leaseId: grant.lease.id }, agent);
     const small = async () => (await relay.relay(workerId, call("small"))).text();
+    const ids = Array.from({ length: 10 }, (_, index) => [
+      `u${String(index)}`,
+      `d${String(index)}`,
+    ]).flat();
 
     const renewDelays: number[] = [];
     const smallDelays: number[] = [];
@@ -192,36 +215,35 @@ describe("transfers through a gateway keep their promises", () => {
       const idleSmall = await timeOf(small);
       samples.clear();
       finishedAt.clear();
-      const downloads: Promise<number>[] = [];
-      const uploads: Promise<unknown>[] = [];
+      sending = true;
+      const transfers: Promise<unknown>[] = [];
       for (let index = 0; index < 10; index += 1) {
-        uploads.push(
+        transfers.push(
           relay
             .relay(
               workerId,
-              call(`upload?id=u${String(index)}`, {
-                body: patternStream(64 * MIB, 5),
-                method: "PUT",
-              }),
+              call(`upload?id=u${String(index)}`, { body: untilStopped(5), method: "PUT" }),
             )
             .then((response) => response.text()),
-        );
-        downloads.push(
           relay
             .relay(workerId, call(`download?id=d${String(index)}`))
-            .then((response) => drain(response.body)),
+            .then((response) => measure(`d${String(index)}`, response.body)),
         );
       }
-      await sleep(500);
+      // why: under load the relays start moving hundreds of ms apart; the second before an answer must lie wholly after each one's first byte.
+      for (let waited = 0; waited < 10_000 && ids.some((id) => !samples.has(id)); waited += 10)
+        await sleep(10);
+      await sleep(1_000);
       const answers: number[] = [];
       renewDelays.push((await timeOf(renew)) - idleRenew);
       answers.push(performance.now());
       smallDelays.push((await timeOf(small)) - idleSmall);
       answers.push(performance.now());
       await sleep(1_000);
+      sending = false;
+      await Promise.all(transfers);
       for (const answer of answers) {
-        for (let index = 0; index < 10; index += 1) {
-          const id = `u${String(index)}`;
+        for (const id of ids) {
           const list = samples.get(id) ?? [];
           const within = (from: number, to: number) => {
             const inside = list.filter((sample) => sample.at >= from && sample.at <= to);
@@ -237,7 +259,6 @@ describe("transfers through a gateway keep their promises", () => {
             quietWindows.push(`${id} finished early`);
         }
       }
-      await Promise.all([...uploads, ...downloads]);
     }
 
     expect(quietWindows).toEqual([]);
