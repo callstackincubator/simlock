@@ -85,7 +85,10 @@ describe("the routes createHttpApp registers", () => {
     expect(registered.some((route) => route.path.startsWith("/v1/stream"))).toBe(true);
     expect(registered.some((route) => route.path.startsWith("/v1/agent-device"))).toBe(true);
     expect(coverageProblems(core, declared)).toEqual([]);
-    expect(moduleRoutes).toEqual(["GET /v1/stream/leases/{id}"]);
+    expect(moduleRoutes).toEqual([
+      "GET /v1/stream/leases/{id}",
+      "GET /v1/stream/workers/{workerId}/devices/{deviceId}",
+    ]);
     expect([...documented].sort()).toEqual([...declared, ...moduleRoutes].sort());
     expect(coverageProblems([...core, "GET /v1/new"], declared)).toEqual([
       "not declared: GET /v1/new",
