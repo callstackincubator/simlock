@@ -145,6 +145,14 @@ describe("setupAgentTools", () => {
     expect(viaCodexHome.tools.map(({ skill }) => skill.status)).toEqual(["skipped", "wrote"]);
     expect(await customHome.exists(`${HOME}/.agents/skills/simlock/SKILL.md`)).toBe(true);
 
+    const projectScope = await withBases();
+    await projectScope.mkdirp("/custom/codex-home");
+    const atProject = await setup(projectScope, {
+      scope: "project",
+      codexHome: "/custom/codex-home",
+    });
+    expect(atProject.tools.map(({ skill }) => skill.status)).toEqual(["skipped", "skipped"]);
+
     const bare = await withBases();
     const named = await setup(bare, { tool: "codex" });
     expect(named.tools).toEqual([

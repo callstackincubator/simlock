@@ -1,4 +1,6 @@
 import {
+  AGENT_TOOL_IDS,
+  agentToolName,
   SetupMcpFailedError,
   setupAgentTools,
   type AgentTool,
@@ -9,13 +11,9 @@ import type { CommandContext } from "../tree.js";
 
 const USAGE =
   "Usage: simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]\n";
-const TOOLS: readonly string[] = ["claude-code", "codex"];
+const TOOLS: readonly string[] = AGENT_TOOL_IDS;
 const TOOL_ID_WIDTH = 11;
 const SKILL_STATUS_WIDTH = 9;
-const TOOL_NAMES: Readonly<Record<AgentTool, string>> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-};
 
 function renderReport(report: SetupReport): string {
   const lines: string[] = [];
@@ -23,7 +21,7 @@ function renderReport(report: SetupReport): string {
     const label = tool.padEnd(TOOL_ID_WIDTH);
     const skipped =
       skill.status === "skipped"
-        ? `  (${TOOL_NAMES[tool]} not found here; pass --tool ${tool} to install anyway)`
+        ? `  (${agentToolName(tool)} not found here; pass --tool ${tool} to install anyway)`
         : "";
     lines.push(
       `${label}  skill  ${skill.status.padEnd(SKILL_STATUS_WIDTH)}  ${skill.path}${skipped}`,

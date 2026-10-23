@@ -10,8 +10,13 @@ import {
 import { renderSkill } from "./skill.js";
 
 const AGENT_TOOLS = {
-  "claude-code": { presence: ".claude", skills: ".claude/skills" },
-  codex: { presence: ".codex", skills: ".agents/skills" },
+  "claude-code": {
+    name: "Claude Code",
+    bin: "claude",
+    presence: ".claude",
+    skills: ".claude/skills",
+  },
+  codex: { name: "Codex", bin: "codex", presence: ".codex", skills: ".agents/skills" },
 } as const;
 
 export type AgentTool = keyof typeof AGENT_TOOLS;
@@ -104,7 +109,11 @@ export interface SetupAgentToolsOptions {
   readonly tool?: AgentTool | undefined;
 }
 
-const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
+export const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
+
+export function agentToolName(tool: AgentTool): string {
+  return AGENT_TOOLS[tool].name;
+}
 
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
   const scope =
@@ -185,7 +194,7 @@ async function connectMcp(
   if (tool === "codex" && scope === "project") {
     return { status: "skipped", reason: "codex mcp add has no project scope" };
   }
-  const bin = tool === "claude-code" ? "claude" : "codex";
+  const { bin } = AGENT_TOOLS[tool];
   const args =
     tool === "claude-code"
       ? ["mcp", "add", "-s", scope, "simlock", "--", "simlock", "mcp"]
