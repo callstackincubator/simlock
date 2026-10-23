@@ -1,6 +1,6 @@
 # 0043. Physical devices reach agent-device through a second daemon on the worker
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — not yet implemented; §4 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) (default-on, command not found: `off`, no doctor line)
 - **Date:** 2026-10-22
 - **Issue:** [#870](https://github.com/callstackincubator/simlock/issues/870)
 - **Supersedes:** in part, [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
