@@ -158,7 +158,7 @@ export interface GatewayDispatcherOptions {
   >;
   readonly leaseIndex: Pick<
     FleetLeaseIndex,
-    "project" | "all" | "isGatewayRequester" | "requesterPrefix"
+    "project" | "all" | "isGatewayRequester" | "requesterPrefix" | "resolve" | "findByWorkerLease"
   >;
 }
 
@@ -515,12 +515,38 @@ export class GatewayDispatcher {
    * itself issued, so it cannot produce that collision. An admin session sees the whole fleet,
    * which is what `GET /v1/leases` is for.
    */
-  #leaseGet: Handler<"lease.get"> = () => ({ lease: undefined as never });
-
   #leaseList: Handler<"lease.list"> = (_input, session) => ({
     leases:
       session.role === "admin" ? this.#fleetLeases() : this.#ownedFleetLeases(session.principal),
   });
+
+  // why: finds the record `lease.list` would hold for this session without building the list -- a gateway-issued lease through the index (its owner, or an admin), a worker's own local lease for an admin only, by a raw id the index does not rename.
+  #leaseGet: Handler<"lease.get"> = (input, session) => {
+    const { leaseIndex, workers } = this.options;
+    const isAdmin = session.role === "admin";
+    const entry = leaseIndex.resolve(input.leaseId);
+    if (entry !== undefined) {
+      const view = workers.view(entry.workerId);
+      const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
+      if (
+        view !== undefined &&
+        raw !== undefined &&
+        (isAdmin || entry.ownerId === session.principal)
+      ) {
+        return { lease: leaseIndex.project(raw, view.id, view.label) };
+      }
+    } else if (isAdmin) {
+      for (const view of workers.views()) {
+        const raw = view.leases?.find((lease) => lease.id === input.leaseId);
+        if (raw !== undefined && leaseIndex.findByWorkerLease(view.id, raw.id) === undefined) {
+          return { lease: leaseIndex.project(raw, view.id, view.label) };
+        }
+      }
+    }
+    throw new DispatchError("UNKNOWN_LEASE", `Unknown lease: ${input.leaseId}`, {
+      leaseId: input.leaseId,
+    });
+  };
 
   /** Every lease this gateway issued to `ownerId`, projected to its fleet-facing form. Looks up
    * each entry's current record from the owning worker's view rather than caching one on the
