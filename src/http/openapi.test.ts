@@ -309,7 +309,7 @@ describe("buildOpenApiDocument", () => {
     }).toEqual({
       components: ["platform"],
       componentRemove: ["dryRun"],
-      events: ["before", "limit", "since"],
+      events: ["before", "limit", "since", "worker"],
     });
     expect(
       Object.keys(replySchema(operation("/v1/events", "get"), "200").properties ?? {}),

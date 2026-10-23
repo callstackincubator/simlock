@@ -70,7 +70,7 @@ Three identities:
 
 - `SimlockErrorCode` is a closed union (`ErrorDetailsMap`). `ERROR_TABLE` gives each code
   `kind` (`transport` | `protocol` | `domain`), `cliExitCode` and `httpStatus`.
-- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s and `events.replay`'s with `beforeId`; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface. `events.replay` takes `beforeId` and `limit` (1 to 500), refused with `sinceTs`; `eventsPageQuery` (`events-page.ts`) parses the HTTP query once, with the bounds.
+- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s and `events.replay`'s with `beforeId`; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface. `events.replay` takes `beforeId` and `limit` (1 to 500), refused with `sinceTs`, and `workerId` (1 to 128 characters) with any of them; `eventsPageQuery` (`events-page.ts`) parses the HTTP query once, with the bounds.
 - `fromWireError` wraps an unknown code as `UNKNOWN_DAEMON_ERROR`. That code and `CANCELLED`
   are built client side only.
 - `CODES_WITH_DECLARED_DETAILS`: codes whose `details` are contract. The compiler keeps it

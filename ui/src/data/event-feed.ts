@@ -24,7 +24,7 @@ const RETRY_INTERVAL_MS = 10_000;
 
 // why: a feed of one worker's events asks the daemon for that worker alone in every read, and keeps of
 // the stream only the events that belong to it.
-export interface FeedScope {
+interface FeedScope {
   readonly workerId: string;
   readonly keeps: (event: ConsoleEvent) => boolean;
 }

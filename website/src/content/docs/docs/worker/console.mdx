@@ -123,11 +123,12 @@ The square shows the worst thing wrong with the worker, and always has a word be
 
 **Issues** shows only workers whose square is not green. **Busy** shows workers using three quarters of their device slots or more.
 
-Select the worker to see three tabs:
+Select the worker to see its CPU, memory and disk, each with a bar, how many leases it holds, and a square per device slot for iOS and Android (leased, ready, booting, quarantined or free). Under them are four tabs:
 
-- **Overview**: CPU, memory and disk, each with a bar; how many leases it holds; a square per device slot for iOS and Android (leased, ready, booting, quarantined or free); and every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
+- **Devices**: every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
 - **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
+- **Events**: this worker's events, newest first, back to the start of its kept history or to the console's cap of events. Older events load as you scroll to the end of the list, and new ones appear at the top. With none, the tab says `No events for this worker yet.`
 
 ### Open a device
 
