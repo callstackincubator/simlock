@@ -11,7 +11,7 @@ import {
   startDaemon,
   test as base,
 } from "./fixtures.js";
-import { fetchFull } from "./full-fetch.js";
+import { answer, leases, pad } from "./stub-answers.js";
 import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -114,20 +114,6 @@ async function open(page: Page, host: RunningDaemon, path: string): Promise<void
   await expect(page.locator("#main")).not.toContainText("Loading…");
 }
 
-/**
- * Answers `GET <pathname>` with what `body` returns at the time of the request, on top of the
- * daemon's own response, so its headers (its `Date` among them) stay real.
- */
-async function answer(page: Page, pathname: string, body: () => unknown): Promise<void> {
-  await page.route(
-    (url) => url.pathname === pathname,
-    async (route: Route) => {
-      const response = await fetchFull(route);
-      await route.fulfill({ json: body(), response });
-    },
-  );
-}
-
 // why: a page before the last hour answers with no events, so the stubbed list ends where it did
 // before Activity scrolled back.
 async function answerEvents(page: Page, replay: readonly unknown[]): Promise<void> {
@@ -138,26 +124,6 @@ async function answerEvents(page: Page, replay: readonly unknown[]): Promise<voi
       await route.fulfill({ json: { events: since ? replay : [] } });
     },
   );
-}
-
-/** `count` leases on the one host, `lse_0001` granted first. */
-function leases(count: number): unknown[] {
-  const now = Date.now();
-  return Array.from({ length: count }, (_, index) => ({
-    deviceId: `dev_${pad(index + 1)}`,
-    grantedAt: now - 3_600_000 + index * 1_000,
-    id: `lse_${pad(index + 1)}`,
-    lastRenewedAt: now - 60_000,
-    idChosenByRequester: false,
-    ownerId: "tok_load",
-    requesterId: "tok_load",
-    ttlDeadline: now + 600_000,
-    ttlMs: 900_000,
-  }));
-}
-
-function pad(n: number): string {
-  return String(n).padStart(4, "0");
 }
 
 function rowIds(list: Locator, section: string): Promise<string[]> {
