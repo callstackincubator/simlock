@@ -223,8 +223,10 @@ describe("the local agent-device profile", () => {
     await first.daemon.dispatch("token.create", { label: LABEL, role: "operator" }, adminSession);
     expect(await labelledIds(first)).toHaveLength(2);
 
+    const identity = (await first.filesystem.stat(first.profilePath)).identity;
     const same = await first.restart();
     expect((await readProfile(same)).text).toBe(before.text);
+    expect((await same.filesystem.stat(same.profilePath)).identity).toBe(identity);
     expect(await labelledIds(same)).toEqual([tokenId]);
 
     const port = await freeLoopbackPort();
