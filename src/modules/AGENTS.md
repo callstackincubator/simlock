@@ -7,11 +7,11 @@ Imported by: `daemon/main.ts` (the factory and types); on a gateway it is handed
 
 ## Files
 
-| File         | Role                                                                                                                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `types.ts`   | `OptionalModuleDefinition` (with optional `http` route data, read only by the OpenAPI document), `ModuleConfig`, `WorkerModule`, `WorkerHooks`, `WorkerContext`, the by-shape copies |
-| `host.ts`    | `createModuleHost`: checks names, loads turned-on modules (`role: "worker"` or `"gateway"`), runs hooks; a gateway host runs `beforeDrain` under the same 30 s deadline              |
-| `testing.ts` | Fake module and context for tests and the conformance suite                                                                                                                          |
+| File         | Role                                                                                                                                                                                                                                   |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`   | `OptionalModuleDefinition` (with optional `http` route data, read only by the OpenAPI document, and optional `localProfile` data), `ModuleTokens`, `ModuleConfig`, `WorkerModule`, `WorkerHooks`, `WorkerContext`, the by-shape copies |
+| `host.ts`    | `createModuleHost`: checks names, loads turned-on modules (`role: "worker"` or `"gateway"`), runs hooks, and on a worker `prepareLocalProfiles` (below); a gateway host runs `beforeDrain` under the same 30 s deadline                |
+| `testing.ts` | Fake module and context for tests and the conformance suite                                                                                                                                                                            |
 
 ## Rules
 
@@ -19,4 +19,5 @@ Imported by: `daemon/main.ts` (the factory and types); on a gateway it is handed
 - Names: the capability name pattern, unique, not a core route segment, at most 16 capabilities.
 - Creating starts nothing. A start that fails before the socket is claimed drops created modules; after it, the normal stop runs their stop hooks.
 - Hooks are direct calls. `afterSocketClaimed` is not awaited; `beforeDrain` and `beforeDriversDispose` share one 30 s budget per step; a throw is logged and the step goes on.
+- A definition with `localProfile` has a file in the data directory that the worker host keeps for local agents: `prepareLocalProfiles` (awaited by `daemon/main.ts` after the socket claim and before HTTP starts) writes it with one `agent` token labelled `localProfile.tokenLabel` when `http.enabled` and the module are on, and deletes it and revokes labelled tokens otherwise, for an off module too. A failure logs one `warn` and the start goes on.
 - Each by-shape type (`Module*`) has a type test in `src/daemon/module-shapes.test.ts` against its original.

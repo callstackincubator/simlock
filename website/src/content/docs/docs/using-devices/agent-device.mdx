@@ -98,6 +98,21 @@ The URL is the worker's HTTP address, or the gateway's (port 4700 by default), f
 - **`install` sends the app from your machine.** The path is on the agent's machine, and agent-device uploads it. A path on the worker is refused with `refused: send the app from your machine as an upload`.
 - **`devices` lists only your devices**, and an empty list before `open`.
 
+## On the same Mac
+
+On a standalone worker with HTTP and agent-device turned on, an agent on the same Mac, running as the same user, needs no token of its own. At each start the worker writes `agent-device-profile.json` in its data directory (`~/.simlock/` for a user session), readable only by its user. It holds the worker's agent-device URL and one agent token, labelled `agent-device on this Mac`. Connect with that file:
+
+```sh
+agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1
+agent-device open --platform ios --session s1
+agent-device snapshot --session s1
+agent-device close --session s1
+```
+
+Pass `--session` on every command. All local agents share the profile's one token, so they share one Simlock identity: give each agent its own `--session` name, or two agents will see each other's devices.
+
+The worker keeps the same token across restarts, so a saved connection keeps working. If the file changes anyway (you changed `http.port`, or revoked the token with `simlock token revoke`), agent-device refuses the saved connection with `Active remote connection config changed`. Run `agent-device connect --remote-config ~/.simlock/agent-device-profile.json --session s1 --force` to refresh it. The worker removes the file and revokes the token when HTTP or agent-device is turned off. A worker that joins a gateway writes none. Do not give your own tokens the label `agent-device on this Mac`: the worker revokes them at the next start.
+
 ## Through a gateway
 
 Point `connect proxy` at the gateway and use a token created on the gateway. `open` lands on a worker whose agent-device is available, and every later command for that device goes to the same worker. You never name a worker.
