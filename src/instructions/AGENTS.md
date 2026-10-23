@@ -26,7 +26,7 @@ changes its section.
 scope; skills `.agents/skills`), under the scope's base: the home directory or the working
 directory. `setupAgentTools` runs in this order: the scope (flag, else a prompt in a terminal, else
 user); inspect every selected tool, refusing a non-directory at `<skills>/simlock` before any write
-(architecture rule 12); the MCP prompt per tool to be written; write `SKILL.md` and leave nothing else
+(architecture rule 12); the MCP prompt per tool to be written; write the skill file and leave nothing else
 in the `simlock` directory; then `mcp add` per written tool, one at a time, through `runTool` (30 s
 each). It reads no home or working directory itself: the CLI passes both. `skill.ts` is the router
 skill, which holds no rule, so it stays right after an upgrade.
