@@ -227,14 +227,14 @@ describe("WebSocketUplinkConnection binary messages", () => {
   });
 });
 
-async function startMuteGateway(): Promise<{
+async function startGateway(answersPings: boolean): Promise<{
   url: string;
   peers: WebSocket[];
   pings: () => number;
 }> {
   const peers: WebSocket[] = [];
   let pingCount = 0;
-  const wss = new WebSocketServer({ noServer: true, autoPong: false });
+  const wss = new WebSocketServer({ noServer: true, autoPong: answersPings });
   server = createServer();
   server.on("upgrade", (request, socket, head) => {
     wss.handleUpgrade(request, socket, head, (peer) => {
@@ -242,6 +242,7 @@ async function startMuteGateway(): Promise<{
       openConnections.push({ close: () => peer.terminate() });
       peer.on("ping", () => {
         pingCount += 1;
+        peer.send("after-pong");
       });
     });
   });
@@ -261,7 +262,7 @@ describe("WebSocketUplinkConnector liveness", () => {
 
   it("terminates an uplink whose gateway stops answering pings within two intervals, and GatewayUplink redials", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const gateway = await startMuteGateway();
+    const gateway = await startGateway(false);
     const clock = new FakeClock();
     let accepted = 0;
     const uplink = new GatewayUplink({
@@ -290,5 +291,24 @@ describe("WebSocketUplinkConnector liveness", () => {
     await vi.waitFor(() => expect(accepted).toBe(2));
     expect(gateway.peers).toHaveLength(2);
     await uplink.stop();
+  });
+
+  it("keeps a healthy uplink open across several ping rounds", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const gateway = await startGateway(true);
+    const worker = await new WebSocketUplinkConnector().connect(dialOptions(gateway.url));
+    openConnections.push(worker);
+    let afterPongs = 0;
+    worker.onData(() => {
+      afterPongs += 1;
+    });
+
+    for (let round = 1; round <= 4; round += 1) {
+      await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
+      await vi.waitFor(() => expect(afterPongs).toBe(round));
+    }
+
+    expect(gateway.pings()).toBe(4);
+    expect(worker.closed).toBe(false);
   });
 });
