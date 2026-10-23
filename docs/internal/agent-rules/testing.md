@@ -68,6 +68,11 @@ prove the behaviour, each at the cheapest level that can prove it
    decide; a failure that reproduces there is not yours to fix in this
    change, and one that does not reproduce is yours. Never skip, disable, or
    quarantine a test to get to green.
+   Most flakes are written, not found: an assertion on a deadline, a
+   duration, a throughput or a frame time without a fake clock passes on
+   an idle machine and fails on a loaded runner. A bound on real time
+   belongs in a `*.timing.test.ts` file or the slow lane, never in a unit
+   or e2e assertion.
    Once a failure has reproduced on a base commit, it is recorded so nobody
    proves it again: an open issue labelled `flaky-test` names the test by
    file and title. A failure that matches an open `flaky-test` issue skips
