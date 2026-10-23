@@ -1,0 +1,121 @@
+import { describe, expect, it } from "vitest";
+
+import { LEASE_ENDED_MESSAGE } from "../agent-device/index.js";
+import { ERROR_TABLE, LEASE_LOST_EXIT_CODE } from "../contract/index.js";
+import { REFUSED_ADB_SEQUENCES, REFUSED_ADB_VERB } from "../drivers/android/index.js";
+import {
+  CALLER_SUPPLIED_SCOPE_FLAGS,
+  REFUSED_RUNTIME_OPERATION,
+  REFUSED_SIMCTL_VERBS,
+  SHUTDOWN_ALL_TARGET,
+} from "../drivers/ios/index.js";
+import { AGENT_INSTRUCTIONS } from "./index.js";
+
+const HEADINGS = [
+  "## Rules for every agent",
+  "## agent-device",
+  "## iOS builds",
+  "## simlock CLI",
+  "## MCP",
+] as const;
+
+const TOOL_NAMES = ["lease_simulator", "list_devices", "release_simulator", "lease_status"];
+
+const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> = {
+  "## Rules for every agent": [
+    "`xcrun simctl`",
+    "`adb`",
+    "`avdmanager`",
+    "`emulator`",
+    "Claude Code",
+    "Codex",
+    "`SIMLOCK_AGENT_ID`",
+    "`REQUESTER_ALREADY_LEASED`",
+    "`--allow-download`",
+    "`simlock release --all`",
+    "`simlock nuke`",
+    "`simlock whoami`",
+  ],
+  "## agent-device": [
+    "`AGENT_DEVICE_DAEMON_AUTH_TOKEN`",
+    "`agent-device connect proxy --daemon-base-url <url>/v1/agent-device`",
+    "`--session <name>`",
+    "`AGENT_DEVICE_SESSION`",
+    "`agent-device open --platform <ios|android> --device <model>`",
+    "`agent-device install <app> <path>`",
+    "`agent-device close`",
+    "`agent-device disconnect`",
+    LEASE_ENDED_MESSAGE,
+  ],
+  "## iOS builds": [
+    "`xcodebuild -destination id=<udid>`",
+    "`react-native run-ios`",
+    "`expo run:ios`",
+    "Detox",
+    "Maestro",
+    "`-destination 'generic/platform=iOS Simulator'`",
+    "`agent-device install`",
+    "`simlock simctl install <device.address> <path-to-.app>`",
+  ],
+  "## simlock CLI": [
+    "`simlock catalog`",
+    "`simlock lease --platform <ios|android> --device <model>`",
+    "`--bind-pid <pid>`",
+    "`--detach`",
+    "`--ttl <duration>`",
+    "`simlock lease renew <lease-id>`",
+    "`--physical`",
+    "`simlock release <lease-id>`",
+    "`lease.id`",
+    "`lease.ttlDeadline`",
+    "`device.address`",
+    "`environment`",
+    "`--export-env`",
+    "`simlock simctl --lease <lease-id>`",
+    "`simlock adb -s <device.address>`",
+    "`simlock adb --lease <lease-id>`",
+    '{"error":{"code":"...","message":"..."}}',
+    "`--gateway`",
+    ...[...REFUSED_SIMCTL_VERBS].map((verb) => `\`simlock simctl ${verb}\``),
+    `\`simlock simctl shutdown ${SHUTDOWN_ALL_TARGET}\``,
+    `\`simlock simctl runtime ${REFUSED_RUNTIME_OPERATION}\``,
+    `\`simlock simctl\` refuses any option before the subcommand, ${[...CALLER_SUPPLIED_SCOPE_FLAGS].map((flag) => `\`--${flag}\``).join(" and ")} included`,
+    `\`simlock adb ${REFUSED_ADB_VERB}\``,
+    ...REFUSED_ADB_SEQUENCES.map(({ sequence }) => `\`simlock adb ${sequence.join(" ")}\``),
+    "`simlock adb` refuses any option before the subcommand other than `-s`, `-t`, `-d` or `-e`",
+    "`simlock adb shell`",
+    ...[
+      ERROR_TABLE.QUEUE_TIMEOUT.cliExitCode,
+      ERROR_TABLE.NO_CAPACITY.cliExitCode,
+      ERROR_TABLE.REQUESTER_ALREADY_LEASED.cliExitCode,
+      LEASE_LOST_EXIT_CODE,
+    ].map((code) => `\`${code}\``),
+  ],
+  "## MCP": [...TOOL_NAMES.map((name) => `\`${name}\``), "context compaction"],
+};
+
+function sectionsOf(text: string): Map<string, string> {
+  const parts = text.split(/^(?=## )/m).slice(1);
+  return new Map(parts.map((part) => [part.split("\n")[0] as string, part]));
+}
+
+describe("the rules text", () => {
+  it("has the five sections in order, each holding its required items, and ends with the website URL", () => {
+    expect(AGENT_INSTRUCTIONS.startsWith("# ")).toBe(true);
+    const headings = AGENT_INSTRUCTIONS.split("\n").filter((line) => line.startsWith("## "));
+    expect(headings).toEqual([...HEADINGS]);
+
+    const sections = sectionsOf(AGENT_INSTRUCTIONS);
+    for (const heading of HEADINGS) {
+      const body = sections.get(heading) ?? "";
+      for (const required of REQUIRED[heading]) {
+        expect(body, `${heading} holds ${required}`).toContain(required);
+      }
+    }
+
+    expect(sections.get("## agent-device")).not.toContain("--os");
+    expect(AGENT_INSTRUCTIONS.trimEnd().split("\n").at(-1)).toBe(
+      "More: https://callstackincubator.github.io/simlock/docs/",
+    );
+  });
+});
