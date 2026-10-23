@@ -625,7 +625,15 @@ export class Dispatcher {
     return { leaseIds: [...leaseIds] };
   };
 
-  #leaseGet: Handler<"lease.get"> = () => ({ lease: undefined as never });
+  #leaseGet: Handler<"lease.get"> = (input, session) => {
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined || (session.role !== "admin" && lease.ownerId !== session.principal)) {
+      throw new UnknownLeaseError(input.leaseId);
+    }
+    return { lease };
+  };
 
   #leaseList: Handler<"lease.list"> = (_input, session) => {
     const leases = this.options.registry.snapshot.leases.filter(

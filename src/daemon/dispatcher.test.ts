@@ -63,6 +63,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
+import { UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
@@ -1192,10 +1193,10 @@ describe("Dispatcher: ownership", () => {
         { leaseId },
         session({ principal: "tok_other", role: "agent" }),
       ),
-    ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
+    ).rejects.toBeInstanceOf(UnknownLeaseError);
     await expect(
       dispatcher.dispatch("lease.get", { leaseId: "lse_nope" }, owner),
-    ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
+    ).rejects.toBeInstanceOf(UnknownLeaseError);
     await expect(
       dispatcher.dispatch(
         "lease.get",
