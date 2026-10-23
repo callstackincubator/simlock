@@ -93,3 +93,7 @@ export function renderInstructions(format: "text" | "json"): string {
     ? JSON.stringify({ instructions: AGENT_INSTRUCTIONS })
     : AGENT_INSTRUCTIONS;
 }
+
+export function renderSkill(): string {
+  return "";
+}

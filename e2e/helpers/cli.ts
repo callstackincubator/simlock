@@ -10,6 +10,7 @@ export interface CliOptions {
   readonly input?: string;
   readonly timeout?: number;
   readonly entry?: string;
+  readonly cwd?: string;
 }
 
 export interface CliError {
@@ -39,6 +40,7 @@ export function cli(
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [options.entry ?? CLI_ENTRY, ...args], {
       env: { ...env, ...options.env },
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     });
     let stdout = "";
     let stderr = "";
