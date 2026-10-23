@@ -95,13 +95,10 @@ describe.skipIf(!hasAndroidSdk)(
             headers: { authorization },
             signal: viewer.signal,
           });
-          expect(
-            response.status,
-            await response
-              .clone()
-              .text()
-              .catch(() => ""),
-          ).toBe(200);
+          // why: a 200 body is an endless stream, so its text is read only for a failure, never as
+          // an argument evaluated up front.
+          const detail = response.status === 200 ? "" : await response.text().catch(() => "");
+          expect(response.status, detail).toBe(200);
           expect(response.headers.get("simlock-stream-codec")).toBe("h264");
           if (response.body === null) throw new Error("the stream answered without a body");
 

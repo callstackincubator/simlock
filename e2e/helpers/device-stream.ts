@@ -10,7 +10,7 @@ export async function deviceStreamUrl(
   deviceId: string,
 ): Promise<string> {
   const instance = JSON.parse(await readFile(join(home, "instance.json"), "utf8")) as {
-    readonly id: string;
+    readonly instanceId: string;
   };
-  return `${base}/v1/stream/workers/${encodeURIComponent(instance.id)}/devices/${encodeURIComponent(deviceId)}`;
+  return `${base}/v1/stream/workers/${encodeURIComponent(instance.instanceId)}/devices/${encodeURIComponent(deviceId)}`;
 }
