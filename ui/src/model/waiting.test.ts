@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { waitingRequestSchema } from "../../../src/contract/index";
-import {
-  chooseWaiting,
-  requestedDevice,
-  type WaitingRequest,
-  type WaitingRow,
-  waitingTable,
-} from "./waiting";
+import { describeRequestedDevice as requestedDevice } from "../../../src/contract/inbox";
+import { chooseWaiting, type WaitingRequest, type WaitingRow, waitingTable } from "./waiting";
 import type { WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");

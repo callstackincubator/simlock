@@ -1,9 +1,10 @@
 // why: ADR 0037 §3. One action list per kind of item, read by every surface that offers it; the
 // wording of each dialog and toast is fixed here, so no surface words it differently.
+import { describeRequestedDevice, workerOfLease } from "../../../src/contract/inbox";
 import type { InboxItem } from "./inbox";
-import { type TokenRecord, leaseRows } from "./leases";
-import { isBehind, type UpdateFacts, updateFactsOf } from "./versions";
-import { requestedDevice } from "./waiting";
+import { workerNameOfLease } from "./leases";
+import { devicePath } from "./paths";
+import { isBehind, type UpdateFacts, updateFactsFrom } from "./versions";
 import { type WorkerView, workerName } from "./workers";
 
 export type DaemonModeName = "gateway" | "worker";
@@ -295,8 +296,7 @@ const FIX_OF: Readonly<Partial<Record<InboxItem["condition"], ItemAction["id"]>>
 
 export interface InboxActionContext {
   readonly mode: DaemonModeName | undefined;
-  readonly now: number;
-  readonly tokens: readonly TokenRecord[];
+  // why: an ending lease's Release names its worker and links its device, which the worker list knows.
   readonly workers: readonly WorkerView[];
 }
 
@@ -311,20 +311,26 @@ export function inboxActions(
     case "waiting":
       return {
         menu: requestActions({
-          device: requestedDevice(item.request.spec),
+          device: describeRequestedDevice(item.request.spec),
           id: item.request.id,
           key: `${item.request.workerId ?? ""}/${item.request.id}`,
           requester: item.request.requesterId,
         }),
       };
     case "ending": {
-      const [row] = leaseRows({
-        leases: [item.lease],
-        now: context.now,
-        tokens: context.tokens,
-        workers: context.workers,
-      });
-      return { menu: row === undefined ? [] : leaseActions(row) };
+      const { lease } = item;
+      const owner = workerOfLease(lease, context.workers);
+      const worker = workerNameOfLease(lease, context.workers);
+      return {
+        menu: leaseActions({
+          holder: lease.holder,
+          id: lease.id,
+          key: `${lease.workerId ?? ""} ${lease.id}`,
+          model: lease.model,
+          ...(worker === undefined ? {} : { worker }),
+          ...(owner === undefined ? {} : { deviceTo: devicePath(owner.id, lease.deviceId) }),
+        }),
+      };
     }
     case "quarantined":
     case "stalled":
@@ -341,7 +347,7 @@ export function inboxActions(
           drained: item.worker.drained,
           id: item.worker.id,
           name: workerName(item.worker),
-          updateFacts: updateFactsOf(item.worker),
+          updateFacts: updateFactsFrom(item.worker, item.worker.leasedDevices),
         },
         context.mode,
       );

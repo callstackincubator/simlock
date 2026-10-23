@@ -1,5 +1,5 @@
+import { agentIdOf } from "../../../src/contract/inbox";
 import { type ConsoleEvent, workerIdOf } from "./events";
-import { agentIdOf } from "./leases";
 import type { Tone } from "./tones";
 import { type WorkerView, workerName } from "./workers";
 

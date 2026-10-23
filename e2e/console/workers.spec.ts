@@ -18,6 +18,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { returnToTab } from "./tab.js";
 
 interface WorkerView {
   readonly id: string;
@@ -1049,6 +1050,7 @@ test.describe("the workers page", () => {
         [undefined, 50, "neutral"],
       ] as const) {
         claim = { usedPercent, ...(level === undefined ? {} : { pressure: level }) };
+        await returnToTab(page);
         const want = tone === "neutral" ? neutral : tones[TONES.indexOf(tone)];
         const at = `${usedPercent}%${level === undefined ? " with no word" : ` and ${level}`}`;
         await expect

@@ -10,6 +10,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { returnToTab } from "./tab.js";
 
 /** One lease as `simlock list --leases` prints it, as far as these tests read. */
 interface ListedLease {
@@ -620,7 +621,9 @@ test.describe("the leases page", () => {
         ),
       );
 
-      await expect(expiry).toContainText(/(49|50) min/, { timeout: 10_000 });
+      await returnToTab(page);
+
+      await expect(expiry).toContainText(/(49|50) min/);
     } finally {
       await host.dispose();
     }

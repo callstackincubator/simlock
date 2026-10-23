@@ -8,7 +8,7 @@ import {
   waitTile,
 } from "./figures";
 import { formatBytes } from "./load";
-import { agentIdOf } from "./leases";
+import { agentIdOf } from "../../../src/contract/inbox";
 import { formatCount } from "./paging";
 import { type ConsoleRange, rangeUnit, writeRange } from "./range";
 import { formatDuration } from "./time";

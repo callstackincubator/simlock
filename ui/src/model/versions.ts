@@ -10,13 +10,23 @@ export interface UpdateFacts {
   readonly leased: number;
 }
 
-export function updateFactsOf(worker: WorkerView): UpdateFacts {
+export function updateFactsFrom(
+  worker: Pick<WorkerView, "latestVersion" | "update" | "version">,
+  leased: number,
+): UpdateFacts {
   return {
     latestVersion: worker.latestVersion ?? null,
-    leased: (worker.devices ?? []).filter((device) => device.state === "leased").length,
+    leased,
     update: worker.update ?? null,
     ...(worker.version === undefined ? {} : { version: worker.version }),
   };
+}
+
+export function updateFactsOf(worker: WorkerView): UpdateFacts {
+  return updateFactsFrom(
+    worker,
+    (worker.devices ?? []).filter((device) => device.state === "leased").length,
+  );
 }
 
 // why: the "newer" rule is the contract's (`isNewerVersion`); the console never compares itself.
