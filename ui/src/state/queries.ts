@@ -7,12 +7,13 @@ import {
 } from "@tanstack/react-query";
 
 import type { ApiPath } from "../data/api";
-import type {
-  Clock,
-  LiveConnection,
-  ResourceState,
-  StreamEvent,
-  Visibility,
+import {
+  type Clock,
+  ConnectionLost,
+  type LiveConnection,
+  type ResourceState,
+  type StreamEvent,
+  type Visibility,
 } from "../data/live/connection";
 import { type StaleKey, staleKeys } from "../model/stale-keys";
 
@@ -64,11 +65,18 @@ export function routeKey(path: ApiPath): readonly string[] {
   return [head];
 }
 
-export function resourceOf<T>(_result: {
+// why: a read lost to the network is the connection's loss, which the sidebar says; the page keeps
+// its data, or its loading, and shows no error for it.
+export function resourceOf<T>(result: {
   readonly data: T | undefined;
   readonly error: unknown;
 }): ResourceState<T> {
-  return {};
+  const { data, error } = result;
+  const refusal = error instanceof ConnectionLost ? undefined : error;
+  return {
+    ...(data === undefined ? {} : { data }),
+    ...(refusal === undefined || refusal === null ? {} : { error: refusal }),
+  };
 }
 
 function timesOf(key: readonly unknown[]): Times {
