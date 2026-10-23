@@ -7,11 +7,18 @@ import {
 } from "@tanstack/react-query";
 
 import type { ApiPath } from "../data/api";
-import type { Clock, LiveConnection, Visibility } from "../data/live/connection";
+import type { Clock, LiveConnection, StreamEvent, Visibility } from "../data/live/connection";
+import { type StaleKey, staleKeys } from "../model/stale-keys";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
 const DROP_MS = 60_000;
 const FRESH_MS = 2_000;
+// why: events of one change come in a run, so a read waits until the run has been quiet this long,
+// but never more than the cap after the first, and is sent once more later for a change that
+// landed after the first answer was made.
+const QUIET_MS = 300;
+const CAP_MS = 1_000;
+const AGAIN_MS = 1_500;
 
 interface Times {
   readonly pollMs?: number;
@@ -112,9 +119,57 @@ export function createQueries(options: QueriesOptions): Queries {
     }
   });
 
+  const marked = new Map<string, StaleKey>();
+  const again = new Map<string, StaleKey>();
+  let quietTimer: unknown;
+  let capTimer: unknown;
+  let againTimer: unknown;
+  const readMarked = (keys: ReadonlyMap<string, StaleKey>): void => {
+    for (const queryKey of keys.values()) {
+      void client.refetchQueries({ queryKey, type: "active" }, { cancelRefetch: false });
+    }
+  };
+  const flush = (): void => {
+    clock.clearTimeout(quietTimer);
+    clock.clearTimeout(capTimer);
+    quietTimer = undefined;
+    capTimer = undefined;
+    const keys = new Map(marked);
+    marked.clear();
+    readMarked(keys);
+    for (const [hash, key] of keys) again.set(hash, key);
+    clock.clearTimeout(againTimer);
+    againTimer = clock.setTimeout(() => {
+      againTimer = undefined;
+      const later = new Map(again);
+      again.clear();
+      readMarked(later);
+    }, AGAIN_MS);
+  };
+  const stopEvents = connection.onEvent((event: StreamEvent) => {
+    const { data } = event;
+    const payload =
+      typeof data === "object" && data !== null
+        ? (data as { payload?: unknown }).payload
+        : undefined;
+    const keys = staleKeys(event.event, payload);
+    if (keys.length === 0) return;
+    for (const queryKey of keys) {
+      marked.set(queryKey.join("/"), queryKey);
+      void client.invalidateQueries({ queryKey, refetchType: "none" });
+    }
+    clock.clearTimeout(quietTimer);
+    quietTimer = clock.setTimeout(flush, QUIET_MS);
+    capTimer ??= clock.setTimeout(flush, CAP_MS);
+  });
+
   return {
     client,
     dispose: () => {
+      stopEvents();
+      clock.clearTimeout(quietTimer);
+      clock.clearTimeout(capTimer);
+      clock.clearTimeout(againTimer);
       stopCache();
       for (const hash of polls.keys()) stopPoll(hash);
       stopVisibility();
