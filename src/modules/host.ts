@@ -143,6 +143,7 @@ async function createOne(
       ...options.context,
       config: section,
       daemonConfig: options.config,
+      enabledByDefault: options.defaulted?.has(name) ?? false,
       logger: options.logger.child(name),
       name,
     });

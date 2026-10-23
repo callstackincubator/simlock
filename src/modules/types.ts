@@ -132,6 +132,8 @@ export interface WorkerContext<C> {
   readonly name: string;
   readonly instanceId: string;
   readonly config: C;
+  // why: true when no layer set this module's `enabled` and the loader turned it on; the module may then stay quiet about a missing tool.
+  readonly enabledByDefault: boolean;
   readonly daemonConfig: Config;
   readonly logger: Logger;
   readonly clock: Clock;
@@ -246,6 +248,8 @@ export interface OptionalModuleDefinition<C> {
   readonly name: string;
   readonly config: ModuleConfig<C>;
   readonly localProfile?: ModuleLocalProfile;
+  // why: plain data the config loader reads without naming the module; a missing `enabled` then means on for a standalone worker (ADR 0046 §1).
+  readonly enabledByDefault?: "standalone-worker";
   readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
@@ -308,5 +312,9 @@ export interface ModuleHostOptions {
   readonly config: Config;
   readonly logger: Logger;
   readonly tokens: ModuleTokens;
-  readonly context: Omit<WorkerContext<unknown>, "name" | "config" | "daemonConfig" | "logger">;
+  readonly defaulted?: ReadonlySet<string>;
+  readonly context: Omit<
+    WorkerContext<unknown>,
+    "name" | "config" | "daemonConfig" | "logger" | "enabledByDefault"
+  >;
 }

@@ -152,7 +152,11 @@ async function isUnavailable(error: unknown): Promise<boolean> {
 
 async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
   const { optionalModules } = await import("../module-registry/index.js");
-  return optionalModules.map(({ config, name }) => ({ name, ...config }));
+  return optionalModules.map(({ config, enabledByDefault, name }) => ({
+    name,
+    ...config,
+    ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
+  }));
 }
 
 async function readAdminTokenFile(

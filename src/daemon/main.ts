@@ -32,7 +32,7 @@ import {
   DriverCatalog,
   HostFactsReader,
   createCore,
-  loadConfig,
+  loadConfigWithDefaults,
   latestPresence,
   loadInstanceId,
   OwnedRootError,
@@ -279,12 +279,13 @@ async function composeDaemon(
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
-  const config = await loadConfig({
+  const { config, defaulted } = await loadConfigWithDefaults({
     configPath,
     filesystem,
-    modules: moduleDefinitions.map(({ config: moduleConfig, name }) => ({
+    modules: moduleDefinitions.map(({ config: moduleConfig, enabledByDefault, name }) => ({
       name,
       ...moduleConfig,
+      ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
     })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     role,
@@ -493,6 +494,7 @@ async function composeDaemon(
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const moduleHost = await createModuleHost({
     config,
+    defaulted,
     context: {
       cancelPending: (requesterId) => {
         if (cancelPendingRequest === undefined) {

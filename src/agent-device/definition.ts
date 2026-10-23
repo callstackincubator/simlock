@@ -36,6 +36,7 @@ export const agentDeviceModule: OptionalModuleDefinition<AgentDeviceModuleConfig
       leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
     }),
   },
+  enabledByDefault: "standalone-worker",
   localProfile: {
     fileName: "agent-device-profile.json",
     render: (origin, secret) =>

@@ -175,6 +175,7 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
       config,
       daemonConfig,
       dataDirectory: "/tmp/simlock-fake",
+      enabledByDefault: false,
       environment: {},
       events: { subscribe: (event, handler) => bus.subscribe(event, handler) },
       filesystem: new MemoryFilesystem(),
