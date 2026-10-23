@@ -11,6 +11,7 @@ import {
   test,
 } from "./fixtures.js";
 import { addInboxItems, drainedWorkerItem } from "./inbox-stub.js";
+import { answerWithoutLoad } from "./workers-answers.js";
 
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -167,6 +168,8 @@ test.describe("the console acts", () => {
   test("a worker is drained from Fleet with no dialog, and Undo undrains it", async ({ page }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "drain-a" }]);
     try {
+      // why: the row shows the host's own disk and CPU; one over its limit outranks "drained" (#886).
+      await answerWithoutLoad(page);
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
       const row = rowOf(page, "drain-a");
       await expect(row).toBeVisible();
