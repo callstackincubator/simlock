@@ -121,7 +121,8 @@ export class LiveConnection {
             throw error;
           case "retry":
             if (this.#reading()) continue;
-            throw error;
+            // why: a read that gave up while the tab is hidden is a read lost, not the route's answer.
+            throw new ConnectionLost();
           case "lost":
             this.#lose();
             throw new ConnectionLost();

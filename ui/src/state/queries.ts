@@ -145,6 +145,8 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
   let capTimer: unknown;
   let againTimer: unknown;
   const readMarked = (keys: ReadonlyMap<string, StaleKey>): void => {
+    // why: a hidden tab or a lost connection reads nothing; coming back reads each key on screen once.
+    if (visibility.hidden() || !onlineManager.isOnline()) return;
     for (const queryKey of keys.values()) {
       void client.refetchQueries({ queryKey, type: "active" }, { cancelRefetch: false });
     }

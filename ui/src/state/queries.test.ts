@@ -375,6 +375,41 @@ describe("a read's answers and failures", () => {
     expect(daemon.healthChecks).toEqual([]);
   });
 
+  it("an event just before the tab hides reads nothing while it is hidden, at the burst or after it", async () => {
+    const { daemon, reads, visibility, watch } = start();
+    watch("/v1/workers");
+    await settle();
+    daemon.openStream()?.send(EVENT);
+    await vi.advanceTimersByTimeAsync(100);
+    visibility.set(true);
+    const before = reads("/v1/workers");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(reads("/v1/workers")).toBe(before);
+  });
+
+  it("a read held while the tab is hidden and the daemon starts leaves the page no error", async () => {
+    const { daemon, queries, visibility } = start(false);
+    const observer = new QueryObserver(queries.client, queries.options<unknown>("/v1/workers"));
+    observer.subscribe(() => undefined);
+    await settle();
+    daemon.openStream()?.end();
+    await settle();
+    daemon.reads = (path) =>
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new RequestTimeoutError(path)), 10_000);
+      });
+    daemon.refuseStreams = () => new Promise<never>(() => undefined);
+    await vi.advanceTimersByTimeAsync(15_000);
+    visibility.set(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    visibility.set(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(resourceOf(observer.getCurrentResult())).toEqual({ data: { read: 1 } });
+  });
+
   it("a refused read keeps the data the console had and the console connected", async () => {
     const { connection, daemon, state, watch } = start();
     watch("/v1/workers");

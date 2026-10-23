@@ -58,7 +58,7 @@ and `useDaemonFacts` (`state/live.tsx`) give them to state and to the sidebar's 
 ## Reads
 
 A page reads a route only while it is on screen (`useRouteQuery`, `state/live.tsx`). `state/queries.ts`
-holds the TanStack `QueryClient` (it is allowed only in `state/`) and the keys and times of ADR 0044:
+holds the TanStack `QueryClient` (the dependency rules keep it out of `data/` and `model/`) and the keys and times of ADR 0044:
 `['workers']` every 15 s, `['leases']` and `['lease', id]` 10 s, `['lease-requests']` 5 s,
 `['stats', range]` 60 s, `['tokens']` never; a read stays fresh 2 s (stats 30 s, tokens 5 min);
 data no page uses is dropped after 60 s. A key polls only while a page uses it, the tab is shown and
