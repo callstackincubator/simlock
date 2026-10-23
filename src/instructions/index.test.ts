@@ -13,7 +13,7 @@ import {
   REFUSED_SIMCTL_VERBS,
   SHUTDOWN_ALL_TARGET,
 } from "../drivers/ios/index.js";
-import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS } from "./index.js";
+import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS, renderSkill } from "./index.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -128,6 +128,7 @@ describe("the rules text", () => {
   it.each([
     ["the rules text", AGENT_INSTRUCTIONS],
     ["the MCP server instructions", MCP_SERVER_INSTRUCTIONS],
+    ["the router skill", renderSkill()],
   ])("%s names no path or Markdown file of this repository", (_name, text) => {
     const prose = text.replace(/https:\/\/\S+/g, "");
     const files = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8" })
@@ -142,5 +143,39 @@ describe("the rules text", () => {
     expect([...topLevel].filter((directory) => prose.includes(`${directory}/`))).toEqual([]);
     const markdown = prose.match(/[\w.-]+\.md\b/g) ?? [];
     expect(markdown.filter((name) => name !== "AGENTS.md" && name !== "CLAUDE.md")).toEqual([]);
+  });
+});
+
+describe("the router skill", () => {
+  it("opens with front matter naming the skill and saying when to use it, sends the agent to whoami and instructions, holds none of the rules, and ends with the website URL", () => {
+    const skill = renderSkill();
+
+    expect(skill.startsWith("---\nname: simlock\ndescription: ")).toBe(true);
+    const frontMatter = skill.slice(4, skill.indexOf("\n---\n", 4));
+    const description = frontMatter.split("\ndescription: ")[1] ?? "";
+    expect(description.length).toBeGreaterThan(0);
+    expect(description.length).toBeLessThanOrEqual(1024);
+    for (const trigger of [
+      "iOS simulator",
+      "Android emulator",
+      "test phone",
+      "simctl",
+      "adb",
+      "emulator",
+      "xcodebuild",
+      "agent-device",
+    ]) {
+      expect(description, trigger).toContain(trigger);
+    }
+
+    const body = skill.slice(skill.indexOf("\n---\n", 4) + 5);
+    expect(body).toContain("`simlock whoami`");
+    expect(body).toContain("`simlock instructions`");
+    for (const heading of HEADINGS) expect(skill).not.toContain(heading);
+    expect(skill).not.toContain("# Using Simlock");
+    expect(skill).not.toContain("--allow-download");
+    expect(skill.trimEnd().split("\n").at(-1)).toBe(
+      "More: https://callstackincubator.github.io/simlock/docs/getting-started/connect-your-agent/",
+    );
   });
 });
