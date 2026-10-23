@@ -96,7 +96,9 @@ sequenceDiagram
 
 A change with an event shows within about a second. A change with none
 (host load, a worker connecting as incompatible) shows within the slowest
-poll of its page, 15 s.
+poll of its page, 15 s, after the daemon serves it. On a gateway the view
+changes only on the gateway's own 30 s refresh, so it shows within about
+45 s.
 
 ### 3. The server helps
 
@@ -124,7 +126,7 @@ poll of its page, 15 s.
 - An idle tab on any page makes at most 40 requests a minute against a
   50-worker gateway, most of them 304s. A browser-lane test holds that line.
 - The public console page changes "within about a second" to say which
-  changes take up to 15 s.
+  changes take up to 15 s, and up to about 45 s on a gateway.
 - A new event that should refresh a page needs a row in the event map; until
   then it waits for the poll.
 - The per-second clock still rebuilds views that show a time; making it
@@ -151,4 +153,4 @@ poll of its page, 15 s.
 - **A count-only `GET /v1/inbox/summary`.** Rejected: the Inbox page would
   still read the four lists, and the rules would live on both sides.
 - **An event for a worker that connects as incompatible, so every change
-  shows within a second.** Rejected: 15 s is enough for a fact that rare.
+  shows within a second.** Rejected: a delay of 15 s, about 45 s on a gateway, is enough for a fact that rare.
