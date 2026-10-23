@@ -139,7 +139,9 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
       schedulePoll(event.query);
     } else if (
       event.type === "updated" &&
-      (event.action.type === "success" || event.action.type === "error")
+      // why: a patch written by setQueryData (manual) is no read, so it leaves the poll's timer running.
+      (event.action.type === "error" ||
+        (event.action.type === "success" && event.action.manual !== true))
     ) {
       schedulePoll(event.query);
     }
@@ -197,8 +199,7 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
   const patchRenewal = (renewal: Renewal): void => {
     kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
     for (const route of RENEWED_ROUTES) {
-      // why: setting data, even unchanged, reschedules the route's poll, so a renewal that moves
-      // no lease leaves the cache alone.
+      // why: a renewal that moves no lease leaves the cache, and its observers, alone.
       const old = client.getQueryData<unknown>([route]);
       if (old === undefined) continue;
       const patched = renewAnswer(route, old, renewal);

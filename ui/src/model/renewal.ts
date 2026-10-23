@@ -26,8 +26,8 @@ export function readRenewal(event: ConsoleEvent): Renewal | undefined {
   };
 }
 
-// why: a gateway's lease list names a lease by `<worker>.<worker's id>`, so its record is found by
-// the worker and the worker's own id; a worker's records carry the id the event names.
+// why: a gateway's lease list names a lease by `<worker>.<worker's id>` unless the requester chose
+// the id, so its record is found by the worker and the worker's own id; a worker's records carry the id the event names.
 function isRenewed(lease: LeaseRecord, renewal: Renewal): boolean {
   return renewal.workerId === undefined
     ? lease.id === renewal.leaseId

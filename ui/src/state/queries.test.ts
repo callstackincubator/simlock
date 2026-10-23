@@ -581,16 +581,24 @@ describe("a lease renewal", () => {
     await settle();
     expect(state("/v1/leases").data).toBe(after);
 
-    // why: a renewal that moves no lease leaves the cache, and so the poll's schedule, alone.
+    // why: a renewal, matched or not, is no read, so it leaves the poll's schedule alone.
     const readsBefore = reads("/v1/leases");
     for (let tick = 0; tick < 5; tick += 1) {
       await vi.advanceTimersByTimeAsync(5_000);
       daemon
         .openStream()
-        ?.send(renewed({ leaseId: "l_9", newDeadline: Date.now() + 1_000 }, 10 + tick));
+        ?.send(
+          renewed(
+            { leaseId: tick % 2 === 0 ? "l_9" : "l_1", newDeadline: Date.now() + 120_000 },
+            10 + tick,
+          ),
+        );
     }
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(reads("/v1/leases") - readsBefore, "polls through 26 s of unmatched renewals").toBe(2);
+    expect(
+      reads("/v1/leases") - readsBefore,
+      "polls at 10, 20 and 30 s through renewals every 5 s, listed and unlisted",
+    ).toBe(3);
 
     const gateway = start();
     const old = {
