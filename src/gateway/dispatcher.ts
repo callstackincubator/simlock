@@ -531,32 +531,44 @@ export class GatewayDispatcher {
     };
   }
 
+  // why: finds the record `lease.list` would hold for this session without building the list -- a gateway-issued lease through the index (its owner, or an admin), a worker's own local lease for an admin only, by a raw id the index does not rename.
   #leaseGet: Handler<"lease.get"> = (input, session) => {
-    const { leaseIndex, workers } = this.options;
     const isAdmin = session.role === "admin";
-    const entry = leaseIndex.resolve(input.leaseId);
-    if (entry !== undefined) {
-      const view = workers.view(entry.workerId);
-      const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
+    const entry = this.options.leaseIndex.resolve(input.leaseId);
+    const lease =
+      entry === undefined
+        ? isAdmin
+          ? this.#localLease(input.leaseId)
+          : undefined
+        : isAdmin || entry.ownerId === session.principal
+          ? this.#issuedLease(entry)
+          : undefined;
+    if (lease === undefined) {
+      throw new DispatchError("UNKNOWN_LEASE", `Unknown lease: ${input.leaseId}`, {
+        leaseId: input.leaseId,
+      });
+    }
+    return { lease };
+  };
+
+  #issuedLease(entry: { readonly workerId: string; readonly workerLeaseId: string }) {
+    const view = this.options.workers.view(entry.workerId);
+    const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
+    return view === undefined || raw === undefined ? undefined : this.#fleetLease(raw, view);
+  }
+
+  #localLease(leaseId: string) {
+    for (const view of this.options.workers.views()) {
+      const raw = view.leases?.find((lease) => lease.id === leaseId);
       if (
-        view !== undefined &&
         raw !== undefined &&
-        (isAdmin || entry.ownerId === session.principal)
+        this.options.leaseIndex.findByWorkerLease(view.id, raw.id) === undefined
       ) {
-        return { lease: this.#fleetLease(raw, view) };
-      }
-    } else if (isAdmin) {
-      for (const view of workers.views()) {
-        const raw = view.leases?.find((lease) => lease.id === input.leaseId);
-        if (raw !== undefined && leaseIndex.findByWorkerLease(view.id, raw.id) === undefined) {
-          return { lease: this.#fleetLease(raw, view) };
-        }
+        return this.#fleetLease(raw, view);
       }
     }
-    throw new DispatchError("UNKNOWN_LEASE", `Unknown lease: ${input.leaseId}`, {
-      leaseId: input.leaseId,
-    });
-  };
+    return undefined;
+  }
 
   /** Every lease this gateway issued to `ownerId`, projected to its fleet-facing form. Looks up
    * each entry's current record from the owning worker's view rather than caching one on the
