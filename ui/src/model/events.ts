@@ -72,6 +72,7 @@ function localMinute(timestamp: number): string {
 export function historyEnd(
   state: HistoryState,
   held: readonly ConsoleEvent[],
+  none = "No events yet.",
 ): HistoryEnd | undefined {
   if (held.length >= MAX_EVENTS) {
     return {
@@ -83,10 +84,7 @@ export function historyEnd(
   if (state === "start") {
     return {
       retry: false,
-      text:
-        oldest === undefined
-          ? "No events yet."
-          : `Start of the history (${localMinute(oldest.timestamp)})`,
+      text: oldest === undefined ? none : `Start of the history (${localMinute(oldest.timestamp)})`,
     };
   }
   if (state === "gone") return { retry: false, text: "Older events are no longer kept." };

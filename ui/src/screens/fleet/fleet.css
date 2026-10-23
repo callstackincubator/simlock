@@ -139,31 +139,11 @@
   padding: var(--space-4) var(--space-6);
 }
 
-.worker-events {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.worker-events li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-1) var(--space-3);
-  padding: var(--space-3) var(--space-6);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--text-sm);
-}
-
-.worker-events li:last-child {
-  border-bottom: 0;
-}
-
-.worker-events li > :last-child {
-  grid-column: 2;
+.worker-event-time {
+  margin-right: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
 }
 
 .panel .facts + .table-card {

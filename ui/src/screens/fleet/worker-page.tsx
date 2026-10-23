@@ -5,9 +5,11 @@ import {
   type Column,
   DataTable,
   Facts,
+  Feed,
   Grid,
   Id,
   Link,
+  ListRow,
   Loaded,
   Meter,
   Page,
@@ -21,11 +23,11 @@ import {
 import {
   type CapabilityRow,
   type DeviceRow,
-  type EventRow,
   type FigureCard,
   type InstallRow,
   type PlatformCard,
   useWorkerEvents,
+  type WorkerEventsPage,
   useWorkerPage,
   useWorkerPageMenu,
   type WarmRow,
@@ -92,7 +94,7 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
         {page.tab === "devices" ? <DevicesTab page={page} /> : null}
         {page.tab === "host" ? <HostTab inspector={page} /> : null}
         {page.tab === "warm-pool" ? <WarmTab inspector={page} /> : null}
-        {page.tab === "events" ? <WorkerEvents id={page.id} /> : null}
+        {page.tab === "events" ? <WorkerEvents key={page.id} id={page.id} /> : null}
       </Tabs>
     </Page>
   );
@@ -437,26 +439,56 @@ function Installs({ rows }: { readonly rows: readonly InstallRow[] }) {
   );
 }
 
+// why: one row of the feed is as tall as the feed says, so the rows can be placed by arithmetic.
+const EVENT_ROW_PX = 60;
+
 function WorkerEvents({ id }: { readonly id: string }) {
   const view = useWorkerEvents(id);
-  return <Loaded view={view}>{(rows) => <WorkerEventList rows={rows} />}</Loaded>;
+  return <Loaded view={view}>{(page) => <WorkerEventFeed page={page} />}</Loaded>;
 }
 
-function WorkerEventList({ rows }: { readonly rows: readonly EventRow[] }) {
-  if (rows.length === 0) {
-    return <p className="muted">No events for this worker in the last hour.</p>;
-  }
+function WorkerEventFeed({ page }: { readonly page: WorkerEventsPage }) {
+  const { end, loadOlder, rows } = page;
+  const endRow =
+    end === undefined ? null : (
+      <p className="feed-end muted">
+        {end.text}
+        {end.retry ? (
+          <Button type="button" onClick={loadOlder}>
+            Try again
+          </Button>
+        ) : null}
+      </p>
+    );
+  if (rows.length === 0) return endRow ?? <p className="muted">Loading…</p>;
   return (
-    <ul className="worker-events" aria-label="Events for this worker">
-      {rows.map((row) => (
-        <li key={row.id}>
-          <time dateTime={row.iso} className="mono muted">
-            {row.time}
-          </time>
-          <span className="mono">{row.name}</span>
-          <span className="muted">{row.summary}</span>
-        </li>
-      ))}
-    </ul>
+    <Feed
+      label="Event feed for this worker"
+      listLabel="Events for this worker"
+      count={rows.length}
+      rowHeight={EVENT_ROW_PX}
+      keyAt={(index) => rows[index]?.id ?? String(index)}
+      newText={(count) => (count === 1 ? "1 new event" : `${count} new events`)}
+      onNearEnd={loadOlder}
+      footer={endRow}
+      renderRow={(index) => {
+        const row = rows[index];
+        return row === undefined ? null : (
+          <ListRow
+            to={row.to}
+            selected={false}
+            title={
+              <>
+                <time className="worker-event-time mono" dateTime={row.iso}>
+                  {row.time}
+                </time>
+                <span className="mono">{row.name}</span>
+              </>
+            }
+            sub={row.summary}
+          />
+        );
+      }}
+    />
   );
 }

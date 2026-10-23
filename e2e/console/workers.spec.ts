@@ -781,7 +781,7 @@ test.describe("the workers page", () => {
     }
   });
 
-  test("on a gateway the Events tab lists only that worker's events, on a single host all of them, and with none it says No events for this worker in the last hour.", async ({
+  test("on a gateway the Events tab lists only that worker's events, on a single host all of them, and scrolls back through that worker's history, shows its new events at the top, and with none says No events for this worker yet.", async ({
     page,
   }) => {
     const fleet = await startFleet([
@@ -814,12 +814,72 @@ test.describe("the workers page", () => {
       await expect(forB.getByText("worker.drain-started").first()).toBeVisible();
       await expect(forB.getByText("lease.granted")).toHaveCount(0);
 
+      const idA = idOf("worker-a");
+      const feed = page.getByRole("region", { name: "Event feed for this worker" });
+      const asked: string[] = [];
+      const answered: { readonly payload?: { readonly workerId?: string } }[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname === "/v1/events") asked.push(url.search);
+      });
+      page.on("response", (response) => {
+        if (new URL(response.url()).pathname !== "/v1/events") return;
+        void response.json().then((body: { events?: (typeof answered)[number][] }) => {
+          answered.push(...(body.events ?? []));
+        });
+      });
+      // why: a page of older events holds 100, so more than 100 of worker A's own are needed.
+      for (let round = 0; round < 25; round += 1) {
+        const granted = await fleet.gateway.cli([
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16",
+          "--os",
+          "18.4",
+          "--detach",
+          "--agent-id",
+          `history-${round}`,
+        ]);
+        expect(granted.code, granted.stderr).toBe(0);
+        const released = await fleet.gateway.cli([
+          "release",
+          (JSON.parse(granted.stdout) as { lease: { id: string } }).lease.id,
+        ]);
+        expect(released.code, released.stderr).toBe(0);
+      }
+      // why: taller than the feed's own height cap, so only a feed that fills the page reaches the bottom.
+      await page.setViewportSize({ height: 1_800, width: 1_280 });
+      await eventsOf(fleet.gateway, idA);
+      await expect(feed).toBeVisible();
+      const box = await feed.boundingBox();
+      expect((box?.y ?? 0) + (box?.height ?? 0)).toBeGreaterThan(1_800 - 120);
+      await expect(page.getByText("Start of the history (", { exact: false })).toHaveCount(0);
+      await expect
+        .poll(async () => {
+          await feed.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+          return page.getByText("Start of the history (", { exact: false }).count();
+        })
+        .toBe(1);
+      expect(asked.some((query) => query.includes("before="))).toBe(true);
+      expect(asked.filter((query) => !query.includes(`worker=${encodeURIComponent(idA)}`))).toEqual(
+        [],
+      );
+      expect(answered.length).toBeGreaterThan(100);
+      expect(answered.filter((event) => event.payload?.workerId !== idA)).toEqual([]);
+
+      await feed.evaluate((element) => element.scrollTo({ top: 0 }));
+      const newest = await feed.getByRole("listitem").first().innerText();
+      await lease(fleet.gateway, "console-e2e-new");
+      await expect.poll(() => feed.getByRole("listitem").first().innerText()).not.toBe(newest);
+
       const replay = (url: URL) => url.pathname === "/v1/events";
       await page.route(replay, async (route) => {
         await route.fulfill({ json: { events: [] } });
       });
       await eventsOf(fleet.gateway, idOf("worker-a"));
-      await expect(page.getByText("No events for this worker in the last hour.")).toBeVisible();
+      await expect(page.getByText("No events for this worker yet.")).toBeVisible();
       await page.unroute(replay);
 
       const [only] = await workerList(host);
@@ -893,7 +953,7 @@ test.describe("the workers page", () => {
       await expect(
         page
           .getByRole("list", { name: "Events for this worker" })
-          .or(page.getByText("No events for this worker in the last hour.")),
+          .or(page.getByText("No events for this worker yet.")),
       ).toBeVisible();
 
       for (const tab of ["Events", "Host", "Warm pool", "Devices"]) {

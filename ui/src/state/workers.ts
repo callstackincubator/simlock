@@ -1,3 +1,7 @@
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+import { EventFeed } from "../data/event-feed";
+import { browserClock } from "../data/live/browser";
 import type { MenuEntry } from "../ds";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
@@ -26,13 +30,13 @@ import {
 import { type StreamOffer, streamOffer } from "../model/screen";
 import { type WorkerList, workerPath } from "../model/workers";
 import { type EventRow, eventRows } from "../model/event-list";
-import { eventsOfWorker } from "../model/events";
+import { eventsOfWorker, type HistoryEnd, historyEnd } from "../model/events";
 import { useActions } from "./actions";
-import { useRecentEvents } from "./events";
-import { useDaemonMode, useRouteQuery, useNow } from "./live";
+import { useDaemonMode, useLiveEvents, useRouteQuery, useNow, useStreamOpened } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { navigate, setSearch, usePath, useSearch } from "./router";
+import { useApi } from "./services";
 
 export type { EventRow } from "../model/event-list";
 export type {
@@ -199,12 +203,34 @@ export function useLeaseUdid(leaseId: string): string | undefined {
   ).data?.lease.udid;
 }
 
-// why: the events the console holds, an hour of them, that belong to this worker, newest first.
-export function useWorkerEvents(workerId: string): LoadView<readonly EventRow[]> {
-  const feed = useRecentEvents();
+export interface WorkerEventsPage {
+  readonly rows: readonly EventRow[];
+  readonly loadOlder: () => void;
+  // why: the last row says why the list stops; none while more may still load.
+  readonly end: HistoryEnd | undefined;
+}
+
+// why: the tab holds its own feed of this worker's events, read from the daemon for that worker
+// alone and scrolled back through its history; the stream adds the worker's new ones.
+export function useWorkerEvents(workerId: string): LoadView<WorkerEventsPage> {
+  const api = useApi();
   const mode = useDaemonMode();
-  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
-  return mapView(loadView(feed), (held) =>
-    eventRows(eventsOfWorker(held, workerId, mode), workers, "all"),
+  const [feed] = useState(
+    () =>
+      new EventFeed((path) => api.getJson(path), browserClock, true, {
+        keeps: (event) => eventsOfWorker([event], workerId, mode).length > 0,
+        workerId,
+      }),
   );
+  useLiveEvents(feed.streamEvent);
+  useStreamOpened(feed.streamOpened);
+  useEffect(() => feed.start(), [feed]);
+  const state = useSyncExternalStore(feed.subscribe, feed.snapshot);
+  const history = useSyncExternalStore(feed.subscribe, feed.history);
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(state), (held) => ({
+    end: historyEnd(history, held, "No events for this worker yet."),
+    loadOlder: feed.loadOlder,
+    rows: eventRows(held, workers, "all"),
+  }));
 }
