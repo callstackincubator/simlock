@@ -358,7 +358,7 @@ test.describe("the stream numbers", () => {
 
       await details.click();
       await expect(numbers).toBeVisible();
-      const labels = await numbers.locator(".facts dt").allInnerTexts();
+      const labels = await numbers.locator(".facts dt").allTextContents();
       expect(labels).toEqual(["State", "Picture", "Frames", "Rate", "Bandwidth", "Dropped"]);
       await expect(drawer(page).getByText("Picture", { exact: true })).toHaveCount(0);
       const picture = numbers

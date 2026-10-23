@@ -1,6 +1,8 @@
+import "./screen-panel.css";
+
 import { useId } from "react";
 
-import { Facts, Refusal, Status } from "../../ds";
+import { Facts, InfoPopover, Refusal, Status } from "../../ds";
 import { type Screen, type StreamOffer, useDeviceScreen } from "../../state/screen";
 
 // why: the hook lives in the panel's own component so that leaving the tab, closing the drawer and
@@ -26,9 +28,25 @@ export function ScreenView(props: { readonly screen: Screen }) {
   const title = useId();
   return (
     <section className="screen-panel" aria-labelledby={title}>
-      <h3 id={title} className="lease-card-title">
-        Screen
-      </h3>
+      <header className="screen-head">
+        <h3 id={title} className="lease-card-title">
+          Screen
+        </h3>
+        <InfoPopover label="Stream details">
+          <Facts
+            facts={[
+              {
+                label: "State",
+                value: <Status tone={readout.state.tone}>{readout.state.word}</Status>,
+              },
+              ...readout.facts.map((fact) => ({
+                label: fact.label,
+                value: <span className="mono">{fact.value}</span>,
+              })),
+            ]}
+          />
+        </InfoPopover>
+      </header>
       <div className="phone">
         {live ? (
           <canvas
@@ -43,18 +61,6 @@ export function ScreenView(props: { readonly screen: Screen }) {
         )}
         {waiting === undefined ? null : <p className="phone-wait">{waiting}</p>}
       </div>
-      <Facts
-        facts={[
-          {
-            label: "State",
-            value: <Status tone={readout.state.tone}>{readout.state.word}</Status>,
-          },
-          ...readout.facts.map((fact) => ({
-            label: fact.label,
-            value: <span className="mono">{fact.value}</span>,
-          })),
-        ]}
-      />
       {note === undefined ? null : <Refusal message={note} />}
     </section>
   );

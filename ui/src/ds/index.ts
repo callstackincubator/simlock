@@ -14,6 +14,7 @@ export { Loaded, type LoadView, Refusal } from "./loaded";
 export { ListRow } from "./master-detail";
 export { ActionBar, type MenuEntry, RowMenu } from "./menu";
 export { Meter } from "./meter";
+export { InfoPopover } from "./popover";
 export type { Paging } from "./pager";
 export { DesignProvider } from "./provider";
 export { Card, Empty, Grid, Id, Panel, Row } from "./panel";
