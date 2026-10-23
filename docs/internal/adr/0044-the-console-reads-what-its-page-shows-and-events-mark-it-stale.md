@@ -1,6 +1,6 @@
 # 0044. The console reads what its page shows, and events mark it stale
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-23
 - **Issue:** [#905](https://github.com/callstackincubator/simlock/issues/905)
 - **Supersedes:** [ADR 0013](0013-the-console-reads-routes-and-follows-the-event-stream.md)
