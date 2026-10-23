@@ -837,7 +837,7 @@ describe("GatewayDispatcher", () => {
   });
 
   it("lease.get reads one lease by its gateway id for its owner or an admin, a worker's own local lease for an admin only, and answers UNKNOWN_LEASE otherwise", async () => {
-    const { dispatcher, workers } = harness();
+    const { dispatcher, leaseIndex, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);
     const issued = {
       ...leaseFixture("lease_1", "dev_1"),
@@ -865,6 +865,22 @@ describe("GatewayDispatcher", () => {
     await expect(get("local_1", stranger)).rejects.toMatchObject(unknown);
     await expect(get("wrk_1.lease_nope", session())).rejects.toMatchObject(unknown);
     await expect(get("lease_1", session())).rejects.toMatchObject(unknown);
+    // why: an index entry can outlive its worker view, or the view its lease.
+    for (const [workerId, workerLeaseId] of [
+      ["wrk_gone", "lease_9"],
+      ["wrk_1", "lease_gone"],
+    ] as const) {
+      leaseIndex.add({
+        gatewayLeaseId: `${workerId}.${workerLeaseId}`,
+        grantedAt: 1,
+        ownerId: "agent-1",
+        requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+        workerId,
+        workerLeaseId,
+      });
+      await expect(get(`${workerId}.${workerLeaseId}`, session())).rejects.toMatchObject(unknown);
+      await expect(get(`${workerId}.${workerLeaseId}`, owner)).rejects.toMatchObject(unknown);
+    }
   });
 
   it("names the worker's own lease id as workerLeaseId on the leases of lease.list, lease.get and list.get kind=leases, never on status.get", async () => {
