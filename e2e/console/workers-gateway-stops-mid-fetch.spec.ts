@@ -133,6 +133,7 @@ test.describe("what the workers page response helper drops and what it lets thro
       abort: async () => {
         aborted = true;
       },
+      request: () => ({ headers: () => ({}) }),
       fetch: async () => {
         throw new Error("getaddrinfo ENOTFOUND gateway.invalid");
       },
@@ -161,6 +162,7 @@ test.describe("what the workers page response helper drops and what it lets thro
           abort: async () => {
             aborted = true;
           },
+          request: () => ({ headers: () => ({}) }),
           fetch: async () => {
             throw new Error(message);
           },

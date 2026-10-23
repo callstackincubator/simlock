@@ -31,6 +31,7 @@ interface SendOptions {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly body?: string;
+  readonly ifNoneMatch?: string;
 }
 
 export async function send<T>(
@@ -57,6 +58,7 @@ export async function send<T>(
       credentials: "same-origin",
       headers: {
         ...(options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` }),
+        ...(options.ifNoneMatch === undefined ? {} : { "If-None-Match": options.ifNoneMatch }),
         ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(options.body === undefined ? {} : { body: options.body }),
@@ -79,9 +81,19 @@ export interface ApiResponse<T> {
   readonly date: string | null;
 }
 
+export interface ReadOptions {
+  // why: the ETag of the last answer to this route; `undefined` asks for the whole answer.
+  readonly tag: string | undefined;
+}
+
+export type ConditionalResponse<T> =
+  | { readonly notModified: true; readonly date: string | null }
+  | (ApiResponse<T> & { readonly notModified?: false; readonly tag: string | null });
+
 export interface ApiClient {
   getJson<T>(path: ApiPath): Promise<T>;
   get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  get<T>(path: ApiPath, options: ReadOptions): Promise<ConditionalResponse<T>>;
   // why: a stream's bound, 10 seconds unless `headTimeoutMs` says otherwise, covers its headers
   // only; the body stays open until it ends or `signal` aborts it.
   stream(
@@ -131,7 +143,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   ): Promise<T> => {
     try {
       return await send(path, sendOptions, async (response) => {
-        await refuseError(response, refuse);
+        // why: a 304 answers the tag this read sent, so it is not a refusal.
+        if (response.status !== 304 || sendOptions.ifNoneMatch === undefined) {
+          await refuseError(response, refuse);
+        }
         return read(response);
       });
     } catch (error: unknown) {
@@ -144,11 +159,26 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       throw error;
     }
   };
-  const get = <T>(path: ApiPath) =>
-    watched(path, authorized(), async (response) => ({
-      body: (await response.json()) as T,
-      date: response.headers.get("Date"),
-    }));
+  function get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  function get<T>(path: ApiPath, readOptions: ReadOptions): Promise<ConditionalResponse<T>>;
+  function get<T>(
+    path: ApiPath,
+    readOptions?: ReadOptions,
+  ): Promise<ApiResponse<T> | ConditionalResponse<T>> {
+    const tag = readOptions?.tag;
+    return watched(
+      path,
+      { ...authorized(), ...(tag === undefined ? {} : { ifNoneMatch: tag }) },
+      async (response) => {
+        const date = response.headers.get("Date");
+        if (response.status === 304) return { date, notModified: true as const };
+        const body = (await response.json()) as T;
+        return readOptions === undefined
+          ? { body, date }
+          : { body, date, tag: response.headers.get("ETag") };
+      },
+    );
+  }
   return {
     get,
     getJson: async <T>(path: ApiPath) => (await get<T>(path)).body,

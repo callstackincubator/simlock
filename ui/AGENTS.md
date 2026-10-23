@@ -73,6 +73,13 @@ phase, the health checks and the clock offset, and does one classified GET for a
 again, any other failure is the connection lost (`ConnectionLost`), which a page never shows as an
 error. A refused stream is asked for again a second later.
 
+A read sends back the ETag of the route's last answer (`ApiClient.get(path, { tag })`, kept per key in
+`state/queries.ts`); a `304` keeps the cached data object, so nothing re-renders, and one that finds
+its data dropped is read again without a tag. A `lease.renewed` event moves the lease's `ttlDeadline`,
+`lastRenewedAt` and `ttlMs` in `['leases']` and `['workers']` in place (`model/renewal.ts`) with no read,
+and the deadline is kept for 60 s against an older answer. Console browser stubs fetch through
+`e2e/console/full-fetch.ts`, which drops `If-None-Match`.
+
 ## Actions
 
 An action is described once per kind of item in `model/actions.ts` (`leaseActions`, `requestActions`,

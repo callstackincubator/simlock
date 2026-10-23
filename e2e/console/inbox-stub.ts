@@ -1,5 +1,7 @@
 import type { Page, Route } from "@playwright/test";
 
+import { fetchFull } from "./full-fetch.js";
+
 /** why: an Inbox item the daemon cannot make quickly (a request that waited minutes, a lease about to end), in the shape `GET /v1/inbox` sends. */
 export type StubbedItem = (now: number) => Record<string, unknown>;
 
@@ -71,7 +73,7 @@ export async function addInboxItems(
   await page.route(
     (url) => url.pathname === "/v1/inbox",
     async (route: Route) => {
-      const response = await route.fetch();
+      const response = await fetchFull(route);
       const now = new Date(response.headers().date ?? "").getTime();
       const body = (await response.json()) as { items: unknown[] };
       await route.fulfill({

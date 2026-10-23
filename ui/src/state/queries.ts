@@ -1,5 +1,6 @@
 import {
   focusManager,
+  hashKey,
   onlineManager,
   type Query,
   QueryClient,
@@ -15,6 +16,8 @@ import {
   type StreamEvent,
   type Visibility,
 } from "../data/live/connection";
+import { readEvent } from "../model/events";
+import { endsInInbox, leaseKeyOf, readRenewal, renewAnswer, type Renewal } from "../model/renewal";
 import { type StaleKey, staleKeys } from "../model/stale-keys";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
@@ -26,6 +29,8 @@ const FRESH_MS = 2_000;
 const QUIET_MS = 300;
 const CAP_MS = 1_000;
 const AGAIN_MS = 1_500;
+const RENEWAL_KEPT_MS = 60_000;
+const RENEWED_ROUTES: readonly string[] = ["leases", "workers"];
 
 interface Times {
   readonly pollMs?: number;
@@ -140,6 +145,20 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
     }
   });
 
+  // why: the ETag of each key's last answer, sent back so an unchanged answer costs no download.
+  const tags = new Map<string, string>();
+
+  // why: a gateway relays a worker's event before it refreshes its view of that worker, so a read
+  // just after a renewal can still carry the old deadline.
+  const kept: { readonly renewal: Renewal; readonly until: number }[] = [];
+  const renewedAnswer = <T>(route: string, data: T): T => {
+    const now = clock.now();
+    for (let index = kept.length - 1; index >= 0; index -= 1) {
+      if ((kept[index]?.until ?? 0) <= now) kept.splice(index, 1);
+    }
+    return kept.reduce((answer, { renewal }) => renewAnswer(route, answer, renewal), data);
+  };
+
   const marked = new Map<string, StaleKey>();
   const again = new Map<string, StaleKey>();
   let quietTimer: unknown;
@@ -169,13 +188,33 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
       readMarked(later);
     }, AGAIN_MS);
   };
+  // why: a renewal needs a read only where its lease's deadline is shown from another answer: the
+  // inbox's ending item and an open lease page.
+  const renewalKeys = (renewal: Renewal): StaleKey[] => [
+    leaseKeyOf(renewal),
+    ...(endsInInbox(client.getQueryData(["inbox"]), renewal) ? [["inbox"]] : []),
+  ];
+  const patchRenewal = (renewal: Renewal): void => {
+    kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
+    for (const route of RENEWED_ROUTES) {
+      client.setQueryData<unknown>([route], (old: unknown) =>
+        old === undefined ? undefined : renewAnswer(route, old, renewal),
+      );
+    }
+  };
   const stopEvents = connection.onEvent((event: StreamEvent) => {
     const { data } = event;
+    const parsed = readEvent(data);
+    const renewal = parsed === undefined ? undefined : readRenewal(parsed);
+    if (renewal !== undefined) patchRenewal(renewal);
     const payload =
       typeof data === "object" && data !== null
         ? (data as { payload?: unknown }).payload
         : undefined;
-    const keys = staleKeys(event.event, payload);
+    const keys = [
+      ...staleKeys(event.event, payload),
+      ...(renewal === undefined ? [] : renewalKeys(renewal)),
+    ];
     if (keys.length === 0) return;
     for (const queryKey of keys) {
       marked.set(queryKey.join("/"), queryKey);
@@ -200,10 +239,31 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
       client.unmount();
       client.clear();
     },
-    options: <T>(path: ApiPath): QueryObserverOptions<T> => ({
-      queryFn: () => connection.read<T>(path),
-      queryKey: routeKey(path),
-      staleTime: timesOf(routeKey(path)).freshMs,
-    }),
+    options: <T>(path: ApiPath): QueryObserverOptions<T> => {
+      const key = routeKey(path);
+      const hash = hashKey(key);
+      return {
+        queryFn: async () => {
+          let tag = tags.get(hash);
+          for (;;) {
+            const answer = await connection.read<T>(path, { tag });
+            if (answer.notModified !== true) {
+              if (answer.tag === null) tags.delete(hash);
+              else tags.set(hash, answer.tag);
+              return RENEWED_ROUTES.includes(key[0] ?? "")
+                ? renewedAnswer(key[0] ?? "", answer.body)
+                : answer.body;
+            }
+            const kept = client.getQueryData<T>(key);
+            if (kept !== undefined) return kept;
+            // why: the data this tag stood for was dropped while the read was out, so the tag
+            // describes nothing and the whole answer is read again.
+            tag = undefined;
+          }
+        },
+        queryKey: key,
+        staleTime: timesOf(key).freshMs,
+      };
+    },
   };
 }

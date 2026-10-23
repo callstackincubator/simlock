@@ -471,3 +471,219 @@ describe("a read's answers and failures", () => {
     expect(connection.serverNow() - Date.now()).toBe(-30_000);
   });
 });
+
+describe("a route's ETag", () => {
+  it("a re-read of an unchanged route sends the first tag: a 304 keeps the same data object with no update, a 200 brings new data and its tag, a 304 after the data was dropped is read again without a tag", async () => {
+    const { daemon, queries } = start();
+    daemon.etag = '"v1"';
+    const observer = new QueryObserver(queries.client, {
+      ...queries.options("/v1/workers"),
+      notifyOnChangeProps: ["data"],
+    });
+    const updates = vi.fn();
+    disposers.push(observer.subscribe(updates));
+    await settle();
+    const first = observer.getCurrentResult().data;
+    expect(first).toBeDefined();
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined]);
+    updates.mockClear();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"']);
+    expect(observer.getCurrentResult().data).toBe(first);
+    expect(updates).not.toHaveBeenCalled();
+
+    daemon.etag = '"v2"';
+    await vi.advanceTimersByTimeAsync(15_000);
+    const second = observer.getCurrentResult().data;
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"', '"v1"']);
+    expect(second).not.toBe(first);
+    expect(second).toEqual({ read: 3 });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"', '"v1"', '"v2"']);
+    expect(observer.getCurrentResult().data).toBe(second);
+
+    let release: () => void = () => {};
+    daemon.reads = () =>
+      new Promise((resolve) => {
+        release = () => {
+          daemon.reads = "answer";
+          resolve({ date: null, notModified: true });
+        };
+      });
+    await vi.advanceTimersByTimeAsync(15_000);
+    queries.client.removeQueries({ queryKey: routeKey("/v1/workers") });
+    release();
+    await settle();
+
+    expect(daemon.gets.map((get) => get.tag)).toEqual([
+      undefined,
+      '"v1"',
+      '"v1"',
+      '"v2"',
+      '"v2"',
+      undefined,
+    ]);
+  });
+});
+
+describe("a lease renewal", () => {
+  const NOW = Date.parse("2026-10-02T12:00:00Z");
+  const lease = (id: string, over: Record<string, unknown> = {}) => ({
+    deviceId: `dev_${id}`,
+    grantedAt: NOW,
+    id,
+    idChosenByRequester: false,
+    lastRenewedAt: NOW,
+    ownerId: "owner",
+    requesterId: "agent",
+    ttlDeadline: NOW + 60_000,
+    ttlMs: 60_000,
+    ...over,
+  });
+  const renewed = (payload: Record<string, unknown>, seq = 2) =>
+    `event: lease.renewed\ndata: ${JSON.stringify({
+      event: "lease.renewed",
+      id: `evt_${String(seq)}`,
+      payload,
+      seq,
+      timestamp: Date.now(),
+    })}\n\n`;
+
+  it("moves the lease's deadline in place with no read: a worker event matches by id, a gateway event by worker and the worker's lease id in both lists, lastRenewedAt and ttlMs follow, a later answer with the old deadline keeps the new one for 60 seconds and one with a later deadline wins, no match or a malformed payload changes nothing", async () => {
+    const { daemon, reads, state, watch } = start();
+    daemon.reads = () =>
+      Promise.resolve({ body: { leases: [lease("l_1"), lease("l_2")] }, date: null });
+    watch("/v1/leases");
+    await settle();
+    const before = state("/v1/leases").data as { leases: object[] };
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const newDeadline = Date.now() + 120_000;
+    daemon.openStream()?.send(renewed({ leaseId: "l_1", newDeadline }));
+    await settle();
+
+    const after = state("/v1/leases").data as { leases: object[] };
+    expect(after.leases[0]).toEqual(
+      lease("l_1", { lastRenewedAt: Date.now(), ttlDeadline: newDeadline, ttlMs: 120_000 }),
+    );
+    expect(after.leases[1]).toBe(before.leases[1]);
+    expect(reads("/v1/leases")).toBe(1);
+
+    daemon.openStream()?.send(renewed({ leaseId: "l_9", newDeadline: newDeadline + 1_000 }, 3));
+    await settle();
+    expect(state("/v1/leases").data).toBe(after);
+    expect(reads("/v1/leases")).toBe(1);
+
+    daemon.openStream()?.send(renewed({ leaseId: "l_2", newDeadline: "soon" }, 5));
+    await settle();
+    expect(state("/v1/leases").data).toBe(after);
+
+    const gateway = start();
+    const old = {
+      leases: [
+        lease("w1.l_1", { workerId: "w1", workerLeaseId: "l_1" }),
+        lease("w1.l_2", { workerId: "w1", workerLeaseId: "l_2" }),
+        lease("w2.l_1", { workerId: "w2", workerLeaseId: "l_1" }),
+      ],
+    };
+    const fleet = {
+      workers: [
+        { id: "w1", leases: [lease("l_1"), lease("l_2")] },
+        { id: "w2", leases: [lease("l_1")] },
+      ],
+    };
+    gateway.daemon.reads = (path) =>
+      Promise.resolve({ body: path === "/v1/leases" ? old : fleet, date: null });
+    gateway.watch("/v1/leases");
+    gateway.watch("/v1/workers");
+    await settle();
+    const deadline = Date.now() + 120_000;
+    gateway.daemon
+      .openStream()
+      ?.send(renewed({ leaseId: "l_1", newDeadline: deadline, workerId: "w1" }, 4));
+    await settle();
+
+    const moved = { lastRenewedAt: Date.now(), ttlDeadline: deadline, ttlMs: 120_000 };
+    expect(gateway.state("/v1/leases").data).toEqual({
+      leases: [
+        lease("w1.l_1", { ...moved, workerId: "w1", workerLeaseId: "l_1" }),
+        old.leases[1],
+        old.leases[2],
+      ],
+    });
+    expect(gateway.state("/v1/workers").data).toEqual({
+      workers: [{ id: "w1", leases: [lease("l_1", moved), lease("l_2")] }, fleet.workers[1]],
+    });
+    expect(gateway.reads("/v1/leases") + gateway.reads("/v1/workers")).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(gateway.reads("/v1/leases")).toBe(2);
+    const kept = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
+    expect(kept.leases[0]?.ttlDeadline).toBe(deadline);
+    expect(kept.leases[1]?.ttlDeadline).toBe(NOW + 60_000);
+
+    const later = deadline + 5_000;
+    gateway.daemon.reads = (path) =>
+      Promise.resolve({
+        body:
+          path === "/v1/leases"
+            ? { leases: [{ ...old.leases[0], ttlDeadline: later }, ...old.leases.slice(1)] }
+            : fleet,
+        date: null,
+      });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const newer = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
+    expect(newer.leases[0]?.ttlDeadline).toBe(later);
+
+    gateway.daemon.reads = (path) =>
+      Promise.resolve({ body: path === "/v1/leases" ? old : fleet, date: null });
+    await vi.advanceTimersByTimeAsync(30_000);
+    const still = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
+    expect(still.leases[0]?.ttlDeadline).toBe(deadline);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const dropped = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
+    expect(dropped.leases[0]?.ttlDeadline).toBe(NOW + 60_000);
+  });
+  it("marks only what a renewal leaves stale: 20 renewals of ending leases in 1 s give one inbox read, a lease observed gives one read, otherwise no request", async () => {
+    const ending = { condition: "ending", group: "Heads-up", key: "lease/l_1/ending" };
+    const inbox = { items: [{ ...ending, lease: lease("l_1") }] };
+    const cases = [
+      ["an ending lease in the inbox", "/v1/inbox", "l_1", 20, ["/v1/inbox"]],
+      ["a lease whose page is open", "/v1/leases/l_1", "l_1", 20, ["/v1/leases/l_1"]],
+      ["a lease nothing shows", "/v1/inbox", "l_2", 20, []],
+      ["another lease's page", "/v1/leases/l_1", "l_2", 20, []],
+      ["a gateway lease's page", "/v1/leases/w1.l_1", "l_1", 20, ["/v1/leases/w1.l_1"]],
+    ] as const;
+    for (const [label, path, leaseId, count, expected] of cases) {
+      const { daemon, watch } = start();
+      daemon.reads = () => Promise.resolve({ body: path === "/v1/inbox" ? inbox : {}, date: null });
+      watch(path);
+      await settle();
+      const before = daemon.gets.length;
+
+      for (let renewal = 0; renewal < count; renewal += 1) {
+        daemon.openStream()?.send(
+          renewed(
+            {
+              leaseId,
+              newDeadline: Date.now() + 120_000 + renewal,
+              ...(path.includes("w1.") ? { workerId: "w1" } : {}),
+            },
+            renewal + 2,
+          ),
+        );
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(
+        daemon.gets.slice(before).map((get) => get.path),
+        label,
+      ).toEqual(expected);
+    }
+  });
+});

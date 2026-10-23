@@ -1,4 +1,5 @@
 import type { Page, Route } from "@playwright/test";
+import { fetchFull } from "./full-fetch.js";
 
 interface WorkerPayload {
   connection?: string;
@@ -17,7 +18,7 @@ const CONNECT_ERROR = /ECONNREFUSED|ECONNRESET|socket hang up/i;
 
 async function fetchOrDrop(route: Route): Promise<Awaited<ReturnType<Route["fetch"]>> | undefined> {
   try {
-    return await route.fetch();
+    return await fetchFull(route);
   } catch (error) {
     if (!(error instanceof Error) || !CONNECT_ERROR.test(error.message)) throw error;
     await route.abort().catch(() => undefined);

@@ -11,6 +11,7 @@ import {
   startDaemon,
   test as base,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -121,7 +122,7 @@ async function answer(page: Page, pathname: string, body: () => unknown): Promis
   await page.route(
     (url) => url.pathname === pathname,
     async (route: Route) => {
-      const response = await route.fetch();
+      const response = await fetchFull(route);
       await route.fulfill({ json: body(), response });
     },
   );

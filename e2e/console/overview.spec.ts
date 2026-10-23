@@ -12,6 +12,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
@@ -445,7 +446,7 @@ test.describe("the Overview's five numbers", () => {
       await page.route(
         (url) => url.pathname === "/v1/lease-requests",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           await route.fulfill({
             json: {
@@ -467,7 +468,7 @@ test.describe("the Overview's five numbers", () => {
       await page.route(
         (url) => url.pathname === "/v1/leases",
         async (route: Route) => {
-          const response = await route.fetch();
+          const response = await fetchFull(route);
           const now = new Date(response.headers().date ?? "").getTime();
           const { leases } = (await response.json()) as {
             leases: { id: string; ttlDeadline: number }[];
