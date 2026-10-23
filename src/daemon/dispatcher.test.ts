@@ -635,7 +635,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { clock, dispatcher, driver } = await buildDispatcher();
     const catalogReads = vi.spyOn(driver, "listCatalog");
 
-    // A console polls every second; every poll up to the last millisecond of the interval
+    // why: calls arrive every second; every call up to the last millisecond of the interval
     // answers from the one read.
     await dispatcher.dispatch("worker.list", {}, admin);
     for (let elapsed = 1_000; elapsed < WORKER_VIEW_REFRESH_INTERVAL_MS; elapsed += 1_000) {

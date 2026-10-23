@@ -255,11 +255,11 @@ export class Dispatcher {
    */
   readonly #handlers: Record<WorkerOperationName, ErasedHandler>;
   /**
-   * `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
+   * why: `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
    * `WORKER_VIEW_REFRESH_INTERVAL_MS`, the rhythm a gateway re-reads a worker's catalog at, and
    * dropped on `WORKER_VIEW_CATALOG_EVENTS`, the events a gateway re-reads it on. Without it
    * every `worker.list` runs each driver's catalog read (`simctl list` on iOS), and the console
-   * polls that route every second. Holds the promise, so calls that arrive while a read runs
+   * polls that route. Holds the promise, so calls that arrive while a read runs
    * share it; a read that fails is dropped, so the next call reads again.
    */
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
