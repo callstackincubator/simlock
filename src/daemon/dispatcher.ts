@@ -851,8 +851,12 @@ export class Dispatcher {
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
-  #eventsReplay: Handler<"events.replay"> = (input) =>
-    input.beforeId === undefined && input.limit === undefined
+  #eventsReplay: Handler<"events.replay"> = (input) => {
+    // why: a worker's own events carry no workerId, so `worker` can only name this daemon or no one (ADR 0012 §1)
+    if (input.workerId !== undefined && input.workerId !== this.options.instanceId) {
+      return Promise.resolve([]);
+    }
+    return input.beforeId === undefined && input.limit === undefined
       ? this.options.eventHistory.replay(
           input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
         )
@@ -862,6 +866,7 @@ export class Dispatcher {
             limit: input.limit ?? EVENTS_PAGE_DEFAULT,
           }),
         );
+  };
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

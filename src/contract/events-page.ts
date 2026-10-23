@@ -7,15 +7,27 @@ export interface EventsPageAsk {
   readonly before?: string | undefined;
   readonly limit?: string | undefined;
   readonly since?: string | undefined;
+  readonly worker?: string | undefined;
 }
 
 export type EventsPageAnswer =
-  | { readonly page: { readonly beforeId?: string; readonly limit?: number } }
+  | {
+      readonly page: {
+        readonly beforeId?: string;
+        readonly limit?: number;
+        readonly workerId?: string;
+      };
+    }
   | { readonly refused: string };
 
 const LIMIT_DIGITS = /^[1-9]\d{0,2}$/;
 
+export const EVENTS_WORKER_MAX = 128;
+
 export function eventsPageQuery(ask: EventsPageAsk): EventsPageAnswer {
+  if (ask.worker !== undefined && (ask.worker === "" || ask.worker.length > EVENTS_WORKER_MAX)) {
+    return { refused: "worker must be a worker id of 1 to 128 characters" };
+  }
   if (ask.before !== undefined && !EVENT_ID_PATTERN.test(ask.before)) {
     return { refused: "before must be an event id" };
   }
@@ -33,6 +45,7 @@ export function eventsPageQuery(ask: EventsPageAsk): EventsPageAnswer {
     page: {
       ...(ask.before === undefined ? {} : { beforeId: ask.before }),
       ...(limit === undefined ? {} : { limit }),
+      ...(ask.worker === undefined ? {} : { workerId: ask.worker }),
     },
   };
 }

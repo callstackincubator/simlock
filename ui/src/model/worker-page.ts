@@ -331,7 +331,7 @@ function deviceRow(
     platform: platformName(device.spec.platform),
     runtime: device.spec.osVersion,
     status: deviceStateStatus(device.state),
-    to: `${devicePath(worker.id, device.id)}${writeWorkerTab(search, "devices")}`,
+    to: `${devicePath(worker.id, device.id)}${writeWorkerTab(writeDrawerTab(search, "details"), "devices")}`,
     ...leaseFacts(device, worker, now, tokens, leaseIds),
     ...defined({
       udid: device.physical ? device.driverDeviceId : undefined,
@@ -623,6 +623,21 @@ export function writeWorkerTab(search: string, tab: WorkerTab): string {
   const params = new URLSearchParams(search);
   params.set("tab", tab);
   return `?${params.toString()}`;
+}
+
+export type DeviceDrawerTab = "details" | "screen";
+
+// why: the device drawer's tab is `?drawer=screen`, or no key for Details, so any other value reads
+// as Details and the next device opens on Details.
+export function readDrawerTab(search: string): DeviceDrawerTab {
+  return new URLSearchParams(search).get("drawer") === "screen" ? "screen" : "details";
+}
+
+export function writeDrawerTab(search: string, tab: DeviceDrawerTab): string {
+  const params = new URLSearchParams(search);
+  if (tab === "screen") params.set("drawer", "screen");
+  else params.delete("drawer");
+  return params.size === 0 ? "" : `?${params.toString()}`;
 }
 
 export interface WorkerBanner {

@@ -176,26 +176,6 @@ export function searchLeaseRows(
   );
 }
 
-export interface StreamOffer {
-  readonly offered: boolean;
-  readonly reason?: string;
-}
-
-// why: a worker answers a stream request with a 404 when its `stream` capability is not on, so the
-// console says so before the click; a worker the console cannot see is left to the daemon's own
-// answer.
-export function streamOffer(worker: WorkerView | undefined): StreamOffer {
-  if (worker === undefined) return { offered: true };
-  const entry = worker.capabilities?.find((capability) => capability.name === "stream");
-  if (entry?.state === "available") return { offered: true };
-  const name = workerName(worker);
-  if (entry?.state === "unavailable") {
-    const reason = `Streaming is unavailable on ${name}. ${entry.reason ?? ""}`;
-    return { offered: false, reason: reason.trim() };
-  }
-  return { offered: false, reason: `Streaming is off on ${name}.` };
-}
-
 export interface LeaseInspection {
   readonly id: string;
   readonly title: string;
@@ -218,7 +198,6 @@ export interface LeaseInspection {
   readonly holder?: Holder;
   readonly ownerId?: string;
   readonly requestId?: string;
-  readonly stream: StreamOffer;
 }
 
 // why: `record` is the lease's entry in `GET /v1/leases`, which alone says who holds it and when it
@@ -244,7 +223,6 @@ export function leaseInspection(input: {
     id: lease.id,
     model: lease.device,
     remaining: formatDuration(deadline - now),
-    stream: streamOffer(worker),
     ...recordFacts(record, tokens, deadline, now, lease.id),
     ...defined({
       requestId: lease.requestId,

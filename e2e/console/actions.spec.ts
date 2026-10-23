@@ -478,15 +478,13 @@ test.describe("the console acts", () => {
       await page.getByRole("button", { name: "Drain", exact: true }).click();
       await expect(page.getByText("bar-a drained", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Actions for bar-a" }).click();
-      await expect(page.getByRole("menuitem", { name: "Undrain" })).toBeVisible();
-      await page.keyboard.press("Escape");
+      await expect(page.getByRole("button", { name: "Actions for bar-a" })).toHaveCount(0);
 
       const [stopped] = fleet.workers as [RunningDaemon];
       await stopped.stop();
       await waitForDisconnected(fleet.gateway);
       await page.getByRole("button", { name: "Actions for bar-a" }).click();
-      await expect(page.getByRole("menuitem")).toHaveText(["Undrain", "Remove worker"]);
+      await expect(page.getByRole("menuitem")).toHaveText(["Remove worker"]);
       await page.keyboard.press("Escape");
       await expect(page.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Remove worker" })).toHaveCount(0);

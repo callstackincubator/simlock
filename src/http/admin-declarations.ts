@@ -157,6 +157,7 @@ const eventsQuerySchema = z.object({
   before: firstValue(z.string()).optional(),
   limit: firstValue(z.string()).optional(),
   since: firstValue(z.string()).optional(),
+  worker: firstValue(z.string()).optional(),
 });
 
 export const eventsRoute = declareRoute({
@@ -166,7 +167,7 @@ export const eventsRoute = declareRoute({
   summary: "Replay stored events, newest page first",
   role: "admin",
   notes:
-    "`since` is a duration such as 5m; `before` and `limit` page back through the history and cannot be used with `since`.",
+    "`since` is a duration such as 5m; `before` and `limit` page back through the history and cannot be used with `since`. `worker` keeps only the events of that worker (1 to 128 characters); a gateway never returns a `worker.rejected` for it, and a worker answers only its own id.",
   request: { query: eventsQuerySchema },
   reply: z.object({ events: OPERATIONS["events.replay"].output }),
   errors: { 422: ["HISTORY_NOT_KEPT"], 503: ["HISTORY_UNAVAILABLE"] },

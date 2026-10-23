@@ -23,10 +23,10 @@ describe("what a refused stream says", () => {
   });
 
   it("keeps the daemon's own reason when it named one, and says what else to check", () => {
-    const refused = new ApiError(404, undefined, "Unknown lease: lse_1");
+    const refused = new ApiError(404, undefined, "Unknown device: dev_1");
 
     expect(refusalOf(refused)).toBe(
-      "Unknown lease: lse_1 A stream is only offered where capabilities.stream.enabled is on, and only for a lease that is still held.",
+      "Unknown device: dev_1 A stream is only offered where capabilities.stream.enabled is on.",
     );
   });
 

@@ -1,0 +1,11 @@
+.popover-positioner {
+  z-index: 90;
+}
+
+.popover {
+  min-width: 14rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  font-size: var(--text-sm);
+}

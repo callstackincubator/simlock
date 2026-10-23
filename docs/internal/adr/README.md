@@ -78,9 +78,10 @@ the status is stale.
 | [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
 | [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented |
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented |
-| [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented |
+| [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
 | [0042](0042-simlock-updates-itself-through-a-frozen-call-and-a-detached-updater.md) | Simlock updates itself through a frozen call and a detached updater | Accepted — not yet implemented; narrows 0009's `takes-requests` stage |
 | [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part |
 | [0044](0044-the-console-reads-what-its-page-shows-and-events-mark-it-stale.md) | The console reads what its page shows, and events mark it stale | Accepted — not yet implemented; supersedes 0013 §3 |
 | [0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) | A standalone worker serves agent-device by default and hands local agents a private profile | Accepted — not yet implemented |
+| [0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Accepted — not yet implemented |

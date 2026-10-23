@@ -88,7 +88,7 @@ agent-device front and the stream (`/v1/stream`).
   opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`).
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.
-- `GET /v1/events` — reads `since`, `before` and `limit` through `eventsPageQuery` (contract), refused as 400 before dispatching `events.replay`; `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503 here too.
+- `GET /v1/events` — reads `since`, `before`, `limit` and `worker` through `eventsPageQuery` (contract), refused as 400 before dispatching `events.replay`; `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503 here too.
 - `GET /v1/stats` — parses `since`/`from`/`to` with `usageWindow` (contract) and `ledger=1`, all refused as 400 before dispatching `usage.get` (the dispatcher answers an agent token 403, `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503).
 - `GET /v1/inbox` → `inbox.get` (admin): the items that need the operator, decided by the daemon (`src/contract/inbox.ts`); an agent token gets 403 from the dispatcher.
 - `POST /v1/update` (optional body `{version, force}`, strict) → `daemon.update`: 202 when the call began the update (`started`), 200 when it followed one or found nothing to do (`upToDate`). The route declares both (`alsoStatus`). The role check is the dispatcher's; on a gateway it updates the gateway itself, with no lease wait.

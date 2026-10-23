@@ -1498,6 +1498,34 @@ describe("lease routes", () => {
     expect(lease).not.toHaveProperty("mode");
   });
 
+  it("names an Android emulator's adb serial as address, beside its AVD name as udid, on the lease object the POST, the request poll and GET /v1/leases/:id answer", async () => {
+    const emulator = {
+      address: "emulator-5554",
+      driverDeviceId: "simlock_3f9a2c1e",
+      id: "dev_and",
+      spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },
+    } as const;
+    const { app, dispatcher, registry } = buildHarness();
+    const posted = postLeaseRequest(app, { device: "Pixel 8", platform: "android" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.resolve(makeGrant({ device: emulator, lease: { deviceId: "dev_and", id: "lse_and" } }));
+    const created = (await (await posted).json()) as { request: { id: string; lease: unknown } };
+    registry.devices = [makeDevice(emulator)];
+    registry.leases = [makeLease({ deviceId: "dev_and", id: "lse_and", ownerId: "tok_agent" })];
+
+    const polled = await app.request(`/v1/lease-requests/${created.request.id}`, {
+      headers: agentAuth,
+    });
+    const read = await app.request("/v1/leases/lse_and", { headers: agentAuth });
+
+    const named = { address: "emulator-5554", udid: "simlock_3f9a2c1e" };
+    expect({
+      get: ((await read.json()) as { lease: unknown }).lease,
+      poll: ((await polled.json()) as { request: { lease: unknown } }).request.lease,
+      post: created.request.lease,
+    }).toMatchObject({ get: named, poll: named, post: named });
+  });
+
   it("404s an unknown lease id", async () => {
     const { app } = buildHarness();
     const response = await app.request("/v1/leases/lse-missing", { headers: agentAuth });
@@ -2389,7 +2417,7 @@ describe("operator-only listing routes", () => {
         oldestTs: 1_234,
       });
     };
-    const notKept = await app.request("/v1/events?before=evt_abc&limit=50", {
+    const notKept = await app.request("/v1/events?before=evt_abc&limit=50&worker=w1", {
       headers: operatorAuth,
     });
     dispatcher.handlers["events.replay"] = () => {
@@ -2397,7 +2425,7 @@ describe("operator-only listing routes", () => {
     };
     const unavailable = await app.request("/v1/events?before=evt_abc", { headers: operatorAuth });
 
-    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50 }]);
+    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50, workerId: "w1" }]);
     expect(notKept.status).toBe(422);
     expect(await notKept.json()).toMatchObject({
       error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
@@ -2414,6 +2442,8 @@ describe("operator-only listing routes", () => {
     ["since=abc", "Invalid duration: abc"],
     ["before=evt_abc&since=1h", "before and since cannot be used together"],
     ["limit=50&since=1h", "limit and since cannot be used together"],
+    ["worker=", "worker must be a worker id of 1 to 128 characters"],
+    [`worker=${"w".repeat(129)}`, "worker must be a worker id of 1 to 128 characters"],
   ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["events.replay"] = () => {
@@ -3276,9 +3306,10 @@ describe("the stream mount's listed route", () => {
     const answer = (path: string, method = "GET") =>
       app.request(path, { headers: agentAuth, method });
 
-    const found = await answer(route.path.replace("{id}", "lse_1"));
+    const listedPath = route.path.replace("{workerId}", "w1").replace("{deviceId}", "dev_1");
+    const found = await answer(listedPath);
     const other = await answer("/v1/stream/x");
-    const wrongMethod = await answer(route.path.replace("{id}", "lse_1"), "POST");
+    const wrongMethod = await answer(listedPath, "POST");
 
     expect(found.status).toBe(200);
     expect(found.headers.get("content-type")).toBe("application/vnd.simlock.stream+h264");
@@ -3286,7 +3317,7 @@ describe("the stream mount's listed route", () => {
     expect(listed).toEqual(
       expect.arrayContaining([found.status, other.status, wrongMethod.status]),
     );
-    expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_LEASE" } });
+    expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_DEVICE" } });
     await found.body?.cancel();
   });
 });

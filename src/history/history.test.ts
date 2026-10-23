@@ -501,6 +501,76 @@ describe("createEventHistory", () => {
     expect(fromStopped).toEqual({ events: stoppedHeld, kind: "events" });
   });
 
+  it("reads a worker's events without the database or the index: from memory with limit counted after the filter, past a failed index build that sets nothing aside, and past a stored row of bad JSON", async () => {
+    const memory = await rig({ capacity: 10 });
+    const connected = (workerId: string) =>
+      memory.bus.emit("worker.connected", { workerId }, "gateway");
+    const first = connected("w1");
+    const rejected = memory.bus.emit(
+      "worker.rejected",
+      { reason: "forbidden", workerId: "w1" },
+      "gateway",
+    );
+    connected("w2");
+    connected("w2");
+    const unstarted = memory.history();
+    const newestOfW1 = await unstarted.replayPage({ limit: 2, workerId: "w1" });
+    const recent = await unstarted.replay({ workerId: "w1" });
+
+    const unindexed = await rig();
+    const noIndex = new ProbeSqliteOpener({
+      fault: (call) => {
+        if (call.kind === "exec" && /CREATE INDEX.*events_worker/is.test(call.sql)) {
+          throw new Error("disk full");
+        }
+      },
+    });
+    const scanning = unindexed.history({ sqlite: noIndex });
+    await scanning.start();
+    const written = unindexed.bus.emit("worker.connected", { workerId: "w1" }, "gateway");
+    unindexed.bus.emit("worker.connected", { workerId: "w2" }, "gateway");
+    const scanned = await scanning.replayPage({ limit: 5, workerId: "w1" });
+    const scanningStatus = scanning.status();
+    await scanning.stop();
+
+    const damaged = await rig();
+    const seeded = damaged.history();
+    await seeded.start();
+    const good = damaged.bus.emit("worker.connected", { workerId: "w1" }, "gateway");
+    await seeded.stop();
+    const file = await new NodeSqliteOpener().open(damaged.dbPath, { readOnly: false });
+    file.exec("DROP INDEX events_worker");
+    file
+      .prepare("INSERT INTO events (id, timestamp, seq, size, envelope) VALUES (?, ?, ?, ?, ?)")
+      .run("evt_bad", NOW, 99, 5, "{nope");
+    file.close();
+    const reopened = damaged.history();
+    await reopened.start();
+    const afterBadRow = await reopened.replayPage({ limit: 5, workerId: "w1" });
+    const reopenedStatus = reopened.status();
+    await reopened.stop();
+    const indexes = await new NodeSqliteOpener().open(damaged.dbPath, { readOnly: true });
+    const indexed = indexes
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'events_worker'")
+      .all();
+    indexes.close();
+
+    expect(newestOfW1).toEqual({ events: [first], kind: "events" });
+    expect(recent).toEqual([first]);
+    expect(rejected.payload).toMatchObject({ workerId: "w1" });
+    expect(levelRecords(unindexed, "warn")).toBe(1);
+    expect(unindexed.logs.records.find((record) => record.level === "warn")?.fields).toMatchObject({
+      error: "disk full",
+    });
+    expect(await damagedNames(unindexed.directory)).toEqual([]);
+    expect(scanningStatus).toMatchObject({ opened: true, writing: true });
+    expect(scanned).toEqual({ events: [written], kind: "events" });
+    expect(levelRecords(damaged, "warn")).toBe(0);
+    expect(reopenedStatus).toMatchObject({ opened: true, writing: true });
+    expect(indexed).toEqual([{ name: "events_worker" }]);
+    expect(afterBadRow).toEqual({ events: [good], kind: "events" });
+  });
+
   it("opens a new file with incremental auto_vacuum, WAL, synchronous NORMAL and a 5 s busy timeout", async () => {
     const rigged = await rig();
     const sqlite = new ProbeSqliteOpener();

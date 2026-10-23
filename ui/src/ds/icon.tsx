@@ -13,6 +13,7 @@ const PATHS = {
   signOut: "M6 2.5H2.5v11H6M10 5l3 3-3 3M13 8H6",
   more: "M3.5 8h.01M8 8h.01M12.5 8h.01",
   device: "M5 1.5h6v13H5zM7.5 12.5h1",
+  info: "M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM8 7.5v4M8 5h.01",
   search: "M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5",
 } as const;
 

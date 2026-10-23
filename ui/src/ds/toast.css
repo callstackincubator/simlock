@@ -34,11 +34,17 @@
 
 .toast-content {
   display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-4);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-3) var(--space-4);
+}
+
+.toast-content > :not(.toast-close) {
+  grid-column: 1;
 }
 
 .toast-title {
+  align-self: center;
   margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -69,8 +75,9 @@
   display: none;
 }
 
-.toast-close {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
+/* why: the close keeps its 40px hit area but not its border, so it reads as part of the toast. */
+.toast .toast-close {
+  grid-column: 2;
+  grid-row: 1;
+  border-color: transparent;
 }

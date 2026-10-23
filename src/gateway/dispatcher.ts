@@ -374,13 +374,15 @@ export class GatewayDispatcher {
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     input.beforeId === undefined && input.limit === undefined
-      ? this.options.eventHistory.replay(
-          input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
-        )
+      ? this.options.eventHistory.replay({
+          ...(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs }),
+          ...(input.workerId === undefined ? {} : { workerId: input.workerId }),
+        })
       : eventsPageAnswer(
           this.options.eventHistory.replayPage({
             ...(input.beforeId === undefined ? {} : { beforeId: input.beforeId }),
             limit: input.limit ?? EVENTS_PAGE_DEFAULT,
+            ...(input.workerId === undefined ? {} : { workerId: input.workerId }),
           }),
         );
 

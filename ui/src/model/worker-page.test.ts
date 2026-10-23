@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import { listSearch } from "./paging";
 import {
   filterWorkers,
+  readDrawerTab,
   readFilter,
   upMeta,
   type WorkerPage,
   workerPageOf,
   workerRow,
+  writeDrawerTab,
   writeFilter,
 } from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
@@ -814,5 +816,25 @@ describe("a worker page's tab", () => {
     expect(tabOf("?tab=warm-pool")).toBe("warm-pool");
     expect(tabOf("?tab=warm-pool", starting)).toBe("devices");
     expect(tabOf("?tab=host", starting)).toBe("host");
+  });
+});
+
+describe("a device drawer's tab", () => {
+  it("is Screen only for ?drawer=screen, written beside the other keys, and a device row's link never carries it", () => {
+    expect(readDrawerTab("?tab=devices&drawer=screen")).toBe("screen");
+    expect(readDrawerTab("?tab=devices&drawer=events")).toBe("details");
+    expect(readDrawerTab("?tab=devices")).toBe("details");
+    expect(writeDrawerTab("?tab=devices", "screen")).toBe("?tab=devices&drawer=screen");
+    expect(writeDrawerTab("?tab=devices&drawer=screen", "details")).toBe("?tab=devices");
+    expect(writeDrawerTab("?drawer=screen", "details")).toBe("");
+
+    const view = worker({ devices: [device()] });
+    const row = workerPageOf({
+      now: NOW,
+      search: "?tab=devices&drawer=screen&page=2",
+      tokens: [],
+      worker: view,
+    }).overview.devices?.[0];
+    expect(row?.to).toBe(`/fleet/${view.id}/${device().id}?tab=devices&page=2`);
   });
 });

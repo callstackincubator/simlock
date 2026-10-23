@@ -63,12 +63,20 @@ export interface DrawerTab {
 // shows, so switching tabs never stops it.
 export function DrawerTabs(props: {
   readonly tabs: readonly DrawerTab[];
-  readonly defaultValue: string;
+  readonly defaultValue?: string;
+  // why: a drawer whose tab lives in the address passes its value and hears the choice; the others
+  // keep theirs inside.
+  readonly value?: string;
+  readonly onValueChange?: (value: string) => void;
   readonly label: string;
 }) {
-  const { defaultValue, label, tabs } = props;
+  const { defaultValue, label, onValueChange, tabs, value } = props;
   return (
-    <Tabs.Root className="drawer-tabs" defaultValue={defaultValue}>
+    <Tabs.Root
+      className="drawer-tabs"
+      {...(value === undefined ? { defaultValue } : { value })}
+      onValueChange={(next) => onValueChange?.(String(next))}
+    >
       <Tabs.List className="drawer-tab-list" aria-label={label}>
         {tabs.map((tab) => (
           <Tabs.Tab key={tab.value} value={tab.value} className="drawer-tab">

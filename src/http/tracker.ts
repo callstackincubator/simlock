@@ -30,6 +30,8 @@ export interface LeasePayload {
   readonly device: string;
   readonly os: string;
   readonly udid: string;
+  // why: the serial the platform's tools take (`adb -s <address>`); absent while the device has none (not ready, or shut down).
+  readonly address?: string;
   readonly deviceId: string;
   readonly createdAt: string;
   readonly expiresAt: string;
@@ -69,6 +71,7 @@ export function buildLeasePayload(
     device: device.spec.model,
     os: device.spec.osVersion,
     udid: device.driverDeviceId,
+    ...(device.address === undefined ? {} : { address: device.address }),
     deviceId: device.id,
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
@@ -376,6 +379,7 @@ type HttpLeaseProgress =
 export interface HttpLeaseDevice {
   readonly id: string;
   readonly driverDeviceId: string;
+  readonly address?: string | undefined;
   readonly spec: {
     readonly platform: string;
     readonly model: string;
