@@ -1,3 +1,4 @@
+import type { StreamOffer } from "./leases";
 import type { Toned } from "./tones";
 
 export type ScreenPhase = "idle" | "starting" | "live" | "stopped";
@@ -85,4 +86,16 @@ export function screenView(input: {
     waiting: live && stats.painted === 0 ? waitingNote : undefined,
     width: meta?.width ?? 0,
   };
+}
+
+export type DeviceScreen =
+  | { readonly kind: "picture" }
+  | { readonly kind: "sentence"; readonly text: string };
+
+export function deviceScreen(_input: {
+  readonly state: string;
+  readonly offer: StreamOffer;
+  readonly conflict: string | undefined;
+}): DeviceScreen {
+  return { kind: "picture" };
 }

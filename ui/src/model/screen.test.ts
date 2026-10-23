@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readout, type ScreenPhase, screenView } from "./screen";
+import { deviceScreen, readout, type ScreenPhase, screenView } from "./screen";
 
 const NONE = { dropped: 0, framesPerSecond: 0, kilobitsPerSecond: 0, painted: 0 };
 const META = { codec: "mjpeg", height: 240, width: 120 };
@@ -80,5 +80,39 @@ describe("the screen pane", () => {
     expect(word("stopped", "the worker ended the capture", undefined)).toBe("failed");
     expect(word("stopped", undefined, undefined)).toBe("off");
     expect(word("live", "an old reason", undefined)).toBe("live");
+  });
+});
+
+describe("what a device's Screen tab shows", () => {
+  const offer = { offered: true } as const;
+  const sentence = (text: string) => ({ kind: "sentence", text });
+
+  it("shows the picture of a ready or leased device, the state's sentence for any other, and the daemon's message for a refusal the row has not caught up with", () => {
+    const states: readonly (readonly [
+      string,
+      ReturnType<typeof sentence> | { kind: "picture" },
+    ])[] = [
+      ["ready", { kind: "picture" }],
+      ["leased", { kind: "picture" }],
+      ["shutdown", sentence("The device is shut down. Its screen shows while it runs.")],
+      ["provisioning", sentence("The device is starting. Its screen shows once it is ready.")],
+      ["reclaiming", sentence("The device is being reset. Its screen shows once it is ready.")],
+      ["quarantined", sentence("The device is quarantined. It has no screen to show.")],
+      ["absent", sentence("The device is not connected. Its screen shows once it is back.")],
+      ["deleted", sentence("The device is deleted. It has no screen to show.")],
+      ["hibernating", sentence("The device is hibernating. It has no screen to show.")],
+    ];
+
+    for (const [state, expected] of states) {
+      expect(deviceScreen({ conflict: undefined, offer, state }), state).toEqual(expected);
+    }
+
+    const conflict = "The device is shutdown; only a ready or leased device streams";
+
+    expect(deviceScreen({ conflict, offer, state: "ready" })).toEqual(sentence(conflict));
+    expect(deviceScreen({ conflict, offer, state: "leased" })).toEqual(sentence(conflict));
+    expect(deviceScreen({ conflict, offer, state: "shutdown" })).toEqual(
+      sentence("The device is shut down. Its screen shows while it runs."),
+    );
   });
 });
