@@ -1,5 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -151,8 +151,78 @@ function allocateWith(rig: Rig, secret: string, n: number): Promise<Response> {
   });
 }
 
+function listens(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+// why: holds the profile write open so a test can look at the HTTP port while the profile is not yet on disk.
+class HoldingFilesystem extends MemoryFilesystem {
+  readonly reached: Promise<void>;
+  release: () => void = () => undefined;
+  private markReached: () => void = () => undefined;
+  private readonly released = new Promise<void>((resolve) => {
+    this.release = resolve;
+  });
+
+  constructor() {
+    super();
+    this.reached = new Promise((resolve) => {
+      this.markReached = resolve;
+    });
+  }
+
+  override async writeFileAtomic(
+    ...args: Parameters<MemoryFilesystem["writeFileAtomic"]>
+  ): Promise<void> {
+    if (args[0].endsWith("agent-device-profile.json")) {
+      this.markReached();
+      await this.released;
+    }
+    return super.writeFileAtomic(...args);
+  }
+
+  override async writeFileExclusive(
+    ...args: Parameters<MemoryFilesystem["writeFileExclusive"]>
+  ): Promise<void> {
+    if (args[0].endsWith("agent-device-profile.json")) {
+      this.markReached();
+      await this.released;
+    }
+    return super.writeFileExclusive(...args);
+  }
+}
+
 describe("the local agent-device profile", () => {
-  it("is written before HTTP listens, and its token leases for a local agent", async () => {
+  it("is on disk before the HTTP listener accepts a connection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-local-profile-"));
+    temporaryDirectories.push(directory);
+    await seedTokensDatabase(directory, []);
+    const filesystem = new HoldingFilesystem();
+    const port = await freeLoopbackPort();
+
+    const starting = launch({ port, resume: { directory, filesystem } });
+    await filesystem.reached;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(await listens(port), "HTTP listens while the profile is still being written").toBe(
+        false,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    filesystem.release();
+    const rig = await starting;
+
+    expect(await filesystem.readFile(rig.profilePath)).toContain("daemonAuthToken");
+    expect(await listens(port)).toBe(true);
+  });
+
+  it("is written with the contract keys, and its token leases for a local agent", async () => {
     const rig = await launch({ seed: [["tok_operator", "slk_operator", "operator", LABEL]] });
 
     const text = await rig.filesystem.readFile(rig.profilePath);
