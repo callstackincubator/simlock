@@ -112,7 +112,9 @@ grounds for rejecting a change even if it works.
     through a third: a cycle means they are one module or a decision sits
     in the wrong one; a unit test enforces it. The breaches that predate
     the check are listed in `.dependency-cruiser-known-violations.json` and
-    `.dependency-cruiser-known-cycles.json`; those lists only shrink. A single-file
+    `.dependency-cruiser-known-cycles.json`; those lists only shrink. The one
+    authorized exemption is the console's import of `src/contract/version-order.ts`
+    by its own path (#825 Decisions, `.dependency-cruiser.mjs`). A single-file
     component's surface is what the file exports, and a component whose
     surface has grown past one file becomes a directory with an index, not
     a second file others reach into. Each module's manual,

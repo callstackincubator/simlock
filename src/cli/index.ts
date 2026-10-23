@@ -16,7 +16,7 @@ const USAGE = `Usage: simlock <command> [options]
 
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events, stats,
-  daemon, config, token, whoami
+  update, daemon, config, token, whoami
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway; on a
                               single host, list shows the host itself

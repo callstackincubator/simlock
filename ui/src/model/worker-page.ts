@@ -4,6 +4,7 @@ import {
   hasIssue,
   platformSlots,
   slotsLabel,
+  stageLine,
   workerHealth,
   workerSlots,
 } from "./fleet";
@@ -12,6 +13,7 @@ import { levelOf } from "./load-thresholds";
 import { holderOf, leasePath, type TokenRecord } from "./leases";
 import { devicePath } from "./paths";
 import { formatDuration } from "./time";
+import { type UpdateFacts, updateFactsOf, versionLine } from "./versions";
 import {
   connectionStatus,
   deviceStateStatus,
@@ -69,6 +71,9 @@ export interface WorkerRow {
   readonly to: string;
   readonly health: Toned;
   readonly system?: string;
+  readonly version?: string;
+  readonly stage?: string;
+  readonly updateFacts: UpdateFacts;
   readonly use?: WorkerUse;
 }
 
@@ -91,10 +96,14 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
   const use = useOf(worker);
   const system = systemOf(worker);
   const slots = workerSlots(worker);
+  const updateFacts = updateFactsOf(worker);
+  const version = versionLine(updateFacts);
+  const health = workerHealth(worker);
+  const stage = health.word === "updating" && worker.update ? stageLine(worker.update) : undefined;
   return {
     connection: worker.connection,
     takesLeases: !worker.drained,
-    health: workerHealth(worker),
+    health,
     id: worker.id,
     meters: loadFigures(worker).map((card) => ({
       label: card.label,
@@ -106,7 +115,10 @@ export function workerRow(worker: WorkerView, search = ""): WorkerRow {
     mono: worker.label === undefined,
     name: workerName(worker),
     to: `${workerPath(worker.id)}${search}`,
+    updateFacts,
     ...(system === undefined ? {} : { system }),
+    ...(version === undefined ? {} : { version }),
+    ...(stage === undefined ? {} : { stage }),
     ...(use === undefined ? {} : { use }),
   };
 }
@@ -392,14 +404,44 @@ function loadFigures(worker: WorkerView): readonly FigureCard[] {
   return worker.connection === "connected" ? figureCards(worker) : [];
 }
 
-// why: a worker that is gone or drained is the first thing an operator should read on its page, so it
-// says so above everything else.
-function bannersOf(worker: WorkerView, now: number): readonly string[] {
+function failureBanner(worker: WorkerView): readonly WorkerBanner[] {
+  const failure = worker.lastUpdateFailure;
+  if (failure === undefined || failure === null) return [];
+  return [
+    {
+      failure: true,
+      text: `Update to ${failure.to} failed (${failure.stage}): ${failure.message}`,
+      tone: "error",
+    },
+  ];
+}
+
+function updatingBanner(worker: WorkerView): readonly WorkerBanner[] {
+  const { update } = worker;
+  if (update === undefined || update === null) return [];
+  return [
+    {
+      text: `Updating to ${update.to} · ${stageLine(update)}. It takes no new leases.`,
+      tone: "warn",
+    },
+  ];
+}
+
+// why: a worker that is gone, failed to update, updates or is drained is the first thing an operator
+// should read on its page, so it says so above everything else, in that order.
+function bannersOf(worker: WorkerView, now: number): readonly WorkerBanner[] {
   return [
     ...(worker.connection === "disconnected"
-      ? [`Disconnected · last seen ${formatDuration(now - worker.lastSeenAt)} ago`]
+      ? [
+          {
+            text: `Disconnected · last seen ${formatDuration(now - worker.lastSeenAt)} ago`,
+            tone: "warn" as const,
+          },
+        ]
       : []),
-    ...(worker.drained ? ["Drained"] : []),
+    ...failureBanner(worker),
+    ...updatingBanner(worker),
+    ...(worker.drained ? [{ text: "Drained", tone: "warn" as const }] : []),
   ];
 }
 
@@ -584,16 +626,25 @@ export function writeWorkerTab(search: string, tab: WorkerTab): string {
   return `?${params.toString()}`;
 }
 
+export interface WorkerBanner {
+  readonly text: string;
+  readonly tone: "warn" | "error";
+  // why: the failure banner offers Update again, when the page's menu offers Update….
+  readonly failure?: true;
+}
+
 export interface WorkerPage {
   readonly id: string;
   readonly tab: WorkerTab;
-  readonly banners: readonly string[];
+  readonly banners: readonly WorkerBanner[];
   readonly title: string;
   readonly connection: WorkerView["connection"];
   readonly drained: boolean;
   readonly mono: boolean;
   readonly health: Toned;
   readonly system?: string;
+  readonly version?: string;
+  readonly updateFacts: UpdateFacts;
   readonly tabs: readonly { readonly value: WorkerTab; readonly label: string }[];
   readonly overview: OverviewTab;
   readonly host: HostTab;
@@ -608,6 +659,8 @@ export function workerPageOf(input: {
   readonly leaseIds?: readonly string[];
 }): WorkerPage {
   const { now, tokens, worker } = input;
+  const updateFacts = updateFactsOf(worker);
+  const version = versionLine(updateFacts);
   const leaseIds = new Set(input.leaseIds ?? []);
   const starting = worker.health === "starting";
   const incompatible = worker.connection === "incompatible";
@@ -646,6 +699,8 @@ export function workerPageOf(input: {
     },
     tabs,
     title: workerName(worker),
+    updateFacts,
+    ...(version === undefined ? {} : { version }),
     ...(host === undefined ? {} : { system: `${host.os} ${host.osVersion}` }),
     ...(starting ? {} : { warm: warmTabOf(worker, now) }),
   };

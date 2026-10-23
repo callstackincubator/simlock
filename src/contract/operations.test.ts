@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   OPERATIONS,
@@ -38,6 +39,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "nuke.run", input: {}, role: "admin" },
   { name: "config.get", input: {}, role: "admin" },
   { name: "daemon.stop", input: {}, role: "admin" },
+  { name: "daemon.update", input: {}, role: "admin" },
   { name: "events.replay", input: {}, role: "admin" },
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
@@ -56,6 +58,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
+  { name: "worker.update", input: { workerId: "wrk_1" }, role: "admin" },
   // ADR 0010 §6: an operator's consent to a download.
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "component.list", input: {}, role: "agent" },
@@ -125,6 +128,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "nuke.run", input: {}, effect: "write" },
   { name: "config.get", input: {}, effect: "read" },
   { name: "daemon.stop", input: {}, effect: "write" },
+  { name: "daemon.update", input: {}, effect: "write" },
   { name: "events.replay", input: {}, effect: "read" },
   { name: "events.subscribe", input: {}, effect: "read" },
   { name: "events.unsubscribe", input: {}, effect: "read" },
@@ -143,6 +147,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
+  { name: "worker.update", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, effect: "write" },
   { name: "component.list", input: {}, effect: "read" },
   {
@@ -534,7 +539,14 @@ describe("operation input/output round trips", () => {
         },
         global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: {
         os: "macOS",
         osVersion: "15.5",
@@ -592,7 +604,14 @@ describe("operation input/output round trips", () => {
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: capacityEntry,
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -611,10 +630,27 @@ describe("operation input/output round trips", () => {
       ).toBeDefined();
       expect(
         OPERATIONS["status.get"].output.parse({
-          daemon: { health: "starting", mode: "worker" },
+          daemon: {
+            health: "starting",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
           host,
         }),
-      ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
+      ).toEqual({
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host,
+      });
     });
 
     it("rejects a short outside the ten reasons, and a target list longer than 320", () => {
@@ -657,7 +693,14 @@ describe("operation input/output round trips", () => {
       short,
     };
     const status = {
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
       warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
     };
@@ -724,7 +767,14 @@ describe("operation input/output round trips", () => {
         global: { running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0 },
         ios: capacityEntry,
       },
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       installs,
@@ -790,7 +840,14 @@ describe("operation input/output round trips", () => {
       ],
       leases: [lease],
       capacity,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       queueDepth: 0,
       workers: [
@@ -1112,6 +1169,7 @@ describe("operation input/output round trips", () => {
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      update: { check: true },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 1,
@@ -1182,6 +1240,7 @@ describe("operation input/output round trips", () => {
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
@@ -1404,7 +1463,14 @@ describe("status.get physicalQueueDepth (ADR 0022)", () => {
   it("a status carries the physical line's depth beside the virtual one", () => {
     const parsed = output.parse({
       capacity,
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -1419,7 +1485,14 @@ describe("status.get physicalQueueDepth (ADR 0022)", () => {
   it("a worker's entry in a gateway's status carries it too", () => {
     const parsed = output.parse({
       capacity,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -1660,5 +1733,93 @@ describe("events.replay input", () => {
     for (const beforeId of ["evt_", "abc"]) expect(parse({ beforeId }).success).toBe(false);
     expect(parse({ beforeId: "evt_abc", sinceTs: 5 }).success).toBe(false);
     expect(parse({ limit: 5, sinceTs: 5 }).success).toBe(false);
+  });
+});
+
+describe("daemon.update", () => {
+  const SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+  const exactVersion = {
+    type: "string",
+    maxLength: 64,
+    pattern: "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$",
+  };
+  const version = { type: "string", maxLength: 64 };
+  const stateBase = {
+    from: version,
+    to: version,
+    forced: { type: "boolean" },
+    startedAt: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+  };
+  const state = (stage: string, extra: Record<string, unknown> = {}) => ({
+    type: "object",
+    properties: { stage: { type: "string", const: stage }, ...extra, ...stateBase },
+    required: ["stage", ...Object.keys(extra), "from", "to", "forced", "startedAt"],
+    additionalProperties: false,
+  });
+
+  it("keeps the input and the answer the shapes every daemon version accepts, because it is a frozen call", () => {
+    expect(z.toJSONSchema(OPERATIONS["daemon.update"].input, { io: "input" })).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        version: exactVersion,
+        force: { type: "boolean" },
+        query: { type: "boolean" },
+      },
+    });
+    expect(z.toJSONSchema(OPERATIONS["daemon.update"].output)).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        started: { type: "boolean" },
+        upToDate: { type: "boolean" },
+        resolved: { anyOf: [exactVersion, { type: "null" }] },
+        version,
+        health: { type: "string", enum: ["starting", "running", "failed"] },
+        update: {
+          anyOf: [
+            {
+              oneOf: [
+                state("waiting", {
+                  leases: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+                }),
+                state("installing"),
+                state("restarting"),
+              ],
+            },
+            { type: "null" },
+          ],
+        },
+        lastUpdateFailure: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                stage: { type: "string", enum: ["installing", "restarting"] },
+                from: version,
+                to: version,
+                message: { type: "string", maxLength: 2000 },
+                at: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+              },
+              required: ["stage", "from", "to", "message", "at"],
+              additionalProperties: false,
+            },
+            { type: "null" },
+          ],
+        },
+        latestVersion: { anyOf: [version, { type: "null" }] },
+      },
+      required: [
+        "started",
+        "upToDate",
+        "resolved",
+        "version",
+        "health",
+        "update",
+        "lastUpdateFailure",
+        "latestVersion",
+      ],
+      additionalProperties: false,
+    });
   });
 });

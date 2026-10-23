@@ -293,16 +293,21 @@ function expectedRow(view: WorkerView): {
   readonly bars: number;
 } {
   const name = view.label ?? view.id;
+  const system = [
+    view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`,
+    view.version === undefined ? "" : `simlock ${view.version}`,
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
   if (view.connection === "incompatible") {
     return {
       bars: 0,
       slots: "No devices",
-      text: [name, "incompatible", "", "—", "—", "—", "—", ""],
+      text: [`${name}${system}`, "incompatible", "", "—", "—", "—", "—", ""],
     };
   }
   const limit = (view.capacity?.ios.limit ?? 0) + (view.capacity?.android.limit ?? 0);
   const leased = view.leases.length;
-  const system = view.host === undefined ? "" : `${view.host.os} ${view.host.osVersion}`;
   return {
     bars: 3,
     slots: leased === 0 ? `${limit} free` : `${leased} leased, ${limit - leased} free`,

@@ -15,7 +15,7 @@ type RouteTag =
   | "Tokens"
   | "Events";
 type SuccessStatus = 200 | 201 | 202 | 204;
-type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 415 | 422 | 500 | 501 | 503 | 504;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 415 | 422 | 500 | 501 | 502 | 503 | 504;
 type JsonContent<Schema extends z.ZodType> = { "application/json": { schema: Schema } };
 type ErrorBody = { error: { code: string; message: string } };
 type ErrorResponse = {
@@ -92,6 +92,7 @@ interface Declaration<
   Reply extends z.ZodType | undefined,
   Stream extends z.ZodType | undefined,
   Success extends SuccessStatus,
+  Also extends SuccessStatus,
   Own extends Partial<Record<ErrorStatus, readonly string[]>>,
 > {
   readonly method: "get" | "post" | "delete";
@@ -105,6 +106,8 @@ interface Declaration<
   readonly stream?: Stream;
   readonly replyHeaders?: z.ZodType;
   readonly status?: Success;
+  // why: a route that answers 202 when it began the work and 200 when it only followed or found nothing to do declares both.
+  readonly alsoStatus?: Also;
   readonly errors?: Own;
   readonly errorExtras?: ErrorExtras;
 }
@@ -182,8 +185,9 @@ export function declareRoute<
   const Reply extends z.ZodType | undefined = undefined,
   const Stream extends z.ZodType | undefined = undefined,
   const Success extends SuccessStatus = 200,
+  const Also extends SuccessStatus = never,
   const Own extends Partial<Record<ErrorStatus, readonly string[]>> = {},
->(declaration: Declaration<Path, Role, Request, Reply, Stream, Success, Own>) {
+>(declaration: Declaration<Path, Role, Request, Reply, Stream, Success, Also, Own>) {
   const request: RequestSchemas = declaration.request ?? {};
   const success = declaration.status ?? 200;
   const body = request.json ?? request.optionalJson;
@@ -193,6 +197,9 @@ export function declareRoute<
       ...successContent(declaration),
       ...(declaration.replyHeaders === undefined ? {} : { headers: declaration.replyHeaders }),
     },
+    ...(declaration.alsoStatus === undefined
+      ? {}
+      : { [declaration.alsoStatus]: { description: "Success", ...successContent(declaration) } }),
     ...declaredErrors(
       declaration.role,
       request,
@@ -202,7 +209,7 @@ export function declareRoute<
   } as DeclaredResponses<
     Reply,
     Stream,
-    Success,
+    Success | Also,
     (keyof Own & ErrorStatus) | BaseStatuses<Role, Request>
   >;
   return createRoute({

@@ -3,6 +3,14 @@ import { levelOf } from "./load-thresholds";
 import type { Tone, Toned } from "./tones";
 import type { WorkerDevice, WorkerView } from "./workers";
 
+export type UpdateState = NonNullable<WorkerView["update"]>;
+
+// why: the stage as the row and the page's banner word it.
+export function stageLine(update: UpdateState): string {
+  if (update.stage !== "waiting") return update.stage;
+  return `waiting for ${update.leases} ${update.leases === 1 ? "lease" : "leases"}`;
+}
+
 const RANK: Readonly<Record<Tone, number>> = { error: 3, idle: 0, ok: 1, warn: 2 };
 
 // why: a list row has room for one square, so of everything wrong with a worker the worst is
@@ -23,6 +31,9 @@ function stateFindings(worker: WorkerView): Toned[] {
   const findings: Toned[] = [];
   if (worker.connection !== "connected") findings.push({ tone: "error", word: worker.connection });
   if (worker.health === "failed") findings.push({ tone: "error", word: "failed" });
+  // why: an update means the worker takes no new leases, so it reads before the drain it may also have.
+  if (worker.update !== undefined && worker.update !== null)
+    findings.push({ tone: "warn", word: "updating" });
   if (worker.drained) findings.push({ tone: "warn", word: "drained" });
   if (worker.health === "starting") findings.push({ tone: "warn", word: "starting" });
   if (worker.capacity?.ramBudget?.overLimit === true) {

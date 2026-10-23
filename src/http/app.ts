@@ -23,10 +23,12 @@ import {
   eventsRoute,
   eventsStreamRoute,
   tokenListRoute,
+  updateRoute,
   workerDrainRoute,
   workerListRoute,
   workerRemoveRoute,
   workerUndrainRoute,
+  workerUpdateRoute,
 } from "./admin-declarations.js";
 import {
   badRequest,
@@ -634,6 +636,24 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   app.openapi({ ...workerListRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
+
+  app.openapi({ ...updateRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {
+    const update = await deps.dispatch(
+      "daemon.update",
+      c.req.valid("json"),
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json(update, update.started ? 202 : 200);
+  });
+
+  app.openapi({ ...workerUpdateRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {
+    const update = await deps.dispatch(
+      "worker.update",
+      { ...c.req.valid("json"), workerId: c.req.valid("param").id },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json(update, update.started ? 202 : 200);
+  });
 
   app.openapi({ ...workerDrainRoute, middleware: [agentAuth] }, async (c) =>
     c.json(

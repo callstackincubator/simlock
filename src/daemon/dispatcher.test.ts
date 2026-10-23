@@ -793,13 +793,14 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
-  it("worker.drain, worker.undrain, worker.remove, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
+  it("worker.drain, worker.undrain, worker.remove, worker.update, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const install = vi.spyOn(components, "install");
     const calls = [
       ["worker.drain", { workerId: "instance-1" }],
       ["worker.undrain", { workerId: "instance-1" }],
       ["worker.remove", { workerId: "instance-1" }],
+      ["worker.update", { workerId: "instance-1" }],
       ["worker.install-component", { platform: "ios", version: "27.0", workers: "all" }],
       ["alerts.test", { destination: "ops" }],
     ] as const;
@@ -825,10 +826,10 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     // The refusal is the whole answer: nothing was installed on this host instead, and the
     // message says how to install here.
     expect(install).not.toHaveBeenCalled();
-    expect(String((refusals[3] as { error?: unknown } | undefined)?.error)).toContain(
+    expect(String((refusals[4] as { error?: unknown } | undefined)?.error)).toContain(
       "install on this host without naming workers",
     );
-    expect((refusals[4] as { error?: Error } | undefined)?.error?.message).toBe(
+    expect((refusals[5] as { error?: Error } | undefined)?.error?.message).toBe(
       "alerts.test sends to a gateway's alert destinations, and this daemon is not a gateway; run it against the gateway",
     );
   });
@@ -2862,8 +2863,19 @@ describe("Dispatcher: status.get console address", () => {
       consoleUrl: "http://127.0.0.1:4711/",
       health: "running",
       mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
-    expect(off.daemon).toEqual({ health: "running", mode: "worker" });
+    expect(off.daemon).toEqual({
+      health: "running",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect("consoleUrl" in off.daemon).toBe(false);
   });
 });
@@ -3879,6 +3891,7 @@ function testConfig(
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -4232,7 +4245,14 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
     const status = await dispatcher.dispatch("status.get", {}, session());
 
     expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
-    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.daemon).toEqual({
+      health: "starting",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
   });
 

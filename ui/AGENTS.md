@@ -2,7 +2,7 @@
 
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
 Entry: `src/main.tsx` → `App` (`src/app/app.tsx`).
-Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only).
+Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and `version-order.ts`'s `isNewerVersion` as a value, imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle); this one `past-index` exemption in `.dependency-cruiser.mjs` is maintainer-authorized (#825 Decisions).
 Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 ## Layers
@@ -48,9 +48,12 @@ asks it. The live connection asks `session.lost()` when it loses the stream, in 
 the same check: reconnect at once, back off as for an unreachable daemon, or stop while the session
 ends. `model/proxy-refusal.ts` words a refusal.
 
-`data/mode.ts` keeps the daemon's mode (`daemon.mode` of `GET /v1/status`, the one field the console
-reads from that route) once the live connection starts and again after each reconnect; a read that
-fails leaves none. `useDaemonMode` (`state/live.tsx`) gives it to state (ADR 0037 §4).
+`data/mode.ts` keeps the daemon's mode, `daemon.version` and `daemon.latestVersion` (the fields of
+`GET /v1/status` the console reads) once the live connection starts and again after each reconnect; a
+read that fails leaves none. The same read repeats every 10 minutes (the daily check emits no event);
+a failed repeat keeps the last values, and the timer stops with the live connection. `useDaemonMode`
+and `useDaemonFacts` (`state/live.tsx`) give them to state and to the sidebar's update notice
+(ADR 0037 §4, ADR 0042).
 
 ## Actions
 
