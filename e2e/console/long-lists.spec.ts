@@ -418,7 +418,10 @@ test.describe("long lists page", () => {
 
     await page.reload();
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
-    await page.goBack();
+    await page.goBack({ waitUntil: "commit" });
+    await page.goBack({ waitUntil: "commit" });
+    await page.goBack({ waitUntil: "commit" });
+    await expect(page).toHaveURL(/\/fleet\?page=2$/);
     await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
   });
 
