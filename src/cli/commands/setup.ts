@@ -48,6 +48,15 @@ function exclusive(first: unknown, second: unknown, message: string): void {
   if (first === true && second === true) throw new UsageError(message);
 }
 
+function parseTool(tools: readonly string[]): AgentTool | undefined {
+  if (tools.length > 1) throw new UsageError("--tool can be given once");
+  const tool = tools[0];
+  if (tool !== undefined && !TOOLS.includes(tool)) {
+    throw new UsageError(`--tool takes ${TOOLS.join(" or ")}`);
+  }
+  return tool as AgentTool | undefined;
+}
+
 function parseSetupFlags(argv: readonly string[]): SetupFlags {
   const values = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
@@ -61,18 +70,12 @@ function parseSetupFlags(argv: readonly string[]): SetupFlags {
   if (values.positionals.length > 0) throw new UsageError("setup accepts no arguments");
   exclusive(values.user, values.project, "--user and --project cannot be used together");
   exclusive(values.mcp, values["no-mcp"], "--mcp and --no-mcp cannot be used together");
-  const tools = (values.tool ?? []) as string[];
-  if (tools.length > 1) throw new UsageError("--tool can be given once");
-  const tool = tools[0];
-  if (tool !== undefined && !TOOLS.includes(tool)) {
-    throw new UsageError(`--tool takes ${TOOLS.join(" or ")}`);
-  }
   return {
     help: values.help === true,
     json: values.json === true,
     scope: values.project ? "project" : values.user ? "user" : undefined,
     mcp: values.mcp ? true : values["no-mcp"] ? false : undefined,
-    tool: tool as AgentTool | undefined,
+    tool: parseTool((values.tool ?? []) as string[]),
   };
 }
 

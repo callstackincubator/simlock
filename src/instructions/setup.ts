@@ -156,20 +156,22 @@ async function askMcp(
   report: readonly SetupToolReport[],
 ): Promise<Set<AgentTool>> {
   const wantsMcp = new Set<AgentTool>();
-  if (options.mcp === false) return wantsMcp;
   for (const { tool, skill } of report) {
-    if (skill.status === "skipped") continue;
-    const asks = options.mcp === undefined && options.interactive;
-    if (
-      options.mcp === true ||
-      (asks &&
-        !(tool === "codex" && scope === "project") &&
-        (await options.confirm(MCP_PROMPTS[tool])))
-    ) {
+    if (skill.status !== "skipped" && (await wantsMcpFor(options, scope, tool))) {
       wantsMcp.add(tool);
     }
   }
   return wantsMcp;
+}
+
+async function wantsMcpFor(
+  options: SetupAgentToolsOptions,
+  scope: SetupScope,
+  tool: AgentTool,
+): Promise<boolean> {
+  if (options.mcp !== undefined) return options.mcp;
+  if (!options.interactive || (tool === "codex" && scope === "project")) return false;
+  return options.confirm(MCP_PROMPTS[tool]);
 }
 
 type McpResult = NonNullable<SetupToolReport["mcp"]>;
@@ -188,7 +190,10 @@ async function connectMcp(
     tool === "claude-code"
       ? ["mcp", "add", "-s", scope, "simlock", "--", "simlock", "mcp"]
       : ["mcp", "add", "simlock", "--", "simlock", "mcp"];
-  const outcome = await runTool(bin, args, { cwd });
+  return mcpResult(tool, bin, await runTool(bin, args, { cwd }));
+}
+
+function mcpResult(tool: AgentTool, bin: string, outcome: ToolOutcome): McpResult {
   if (outcome.outcome === "not-found") return { status: "skipped", reason: `${bin} not found` };
   if (outcome.outcome === "timed-out") {
     return { status: "failed", reason: "timed out after 30 s" };
