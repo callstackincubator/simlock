@@ -39,6 +39,7 @@ import { createUsageReader, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
+  inboxItems,
   isSimlockError,
   EVENTS_PAGE_DEFAULT,
   OPERATIONS,
@@ -412,7 +413,10 @@ export class GatewayDispatcher {
     return { revoked };
   };
 
-  #inboxGet: Handler<"inbox.get"> = () => ({ items: [] });
+  // why: the rules read the same views, as `worker.list` serves them.
+  #inboxGet: Handler<"inbox.get"> = () => ({
+    items: [...inboxItems(this.options.workers.views())],
+  });
 
   #workerList: Handler<"worker.list"> = () => ({ workers: this.options.workers.views() });
 

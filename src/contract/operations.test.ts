@@ -45,6 +45,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
   { name: "usage.get", input: { from: 0, to: 60_000 }, role: "admin" },
+  { name: "inbox.get", input: {}, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   {
@@ -135,6 +136,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "events.subscribe", input: {}, effect: "read" },
   { name: "events.unsubscribe", input: {}, effect: "read" },
   { name: "usage.get", input: { from: 0, to: 60_000 }, effect: "read" },
+  { name: "inbox.get", input: {}, effect: "read" },
   { name: "token.create", input: { role: "agent" }, effect: "write" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, effect: "read" },
   {
