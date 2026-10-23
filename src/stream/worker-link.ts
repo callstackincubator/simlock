@@ -15,6 +15,7 @@ import type { StreamCaller } from "./caller.js";
 import { type CapturedStream, type FeedBounds, readScreenFeed } from "./feed.js";
 import {
   deviceNotRunning,
+  deviceStopped,
   notStreamable,
   StreamRefusalError,
   streamUnavailable,
@@ -56,7 +57,10 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
       // capture first would answer an agent one way for a lease this worker holds and another for a
       // lease that does not exist, which is a way of listing the fleet's leases.
       const { device, lease } = requireTarget(options, target, caller);
-      const slot = options.captures.begin(lease?.id ?? device.id);
+      const slot =
+        lease === undefined
+          ? options.captures.beginOnDevice(device.id)
+          : options.captures.begin(lease.id);
       // why: the listener, and not only the body's cancel, because a request aborted before its
       // first frame has no body being read yet -- which is what a page opened and closed quickly does.
       if (signal.aborted) void slot.release();
@@ -76,7 +80,8 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
         stream = await readScreenFeed(feed, options.bounds);
       } catch (error) {
         slot.abandon();
-        if (slot.ended.aborted && lease !== undefined) throw unknownLease(lease.id);
+        if (slot.ended.aborted)
+          throw lease === undefined ? deviceStopped() : unknownLease(lease.id);
         throw refusalFor(error);
       }
       // why: the lease is read again once there is a picture, because a capture can take seconds to
@@ -89,9 +94,13 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
         await slot.release();
         throw streamUnavailable("The viewer went away before the picture started");
       }
-      if (lease !== undefined && (slot.ended.aborted || still?.deviceId !== lease.deviceId)) {
+      if (
+        lease === undefined
+          ? slot.ended.aborted
+          : slot.ended.aborted || still?.deviceId !== lease.deviceId
+      ) {
         await slot.release();
-        throw unknownLease(lease.id);
+        throw lease === undefined ? deviceStopped() : unknownLease(lease.id);
       }
       return { ...stream, close: () => slot.release() };
     },

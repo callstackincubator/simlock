@@ -37,6 +37,14 @@ export function deviceNotRunning(state: string): StreamRefusalError {
   );
 }
 
+export function deviceStopped(): StreamRefusalError {
+  return new StreamRefusalError(
+    409,
+    "DEVICE_NOT_RUNNING",
+    "The device stopped before its picture started",
+  );
+}
+
 export function noSuchStream(): StreamRefusalError {
   // why: the same status and code as an unknown lease on purpose -- a daemon with `capabilities.stream.enabled` off
   // never mounts this route at all and answers any path it has not heard of as a 404, so a client that
