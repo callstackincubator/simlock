@@ -9,6 +9,9 @@ import {
 
 import type { ApiPath } from "../data/api";
 import type { Clock, LiveConnection, Visibility } from "../data/live/connection";
+import { readEvent } from "../model/events";
+import type { LeaseList } from "../model/leases";
+import { readRenewal, renewLeases } from "../model/renewal";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
 const DROP_MS = 60_000;
@@ -116,9 +119,19 @@ export function createQueries(options: QueriesOptions): Queries {
     }
   });
 
+  const stopEvents = connection.onEvent((streamEvent) => {
+    const event = readEvent(streamEvent.data);
+    const renewal = event === undefined ? undefined : readRenewal(event);
+    if (renewal === undefined) return;
+    client.setQueryData<LeaseList>(["leases"], (old) =>
+      old === undefined ? undefined : renewLeases(old, renewal),
+    );
+  });
+
   return {
     client,
     dispose: () => {
+      stopEvents();
       stopCache();
       for (const hash of polls.keys()) stopPoll(hash);
       stopVisibility();
