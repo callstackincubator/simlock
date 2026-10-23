@@ -36,6 +36,10 @@ import {
   type UplinkTransportConnection,
 } from "./uplink.js";
 
+/** why: a ping that finds no pong since the previous one terminates the link, so a gateway that
+ * vanished without closing is noticed within two of these. */
+export const UPLINK_PING_INTERVAL_MS = 15_000;
+
 function rawBytes(data: RawData): Buffer {
   if (Array.isArray(data)) return Buffer.concat(data);
   return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);

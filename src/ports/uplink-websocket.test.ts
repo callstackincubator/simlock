@@ -17,14 +17,21 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
+
+import { FakeClock } from "./clock.js";
+import { GatewayUplink } from "../daemon/gateway-uplink.js";
 
 import type {
   ClaimedUplinkIdentity,
   UplinkAuthOutcome,
   UplinkTransportConnection,
 } from "./uplink.js";
-import { WebSocketUplinkConnector, WebSocketUplinkListenerFactory } from "./uplink-websocket.js";
+import {
+  UPLINK_PING_INTERVAL_MS,
+  WebSocketUplinkConnector,
+  WebSocketUplinkListenerFactory,
+} from "./uplink-websocket.js";
 
 let server: Server | undefined;
 const openConnections: Array<{ close(): unknown }> = [];
@@ -217,5 +224,75 @@ describe("WebSocketUplinkConnection binary messages", () => {
     await worker.write("hello");
 
     expect(onSent).toHaveBeenCalledTimes(1);
+  });
+});
+
+async function startMuteGateway(): Promise<{
+  url: string;
+  peers: WebSocket[];
+  pings: () => number;
+  nextPeer: (count: number) => Promise<void>;
+}> {
+  const peers: WebSocket[] = [];
+  let pingCount = 0;
+  const waiting: Array<{ count: number; resolve: () => void }> = [];
+  const wss = new WebSocketServer({ noServer: true, autoPong: false });
+  server = createServer();
+  server.on("upgrade", (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (peer) => {
+      peers.push(peer);
+      openConnections.push({ close: () => peer.terminate() });
+      peer.on("ping", () => {
+        pingCount += 1;
+      });
+      for (const w of waiting) if (peers.length >= w.count) w.resolve();
+    });
+  });
+  await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    peers,
+    pings: () => pingCount,
+    nextPeer: (count) =>
+      peers.length >= count
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => waiting.push({ count, resolve })),
+  };
+}
+
+describe("WebSocketUplinkConnector liveness", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("terminates an uplink whose gateway stops answering pings within two intervals, and GatewayUplink redials", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const gateway = await startMuteGateway();
+    const clock = new FakeClock();
+    const uplink = new GatewayUplink({
+      clock,
+      connector: new WebSocketUplinkConnector(),
+      url: gateway.url,
+      token: "join",
+      workerId: "wrk_1",
+      accept: () => {},
+      backoff: { initialMs: 1_000, maxMs: 1_000, multiplier: 1 },
+      random: () => 1,
+    });
+    uplink.start();
+    await gateway.nextPeer(1);
+    const first = gateway.peers[0];
+    const firstClosed = new Promise<void>((resolve) => first?.on("close", () => resolve()));
+
+    await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
+    await vi.waitFor(() => expect(gateway.pings()).toBe(1));
+    await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
+    await firstClosed;
+
+    clock.advance(1_000);
+    await gateway.nextPeer(2);
+    expect(gateway.peers).toHaveLength(2);
+    await uplink.stop();
   });
 });
