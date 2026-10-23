@@ -1,4 +1,9 @@
-import { handleStreamRequest, leaseIdOf, type StreamServiceOptions } from "./service.js";
+import {
+  handleStreamRequest,
+  relayedDeviceTargetOf,
+  streamTargetOf,
+  type StreamServiceOptions,
+} from "./service.js";
 
 // why: the shape the HTTP layer mounts, declared here rather than imported from `src/http`, because a
 // stream is the same exchange whether a console on this host asks for it or a gateway relays one, and a
@@ -11,7 +16,7 @@ export interface StreamMount {
 }
 
 export interface StreamRelayTarget {
-  (request: Request, tenant: string, leaseId: string | undefined): Promise<Response>;
+  (request: Request, tenant: string): Promise<Response>;
 }
 
 export function createStreamMount(options: StreamServiceOptions): StreamMount {
@@ -24,21 +29,19 @@ export function createStreamMount(options: StreamServiceOptions): StreamMount {
           principal: identity.principal,
           role: identity.role === "operator" ? "operator" : "agent",
         },
-        leaseIdOf(new URL(request.url).pathname),
+        streamTargetOf(new URL(request.url).pathname),
       ),
   };
 }
 
 export function createStreamRelayTarget(options: StreamServiceOptions): StreamRelayTarget {
-  return (request, tenant, leaseId) =>
-    // why: a relayed exchange arrives carrying the tenant it was relayed under, which is what the
-    // worker checks its own registry against -- the same way `device.exec` names the requester a
-    // gateway speaks for. Nothing on this door is a claim the worker takes on faith, and a relay is
-    // admitted only from a gateway session, so it is as trusted as the uplink it came on and no more.
+  // why: a relay is admitted only from a gateway session, and the gateway has already refused a caller
+  // that is not an operator, so a device stream on this door is served whatever the tenant.
+  return (request, tenant) =>
     handleStreamRequest(
       options,
       request,
-      { principal: tenant, requesterId: tenant, role: "agent" },
-      leaseId,
+      { principal: tenant, role: "operator" },
+      relayedDeviceTargetOf(new URL(request.url).pathname),
     );
 }

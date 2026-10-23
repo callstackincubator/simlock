@@ -1,28 +1,24 @@
 import type { ScreenMeta } from "../core/index.js";
+import type { StreamCaller } from "./caller.js";
 import type { CapturedStream } from "./feed.js";
 import { checkedMeta } from "./framing.js";
-import { relayedRefusal, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
-import type { StreamLink } from "./service.js";
-
-export interface StreamLeasePlacement {
-  readonly ownerId: string;
-  readonly requesterId: string;
-  readonly workerLeaseId: string;
-  readonly workerId: string;
-}
+import {
+  relayedRefusal,
+  StreamRefusalError,
+  streamUnavailable,
+  unknownDevice,
+  unknownWorker,
+} from "./refusal.js";
+import type { StreamLink, StreamTarget } from "./service.js";
 
 export interface FleetPort {
-  holder(leaseId: string): StreamLeasePlacement | undefined;
+  knowsWorker(workerId: string): boolean;
   // why: `gw:<this gateway's instance id>:`, the exact prefix this index recognizes a requester it
   // sent by, so a stream namespaces with the same value its leases do.
   readonly requesterPrefix: string;
   relay(
     workerId: string,
-    call: {
-      readonly request: Request;
-      readonly tenant: string;
-      readonly leaseId: string;
-    },
+    call: { readonly request: Request; readonly tenant: string },
   ): Promise<Response>;
 }
 
@@ -30,38 +26,31 @@ export interface GatewayStreamLinkOptions {
   readonly fleet: FleetPort;
 }
 
-const WORKER_STREAM_PATH = "/stream/leases/";
-
 export function createGatewayStreamLink(options: GatewayStreamLinkOptions): StreamLink {
-  return {
-    async serve(leaseId, caller, signal): Promise<CapturedStream> {
-      const held = options.fleet.holder(leaseId);
-      if (held === undefined) throw unknownLease(leaseId);
-      if (caller.role !== "operator" && held.ownerId !== caller.principal) {
-        throw unknownLease(leaseId);
-      }
+  return { serve: (target, caller, signal) => serveDevice(options, target, caller, signal) };
+}
 
-      // why: the tenant is the same namespaced requester id `device.exec` forwards (ADR 0005 §27),
-      // namespaced from the lease's own recorded requester rather than from the caller's claim -- so
-      // a caller cannot reach a screen by naming someone else, and the worker proves ownership
-      // against its own registry instead of trusting this relay.
-      const namespacedRequesterId = `${options.fleet.requesterPrefix}${held.requesterId}`;
-      const response = await relayed(held.workerId, leaseId, () =>
-        options.fleet.relay(held.workerId, {
-          leaseId: held.workerLeaseId,
-          request: new Request(
-            // why: the worker's own name for the lease, not the fleet id. A fleet id is this gateway's
-            // naming and a worker knows nothing of it, so a request that reached the wrong lease would
-            // be answered with the wrong screen rather than refused.
-            `http://simlock-worker${WORKER_STREAM_PATH}${encodeURIComponent(held.workerLeaseId)}`,
-            { method: "GET", signal },
-          ),
-          tenant: namespacedRequesterId,
-        }),
-      );
-      return fromResponse(held.workerId, leaseId, response);
-    },
-  };
+async function serveDevice(
+  options: GatewayStreamLinkOptions,
+  target: StreamTarget,
+  caller: StreamCaller,
+  signal: AbortSignal,
+): Promise<CapturedStream> {
+  // why: the same refusal an unknown device gets, before any relay, so an agent cannot reach a screen
+  // by naming a device.
+  if (caller.role !== "operator") throw unknownDevice(target.deviceId);
+  const workerId = target.workerId ?? "";
+  if (!options.fleet.knowsWorker(workerId)) throw unknownWorker(workerId);
+  const response = await relayed(workerId, `device ${target.deviceId}`, () =>
+    options.fleet.relay(workerId, {
+      request: new Request(
+        `http://simlock-worker/stream/devices/${encodeURIComponent(target.deviceId)}`,
+        { method: "GET", signal },
+      ),
+      tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
+    }),
+  );
+  return fromResponse(workerId, `device ${target.deviceId}`, response);
 }
 
 // why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker
@@ -69,7 +58,7 @@ export function createGatewayStreamLink(options: GatewayStreamLinkOptions): Stre
 // that reason rather than a 500 that says nothing; anything without a code is a real fault.
 async function relayed(
   workerId: string,
-  leaseId: string,
+  subject: string,
   relay: () => Promise<Response>,
 ): Promise<Response> {
   try {
@@ -78,7 +67,7 @@ async function relayed(
     const code = (error as { readonly code?: unknown }).code;
     if (code === "RELAY_TARGET_MISSING") {
       throw streamUnavailable(
-        `Worker ${workerId} does not serve screen streams for lease ${leaseId}; turn on capabilities.stream.enabled there`,
+        `Worker ${workerId} does not serve screen streams for ${subject}; turn on capabilities.stream.enabled there`,
       );
     }
     if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
@@ -98,7 +87,7 @@ const MAX_REFUSAL_BYTES = 16 * 1024;
 
 async function fromResponse(
   workerId: string,
-  leaseId: string,
+  subject: string,
   response: Response,
 ): Promise<CapturedStream> {
   // why: the codec header is what tells a relayed stream from a relayed refusal -- a gateway reads a
@@ -107,7 +96,7 @@ async function fromResponse(
   const codec = response.headers.get("simlock-stream-codec");
   if (!response.ok || codec === null || response.body === null) {
     const reason = await readCapped(response, MAX_REFUSAL_BYTES);
-    throw relayedRefusal(workerId, leaseId, response.status, reason);
+    throw relayedRefusal(workerId, subject, response.status, reason);
   }
   let meta: ScreenMeta;
   try {
@@ -120,7 +109,7 @@ async function fromResponse(
   } catch (error) {
     await response.body.cancel().catch(() => undefined);
     throw streamUnavailable(
-      `Worker ${workerId} answered the stream for lease ${leaseId} with a picture it cannot describe: ${
+      `Worker ${workerId} answered the stream for ${subject} with a picture it cannot describe: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );

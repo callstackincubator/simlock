@@ -11,7 +11,6 @@ import {
   leaseRows,
   leasesOnWorker,
   searchLeaseRows,
-  streamOffer,
   type TokenRecord,
 } from "./leases";
 import type { ConsoleEvent } from "./events";
@@ -209,37 +208,6 @@ describe("a worker's leases", () => {
   });
 });
 
-describe("whether a worker offers the live screen", () => {
-  it("offers it when the worker's stream capability is available", () => {
-    expect(streamOffer(host())).toEqual({ offered: true });
-  });
-
-  it("says streaming is off on the worker when the capability is off or not reported", () => {
-    const off = host({ capabilities: [{ name: "stream", state: "off" }] });
-    const silent = host({ capabilities: [] });
-    const unreported = host({ capabilities: undefined });
-
-    expect(streamOffer(off)).toEqual({ offered: false, reason: "Streaming is off on mac-mini-1." });
-    expect(streamOffer(silent).offered).toBe(false);
-    expect(streamOffer(unreported).offered).toBe(false);
-  });
-
-  it("gives the worker's reason when the capability is unavailable", () => {
-    const worker = host({
-      capabilities: [{ name: "stream", reason: "ffmpeg is missing", state: "unavailable" }],
-    });
-
-    expect(streamOffer(worker)).toEqual({
-      offered: false,
-      reason: "Streaming is unavailable on mac-mini-1. ffmpeg is missing",
-    });
-  });
-
-  it("leaves it to the daemon's answer when the lease's worker is not known", () => {
-    expect(streamOffer(undefined)).toEqual({ offered: true });
-  });
-});
-
 describe("a lease's inspection", () => {
   const inspect = (
     overrides: {
@@ -349,16 +317,6 @@ describe("a lease's inspection", () => {
     expect(
       inspect({ lease: details({ workerId: "wrk_gone" }), record: undefined, workers: [] }).worker,
     ).toEqual({ name: "wrk_gone" });
-  });
-
-  it("carries whether the lease's worker offers the live screen", () => {
-    const off = host({ capabilities: [{ name: "stream", state: "off" }] });
-
-    expect(inspect({ workers: [off] }).stream).toEqual({
-      offered: false,
-      reason: "Streaming is off on mac-mini-1.",
-    });
-    expect(inspect().stream.offered).toBe(true);
   });
 });
 

@@ -22,6 +22,13 @@ import {
 const RETRY_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000] as const;
 const RETRY_INTERVAL_MS = 10_000;
 
+// why: a feed of one worker's events asks the daemon for that worker alone in every read, and keeps of
+// the stream only the events that belong to it.
+interface FeedScope {
+  readonly workerId: string;
+  readonly keeps: (event: ConsoleEvent) => boolean;
+}
+
 export class EventFeed {
   readonly #get: (path: ApiPath) => Promise<unknown>;
   readonly #clock: Clock;
@@ -41,13 +48,26 @@ export class EventFeed {
   #active = false;
 
   readonly #showsHistory: boolean;
+  readonly #scope: FeedScope | undefined;
 
   // why: only a screen that scrolls back through the history asks for it; the others read the last
   // hour and nothing older, so a quiet hour does not fill their lists with older events.
-  constructor(get: (path: ApiPath) => Promise<unknown>, clock: Clock, showsHistory = false) {
+  constructor(
+    get: (path: ApiPath) => Promise<unknown>,
+    clock: Clock,
+    showsHistory = false,
+    scope?: FeedScope,
+  ) {
     this.#get = get;
     this.#clock = clock;
     this.#showsHistory = showsHistory;
+    this.#scope = scope;
+  }
+
+  #read(query: string): Promise<unknown> {
+    const worker =
+      this.#scope === undefined ? "" : `&worker=${encodeURIComponent(this.#scope.workerId)}`;
+    return this.#get(`/v1/events?${query}${worker}`);
   }
 
   start(): () => void {
@@ -61,7 +81,7 @@ export class EventFeed {
   readonly streamEvent = (message: StreamEvent): void => {
     if (!this.#active) return;
     const event = readEvent(message.data);
-    if (event !== undefined) this.#add([event]);
+    if (event !== undefined && this.#scope?.keeps(event) !== false) this.#add([event]);
   };
 
   readonly streamOpened = (opened: StreamOpened): void => {
@@ -97,7 +117,7 @@ export class EventFeed {
     this.#retryTimer = undefined;
     this.#loading = true;
     const opens = this.#opens;
-    this.#get(`/v1/events?since=${since}`)
+    this.#read(`since=${since}`)
       .then(readReplay)
       .then(
         (events) => {
@@ -143,7 +163,7 @@ export class EventFeed {
         ? `limit=${PAGE}`
         : `before=${encodeURIComponent(oldest.id)}&limit=${PAGE}`;
     this.#loadingOlder = true;
-    this.#get(`/v1/events?${query}`)
+    this.#read(query)
       .then(readOlder)
       .then(
         (page) => {

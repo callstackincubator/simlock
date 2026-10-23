@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEVICE_READY_MS,
+  deviceStreamUrl,
   REPO_ROOT,
   SCREEN_TAGS as TAG,
   readScreenFrames as readFrames,
@@ -16,6 +17,8 @@ import {
 const execFileAsync = promisify(execFile);
 
 const STREAM_OPEN_BOUND = 240_000;
+// why: an exact model name, as a warm target needs; the same model the other iOS lanes lease.
+const WARM_MODEL = "iPhone 16";
 const KEY_FRAME_BOUND = 120_000;
 
 async function within<T>(work: Promise<T>, bound: number, what: string): Promise<T> {
@@ -70,12 +73,13 @@ describe.skipIf(process.platform !== "darwin")(
           );
           expect(lease.code, `lease failed: ${lease.stdout} ${lease.stderr}`).toBe(0);
           const leaseId = (lease.json as { lease: { id: string } }).lease.id;
+          const deviceId = (lease.json as { device: { id: string } }).device.id;
           const created = await env.cli(["token", "create", "--role", "operator"]);
           expect(created.code, created.stderr).toBe(0);
           const authorization = `Bearer ${(created.json as { secret: string }).secret}`;
           const open = async (signal: AbortSignal) => {
             const response = await within(
-              fetch(`${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+              fetch(await deviceStreamUrl(baseUrl, env.home, deviceId), {
                 headers: { authorization },
                 signal,
               }),
@@ -159,6 +163,103 @@ describe.skipIf(process.platform !== "darwin")(
             label: "the capture stopped once its lease ended under a connected viewer",
             timeout: 10_000,
           });
+        } finally {
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
+        }
+      },
+    );
+
+    it(
+      "streams a simulator nobody has leased, and keeps streaming for 10 s when a lease is granted on that simulator",
+      { timeout: 480_000 },
+      async () => {
+        expect(await capturesRunning(), "a capture was already running before the test").toBe(0);
+        const { env, port } = await withHttpDaemon((httpPort) => ({
+          configOverrides: {
+            http: { enabled: true, host: "127.0.0.1", port: httpPort },
+            capabilities: {
+              stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
+            },
+            warmPool: { targets: [{ count: 1, model: WARM_MODEL, platform: "ios" }] },
+          },
+          driver: "real",
+        }));
+        const baseUrl = `http://127.0.0.1:${String(port)}`;
+        try {
+          let warmId = "";
+          await waitFor(
+            async () => {
+              const listed = await env.cli(["list", "--devices"]);
+              const devices = (listed.json ?? []) as { id: string; state: string }[];
+              warmId = devices.find((device) => device.state === "ready")?.id ?? "";
+              return warmId !== "";
+            },
+            {
+              interval: 2_000,
+              label: "the warm pool keeps one simulator ready",
+              timeout: DEVICE_READY_MS,
+            },
+          );
+          const created = await env.cli(["token", "create", "--role", "operator"]);
+          expect(created.code, created.stderr).toBe(0);
+          const viewer = new AbortController();
+          const response = await within(
+            fetch(await deviceStreamUrl(baseUrl, env.home, warmId), {
+              headers: { authorization: `Bearer ${(created.json as { secret: string }).secret}` },
+              signal: viewer.signal,
+            }),
+            STREAM_OPEN_BOUND,
+            "the unleased simulator's stream to open",
+          );
+          const detail = response.status === 200 ? "" : await response.text().catch(() => "");
+          expect(response.status, detail).toBe(200);
+          if (response.body === null) throw new Error("the stream answered without a body");
+          const reader = response.body.getReader();
+          const first = await within(
+            readFrames(reader, (read) => read.some((frame) => frame.tag === TAG.keyframe)),
+            KEY_FRAME_BOUND,
+            "the unleased simulator's key frame",
+          );
+          expect(first.some((frame) => frame.tag === TAG.keyframe)).toBe(true);
+
+          const lease = await env.cli(
+            [
+              "lease",
+              "--platform",
+              "ios",
+              "--device",
+              WARM_MODEL,
+              "--agent-id",
+              "ios-stream-watched",
+              "--detach",
+            ],
+            { timeout: DEVICE_READY_MS },
+          );
+          expect(lease.code, `lease failed: ${lease.stdout} ${lease.stderr}`).toBe(0);
+          expect(
+            (lease.json as { device: { id: string } }).device.id,
+            "the lease took another simulator",
+          ).toBe(warmId);
+          const keepUntil = Date.now() + 10_000;
+          const kept = await within(
+            readFrames(reader, () => Date.now() > keepUntil),
+            KEY_FRAME_BOUND,
+            "frames after the lease was granted",
+          );
+          expect(kept.length, "the stream sent nothing for 10 s after the lease").toBeGreaterThan(
+            0,
+          );
+          // why: a stream that closed at the grant ends the read loop early with frames already
+          // buffered, so frames alone do not prove it kept going; the next read must still be open.
+          const stillOpen = await within(
+            reader.read(),
+            KEY_FRAME_BOUND,
+            "the stream's next read after the lease",
+          );
+          expect(stillOpen.done, "the stream ended when the lease was granted").toBe(false);
+          viewer.abort();
         } finally {
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })

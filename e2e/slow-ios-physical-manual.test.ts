@@ -2,7 +2,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import {
+  deviceStreamUrl,
+  freeLoopbackPort,
+  waitFor,
+  withDaemon,
+  type TestEnv,
+} from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -166,12 +172,13 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         );
         expect(leased.code, `lease failed: ${leased.stderr}`).toBe(0);
         const leaseId = (leased.json as { lease: { id: string } }).lease.id;
+        const deviceId = (leased.json as { device: { id: string } }).device.id;
 
         const created = await env.cli(["token", "create", "--role", "operator"]);
         expect(created.code, created.stderr).toBe(0);
         const viewer = new AbortController();
         const response = await fetch(
-          `http://127.0.0.1:${String(env.port)}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
+          await deviceStreamUrl(`http://127.0.0.1:${String(env.port)}`, env.home, deviceId),
           {
             headers: { authorization: `Bearer ${(created.json as { secret: string }).secret}` },
             signal: viewer.signal,

@@ -130,6 +130,7 @@ export interface ModuleScreens {
 
 export interface WorkerContext<C> {
   readonly name: string;
+  readonly instanceId: string;
   readonly config: C;
   readonly daemonConfig: Config;
   readonly logger: Logger;

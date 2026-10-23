@@ -90,7 +90,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
    While it waits, `state` is `queued` (with `queuePosition`), `downloading`, `reclaiming`, `provisioning` or `booting` (with `etaSeconds`). A granted request carries the lease:
 
    ```json
-   {"request":{"createdAt":"2026-10-21T09:12:00.000Z","id":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","state":"granted","lease":{"id":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","requestId":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","platform":"ios","device":"iPhone 16","os":"18.6","udid":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","deviceId":"dev_8c1f2e7a-4b6d-4e0f-9a3c-5d2b7e1f0a64","createdAt":"2026-10-21T09:12:41.000Z","expiresAt":"2026-10-21T09:42:41.000Z","ttlMs":1800000,"dataPlane":null,"mode":"full"}}}
+   {"request":{"createdAt":"2026-10-21T09:12:00.000Z","id":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","state":"granted","lease":{"id":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","requestId":"req_7d1a0c4e-2b9f-4e63-8a15-c3f0d6b8e241","platform":"ios","device":"iPhone 16","os":"18.6","udid":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","address":"6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","deviceId":"dev_8c1f2e7a-4b6d-4e0f-9a3c-5d2b7e1f0a64","createdAt":"2026-10-21T09:12:41.000Z","expiresAt":"2026-10-21T09:42:41.000Z","ttlMs":1800000,"dataPlane":null,"mode":"full"}}}
    ```
 
    A failed request carries `error` with a `code` and `message`, such as `QUEUE_TIMEOUT` when `timeoutMs` ran out.
@@ -150,7 +150,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
 ## Running commands with exec
 
 - **Name your device in the arguments.** Use the lease's `udid` for `simctl`. Other agents' devices are on the same worker, so never use `booted`.
-- **On Android, find the emulator's serial first.** The lease's `udid` is the emulator's AVD name (`simlock_…`), not its adb serial. Run `adb devices`, then `adb -s <serial> emu avd name` on each emulator until the name matches, and use that serial with `-s`.
+- **On Android, use the lease's `address` as the adb serial.** The lease's `udid` is the emulator's AVD name (`simlock_…`), not its adb serial. Run `adb -s <address> …`. `address` is absent while the device has none, for example before it is ready or after it shuts down.
 - **On a physical device, Simlock names the device for you.** `devicectl` gets `--device <UDID>` added, and `adb` on a physical Android phone gets the phone's serial.
 - **Paths are on the worker.** `{"tool":"simctl","args":["install","<udid>","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API has no way to upload a file; get it there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
 - **No terminal.** `stdin` in the body is sent to the command once. Interactive commands, such as a bare `adb shell`, are refused.

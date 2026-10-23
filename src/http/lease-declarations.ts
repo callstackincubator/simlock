@@ -14,6 +14,7 @@ import { declareRoute, firstValue, sseMessage } from "./routes.js";
 const leaseParamsSchema = z.object({ id: z.string() });
 
 const leasePayloadSchema = z.object({
+  address: z.string().optional(),
   createdAt: z.string(),
   dataPlane: z.null(),
   device: z.string(),

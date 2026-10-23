@@ -278,6 +278,10 @@ test.describe("the Inbox view", () => {
       expect((await fleet.gateway.cli(["worker", "drain", a?.id ?? ""])).code).toBe(0);
       await openInbox(page, fleet.gateway);
 
+      const row = page.getByRole("region", { name: "Needs a look" });
+      await expect(row.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
+      await expect(row.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+
       await item(page, "drained", "worker-a").click();
 
       await expect(page).toHaveURL(new RegExp(`/inbox/${encodeURIComponent(`${a?.id}/drained`)}$`));
@@ -286,6 +290,7 @@ test.describe("the Inbox view", () => {
       await expect(drawer.getByRole("region", { name: "What happened" })).toContainText(
         "worker-a is drained",
       );
+      await expect(drawer.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
       await expect(facts(page)).toContainText(/Leases still held\s*0/);
       await expect(drawer.getByRole("link", { name: "Open worker" })).toHaveAttribute(
         "href",

@@ -140,8 +140,11 @@ describe("a screen stream through a gateway", () => {
       agent,
     );
     const leaseId = (granted as { lease: { id: string } }).lease.id;
+    const deviceId = (granted as { lease: { deviceId: string } }).lease.deviceId;
+    const { workers } = await gateway.dispatch("worker.list", {}, admin);
+    const workerId = workers[0]?.id ?? "";
     const stream = (signal?: AbortSignal) =>
-      fetch(`http://127.0.0.1:${String(port)}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+      fetch(`http://127.0.0.1:${String(port)}/v1/stream/workers/${workerId}/devices/${deviceId}`, {
         headers: { authorization: `Bearer ${operator}` },
         ...(signal === undefined ? {} : { signal }),
       });

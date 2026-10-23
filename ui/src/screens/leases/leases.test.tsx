@@ -2,12 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { LeaseInspection, LeaseRowView } from "../../state/leases";
-import type { Screen } from "../../state/screen";
 import type { Paging } from "../../ds";
 import { inConsole } from "../../state/test-support";
 import { LeaseDetail, LeaseEventList, LeaseTitle } from "./drawer";
 import { LeaseTable } from "./index";
-import { ScreenView } from "./screen-panel";
 
 function text(html: string): string {
   return html
@@ -51,33 +49,11 @@ function inspection(overrides: Partial<LeaseInspection> = {}): LeaseInspection {
     renewed: "30 s ago",
     requestId: "req_7d1a",
     runtime: "18.4",
-    stream: { offered: true },
     title: "ci-runner-3",
     worker: { name: "mac-mini-1", to: "/fleet/wrk_host" },
     ...overrides,
   };
 }
-
-const IDLE: Screen = {
-  canvas: { current: null },
-  height: 0,
-  live: false,
-  note: undefined,
-  readout: {
-    facts: [
-      { label: "Picture", value: "—" },
-      { label: "Frames", value: "—" },
-      { label: "Rate", value: "—" },
-      { label: "Bandwidth", value: "—" },
-      { label: "Dropped", value: "—" },
-    ],
-    state: { tone: "idle", word: "off" },
-  },
-  start: () => undefined,
-  stop: () => undefined,
-  waiting: undefined,
-  width: 0,
-};
 
 const PAGING: Paging = {
   go: () => undefined,
@@ -160,72 +136,6 @@ describe("a lease's drawer", () => {
 
     expect(html).not.toContain("Request");
     expect(html).toContain("Mode — Image tag — Kind Physical");
-  });
-});
-
-describe("the screen panel before anything is asked for", () => {
-  it("offers the one control a screen has and says there is no picture while it is off", () => {
-    const html = renderToStaticMarkup(<ScreenView screen={IDLE} offered reason={undefined} />);
-
-    expect(html).toContain("Show screen");
-    expect(html).not.toContain("disabled");
-    expect(html).toContain("No picture while this is off.");
-    expect(html).not.toContain("<canvas");
-  });
-
-  it("shows the state as a word, and every figure it cannot yet fill as missing", () => {
-    const html = renderToStaticMarkup(<ScreenView screen={IDLE} offered reason={undefined} />);
-    const words = [...html.matchAll(/<dt>([^<]*)<\/dt><dd[^>]*>(.*?)<\/dd>/g)].map(
-      ([, label = "", value = ""]) => `${label}=${text(value)}`,
-    );
-
-    expect(words).toEqual([
-      "State=off",
-      "Picture=—",
-      "Frames=—",
-      "Rate=—",
-      "Bandwidth=—",
-      "Dropped=—",
-    ]);
-  });
-
-  it("disables Show screen and says why before any click when the worker has streaming off", () => {
-    const html = renderToStaticMarkup(
-      <ScreenView screen={IDLE} offered={false} reason="Streaming is off on mac-mini-1." />,
-    );
-
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Show screen<\/button>/);
-    expect(text(html)).toContain("Streaming is off on mac-mini-1.");
-  });
-});
-
-describe("the screen panel while a picture is asked for", () => {
-  const live: Screen = {
-    ...IDLE,
-    height: 240,
-    live: true,
-    readout: { ...IDLE.readout, state: { tone: "ok", word: "live" } },
-    waiting: "Waiting for the first frame.",
-    width: 120,
-  };
-
-  it("offers Stop, mounts the canvas, and says it is waiting for the first frame", () => {
-    const html = renderToStaticMarkup(<ScreenView screen={live} offered reason={undefined} />);
-
-    expect(html).toContain(">Stop<");
-    expect(html).toContain('aria-label="The leased device&#x27;s screen"');
-    expect(html).toContain("Waiting for the first frame.");
-    expect(html).not.toContain("No picture while this is off.");
-  });
-
-  it("shows a refusal as an alert, and no canvas, once the stream has stopped", () => {
-    const html = renderToStaticMarkup(
-      <ScreenView screen={{ ...IDLE, note: "Unknown lease: lse_1" }} offered reason={undefined} />,
-    );
-
-    expect(html).toContain('role="alert"');
-    expect(html).toContain("Unknown lease: lse_1");
-    expect(html).not.toContain("<canvas");
   });
 });
 

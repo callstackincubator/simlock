@@ -12,6 +12,7 @@ import { z } from "zod";
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import {
   EVENTS_PAGE_MAX,
+  EVENTS_WORKER_MAX,
   EVENTS_PAGE_WITH_SINCE_MESSAGE,
   eventsPageWithoutSince,
 } from "./events-page.js";
@@ -700,6 +701,7 @@ export const eventsReplay = defineOperation({
       beforeId: z.string().regex(EVENT_ID_PATTERN).optional(),
       limit: z.number().int().min(1).max(EVENTS_PAGE_MAX).optional(),
       sinceTs: z.number().optional(),
+      workerId: z.string().min(1).max(EVENTS_WORKER_MAX).optional(),
     })
     .refine(eventsPageWithoutSince, { message: EVENTS_PAGE_WITH_SINCE_MESSAGE }),
   output: z.array(eventEnvelopeSchema),

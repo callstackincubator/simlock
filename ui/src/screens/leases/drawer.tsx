@@ -8,7 +8,6 @@ import {
   useLeaseEvents,
   useLeaseInspection,
 } from "../../state/leases";
-import { ScreenPanel } from "./screen-panel";
 
 // why: the drawer opens at once, titled "Lease" until the details arrive, and says so when
 // the lease is no longer held, so an address that outlives its lease still lands somewhere.
@@ -42,18 +41,6 @@ export function LeaseDrawer(props: {
                     content: <LeaseDetail lease={inspection} />,
                     label: "Details",
                     value: "details",
-                  },
-                  {
-                    content: (
-                      <ScreenPanel
-                        leaseId={inspection.id}
-                        offered={inspection.stream.offered}
-                        reason={inspection.stream.reason}
-                      />
-                    ),
-                    keepMounted: true,
-                    label: "Screen",
-                    value: "screen",
                   },
                   { content: <LeaseEvents id={inspection.id} />, label: "Events", value: "events" },
                 ]}

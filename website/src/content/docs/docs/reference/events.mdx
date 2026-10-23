@@ -42,9 +42,10 @@ With `--follow`, each line that arrives live wraps the event in an `event` field
 | `GET /v1/events`              | `{"events": [...]}`: the recent events kept in memory.                                        |
 | `GET /v1/events?since=2h`     | `{"events": [...]}`: events from the history, same duration format as the CLI.                |
 | `GET /v1/events?before=evt_…&limit=100` | `{"events": [...]}`: the `limit` events just older than that event, oldest first. Fewer than `limit` means the history ends there. |
+| `GET /v1/events?worker=w1&limit=100` | `{"events": [...]}`: only the events of that worker, with `before`, `limit` or `since` as above. |
 | `GET /v1/events/stream`       | A server-sent event stream. Each message's `event` is the event name and its `data` the event as JSON. |
 
-`limit` is 1 to 500, and 100 when only `before` is given; `limit` alone returns the newest events. `before` and `limit` cannot be combined with `since`. A bad `before` or `limit` is `400 BAD_REQUEST`; a `before` the history no longer holds is `422 HISTORY_NOT_KEPT` with `oldestTs`; an unreadable history is `503 HISTORY_UNAVAILABLE`.
+`limit` is 1 to 500, and 100 when only `before` is given; `limit` alone returns the newest events. `before` and `limit` cannot be combined with `since`. `worker` is a worker id of 1 to 128 characters, as `GET /v1/workers` gives it. A gateway returns the events whose payload has that `workerId`, never a `worker.rejected` (its id is only what a refused connection claimed), and an unknown worker gives `{"events": []}`. A worker answers every event for its own id and none for another. A bad `before`, `limit` or `worker` is `400 BAD_REQUEST`; a `before` the history no longer holds is `422 HISTORY_NOT_KEPT` with `oldestTs`; an unreadable history is `503 HISTORY_UNAVAILABLE`.
 
 ```sh
 curl -N -H "Authorization: Bearer $SIMLOCK_TOKEN" https://simlock-gw.example.com/v1/events/stream

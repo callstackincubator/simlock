@@ -87,8 +87,8 @@ export function RowMenu(props: { readonly label: string; readonly entries: reado
   );
 }
 
-// why: a drawer or a page shows its item's first safe action as a button and every action under
-// its own ⋯, the dangerous ones last.
+// why: a drawer or a page shows its item's first safe action as a button and the other actions
+// under its own ⋯, the dangerous ones last; the ⋯ does not repeat the button.
 export function ActionBar(props: {
   readonly label: string;
   readonly entries: readonly MenuEntry[];
@@ -103,7 +103,7 @@ export function ActionBar(props: {
           {first.label}
         </Button>
       )}
-      <RowMenu label={label} entries={entries} />
+      <RowMenu label={label} entries={entries.filter((entry) => entry !== first)} />
     </span>
   );
 }

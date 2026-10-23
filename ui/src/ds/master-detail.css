@@ -1,4 +1,4 @@
-/* A list of rows, and the breadcrumb a worker's page carries. */
+/* A list of rows. */
 
 .list {
   margin: 0;
@@ -56,26 +56,4 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
   text-overflow: ellipsis;
-}
-
-.crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.crumb + .crumb::before {
-  content: "/";
-  margin-right: var(--space-2);
-}
-
-.crumb {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }

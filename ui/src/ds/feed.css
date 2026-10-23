@@ -11,14 +11,24 @@
 /* As a page's last part the feed fills the page's height; the box's height comes from the page,
  * never from its rows, so it still scrolls inside itself. */
 .page > .feed:last-child,
-.page > :last-child > .feed:last-child {
+.page > :last-child > .feed:last-child,
+.page > .tabs:last-child > .tab-panel > .feed:last-child {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* Tabs that end a page, with a feed as their panel's last part, pass the page's height down to it. */
+.page > .tabs:last-child,
+.page > .tabs:last-child > .tab-panel {
   display: flex;
   flex: 1;
   flex-direction: column;
 }
 
 .page > .feed:last-child .feed-box,
-.page > :last-child > .feed:last-child .feed-box {
+.page > :last-child > .feed:last-child .feed-box,
+.page > .tabs:last-child > .tab-panel > .feed:last-child .feed-box {
   flex: 1 1 0;
   height: auto;
   min-height: 20rem;

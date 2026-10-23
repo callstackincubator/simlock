@@ -1,3 +1,7 @@
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+import { EventFeed } from "../data/event-feed";
+import { browserClock } from "../data/live/browser";
 import type { MenuEntry } from "../ds";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
@@ -7,11 +11,14 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
+  readDrawerTab,
   readFilter,
   searchWorkers,
   upMeta,
   type WorkerFilter,
+  writeDrawerTab,
   writeFilter,
+  type DeviceDrawerTab,
   type DeviceRow,
   type WorkerPage,
   type WorkerRow,
@@ -20,19 +27,21 @@ import {
   workerRow,
   writeWorkerTab,
 } from "../model/worker-page";
+import { type StreamOffer, streamOffer } from "../model/screen";
 import { type WorkerList, workerPath } from "../model/workers";
 import { type EventRow, eventRows } from "../model/event-list";
-import { eventsOfWorker } from "../model/events";
+import { eventsOfWorker, type HistoryEnd, historyEnd } from "../model/events";
 import { useActions } from "./actions";
-import { useRecentEvents } from "./events";
-import { useDaemonMode, useRouteQuery, useNow } from "./live";
+import { useDaemonMode, useLiveEvents, useRouteQuery, useNow, useStreamOpened } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
 import { navigate, setSearch, usePath, useSearch } from "./router";
+import { useApi } from "./services";
 
 export type { EventRow } from "../model/event-list";
 export type {
   CapabilityRow,
+  DeviceDrawerTab,
   DeviceRow,
   FigureCard,
   InstallRow,
@@ -164,12 +173,25 @@ export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> 
 export function useDeviceDrawer(
   workerId: string,
   deviceId: string,
-): { readonly view: LoadView<DeviceRow | undefined>; readonly close: () => void } {
+): {
+  readonly view: LoadView<DeviceRow | undefined>;
+  readonly close: () => void;
+  readonly tab: DeviceDrawerTab;
+  readonly chooseTab: (tab: DeviceDrawerTab) => void;
+  readonly stream: StreamOffer;
+} {
   const page = useWorkerPage(workerId);
   const search = useSearch();
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers;
   return {
-    // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept.
-    close: () => navigate(`${workerPath(workerId)}${search}`, { replace: true }),
+    // why: each choice replaces the entry rather than adding one, as the worker page's tabs do.
+    chooseTab: (tab) => setSearch(writeDrawerTab(search, tab), { replace: true }),
+    // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept; the
+    // drawer's own tab belongs to one open drawer, so it goes.
+    close: () =>
+      navigate(`${workerPath(workerId)}${writeDrawerTab(search, "details")}`, { replace: true }),
+    stream: streamOffer(workers?.find((worker) => worker.id === workerId)),
+    tab: readDrawerTab(search),
     view: mapView(page, (shown) => shown?.overview.devices?.find((row) => row.id === deviceId)),
   };
 }
@@ -181,12 +203,38 @@ export function useLeaseUdid(leaseId: string): string | undefined {
   ).data?.lease.udid;
 }
 
-// why: the events the console holds, an hour of them, that belong to this worker, newest first.
-export function useWorkerEvents(workerId: string): LoadView<readonly EventRow[]> {
-  const feed = useRecentEvents();
-  const mode = useDaemonMode();
-  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
-  return mapView(loadView(feed), (held) =>
-    eventRows(eventsOfWorker(held, workerId, mode), workers, "all"),
+export interface WorkerEventsPage {
+  readonly rows: readonly EventRow[];
+  readonly loadOlder: () => void;
+  // why: the last row says why the list stops; none while more may still load.
+  readonly end: HistoryEnd | undefined;
+}
+
+// why: the tab holds its own feed of this worker's events, read from the daemon for that worker
+// alone and scrolled back through its history; the stream adds the worker's new ones.
+export function useWorkerEvents(workerId: string): LoadView<WorkerEventsPage> {
+  const api = useApi();
+  // why: the feed outlives the render that built it, and the mode may arrive after the tab mounts,
+  // so the filter reads the mode as it is when each event comes.
+  const daemonMode = useDaemonMode();
+  const mode = useRef(daemonMode);
+  mode.current = daemonMode;
+  const [feed] = useState(
+    () =>
+      new EventFeed((path) => api.getJson(path), browserClock, true, {
+        keeps: (event) => eventsOfWorker([event], workerId, mode.current).length > 0,
+        workerId,
+      }),
   );
+  useLiveEvents(feed.streamEvent);
+  useStreamOpened(feed.streamOpened);
+  useEffect(() => feed.start(), [feed]);
+  const state = useSyncExternalStore(feed.subscribe, feed.snapshot);
+  const history = useSyncExternalStore(feed.subscribe, feed.history);
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? [];
+  return mapView(loadView(state), (held) => ({
+    end: historyEnd(history, held, "No events for this worker yet."),
+    loadOlder: feed.loadOlder,
+    rows: eventRows(held, workers, "all"),
+  }));
 }

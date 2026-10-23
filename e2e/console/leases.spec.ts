@@ -335,7 +335,7 @@ test.describe("the leases page", () => {
 
       await leaseRow(page, lease.id).click();
       await expect(page.getByRole("dialog")).toBeVisible();
-      for (const name of ["Screen", "Details", "Screen", "Details"]) {
+      for (const name of ["Events", "Details", "Events", "Details"]) {
         await page.getByRole("tab", { name }).click();
       }
       await page.waitForTimeout(400);
@@ -360,7 +360,11 @@ test.describe("the leases page", () => {
 
       const drawer = page.getByRole("dialog");
       await expect(drawer).toBeVisible();
-      expect((await drawer.boundingBox())?.width).toBeCloseTo(360, 0);
+      // why: the page reserves a scrollbar gutter, so the page is narrower than the 360px viewport.
+      const available = await page.evaluate(
+        () => document.documentElement.getBoundingClientRect().width,
+      );
+      expect((await drawer.boundingBox())?.width).toBeCloseTo(available, 0);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();
@@ -645,8 +649,7 @@ test.describe("the leases page", () => {
       await leaseRow(page, granted.id).click();
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
       await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
-      await page.getByRole("tab", { name: "Screen" }).click();
-      await expect(page.getByRole("button", { name: "Show screen" })).toBeVisible();
+      await expect(page.getByRole("dialog").getByRole("tab")).toHaveText(["Details", "Events"]);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();

@@ -505,6 +505,7 @@ async function composeDaemon(
       environment: process.env,
       events: { subscribe: (event, handler) => eventBus.subscribe(event, handler) },
       filesystem,
+      instanceId,
       leaseEnvironment,
       nodePath: process.execPath,
       nodeVersion: process.versions.node,

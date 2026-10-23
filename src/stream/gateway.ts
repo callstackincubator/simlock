@@ -6,18 +6,8 @@ import type { StreamModuleConfig } from "./definition.js";
 export function createGateway(ctx: GatewayContext<StreamModuleConfig>): GatewayModule {
   const stream = createGatewayStream({
     fleet: {
-      holder: (leaseId) => {
-        const entry = ctx.leases.resolve(leaseId);
-        return entry === undefined
-          ? undefined
-          : {
-              ownerId: entry.ownerId,
-              requesterId: entry.requesterId,
-              workerId: entry.workerId,
-              workerLeaseId: entry.workerLeaseId,
-            };
-      },
-      relay: (workerId, call) => ctx.relay(workerId, call.request, call.tenant, call.leaseId),
+      knowsWorker: (workerId) => ctx.worker(workerId) !== undefined,
+      relay: (workerId, call) => ctx.relay(workerId, call.request, call.tenant),
       requesterPrefix: ctx.requesterPrefix,
     },
     logger: ctx.logger,

@@ -300,7 +300,7 @@ describe("createApiClient", () => {
     const api = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });
 
     const outcome = api
-      .stream("/v1/stream/leases/lse_1", new AbortController().signal, 90_000)
+      .stream("/v1/stream/workers/w1/devices/dev_1", new AbortController().signal, 90_000)
       .then(
         () => "answered",
         (error: unknown) => error,
