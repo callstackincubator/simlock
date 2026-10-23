@@ -51,6 +51,7 @@ interface Switches {
   readonly http?: boolean;
   readonly agentDevice?: boolean;
   readonly role?: "gateway";
+  readonly defaults?: "standalone" | "joined";
 }
 
 interface LaunchOptions extends Switches {
@@ -82,10 +83,24 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   }
   const daemon = await startDaemon({
     clock,
-    configOverrides: {
-      capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
-      http: { enabled: options.http ?? true, host, port },
-    },
+    configOverrides:
+      options.defaults === undefined
+        ? {
+            capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
+            http: { enabled: options.http ?? true, host, port },
+          }
+        : {
+            capabilities: { "agent-device": { command: "fake-agent-device" } },
+            ...(options.defaults === "joined"
+              ? {
+                  gateway: {
+                    token: "slk_join",
+                    url: `ws://127.0.0.1:${String(await freeLoopbackPort())}`,
+                  },
+                }
+              : {}),
+            http: { port },
+          },
     ...(options.role === undefined ? {} : { role: options.role }),
     dataDirectory: directory,
     deviceDataTables: fakeDeviceDataTables,
@@ -379,5 +394,26 @@ describe("the local agent-device profile", () => {
     ]);
     const made = await rig.daemon.dispatch("token.create", { role: "agent" }, adminSession);
     expect((await allocateWith(rig, made.secret, 1)).status).toBe(200);
+  });
+
+  it("is written and served by a standalone worker on its defaults, and not by a joined one", async () => {
+    const standalone = await launch({ defaults: "standalone" });
+    const config = await standalone.daemon.dispatch("config.get", {}, adminSession);
+    expect(config.http.enabled).toBe(true);
+    expect(config.capabilities["agent-device"]?.enabled).toBe(true);
+    const profile = JSON.parse(await standalone.filesystem.readFile(standalone.profilePath)) as {
+      daemonAuthToken: string;
+    };
+    const health = await fetch(`http://127.0.0.1:${standalone.port}/v1/agent-device/health`, {
+      headers: { authorization: `Bearer ${profile.daemonAuthToken}`, connection: "close" },
+    });
+    const joined = await launch({ defaults: "joined" });
+
+    expect(health.status).toBe(200);
+    expect(await listens(joined.port)).toBe(false);
+    expect(await joined.filesystem.exists(joined.profilePath)).toBe(false);
+    expect((await joined.daemon.dispatch("status.get", {}, adminSession)).capabilities).toEqual([
+      { name: "agent-device", state: "off" },
+    ]);
   });
 });
