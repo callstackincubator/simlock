@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { CORE_ROUTE_SEGMENTS, MAX_CAPABILITIES, capabilityNameSchema } from "../contract/index.js";
 import type { Clock, Logger } from "../ports/index.js";
 import type {
@@ -14,6 +16,26 @@ import type {
   OptionalModuleDefinition,
   WorkerModule,
 } from "./types.js";
+
+function profileOrigin(host: string, port: number): string {
+  const reachable = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  return `http://${reachable.includes(":") ? `[${reachable}]` : reachable}:${String(port)}`;
+}
+
+async function writeLocalProfile(
+  definition: OptionalModuleDefinition<unknown>,
+  options: ModuleHostOptions,
+): Promise<void> {
+  const { localProfile } = definition;
+  if (localProfile === undefined) return;
+  const { tokens } = options;
+  const { secret } = await tokens.create("agent", localProfile.tokenLabel);
+  await options.context.filesystem.writeFileAtomic(
+    join(options.context.dataDirectory, localProfile.fileName),
+    localProfile.render(profileOrigin(options.config.http.host, options.config.http.port), secret),
+    { mode: 0o600 },
+  );
+}
 
 const HOOK_DEADLINE_MS = 30_000;
 
@@ -258,6 +280,15 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
       for (const { name, worker } of started) {
         const call = worker.hooks?.afterSocketClaimed;
         if (call !== undefined) void runHook(logger, name, "afterSocketClaimed", () => call());
+      }
+    },
+    async prepareLocalProfiles(): Promise<void> {
+      for (const definition of definitions) {
+        try {
+          await writeLocalProfile(definition, options);
+        } catch (error: unknown) {
+          logger.warn(`Could not prepare the ${definition.name} profile: ${messageOf(error)}`);
+        }
       }
     },
     beforeDrain: () => runStopStep("beforeDrain"),

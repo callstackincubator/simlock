@@ -37,7 +37,7 @@ export function fakeAuth(identities: ReadonlyMap<string, Identity>): Auth {
     },
     resolveHelloRole: unused,
     authenticateUplink: unused,
-    tokens: { create: unused, list: unused, revoke: unused },
+    tokens: { create: unused, list: unused, revoke: unused, verify: unused },
     adminSecret: { persist: unused, remove: unused },
   };
 }

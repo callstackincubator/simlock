@@ -40,6 +40,7 @@ async function freeLoopbackPort(): Promise<number> {
 interface Rig {
   readonly daemon: DaemonServer;
   readonly filesystem: MemoryFilesystem;
+  readonly logs: MemoryLogSink;
   readonly profilePath: string;
   readonly port: number;
 }
@@ -49,6 +50,7 @@ async function launch(host = "127.0.0.1"): Promise<Rig> {
   temporaryDirectories.push(directory);
   const clock = new FakeClock(1_000);
   const filesystem = new MemoryFilesystem();
+  const logs = new MemoryLogSink();
   const port = await freeLoopbackPort();
   const daemon = await startDaemon({
     clock,
@@ -69,12 +71,18 @@ async function launch(host = "127.0.0.1"): Promise<Rig> {
       }),
     ],
     filesystem,
-    logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+    logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
     optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
     version: "1.2.3",
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
-  return { daemon, filesystem, port, profilePath: join(directory, "agent-device-profile.json") };
+  return {
+    daemon,
+    filesystem,
+    logs,
+    port,
+    profilePath: join(directory, "agent-device-profile.json"),
+  };
 }
 
 async function tokens(rig: Rig) {

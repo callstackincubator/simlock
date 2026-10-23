@@ -9,7 +9,7 @@ import {
   type OptionalModuleDefinition,
   type WorkerView,
 } from "./index.js";
-import { fakeGatewayContext, fakeModule, fakeWorkerContext } from "./testing.js";
+import { fakeGatewayContext, fakeModule, fakeModuleTokens, fakeWorkerContext } from "./testing.js";
 
 const HOOK_DEADLINE_MS = 30_000;
 
@@ -76,6 +76,7 @@ describe("every optional module's contract", () => {
       definitions: [definition],
       logger: new NoopLogger(),
       role: "worker",
+      tokens: fakeModuleTokens(),
     });
 
     expect(loadWorker).not.toHaveBeenCalled();

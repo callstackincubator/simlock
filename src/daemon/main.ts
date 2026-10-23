@@ -518,6 +518,7 @@ async function composeDaemon(
     },
     definitions: moduleDefinitions,
     logger,
+    tokens: auth.tokens,
     role: "worker",
   });
   // Builds leasing on top of core (ADR 0018 §2).
@@ -766,8 +767,9 @@ async function composeDaemon(
       if (gatewayUplink !== undefined) {
         void (hostLoad?.firstReading() ?? Promise.resolve()).then(() => gatewayUplink.start());
       }
+      const profilesPrepared = moduleHost.prepareLocalProfiles();
       if (!config.http.enabled) return;
-      void startHttpGateway().then(
+      void profilesPrepared.then(startHttpGateway).then(
         () => resolveGatewayStarted?.(),
         (error: unknown) => {
           logger.error("HTTP frontend failed to start", { message: errorMessage(error) });

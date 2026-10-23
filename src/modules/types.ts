@@ -216,9 +216,36 @@ export interface ModuleHttpRoute {
   readonly statuses: Readonly<Record<number, ModuleHttpResponse>>;
 }
 
+// why: a by-shape copy of the auth module's token operations, so a module host mints and checks tokens without importing auth.
+export interface ModuleTokenRecord {
+  readonly id: string;
+  readonly hash: string;
+  readonly role: "agent" | "operator" | "worker";
+  readonly label?: string;
+  readonly createdAt: number;
+}
+
+export interface ModuleTokens {
+  create(
+    role: ModuleTokenRecord["role"],
+    label?: string,
+  ): Promise<{ record: ModuleTokenRecord; secret: string }>;
+  list(): Promise<ModuleTokenRecord[]>;
+  revoke(id: string): Promise<boolean>;
+  verify(secret: string): Promise<ModuleTokenRecord | undefined>;
+}
+
+// why: plain data in a `definition.ts`: the host keeps this file for local agents, loading none of the module's code.
+export interface ModuleLocalProfile {
+  readonly fileName: string;
+  readonly tokenLabel: string;
+  render(origin: string, secret: string): string;
+}
+
 export interface OptionalModuleDefinition<C> {
   readonly name: string;
   readonly config: ModuleConfig<C>;
+  readonly localProfile?: ModuleLocalProfile;
   readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
@@ -236,6 +263,7 @@ export interface ModuleHost {
     readonly remedy: string;
   }[];
   afterSocketClaimed(): void;
+  prepareLocalProfiles(): Promise<void>;
   beforeDrain(): Promise<void>;
   beforeDriversDispose(): Promise<void>;
 }
@@ -279,5 +307,6 @@ export interface ModuleHostOptions {
   readonly definitions: readonly OptionalModuleDefinition<unknown>[];
   readonly config: Config;
   readonly logger: Logger;
+  readonly tokens: ModuleTokens;
   readonly context: Omit<WorkerContext<unknown>, "name" | "config" | "daemonConfig" | "logger">;
 }

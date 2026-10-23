@@ -36,6 +36,24 @@ export const agentDeviceModule: OptionalModuleDefinition<AgentDeviceModuleConfig
       leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
     }),
   },
+  localProfile: {
+    fileName: "agent-device-profile.json",
+    render: (origin, secret) =>
+      `${JSON.stringify(
+        {
+          daemonAuthToken: secret,
+          daemonBaseUrl: `${origin}/v1/agent-device`,
+          daemonTransport: "http",
+          leaseProvider: "proxy",
+          runId: "simlock-local",
+          sessionIsolation: "tenant",
+          tenant: "local",
+        },
+        null,
+        2,
+      )}\n`,
+    tokenLabel: "agent-device on this Mac",
+  },
   loadGateway: () => import("./gateway.js"),
   loadWorker: () => import("./worker.js"),
   name: "agent-device",
