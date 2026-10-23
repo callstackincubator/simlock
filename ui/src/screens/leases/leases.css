@@ -101,22 +101,6 @@
   border: 1px solid var(--border);
 }
 
-.screen-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.screen-head .button:disabled {
-  cursor: not-allowed;
-}
-
-.screen-reason {
-  margin: 0;
-  font-size: var(--text-sm);
-}
-
 /* The picture sits in a phone-shaped frame; the canvas keeps the ratio it was painted at inside
  * it, so a landscape picture letterboxes rather than stretches. */
 .phone {

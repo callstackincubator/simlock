@@ -7,11 +7,14 @@ import { listSearch, readQuery, TABLE_SIZES, writeQuery } from "../model/paging"
 import { type FleetAddress, fleetAddress } from "../model/paths";
 import {
   filterWorkers,
+  readDrawerTab,
   readFilter,
   searchWorkers,
   upMeta,
   type WorkerFilter,
+  writeDrawerTab,
   writeFilter,
+  type DeviceDrawerTab,
   type DeviceRow,
   type WorkerPage,
   type WorkerRow,
@@ -33,6 +36,7 @@ import { navigate, setSearch, usePath, useSearch } from "./router";
 export type { EventRow } from "../model/event-list";
 export type {
   CapabilityRow,
+  DeviceDrawerTab,
   DeviceRow,
   FigureCard,
   InstallRow,
@@ -164,12 +168,22 @@ export function useWorkerPage(id: string): LoadView<WorkerPageView | undefined> 
 export function useDeviceDrawer(
   workerId: string,
   deviceId: string,
-): { readonly view: LoadView<DeviceRow | undefined>; readonly close: () => void } {
+): {
+  readonly view: LoadView<DeviceRow | undefined>;
+  readonly close: () => void;
+  readonly tab: DeviceDrawerTab;
+  readonly chooseTab: (tab: DeviceDrawerTab) => void;
+} {
   const page = useWorkerPage(workerId);
   const search = useSearch();
   return {
-    // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept.
-    close: () => navigate(`${workerPath(workerId)}${search}`, { replace: true }),
+    // why: each choice replaces the entry rather than adding one, as the worker page's tabs do.
+    chooseTab: (tab) => setSearch(writeDrawerTab(search, tab), { replace: true }),
+    // why: closing replaces the drawer's entry with the worker's own page, tab and paging kept; the
+    // drawer's own tab belongs to one open drawer, so it goes.
+    close: () =>
+      navigate(`${workerPath(workerId)}${writeDrawerTab(search, "details")}`, { replace: true }),
+    tab: readDrawerTab(search),
     view: mapView(page, (shown) => shown?.overview.devices?.find((row) => row.id === deviceId)),
   };
 }

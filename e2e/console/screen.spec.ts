@@ -144,13 +144,16 @@ test.describe("the device drawer's Screen tab", () => {
     let fleet: Awaited<ReturnType<typeof startFleet>> | undefined;
     try {
       const gatewayCommand = await writeCaptureProgram(fleetDir);
-      fleet = await startFleet([
-        {
-          config: { capabilities: { stream: { enabled: true, fps: 5 } } },
-          driverScript: { ios: { ...IOS, screenCaptureCommand: gatewayCommand } },
-          label: "worker-a",
-        },
-      ]);
+      fleet = await startFleet(
+        [
+          {
+            config: { capabilities: { stream: { enabled: true, fps: 5 } } },
+            driverScript: { ios: { ...IOS, screenCaptureCommand: gatewayCommand } },
+            label: "worker-a",
+          },
+        ],
+        { gatewayConfig: { capabilities: { stream: { enabled: true } } } },
+      );
       const worker = fleet.workers[0];
       if (worker === undefined) throw new Error("the fleet has no worker");
       const cases = [

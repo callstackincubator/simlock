@@ -440,8 +440,12 @@ export async function startFleet(
     readonly driverScript?: FakeDriverScript;
     readonly config?: Readonly<Record<string, unknown>>;
   }[],
+  options: { readonly gatewayConfig?: Readonly<Record<string, unknown>> } = {},
 ): Promise<Fleet> {
-  const gateway = await startDaemon("gateway");
+  const gateway = await startDaemon(
+    "gateway",
+    options.gatewayConfig === undefined ? {} : { config: options.gatewayConfig },
+  );
   const started: RunningDaemon[] = [];
   try {
     for (const worker of workers) {

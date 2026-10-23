@@ -334,7 +334,7 @@ test.describe("the leases page", () => {
 
       await leaseRow(page, lease.id).click();
       await expect(page.getByRole("dialog")).toBeVisible();
-      for (const name of ["Screen", "Details", "Screen", "Details"]) {
+      for (const name of ["Events", "Details", "Events", "Details"]) {
         await page.getByRole("tab", { name }).click();
       }
       await page.waitForTimeout(400);
@@ -642,8 +642,7 @@ test.describe("the leases page", () => {
       await leaseRow(page, granted.id).click();
       await expect(inspectorTitle(page, /ci-runner-3/)).toBeVisible();
       await expect(fact(page, "Device", "UDID")).toHaveText(granted.udid);
-      await page.getByRole("tab", { name: "Screen" }).click();
-      await expect(page.getByRole("button", { name: "Show screen" })).toBeVisible();
+      await expect(page.getByRole("dialog").getByRole("tab")).toHaveText(["Details", "Events"]);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();
