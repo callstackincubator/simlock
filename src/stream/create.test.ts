@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { type ScreenAvailability, ScreenNotSupportedError } from "../core/index.js";
 import { FakeClock, NoopLogger } from "../ports/index.js";
-import { createWorkerStream } from "./create.js";
+import { createGatewayStream, createWorkerStream } from "./create.js";
 import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
 
 function worker(
@@ -204,5 +204,38 @@ describe("createWorkerStream", () => {
     expect(((await unsupported.json()) as { error: { code: string } }).error.code).toBe(
       "STREAM_NOT_SUPPORTED",
     );
+  });
+
+  it("answers an agent token asking for a device's stream with 404 UNKNOWN_DEVICE, on a worker and through a gateway, opening and relaying nothing", async () => {
+    const agent = { principal: "tok_agent", role: "agent" };
+    const { opened, stream } = worker();
+    expect((await stream.mount.handle(deviceRequest("w1", "dev_1"), OPERATOR)).status).toBe(200);
+    const onWorker = await stream.mount.handle(deviceRequest("w1", "dev_1"), agent);
+    expect(onWorker.status).toBe(404);
+    expect(await onWorker.json()).toEqual({
+      error: { code: "UNKNOWN_DEVICE", message: "Unknown device: dev_1" },
+    });
+    expect(opened()).toBe(1);
+
+    const relays: string[] = [];
+    const gateway = createGatewayStream({
+      fleet: {
+        holder: () => undefined,
+        relay: async (workerId) => {
+          relays.push(workerId);
+          return new Response(null, { status: 500 });
+        },
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const throughGateway = await gateway.mount.handle(deviceRequest("w1", "dev_1"), agent);
+    expect(throughGateway.status).toBe(404);
+    expect(await throughGateway.json()).toEqual({
+      error: { code: "UNKNOWN_DEVICE", message: "Unknown device: dev_1" },
+    });
+    expect(relays).toEqual([]);
+    await gateway.mount.handle(deviceRequest("w1", "dev_1"), OPERATOR);
+    expect(relays).toEqual(["w1"]);
   });
 });
