@@ -105,4 +105,54 @@ test.describe("the console's layout", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("a toast's close button lies beside its text, inside the toast, and a one-line toast centres both", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
+    try {
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      await openPage(page, fleet.gateway, `/fleet/${id}`, "layout-a", false);
+
+      const measure = (title: string) =>
+        page
+          .locator(".toast")
+          .filter({ has: page.getByText(title, { exact: true }) })
+          .evaluate((toast) => {
+            const box = toast.getBoundingClientRect();
+            const close = toast.querySelector(".toast-close")?.getBoundingClientRect();
+            const text = toast.querySelector(".toast-title")?.getBoundingClientRect();
+            if (close === undefined || text === undefined) throw new Error("toast has no parts");
+            return {
+              closeInside:
+                close.left >= box.left &&
+                close.right <= box.right &&
+                close.top >= box.top &&
+                close.bottom <= box.bottom,
+              centres: Math.abs(close.top + close.height / 2 - (text.top + text.height / 2)),
+              overlap:
+                text.right > close.left && text.left < close.right && text.bottom > close.top,
+              hasAction: toast.querySelector(".toast-action") !== null,
+            };
+          });
+
+      await page.getByRole("button", { name: "Drain", exact: true }).click();
+      await expect(page.getByText("layout-a drained", { exact: true })).toBeVisible();
+      const drained = await measure("layout-a drained");
+      expect(drained.hasAction).toBe(true);
+      expect(drained.closeInside).toBe(true);
+      expect(drained.overlap).toBe(false);
+
+      await page.getByRole("button", { name: "Undrain", exact: true }).click();
+      await expect(page.getByText("layout-a undrained", { exact: true })).toBeVisible();
+      const undrained = await measure("layout-a undrained");
+      expect(undrained.hasAction).toBe(false);
+      expect(undrained.closeInside).toBe(true);
+      expect(undrained.overlap).toBe(false);
+      expect(undrained.centres).toBeLessThanOrEqual(4);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });
