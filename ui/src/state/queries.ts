@@ -17,7 +17,7 @@ import {
   type Visibility,
 } from "../data/live/connection";
 import { readEvent } from "../model/events";
-import { readRenewal, renewAnswer, type Renewal } from "../model/renewal";
+import { endsInInbox, leaseKeyOf, readRenewal, renewAnswer, type Renewal } from "../model/renewal";
 import { type StaleKey, staleKeys } from "../model/stale-keys";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
@@ -204,7 +204,17 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
       typeof data === "object" && data !== null
         ? (data as { payload?: unknown }).payload
         : undefined;
-    const keys = staleKeys(event.event, payload);
+    // why: a renewal needs a read only where its lease's deadline is shown from another answer: the
+    // inbox's ending item and an open lease page.
+    const keys = [
+      ...staleKeys(event.event, payload),
+      ...(renewal === undefined
+        ? []
+        : [
+            leaseKeyOf(renewal),
+            ...(endsInInbox(client.getQueryData(["inbox"]), renewal) ? [["inbox"]] : []),
+          ]),
+    ];
     if (keys.length === 0) return;
     for (const queryKey of keys) {
       marked.set(queryKey.join("/"), queryKey);

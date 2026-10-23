@@ -79,3 +79,20 @@ export function renewAnswer<T>(route: string, data: T, renewal: Renewal): T {
   if (route === "workers") return renewWorkers(data as WorkerList, renewal) as T;
   return data;
 }
+
+// why: the Inbox shows a lease's time left only on its `ending` item, so only that item goes stale.
+export function endsInInbox(data: unknown, renewal: Renewal): boolean {
+  const items = (data as { readonly items?: readonly unknown[] } | undefined)?.items;
+  return (items ?? []).some((item) => {
+    const { condition, lease } = item as { condition?: unknown; lease?: LeaseRecord };
+    return condition === "ending" && lease !== undefined && isRenewed(lease, renewal);
+  });
+}
+
+// why: a gateway names a lease `<worker>.<worker's id>`, which is the id its detail page is read by.
+export function leaseKeyOf(renewal: Renewal): readonly string[] {
+  return [
+    "lease",
+    renewal.workerId === undefined ? renewal.leaseId : `${renewal.workerId}.${renewal.leaseId}`,
+  ];
+}
