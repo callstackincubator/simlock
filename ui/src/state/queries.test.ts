@@ -620,4 +620,34 @@ describe("a lease renewal", () => {
     const dropped = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
     expect(dropped.leases[0]?.ttlDeadline).toBe(NOW + 60_000);
   });
+  it("marks only what a renewal leaves stale: 20 renewals of ending leases in 1 s give one inbox read, a lease observed gives one read, otherwise no request", async () => {
+    const ending = { condition: "ending", group: "Heads-up", key: "lease/l_1/ending" };
+    const inbox = { items: [{ ...ending, lease: lease("l_1") }] };
+    const cases = [
+      ["an ending lease in the inbox", "/v1/inbox", "l_1", 20, ["/v1/inbox"]],
+      ["a lease whose page is open", "/v1/leases/l_1", "l_1", 20, ["/v1/leases/l_1"]],
+      ["a lease nothing shows", "/v1/inbox", "l_2", 20, []],
+      ["another lease's page", "/v1/leases/l_1", "l_2", 20, []],
+    ] as const;
+    for (const [label, path, leaseId, count, expected] of cases) {
+      const { daemon, watch } = start();
+      daemon.reads = () => Promise.resolve({ body: path === "/v1/inbox" ? inbox : {}, date: null });
+      watch(path);
+      await settle();
+      const before = daemon.gets.length;
+
+      for (let renewal = 0; renewal < count; renewal += 1) {
+        daemon
+          .openStream()
+          ?.send(renewed({ leaseId, newDeadline: Date.now() + 120_000 + renewal }, renewal + 2));
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(
+        daemon.gets.slice(before).map((get) => get.path),
+        label,
+      ).toEqual(expected);
+    }
+  });
 });
