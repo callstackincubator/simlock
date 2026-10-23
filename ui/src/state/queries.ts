@@ -83,8 +83,7 @@ function timesOf(key: readonly unknown[]): Times {
   return TIMES[String(key[0])] ?? DEFAULT_TIMES;
 }
 
-export function createQueries(options: QueriesOptions): Queries {
-  const { clock, connection, visibility } = options;
+export function createQueries({ clock, connection, visibility }: QueriesOptions): Queries {
   const client = new QueryClient({
     defaultOptions: {
       queries: {
