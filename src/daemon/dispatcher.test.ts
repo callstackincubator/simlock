@@ -2320,24 +2320,35 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
   const requests = (dispatcher: Dispatcher) =>
     dispatcher.dispatch("list.get", { kind: "requests" }, session({ role: "admin" }));
 
-  it("inbox.get on a worker answers a lease about to end and a request that has waited over 60 s", async () => {
-    const { clock, dispatcher, engine } = await buildDispatcher();
-    await request(dispatcher, "holder-1", { ttlMs: 250_000 });
-    await request(dispatcher, "holder-2");
-    void request(dispatcher, "agent-a");
-    await expect.poll(() => engine.queueDepth).toBe(1);
-    clock.advance(60_001);
+  it("inbox.get on a worker answers a lease about to end and a request that has waited over 60 s, naming a holder by its token's label, or by its id when the daemon has no token store", async () => {
+    const holders = async (withoutTokens: boolean) => {
+      const { clock, dispatcher, engine, tokens } = await buildDispatcher({ withoutTokens });
+      const { record } = await tokens.create("agent", "ci-bot");
+      await request(dispatcher, record.id, { ttlMs: 250_000 });
+      await request(dispatcher, "holder-2");
+      void request(dispatcher, "agent-a");
+      await expect.poll(() => engine.queueDepth).toBe(1);
+      clock.advance(60_001);
+      const { items } = await dispatcher.dispatch("inbox.get", {}, session({ role: "admin" }));
+      return { id: record.id, items };
+    };
 
-    const { items } = await dispatcher.dispatch("inbox.get", {}, session({ role: "admin" }));
+    const labelled = await holders(false);
+    const bare = await holders(true);
 
-    expect(items.map((item) => [item.key.replace(/\/[^/]+\//, "/id/"), item.condition])).toEqual([
+    expect(
+      labelled.items.map((item) => [item.key.replace(/\/[^/]+\//, "/id/"), item.condition]),
+    ).toEqual([
       ["request/id/waiting", "waiting"],
       ["lease/id/ending", "ending"],
     ]);
-    expect(items).toContainEqual(
+    expect(labelled.items).toContainEqual(
       expect.objectContaining({
-        lease: expect.objectContaining({ holder: "holder-1", model: "iPhone 17 Pro" }),
+        lease: expect.objectContaining({ holder: "ci-bot", model: "iPhone 17 Pro" }),
       }),
+    );
+    expect(bare.items).toContainEqual(
+      expect.objectContaining({ lease: expect.objectContaining({ holder: bare.id }) }),
     );
   });
 

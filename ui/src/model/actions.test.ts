@@ -194,6 +194,10 @@ function checksInbox(): void {
   expect(heldLease.menu[0]?.confirm?.body).toBe(
     "iPhone 16 on mac-mini-1 goes back to the pool now, and agent-1's next command on it fails.",
   );
+  expect(heldLease.menu[0]?.success.view).toEqual({
+    label: "View device",
+    to: "/fleet/wrk_1/dev_1",
+  });
   const drainedItem = items.find((item) => item.key === "wrk_drained/drained");
   if (drainedItem === undefined) throw new Error("no drained item");
   expect(inboxActions(drainedItem, { ...context, mode: undefined })).toEqual({ menu: [] });

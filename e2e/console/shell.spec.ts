@@ -46,7 +46,7 @@ test.describe("the shell", () => {
     expect(await hasHorizontalScroll(page)).toBe(false);
   });
 
-  test("the sidebar's Inbox count reads only /v1/inbox on every page, not the fleet lists", async ({
+  test("the sidebar's Inbox count reads only /v1/inbox on every page, and the Inbox page reads no leases, tokens or requests", async ({
     daemon,
     page,
   }) => {
@@ -63,6 +63,14 @@ test.describe("the shell", () => {
     // why: the sign-in check and the token check at start each read /v1/workers outside the query
     // layer, so two are allowed.
     expect(asked.get("/v1/workers") ?? 0).toBeLessThanOrEqual(2);
+    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
+      expect(asked.get(path) ?? 0, path).toBe(0);
+    }
+
+    // why: the Inbox page reads the items and the worker list, and the page is drawn once both are in,
+    // so a read of leases, tokens or requests would have been asked by then.
+    await page.getByRole("link", { name: /^Inbox/ }).click();
+    await expect(page.getByText("Nothing needs you.")).toBeVisible();
     for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
       expect(asked.get(path) ?? 0, path).toBe(0);
     }

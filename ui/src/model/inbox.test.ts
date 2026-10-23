@@ -550,5 +550,20 @@ describe("the Inbox page", () => {
       open: "Open worker",
       to: "/fleet/wrk%2F1",
     });
+    const ofDevice = pageOf(
+      [
+        worker({
+          devices: [device("dev_1", { state: "quarantined" })],
+          id: "wrk/1",
+          label: "mac-mini-1",
+        }),
+      ],
+      "wrk/1/dev_1/quarantined",
+    );
+    expect(shownOf(ofDevice).about).toEqual({
+      name: "mac-mini-1",
+      open: "Open worker",
+      to: "/fleet/wrk%2F1",
+    });
   });
 });
