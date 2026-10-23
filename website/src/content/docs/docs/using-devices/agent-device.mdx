@@ -133,6 +133,7 @@ Restarting a worker's daemon ends every agent-device lease on that worker, even 
 | `refused: this agent-device is too old to use through a gateway; update it` | Upgrade the agent's agent-device. |
 | `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. |
 | `agent-device is not available on this simlock: phone daemon: <message>` | `open --physical`, or a command on a phone lease, found the phone daemon starting or down. Simulator leases keep working; `simlock doctor` prints the phone daemon's finding. |
+| `refused by simlock: No worker in the fleet can currently serve this request` | `open` (a new allocate) found every worker that can serve agent-device drained. Undrain a worker, or wait for one to take the request. Leases already held keep working. |
 
 ## Related
 

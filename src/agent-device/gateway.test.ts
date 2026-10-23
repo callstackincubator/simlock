@@ -51,7 +51,7 @@ describe("agent-device's gateway side", () => {
     expect(unknown.body).toContain(noWorker);
   });
 
-  it("a worker whose catalog is unread, and a drained one, are not offered to a new allocate, while the same worker read and not drained is", async () => {
+  it("a worker whose catalog is unread, and a drained one, are not relayed a bare health request, while the same worker read and not drained is", async () => {
     expect((await healthThroughGateway([viewOf()])).relayed).toHaveLength(1);
 
     const unread = await healthThroughGateway([viewOf({ catalogReadAt: undefined })]);
