@@ -33,7 +33,7 @@ import {
 const GROUP_ORDER = ["Broken", "Needs a look", "Heads-up"] as const;
 
 export function InboxScreen() {
-  const { choose, couldNotCheck, filter, rows, urlId, view } = useInbox();
+  const { choose, filter, rows, urlId, view } = useInbox();
   const { close, fromList } = useInboxDrawer(urlId);
   const actionsOf = useInboxActions();
   const drawerActions = (row: InboxRow | undefined) =>
@@ -60,12 +60,7 @@ export function InboxScreen() {
       <Loaded view={view}>
         {(page) => (
           <>
-            <InboxBody
-              rows={rows(page)}
-              filter={filter}
-              couldNotCheck={couldNotCheck}
-              actionsOf={actionsOf}
-            />
+            <InboxBody rows={rows(page)} filter={filter} actionsOf={actionsOf} />
             {urlId === undefined ? null : (
               <Drawer
                 key={urlId}
@@ -93,17 +88,10 @@ export function InboxScreen() {
 export function InboxBody(props: {
   readonly rows: readonly InboxRow[];
   readonly filter: InboxFilter;
-  readonly couldNotCheck?: readonly string[];
   readonly actionsOf?: (row: InboxRow) => InboxRowActions;
 }) {
-  const { actionsOf, couldNotCheck = [], filter, rows } = props;
-  const unchecked =
-    couldNotCheck.length === 0 ? null : (
-      <p className="muted">{`Could not check: ${couldNotCheck.join(", ")}`}</p>
-    );
+  const { actionsOf, filter, rows } = props;
   if (rows.length === 0) {
-    // why: an Inbox that could not read everything never claims nothing needs you.
-    if (unchecked !== null) return unchecked;
     return (
       <div className="table-card">
         <p className="muted table-empty">
@@ -114,7 +102,6 @@ export function InboxBody(props: {
   }
   return (
     <>
-      {unchecked}
       {GROUP_ORDER.map((group) => {
         const inGroup = rows.filter((row) => row.group === group);
         return inGroup.length === 0 ? null : (

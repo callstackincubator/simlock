@@ -1,9 +1,10 @@
 // why: a key is the front of a query key; `["lease"]` stands for every `["lease", id]`.
 export type StaleKey = readonly string[];
 
-const LEASES: readonly StaleKey[] = [["leases"], ["workers"], ["lease"]];
-const REQUESTS: readonly StaleKey[] = [["lease-requests"]];
-const WORKERS: readonly StaleKey[] = [["workers"]];
+// why: the Inbox is made from the workers, leases and waiting requests, so whatever marks one of them marks it.
+const LEASES: readonly StaleKey[] = [["leases"], ["workers"], ["lease"], ["inbox"]];
+const REQUESTS: readonly StaleKey[] = [["lease-requests"], ["inbox"]];
+const WORKERS: readonly StaleKey[] = [["workers"], ["inbox"]];
 const NONE: readonly StaleKey[] = [];
 
 function hasLeaseId(payload: unknown): boolean {
@@ -30,7 +31,8 @@ export function staleKeys(name: string, payload: unknown): readonly StaleKey[] {
     default:
   }
   if (name.startsWith("request.")) return REQUESTS;
-  if (name.startsWith("device.")) return hasLeaseId(payload) ? [["workers"], ["lease"]] : WORKERS;
+  if (name.startsWith("device."))
+    return hasLeaseId(payload) ? [["workers"], ["lease"], ["inbox"]] : WORKERS;
   if (
     name.startsWith("worker.") ||
     name.startsWith("component.") ||

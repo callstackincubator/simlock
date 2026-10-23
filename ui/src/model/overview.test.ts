@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { inboxItems } from "../../../src/contract/inbox";
 import { figuresOf } from "./figures";
 import { overviewOf } from "./overview";
 import { statsOf } from "./test-support";
@@ -135,15 +136,17 @@ describe("the overview", () => {
       ttlDeadline: NOW + 100_000,
       ttlMs: 900_000,
     };
+    const workers = [
+      ...fleet,
+      worker("down-2", [], { connection: "disconnected" }),
+      worker("down-3", [], { connection: "disconnected" }),
+    ];
     const { inbox } = overviewOf({
+      items: inboxItems(workers, { leases: [lease], now: NOW }),
       leases: [lease],
       now: NOW,
       requests: [],
-      workers: [
-        ...fleet,
-        worker("down-2", [], { connection: "disconnected" }),
-        worker("down-3", [], { connection: "disconnected" }),
-      ],
+      workers,
     });
 
     expect(inbox.problems).toBe(5);

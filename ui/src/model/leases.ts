@@ -1,6 +1,13 @@
 import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
+import {
+  deviceOfLease,
+  holderName,
+  holderOf,
+  isExpiring,
+  workerOfLease,
+} from "../../../src/contract/inbox";
 import { defined } from "./defined";
 import { type ConsoleEvent, textField, workerIdOf } from "./events";
 import { formatDuration } from "./time";
@@ -39,42 +46,6 @@ export interface Holder {
   readonly label?: string;
 }
 
-// why: over HTTP a requester's id is its token's id, so a token with that id names it; a requester
-// no token matches, such as an agent on the local socket, is its id alone.
-export function holderOf(requesterId: string, tokens: readonly TokenRecord[]): Holder {
-  const id = agentIdOf(requesterId);
-  const label = tokens.find((token) => token.id === id)?.label;
-  return label === undefined ? { id } : { id, label };
-}
-
-const GATEWAY_REQUESTER = /^gw:[^:]+:(.+)$/;
-
-// why: a gateway hands a worker its agents' requests under `gw:<gateway instance>:<agent id>`, so a
-// worker's own view names the agent behind that prefix; the console shows the agent, as the
-// gateway's lease list does.
-export function agentIdOf(requesterId: string): string {
-  return GATEWAY_REQUESTER.exec(requesterId)?.[1] ?? requesterId;
-}
-
-// why: a holder's title is its token's label, or its id where no label names it.
-function holderTitle(holder: Holder): string {
-  return holder.label ?? holder.id;
-}
-
-export function holderName(requesterId: string, tokens: readonly TokenRecord[]): string {
-  return holderTitle(holderOf(requesterId, tokens));
-}
-
-// why: a single host names no worker on its leases, and every lease there is on its one worker, the
-// host itself.
-function workerOfLease(
-  lease: { readonly workerId?: string | undefined },
-  workers: readonly WorkerView[],
-): WorkerView | undefined {
-  if (lease.workerId === undefined) return workers.length === 1 ? workers[0] : undefined;
-  return workers.find((worker) => worker.id === lease.workerId);
-}
-
 export function leasesOnWorker(
   leases: readonly LeaseRecord[],
   workerId: string,
@@ -99,14 +70,7 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-export function deviceOfLease(
-  lease: LeaseRecord,
-  workers: readonly WorkerView[],
-): WorkerDevice | undefined {
-  return workerOfLease(lease, workers)?.devices?.find((device) => device.id === lease.deviceId);
-}
-
-function workerNameOfLease(
+export function workerNameOfLease(
   lease: {
     readonly workerId?: string | undefined;
     readonly worker?: { readonly label?: string | undefined } | undefined;
@@ -132,14 +96,6 @@ export const LEASE_FILTERS: readonly { readonly value: LeaseFilter; readonly lab
   { label: "iOS", value: "ios" },
   { label: "Android", value: "android" },
 ];
-
-// why: a lease with under 5 minutes left is about to end, so the list, the lease drawer, the Overview and the
-// Inbox warn by the same rule.
-const EXPIRING_UNDER_MS = 5 * 60_000;
-
-export function isExpiring(deadline: number, now: number): boolean {
-  return deadline - now < EXPIRING_UNDER_MS;
-}
 
 function percentLeft(deadline: number, now: number, ttlMs: number): number {
   return ttlMs <= 0 ? 0 : Math.max(0, Math.min(100, ((deadline - now) / ttlMs) * 100));
@@ -328,7 +284,7 @@ function recordFacts(
     holder,
     percent: percentLeft(deadline, now, record.ttlMs),
     renewed: `${formatDuration(now - record.lastRenewedAt)} ago`,
-    title: holderTitle(holder),
+    title: holderName(record.requesterId, tokens),
     ...(record.ownerId === record.requesterId ? {} : { ownerId: record.ownerId }),
   };
 }

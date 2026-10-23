@@ -33,6 +33,7 @@ interface Times {
 }
 
 const TIMES: Readonly<Record<string, Times>> = {
+  inbox: { freshMs: FRESH_MS, pollMs: 10_000 },
   lease: { freshMs: FRESH_MS, pollMs: 10_000 },
   "lease-requests": { freshMs: FRESH_MS, pollMs: 5_000 },
   leases: { freshMs: FRESH_MS, pollMs: 10_000 },

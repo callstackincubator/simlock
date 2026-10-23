@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { inboxActions, leaseActions, requestActions, workerActions } from "./actions";
-import { inboxItems } from "./inbox";
+import { inboxItems } from "../../../src/contract/inbox";
 import type { LeaseRecord } from "./leases";
 import type { UpdateFacts } from "./versions";
 import type { WaitingRequest } from "./waiting";
@@ -163,7 +163,7 @@ function checksInbox(): void {
       ],
     }),
   ];
-  const context = { mode: "gateway", now: NOW, tokens: [], workers } as const;
+  const context = { mode: "gateway", workers } as const;
   const items = inboxItems(workers, { leases: [ending], now: NOW, requests: [waiting] });
   const of = (key: string) => {
     const item = items.find((candidate) => candidate.key === key);
