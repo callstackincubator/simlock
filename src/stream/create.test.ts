@@ -27,8 +27,17 @@ function worker(
   );
   const feeds: ScriptedFeed[] = [];
   let opened = 0;
+  const handlers = new Map<string, ((envelope: { payload: { deviceId: string } }) => void)[]>();
   const stream = createWorkerStream({
     clock,
+    events: {
+      subscribe: (event, handler) => {
+        const forEvent = handlers.get(event) ?? [];
+        forEvent.push(handler as (typeof forEvent)[number]);
+        handlers.set(event, forEvent);
+        return () => undefined;
+      },
+    },
     instanceId: "w1",
     logger: new NoopLogger(),
     name: "stream",
@@ -47,7 +56,10 @@ function worker(
     },
     settings: { bitrateKbps: 1500, fps: 30, maxDimension: 720 },
   });
-  return { clock, feeds, opened: () => opened, registry, stream };
+  const emit = (event: string, deviceId: string) => {
+    for (const handler of handlers.get(event) ?? []) handler({ payload: { deviceId } });
+  };
+  return { clock, emit, feeds, opened: () => opened, registry, stream };
 }
 
 const STREAM_HEADERS = {
@@ -314,7 +326,7 @@ describe("createWorkerStream", () => {
     expect(relays.map((relay) => relay.workerId)).toEqual(["w1", "w_busy", "w_missing", "w_gone"]);
   });
 
-  it("follows its device: a lease granted leaves the stream running, a lease ended stops the capture before the reclaim hook returns, and a hook that runs while the capture opens refuses with 409", async () => {
+  it("follows its device: a lease granted leaves the stream running, a lease ended or a device that stops running ends the capture, and one that comes while the capture opens refuses with 409", async () => {
     {
       const { feeds, registry, stream } = worker();
       const ended = (leaseId: string) =>
@@ -360,6 +372,42 @@ describe("createWorkerStream", () => {
       expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
         "DEVICE_NOT_RUNNING",
       );
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    for (const event of [
+      "device.shutdown",
+      "device.absence-detected",
+      "device.quarantined",
+      "device.deleted",
+    ]) {
+      const { emit, feeds, stream } = worker();
+      const watched = await stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      const other = await stream.mount.handle(deviceRequest("w1", "dev_leased"), OPERATOR);
+      const watchedReader = watched.body!.getReader();
+      const otherReader = other.body!.getReader();
+      await watchedReader.read();
+      await otherReader.read();
+      emit(event, "dev_ready");
+      await settledWithin(Promise.resolve());
+      expect(feeds[0]?.closes, event).toBe(1);
+      expect((await watchedReader.read()).done, event).toBe(true);
+      expect(feeds[1]?.closes, event).toBe(0);
+      feeds[1]?.keyframe([5]);
+      expect((await otherReader.read()).done, event).toBe(false);
+      await otherReader.cancel();
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { emit, feeds, stream } = worker([], true, false, gate);
+      const asked = stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      await settledWithin(asked);
+      emit("device.shutdown", "dev_ready");
+      openIt();
+      const refused = await asked;
+      expect(refused.status).toBe(409);
       expect(feeds[0]?.closes).toBe(1);
     }
   });

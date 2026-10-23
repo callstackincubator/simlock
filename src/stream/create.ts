@@ -1,5 +1,5 @@
 import type { ScreenAvailability, ScreenSettings } from "../core/index.js";
-import type { ModuleLeaseEndParticipant } from "../modules/index.js";
+import type { ModuleLeaseEndParticipant, WorkerContext } from "../modules/index.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 import { DEFAULT_SILENCE_MS, DEFAULT_START_MS } from "./feed.js";
@@ -16,6 +16,7 @@ import { createWorkerStreamLink, type ScreenOpener, type StreamRegistry } from "
 export interface WorkerStreamOptions {
   readonly name: string;
   readonly instanceId: string;
+  readonly events: WorkerContext<unknown>["events"];
   readonly registry: StreamRegistry;
   readonly screens: ScreenOpener & {
     screenAvailability(): Promise<readonly ScreenAvailability[]>;
