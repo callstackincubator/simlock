@@ -594,14 +594,13 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const session = buildHttpSession(identity);
     const id = c.req.valid("param").id;
 
-    // Best-effort lookup, only to decorate the response with the device id/state --
+    // why: best-effort lookup, only to decorate the response with the device id/state --
     // `lease.release`'s output schema is `{ leaseId }` alone (no `deviceId`), so this is still
     // needed for the response body. It is *not* the authorization decision: `lease.release`
     // below is dispatched directly and is the sole source of truth for whether this request is
     // allowed (S6). Its `ownsLease` hook answers `FORBIDDEN`/403 for someone else's lease and
     // the handler answers `UNKNOWN_LEASE`/404 for a nonexistent one, matching the socket
-    // transport exactly -- unlike the `lease.list`-filtered `findOwnedLease`, which always
-    // answered 404 for both cases.
+    // transport exactly.
     const lease = await findLeaseForDecoration(deps, session, id);
 
     await deps.dispatch("lease.release", { leaseId: id }, session);
