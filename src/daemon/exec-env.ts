@@ -1,7 +1,8 @@
 /**
  * why: a `device.exec` command runs as the daemon's user for whoever holds a lease, so it gets
  * only what the wrapped tools need to start; every other key of the daemon's environment (CI
- * tokens, cloud keys, launchd-injected values) stays with the daemon.
+ * tokens, cloud keys, launchd-injected values) is not passed on. This is no secrecy boundary: the
+ * command runs as the daemon's user and can still read the daemon's own environment.
  */
 const KEPT_KEYS: ReadonlySet<string> = new Set([
   "PATH",
