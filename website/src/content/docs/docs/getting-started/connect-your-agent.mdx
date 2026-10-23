@@ -37,6 +37,16 @@ Do not put a fixed `SIMLOCK_AGENT_ID` in a shared shell profile or a shared MCP 
 
 `SIMLOCK_AGENT_ID` wins over the session ID when both are set. `simlock lease --agent-id <id>` wins over both, for that one command.
 
+## Install the skill
+
+Run `simlock setup` once. It writes a small `simlock` skill into Claude Code and Codex, for every project of your user, or for the current project with `--project`. The skill tells the agent what Simlock is, to check its setup with `simlock whoami` and to read the rules with `simlock instructions`. It holds no rules itself, so it stays right after you update Simlock.
+
+```sh
+simlock setup
+```
+
+In a terminal, `setup` asks for the scope and, for each tool, whether to connect Simlock's MCP server too. Pass `--user` or `--project`, `--tool claude-code` or `--tool codex`, and `--mcp` or `--no-mcp` to answer for a script. See [`simlock setup`](/simlock/docs/reference/cli#simlock-setup) for the paths and the report.
+
 ## Use the CLI
 
 Run `simlock instructions` and paste its output into your project's `AGENTS.md` or `CLAUDE.md`. It prints the current rules for using Simlock: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it again after you update Simlock, so your agents follow the rules your version has.
@@ -80,6 +90,8 @@ Add the server to `.mcp.json` at the root of your project:
 }
 ```
 
+Or let `simlock setup --mcp` run `claude mcp add -s user simlock -- simlock mcp` for you.
+
 The server takes the Claude Code session's identity, the same one the CLI uses in that session.
 
 </TabItem>
@@ -88,6 +100,8 @@ The server takes the Claude Code session's identity, the same one the CLI uses i
 ```sh
 codex mcp add simlock -- simlock mcp
 ```
+
+Or let `simlock setup --mcp` run it for you, at the user scope.
 
 The server gets its own identity from its process ID. It is not the identity the CLI has in the same session.
 

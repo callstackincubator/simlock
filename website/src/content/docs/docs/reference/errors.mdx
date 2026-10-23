@@ -22,8 +22,8 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | Exit | Error codes | Meaning |
 | --- | --- | --- |
 | 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
-| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
-| 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED`, `WORKER_NOT_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `CANCELLED` | The command failed. Read the code and the message. |
+| 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `SETUP_REFUSED`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED`, `WORKER_NOT_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
 | 12 | `NO_DRIVER`, `CAPABILITY_MISSING`, `RUNTIME_MISSING`, `UNKNOWN_MODEL`, `INSUFFICIENT_DISK_SPACE`, `LICENSE_NOT_ACCEPTED`, `DOWNLOADS_DISABLED`, `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE`, `DEVICE_NOT_ENROLLABLE`, `UNKNOWN_DEVICE`, `HISTORY_NOT_KEPT`, `UNKNOWN_WORKER`, `UNKNOWN_ALERT_DESTINATION` | What you named does not exist here, or this machine cannot provide it. |
@@ -140,6 +140,8 @@ The CLI and the HTTP API each add a few codes of their own:
 | Code | Where | Exit or HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
 | `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
+| `SETUP_REFUSED` | CLI | exit 2 | `simlock setup` found a file or a symlink where its `simlock` skill directory goes. Nothing was written. | Move it aside and run `setup` again. |
+| `SETUP_MCP_FAILED` | CLI | exit 1 | `simlock setup` wrote the skills, but a tool's `mcp add` command failed or ran longer than 30 seconds. The message names each tool and the reason. | Run the tool's `mcp add` command by hand, as the message and [Connect your agent](/simlock/docs/getting-started/connect-your-agent) show. |
 | `UNAUTHENTICATED` | HTTP | 401 | The request has no token, or one the daemon does not accept. | Send a valid token as `Authorization: Bearer <token>`. |
 | `UNSUPPORTED_MEDIA_TYPE` | HTTP | 415 | A request with a JSON body did not send `Content-Type: application/json`. | Send the header `Content-Type: application/json`. |
 | `UNKNOWN_LEASE_REQUEST` | HTTP | 404 | No lease request has this ID. | Check the ID the create call returned. |

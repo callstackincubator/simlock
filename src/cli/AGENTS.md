@@ -4,7 +4,7 @@ Does: the `simlock` command surface over `simlock/admin` — parse, render, hold
 Entry: `main.ts` (the `simlock` bin) → `index.ts` `runCli(argv)`.
 Uses: admin, bus (event key, type), client (types), agent-identity, lease-policy, history (reader), core
 (`loadConfig` only), contract, ports, module-registry (`optionalModules` only); instructions
-(`commands/instructions.ts` only); mcp, loaded on demand. Never imports: daemon, drivers, gateway, http.
+(`commands/instructions.ts` and `commands/setup.ts` only); mcp, loaded on demand. Never imports: daemon, drivers, gateway, http.
 
 Everything except `agent-identity` (the requester-id resolver, the one cheap component) is
 loaded **on demand**: the CLI's own shared files (`main.ts`, `index.ts`, `tree.ts`,
@@ -55,7 +55,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    whenever the chosen role is the gateway (`SIMLOCK_HOME` still the root). When a worker
    answers `UNSUPPORTED_IN_WORKER_MODE`, no `--gateway` was given and a gateway is present,
    the printed message gets the `--gateway` hint appended. With `--gateway` and no gateway
-   present every command but `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp` and `instructions` (and any `--help`, except after `adb`/`simctl`)
+   present every command but `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup` (and any `--help`, except after `adb`/`simctl`)
    stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects.
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
@@ -98,6 +98,11 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 9. **`simlock mcp`** — imports `src/mcp/main.ts` and runs it, passing the global flag as `{ daemonFlag }`.
 10. **`simlock instructions [--json]`** — prints the static rules text from `src/instructions`, or
     one JSON object `{ instructions }`; never connects to a daemon.
+11. **`simlock setup [--user | --project] [--tool <t>] [--mcp | --no-mcp] [--json]`** — installs the
+    router skill through `setupAgentTools`, with `environment.homeDirectory`, `workingDirectory`,
+    `codexHome`, `filesystem` and `runTool` (the composition root reads `homedir()`, `process.cwd()`
+    and `CODEX_HOME`); never connects to a daemon. Prompts only without `--json`. A refusal is
+    `SETUP_REFUSED` (exit 2); a failed `mcp add` prints the report, then `SETUP_MCP_FAILED` (exit 1).
 
 ## Rules
 

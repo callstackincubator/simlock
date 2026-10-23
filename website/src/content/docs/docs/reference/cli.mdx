@@ -18,6 +18,7 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
+| [`simlock setup`](#simlock-setup) | Install the Simlock skill into Claude Code and Codex | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock status`](#simlock-status) | Show the daemon, its devices and its leases | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock events`](#simlock-events) | Print business events | [Events reference](/simlock/docs/reference/events) |
@@ -58,7 +59,7 @@ The CLI takes these flags out of the whole command line, including the arguments
 
 With `--gateway`, the command goes to the gateway. With `--local`, it goes to the worker. With neither, it goes to the gateway only when this machine has a gateway (`~/.simlock/gateway` holds an `instance.json` or `config.json`) and no worker has started here yet (`~/.simlock/instance.json` does not exist). Otherwise it goes to the worker.
 
-`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp` and `instructions`.
+`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`.
 
 When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
 
@@ -217,6 +218,46 @@ simlock instructions [--json]
 | `--json` | Print one JSON object, `{"instructions": "..."}`, instead of the text. |
 
 The text is the same on every machine, and the command never contacts a daemon, so it works with no daemon running.
+
+## simlock setup
+
+Install a small `simlock` skill into Claude Code and Codex, so every later agent session there knows what Simlock is, checks its setup with `simlock whoami` and reads the rules with `simlock instructions`. The skill holds no rules itself, so it stays right after you update Simlock. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+
+```text
+simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--user` | Install for your user, for every project. The default. |
+| `--project` | Install for the project in the current directory only. |
+| `--tool <claude-code\|codex>` | Install for this tool, even when it is not set up on this machine. Without it, `setup` installs for each tool whose directory (`~/.claude`, `~/.codex` or `$CODEX_HOME`) exists, and reports the other as `skipped`. |
+| `--mcp` | Also connect Simlock's MCP server, by running the tool's own `mcp add` command. |
+| `--no-mcp` | Do not connect it, and do not ask. |
+| `--json` | Print the report as one JSON object, `{"scope": ..., "tools": [...]}`, and ask nothing. |
+
+In a terminal, `setup` asks for the scope (`Install only for this project (not every project)? [y/N]`) and, for each tool it installs, whether to connect the MCP server too. The defaults are the user scope and no MCP. With no terminal, or with `--json`, it asks nothing and takes the defaults unless a flag says otherwise.
+
+The skill is one file, `SKILL.md`, in a `simlock` directory under the tool's skills directory:
+
+| Tool | User scope | Project scope |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/simlock/` | `.claude/skills/simlock/` |
+| Codex | `~/.agents/skills/simlock/` | `.agents/skills/simlock/` |
+
+`setup` touches nothing outside the `simlock` directory. Run again, it replaces the directory's contents. If a file or a symlink sits where the `simlock` directory goes, it fails with `SETUP_REFUSED` (exit 2) before writing anything for any tool.
+
+The MCP server is connected with `claude mcp add -s user simlock -- simlock mcp` (`-s project` at the project scope) and `codex mcp add simlock -- simlock mcp`. Codex has no project scope for MCP, so at the project scope `--mcp` reports `skipped` for it. A tool that is not on `PATH` is reported `skipped`; a command that fails or runs longer than 30 seconds is reported `failed`, and the command then exits 1 with `SETUP_MCP_FAILED` after the report.
+
+The report has one `skill` line per tool and, when MCP was asked for, one `mcp` line:
+
+```text
+claude-code  skill  wrote      /Users/me/.claude/skills/simlock
+claude-code  mcp    connected
+codex        skill  skipped    /Users/me/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)
+```
+
+Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connected`, `already`, `failed` and `skipped`. The command never contacts a daemon.
 
 ## simlock status
 
