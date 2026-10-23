@@ -8,7 +8,7 @@ import { buildResults, groupStatuses, searchGroups } from "../model/search";
 import { type WaitingList, waitingTable } from "../model/waiting";
 import type { WorkerList } from "../model/workers";
 import { useActions } from "./actions";
-import { useDaemonMode, useLiveResource, useNow } from "./live";
+import { useDaemonMode, useRouteQuery, useNow } from "./live";
 import { loadView } from "./resource";
 import { navigate } from "./router";
 
@@ -69,7 +69,7 @@ function sourceOf<T>(state: ResourceState<T>): Source<T> {
 // why: a group already shown never changes while the dialog is open, so each read is kept as it
 // stood the first time it settled, answered or failed; a live update after that changes nothing.
 function useSettledOnce<T>(path: ApiPath): Source<T> {
-  const live = sourceOf(useLiveResource<T>(path));
+  const live = sourceOf(useRouteQuery<T>(path));
   const [kept, keep] = useState(live);
   if (kept.kind === "loading" && live.kind !== "loading") keep(live);
   return kept.kind === "loading" ? live : kept;

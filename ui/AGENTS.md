@@ -31,7 +31,7 @@ Each layer imports only the layers below it. `.dependency-cruiser.mjs` enforces 
    (`overviewOf` in `overview.ts`). Shared rules live once: `workerHealth`, `workerSlots`
    (`fleet.ts`), `eventSummary`, `eventTone` (`activity.ts`), `inboxTone`
    (`inbox.ts`), the word → tone tables (`tones.ts`), page paths (`paths.ts`).
-2. State: a hook in `src/state/<page>.ts` reads routes with `useLiveResource`, turns each into a
+2. State: a hook in `src/state/<page>.ts` reads routes with `useRouteQuery`, turns each into a
    `LoadView` (`resource.ts`: `loadView`, `mapView`, `bothViews`), and maps it through the
    builder. It re-exports the view-model types the screen needs.
 3. Screen: `src/screens/<page>/index.tsx` exports `<Page>Screen`, wraps content in `Loaded`, and
@@ -54,6 +54,22 @@ read that fails leaves none. The same read repeats every 10 minutes (the daily c
 a failed repeat keeps the last values, and the timer stops with the live connection. `useDaemonMode`
 and `useDaemonFacts` (`state/live.tsx`) give them to state and to the sidebar's update notice
 (ADR 0037 §4, ADR 0042).
+
+## Reads
+
+A page reads a route only while it is on screen (`useRouteQuery`, `state/live.tsx`). `state/queries.ts`
+holds the TanStack `QueryClient` (it is allowed only in `state/`) and the keys and times of ADR 0044:
+`['workers']` every 15 s, `['leases']` and `['lease', id]` 10 s, `['lease-requests']` 5 s,
+`['stats', range]` 60 s, `['tokens']` never; a read stays fresh 2 s (stats 30 s, tokens 5 min);
+data no page uses is dropped after 60 s. A key polls only while a page uses it, the tab is shown and
+the connection is up; a hidden tab or a lost connection reads nothing, and coming back reads each key
+on screen once. An event marks keys stale through `model/stale-keys.ts`, and the burst window reads
+them once, 300 ms after the last event of a burst (at most 1 s after its first), and again 1.5 s later;
+a key no page shows is only marked. `LiveConnection` (`data/live/connection.ts`) keeps the stream, the
+phase, the health checks and the clock offset, and does one classified GET for a read
+(`connection.read`): a refusal is the route's own answer, a timeout while the daemon starts is asked
+again, any other failure is the connection lost (`ConnectionLost`), which a page never shows as an
+error. A refused stream is asked for again a second later.
 
 ## Actions
 

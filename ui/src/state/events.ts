@@ -23,7 +23,7 @@ import type { LeaseList, LeaseRecord } from "../model/leases";
 import { itemIdFrom } from "../model/paths";
 import type { WaitingList, WaitingRequest } from "../model/waiting";
 import type { WorkerList, WorkerView } from "../model/workers";
-import { useLiveEvents, useLiveResource, useNow, useStreamOpened } from "./live";
+import { useLiveEvents, useRouteQuery, useNow, useStreamOpened } from "./live";
 import { loadView, mapView } from "./resource";
 import { setSearch, usePath, useSearch } from "./router";
 import { useApi } from "./services";
@@ -83,9 +83,9 @@ export function useEvents(): LoadView<EventsPage> {
   const events = feed.data;
   // why: the places an event links to are read for the links only; a route that is slow, refused
   // or not served here costs the feed nothing, only the link.
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? NO_WORKERS;
-  const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? NO_LEASES;
-  const requests = useLiveResource<WaitingList>("/v1/lease-requests").data?.requests ?? NO_REQUESTS;
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers ?? NO_WORKERS;
+  const leases = useRouteQuery<LeaseList>("/v1/leases").data?.leases ?? NO_LEASES;
+  const requests = useRouteQuery<WaitingList>("/v1/lease-requests").data?.requests ?? NO_REQUESTS;
   const now = useNow().server;
   const address = useSearch();
   const subject = readSubject(address);

@@ -19,7 +19,7 @@ import type { WorkerList } from "../model/workers";
 import { type ListDrawerState, useListDrawer } from "./drawer";
 import { useRecentEvents } from "./events";
 import { useActions } from "./actions";
-import { useDaemonMode, useLiveResource, useNow } from "./live";
+import { useDaemonMode, useRouteQuery, useNow } from "./live";
 import { bothViews, loadView, mapView } from "./resource";
 import { usePath } from "./router";
 
@@ -67,10 +67,10 @@ export function inboxReadsOf(
 
 export function useInboxReads(): InboxReads {
   return inboxReadsOf(
-    useLiveResource<WaitingList>("/v1/lease-requests"),
-    useLiveResource<LeaseList>("/v1/leases"),
-    useLiveResource<TokenList>("/v1/tokens"),
-    useLiveResource<WorkerList>("/v1/workers"),
+    useRouteQuery<WaitingList>("/v1/lease-requests"),
+    useRouteQuery<LeaseList>("/v1/leases"),
+    useRouteQuery<TokenList>("/v1/tokens"),
+    useRouteQuery<WorkerList>("/v1/workers"),
   );
 }
 
