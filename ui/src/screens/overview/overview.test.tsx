@@ -143,6 +143,7 @@ describe("the overview screen", () => {
             slots: [],
             slotsLabel: "No devices",
             to: `/fleet/w${index}`,
+            updateFacts: { latestVersion: null, leased: 0, update: null },
           })),
         }}
       />,

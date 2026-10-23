@@ -142,6 +142,7 @@ function config(options: EngineOptions): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 48 * 60 * 60_000, shutdownAfterMs: 24 * 60 * 60_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 3_600_000,
       maxTtlMs: 14_400_000,

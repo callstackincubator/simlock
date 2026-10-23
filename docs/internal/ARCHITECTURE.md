@@ -54,6 +54,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | cli | Operator command surface | [cli](../../src/cli/AGENTS.md) |
 | mcp | stdio MCP server for one agent session | [mcp](../../src/mcp/AGENTS.md) |
 | simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/AGENTS.md) · [client](../../src/client/AGENTS.md) · [admin](../../src/admin/AGENTS.md) |
+| updater | The detached process that installs a Simlock version with npm, restarts the daemon and rolls back | [updater](../../src/updater/AGENTS.md) |
 | lease-policy | Client-side renew timer | [lease-policy](../../src/lease-policy/AGENTS.md) |
 | bus | Post-commit business events and their in-memory ring | [bus](../../src/bus/AGENTS.md) |
 | state | `state.db`: opens it, refuses an old file, damage and a newer version, migrates each owner's tables | [state](../../src/state/AGENTS.md) |

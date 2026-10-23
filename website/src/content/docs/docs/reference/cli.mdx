@@ -21,6 +21,7 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock events`](#simlock-events) | Print business events | [Events reference](/simlock/docs/reference/events) |
 | [`simlock stats`](#simlock-stats) | Show usage figures for a time window | [Monitoring](/simlock/docs/worker/monitoring) |
+| [`simlock update`](#simlock-update) | Install the newest Simlock (or a named version) and restart the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
 | [`simlock whoami`](#simlock-whoami) | Show who the daemon thinks you are | [Access control](/simlock/docs/gateway/access-control) |
 | [`simlock daemon`](#simlock-daemon) | Start, stop and inspect the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
 | [`simlock config`](#simlock-config) | Read and change the daemon's configuration | [Configuration](/simlock/docs/worker/configuration) |
@@ -204,7 +205,11 @@ Takes no flags other than the [global flags](#global-flags). Stdout carries only
 
 ## simlock status
 
-Show the daemon's health and mode, its console address, capacity, devices, leases and queue depth. Works for any caller. See [Monitoring](/simlock/docs/worker/monitoring).
+Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. See [Monitoring](/simlock/docs/worker/monitoring).
+
+When the daemon has seen a newer Simlock version on npm, the `Simlock:` line says so: `Simlock: 0.3.0 (0.4.0 available)`. A daemon learns the newest version at start and every 24 hours after, unless `update.check` is `false`.
+
+While an update runs, the second line below `Daemon:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
 
 ```text
 simlock status [--json]
@@ -356,6 +361,39 @@ simlock cleanup [--dry-run] [--rule <name>]
 
 A gateway refuses `cleanup` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
+## simlock update
+
+Install the newest Simlock, or a named version, on this machine and restart its daemon once the leases it holds have ended. Needs the admin role. See [Running the daemon](/simlock/docs/worker/running-the-daemon#update-simlock).
+
+```text
+simlock update [--version <version>] [--force] [--json]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--version <version>` | Install this exact version (`0.4.0`, `0.4.0-rc.1`), older ones included. A tag or a range is a usage error. | The newest release |
+| `--force` | Do not wait for the leases to end. They survive the restart. | Off |
+| `--json` | Print no progress, only the daemon's final answer as one JSON line. | Off |
+
+While the daemon waits, it takes no new leases: a request gets `DAEMON_UPDATING`. Leases already held renew and release as usual. The command follows the update and prints each stage. `Ctrl-C` stops following and leaves the update running; `simlock update --force` from another shell stops the wait.
+
+```text
+$ simlock update
+Updating simlock 0.3.0 → 0.4.0
+Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.
+Installing simlock@0.4.0
+Restarting the daemon
+simlock 0.4.0 is running
+```
+
+- Already on the newest release: `simlock 0.4.0 is already the latest`, and nothing restarts. A prerelease newer than the newest release is not downgraded; name the version to install another.
+- The install fails: `Update failed (installing): <npm's message>`, exit 1. The old daemon keeps running and takes leases again.
+- The new version does not start: the old version is installed again and started. `Update failed (restarting): <reason>. Rolled back to <version>.`, exit 1.
+- The daemon does not answer within 15 minutes after it restarts: `The daemon did not come back; run simlock status.`, exit 1.
+- Simlock must be installed with `npm i -g simlock`. Otherwise the command stops with `UPDATE_UNSUPPORTED_INSTALL`. A worker and a gateway of one user share the install, so while the other runs it stops with `UPDATE_SHARED_INSTALL`. npm failing to find the version is `UPDATE_RESOLVE_FAILED`. See [Errors](/simlock/docs/reference/errors#updating-simlock).
+
+`POST /v1/update` does the same over HTTP. On a machine that runs a gateway, `simlock update --gateway` updates the gateway itself. A gateway holds no leases of its own, so it does not wait: it installs and restarts at once, and a request in that gap fails as in any gateway restart. To update a worker from a gateway, use [`simlock worker update`](#simlock-worker).
+
 ## simlock nuke
 
 Emergency reset: release every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
@@ -461,16 +499,35 @@ simlock worker list [--json]
 simlock worker drain <worker-id>
 simlock worker undrain <worker-id>
 simlock worker remove <worker-id>
+simlock worker update <worker-id> [--version <version>] [--force] [--detach]
 ```
 
 | Subcommand | What it does |
 | --- | --- |
-| `list` | Show each worker: connection, devices, capacity and installs. On a single machine it shows the machine itself. `--json` prints one JSON line in place of the text view. |
+| `list` | Show each worker: connection, devices, capacity and installs. A worker's line also shows its Simlock version, with `(<latest> available)` when npm has a newer release, and `updating to <version>: <stage>` while it updates. On a single machine it shows the machine itself. `--json` prints one JSON line in place of the text view. |
 | `drain` | Stop sending new requests to the worker. Its leases run on. |
 | `undrain` | Send new requests to the worker again. |
 | `remove` | Forget a worker that is not connected. A connected worker is refused with `WORKER_CONNECTED`: drain it and let it disconnect first. |
+| `update` | Update one worker's Simlock from the gateway and follow it. The worker takes no new leases while it updates. A drain stays as it is. |
 
-All four need the admin role. `drain`, `undrain` and `remove` print one JSON line, and on a worker they fail with `UNSUPPORTED_IN_WORKER_MODE` (exit 2).
+All five need the admin role. `drain`, `undrain` and `remove` print one JSON line, and on a worker all but `list` fail with `UNSUPPORTED_IN_WORKER_MODE` (exit 2).
+
+`update` takes the flags of [`simlock update`](#simlock-update) and one more:
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--version <version>` | Install this exact version on the worker. | The newest release |
+| `--force` | The worker does not wait for its leases to end. | Off |
+| `--detach` | Print where the update started and return. Follow it with `simlock worker list`. | Off |
+
+It follows the worker's line in the list and ends with one of these:
+
+- `mac-studio-2 (3f81a2c4) is running 0.4.0`
+- `Update failed (installing): <message>`, exit 1. The worker keeps running its old version and takes leases again.
+- `mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)`.
+- With `--detach`: `Updating mac-studio-2 (3f81a2c4) 0.3.0 → 0.4.0. Follow it with simlock worker list.`
+
+A worker that shows `incompatible` can be updated this way too. A worker that is not connected fails with `WORKER_NOT_CONNECTED`; one that does not answer within 90 seconds fails with the same code. `POST /v1/workers/{id}/update` does the same over HTTP.
 
 ## simlock alerts
 

@@ -98,6 +98,7 @@ describe("loadConfig", () => {
         maxConcurrentRecoveries: 1,
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
@@ -1745,6 +1746,15 @@ describe("loadConfig modes (ADR 0005)", () => {
     );
 
     expect(config.metrics).toEqual({ retention: 120 * 24 * 3_600_000 });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reads update.check in a gateway config without a warning", async () => {
+    const warn = vi.fn();
+
+    const config = await load({ update: { check: false } }, { role: "gateway", warn });
+
+    expect(config.update).toEqual({ check: false });
     expect(warn).not.toHaveBeenCalled();
   });
 

@@ -49,6 +49,18 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     ]);
   });
 
+  it("copies a file's contents over the target and leaves the source", async () => {
+    const filesystem = create();
+    await filesystem.mkdirp(temporaryDirectory);
+    await filesystem.writeFileAtomic(`${temporaryDirectory}/source`, "kept");
+    await filesystem.writeFileAtomic(`${temporaryDirectory}/target`, "replaced");
+
+    await filesystem.copyFile(`${temporaryDirectory}/source`, `${temporaryDirectory}/target`);
+
+    await expect(filesystem.readFile(`${temporaryDirectory}/target`)).resolves.toBe("kept");
+    await expect(filesystem.readFile(`${temporaryDirectory}/source`)).resolves.toBe("kept");
+  });
+
   it("reads a file from a byte offset, and nothing past its end", async () => {
     const filesystem = create();
     const file = `${temporaryDirectory}/daemon.log`;

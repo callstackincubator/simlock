@@ -204,7 +204,14 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     // A starting worker answers `status.get` with `daemon` and `host` only.
     worker.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture({ arch: "x64" }),
     };
     worker.devices = [deviceFixture("dev_1", "leased")];
@@ -256,7 +263,14 @@ describe("GatewayService", () => {
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
     worker.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
     worker.devices = [deviceFixture("dev_1", "leased")];
@@ -389,7 +403,14 @@ describe("GatewayService", () => {
     };
     worker.status = statusFixture({
       capacity,
-      daemon: { health: "failed", mode: "worker" },
+      daemon: {
+        health: "failed",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
@@ -424,9 +445,12 @@ describe("GatewayService", () => {
       installs: [install],
       label: "mac-mini-1",
       lastSeenAt: 1_000,
+      lastUpdateFailure: null,
+      latestVersion: null,
       lease: { maxTtlMs: 6 * 60 * 60_000 },
       leases: [leaseFixture("lease_1", "dev_1")],
       queueDepth: 3,
+      update: null,
       version: "9.8.7",
       waiting: [waiting],
     });
@@ -976,6 +1000,41 @@ describe("GatewayService", () => {
       await harness.service.stop();
     });
 
+    it("shows a worker's update after daemon.update-started and its failure after daemon.update-failed, without waiting for the periodic refresh", async () => {
+      const worker = new ScriptedWorkerClient();
+      const harness = await joined(worker);
+      const base = statusFixture();
+      const update = {
+        forced: false,
+        from: "0.3.0",
+        stage: "installing",
+        startedAt: 1_000,
+        to: "0.4.0",
+      } as const;
+      const failure = {
+        at: 2_000,
+        from: "0.3.0",
+        message: "npm failed",
+        stage: "installing",
+        to: "0.4.0",
+      } as const;
+
+      worker.status = { ...base, daemon: { ...base.daemon, update } };
+      worker.pushEvent({ event: "daemon.update-started" });
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.update).toEqual(update));
+
+      worker.status = { ...base, daemon: { ...base.daemon, lastUpdateFailure: failure } };
+      worker.pushEvent({ event: "daemon.update-failed" });
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")).toMatchObject({
+          lastUpdateFailure: failure,
+          update: null,
+        }),
+      );
+
+      await harness.service.stop();
+    });
+
     it("drops a worker's install after component.install-failed, without waiting for the periodic refresh", async () => {
       const worker = new ScriptedWorkerClient();
       worker.status = statusFixture({ installs: [install] });
@@ -1176,6 +1235,140 @@ describe("GatewayService", () => {
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
+
+    await harness.service.stop();
+  });
+
+  it("reads an incompatible worker's update with daemon.update query on the tick and keeps the last view when the query fails", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError({ min: 5, max: 5 });
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    const update = {
+      forced: false,
+      from: "0.2.0",
+      stage: "installing",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const lastUpdateFailure = {
+      at: 500,
+      from: "0.1.0",
+      message: "npm failed",
+      stage: "installing",
+      to: "0.2.0",
+    } as const;
+    worker.updateAnswer = {
+      ...worker.updateAnswer,
+      lastUpdateFailure,
+      latestVersion: "0.4.0",
+      update,
+    };
+
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        lastUpdateFailure,
+        latestVersion: "0.4.0",
+        update,
+      }),
+    );
+    expect(worker.updateInputs).toEqual([{ query: true }]);
+
+    worker.updateFailWith = new Error("worker went quiet");
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(worker.updateInputs).toHaveLength(2));
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
+
+    await harness.service.stop();
+  });
+
+  it("does not let a replaced incompatible link's late update query overwrite its successor's view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const stale = new ScriptedWorkerClient();
+    stale.failWith = protocolMismatchError({ min: 5, max: 5 });
+    await harness.join("wrk_1", stale);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    let answerQuery: (() => void) | undefined;
+    stale.updateDaemon = () =>
+      new Promise((resolve) => {
+        answerQuery = () =>
+          resolve({
+            ...stale.updateAnswer,
+            update: {
+              forced: false,
+              from: "0.2.0",
+              stage: "installing",
+              startedAt: 1,
+              to: "0.4.0",
+            },
+          });
+      });
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(answerQuery).toBeDefined());
+
+    await harness.join("wrk_1", new ScriptedWorkerClient("admin", "9.9.9"));
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+    answerQuery?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      connection: "connected",
+      update: null,
+      version: "9.9.9",
+    });
+    await harness.service.stop();
+  });
+
+  it("shows a worker's update, last update failure and latest version from its status, and a later status without an update clears it", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    const update = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const failure = {
+      at: 500,
+      from: "0.2.0",
+      message: "npm failed",
+      stage: "installing",
+      to: "0.3.0",
+    } as const;
+    const base = statusFixture();
+    worker.status = {
+      ...base,
+      daemon: { ...base.daemon, lastUpdateFailure: failure, latestVersion: "0.4.0", update },
+    };
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        lastUpdateFailure: failure,
+        latestVersion: "0.4.0",
+        update,
+      }),
+    );
+
+    worker.status = { ...worker.status, daemon: { ...worker.status.daemon, update: null } };
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.update).toBeNull());
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      lastUpdateFailure: failure,
+      latestVersion: "0.4.0",
+    });
 
     await harness.service.stop();
   });
@@ -1405,7 +1598,14 @@ describe("GatewayService", () => {
 
     // A's held `status.get` now answers `starting`, after B built the current view.
     clientA.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
     release();
@@ -1810,7 +2010,14 @@ describe("GatewayService: a worker's capabilities in its view", () => {
     const { harness } = await joinedWith([available]);
     const restarted = new ScriptedWorkerClient();
     restarted.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
 

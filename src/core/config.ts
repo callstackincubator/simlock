@@ -281,6 +281,9 @@ export interface Config {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
   };
+  readonly update: {
+    readonly check: boolean;
+  };
   readonly warmPool: WarmPoolConfig & {
     readonly quarantine: {
       /** Failed retries allowed after the release-time purge that triggers quarantine. */
@@ -655,6 +658,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "metrics",
   "gateway",
   "capabilities",
+  "update",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
@@ -904,6 +908,7 @@ function defaultConfig(
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
     },
+    update: { check: true },
     warmPool: {
       ...defaultWarmPoolConfig(systemStats),
       quarantine: {
@@ -1062,6 +1067,7 @@ function configValidators(
       timeoutMs: positiveNumber,
     }),
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
+    update: objectValidator({ check: booleanValue }),
     warmPool: objectValidator({
       ...warmPoolConfigValidator,
       quarantine: objectValidator({

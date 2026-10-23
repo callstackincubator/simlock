@@ -59,7 +59,12 @@ export interface LeasingOptions {
   readonly leaseEndParticipants?: readonly LeaseEndParticipant[] | undefined;
 }
 
-export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader {
+export interface UpdateHold {
+  holdForUpdate(): Promise<void>;
+  releaseUpdateHold(): Promise<void>;
+}
+
+export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader, UpdateHold {
   /**
    * why: building leasing does not connect them, so building one over a core never re-points that core's
    * ports.
@@ -255,6 +260,8 @@ export function createLeasing(options: LeasingOptions): Leasing {
     expire: async (leaseId: string) => {
       await releaseCoordinator.expire(leaseId);
     },
+    holdForUpdate: async () => acquisition.holdForUpdate(),
+    releaseUpdateHold: async () => acquisition.releaseUpdateHold(),
     settleRequests: async () => startup.settleRequests(),
     reconcile: async (read: StartupRead) => {
       await startup.reconcile(read);
