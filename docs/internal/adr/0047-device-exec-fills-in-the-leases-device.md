@@ -5,6 +5,8 @@
 - **Issue:** [#951](https://github.com/callstackincubator/simlock/issues/951)
 - **Extends:** [ADR 0005](0005-gateway-and-worker-modes.md) §19a (the
   driver resolves the command). Nothing in 0005 is replaced.
+- **Narrows:** [ADR 0003](0003-one-typed-daemon-contract-behind-every-frontend.md)
+  §11's MCP tool-call serialization: `run_on_device` does not queue (§6).
 
 ## Context
 
@@ -40,17 +42,35 @@ each tool's grammar and refusal list (drivers rule 6).
    | `adb`, physical phone | `-s <serial>`, as today | Any leading flag refused, as today |
    | `devicectl`, physical iPhone or iPad | `--device <udid>`, as today | `--device` / `-d` with the lease's UDID left as is |
 
-   A `simctl` verb not on the device-verb list (`list`, `runtime`,
-   `help`, `pair`, …) passes as today, with nothing filled in and nothing
-   checked.
+   The two lists, read from `xcrun simctl help` (Xcode 27.0) and
+   `adb help` (platform-tools 37.0.0):
+
+   - **simctl device verbs**, device first: `addmedia`, `appinfo`, `boot`,
+     `get_app_container`, `getenv`, `icloud_sync`, `install`,
+     `install_app_data`, `io`, `keychain`, `listapps`, `location`,
+     `openurl`, `privacy`, `push`, `reboot`, `rename`, `shutdown`,
+     `status_bar`, `terminate`, `ui`, `uninstall`, `upgrade`; device after
+     the verb's own options: `launch`, `spawn`, `pbcopy`, `pbpaste`. Among
+     those options only `-a` takes a separate value.
+   - **adb no-device subcommands**: `devices`, `help`, `version`,
+     `connect`, `disconnect`, `pair`, `mdns`, `keygen`, `start-server`,
+     `kill-server`, `reconnect`, and `forward` / `reverse` followed by
+     `--list`.
+
+   A `simctl` verb not on its list (`list`, `runtime`, `help`, `pair`,
+   `pbsync`, `clone`, …) passes as today, with nothing filled in and
+   nothing checked. An emulator whose address is empty gets nothing filled
+   in.
 
 2. **Naming another device is refused.** Where the table above fills a
    device in, an argument that names a different device is refused with
    `PASSTHROUGH_REFUSED` before anything runs. The message names both the
-   device the arguments named and the lease's own. For `simctl` that
-   is another UDID-shaped operand or `booted`. For an emulator's `adb` it
-   is `-s <other serial>`, `-d`, `-e` or `-t`. For `devicectl` it is a
-   `--device` / `-d` with another value. This is still an accident
+   device the arguments named, as the caller wrote it, and the lease's
+   own. For `simctl` that is another UUID-shaped operand or `booted`
+   (`booted`, `0A1B…`). For an emulator's `adb` it is `-s <other serial>`,
+   `-d`, `-e` or `-t <id>` (`-s emulator-5556`, `-e`, `-t 3`). For
+   `devicectl` it is a `--device` / `-d` whose value is not the lease's
+   UDID (`--device 00008110-…`), names and ECIDs included. This is still an accident
    boundary, not a security one: `xcrun simctl` stays reachable (drivers
    known gaps).
 
@@ -68,6 +88,13 @@ each tool's grammar and refusal list (drivers rule 6).
    passes no device, so `simlock simctl` and `simlock adb` on a worker
    are unchanged. #948 can pass the caller's lease's device to the same
    driver call and get the same rule.
+
+6. **The MCP tool built on it does not queue.** `run_on_device` (#951)
+   reads the session's lease when it starts and runs beside the other
+   tool calls, so `lease_status` and `release_simulator` answer while a
+   command runs. A release or a session end during a command goes ahead;
+   the command runs on to its exit or `exec.timeoutMs`, as a command does
+   today when its connection closes (ADR 0005 §19e).
 
 ```mermaid
 sequenceDiagram
@@ -97,6 +124,10 @@ sequenceDiagram
 - Each driver keeps a device-verb list (iOS) or a no-device list
   (Android). A new `simctl` verb is passed through unfilled until it is
   added to the list.
+- A caller that names its own device another way (a simctl device name,
+  a devicectl ECID or name, adb `-t <own transport id>`) is refused or,
+  for a simctl name, gets the UDID put in front of it and simctl fails.
+  The UDID or serial is the one form that passes.
 - In a fleet whose workers run mixed versions, a command that leaves the
   device out works only on workers that have this change.
 
