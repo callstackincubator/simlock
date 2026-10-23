@@ -191,15 +191,18 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
   // why: a renewal needs a read only where its lease's deadline is shown from another answer: the
   // inbox's ending item and an open lease page.
   const renewalKeys = (renewal: Renewal): StaleKey[] => [
-    leaseKeyOf(renewal),
+    leaseKeyOf(renewal, client.getQueryData(["leases"])),
     ...(endsInInbox(client.getQueryData(["inbox"]), renewal) ? [["inbox"]] : []),
   ];
   const patchRenewal = (renewal: Renewal): void => {
     kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
     for (const route of RENEWED_ROUTES) {
-      client.setQueryData<unknown>([route], (old: unknown) =>
-        old === undefined ? undefined : renewAnswer(route, old, renewal),
-      );
+      // why: setting data, even unchanged, reschedules the route's poll, so a renewal that moves
+      // no lease leaves the cache alone.
+      const old = client.getQueryData<unknown>([route]);
+      if (old === undefined) continue;
+      const patched = renewAnswer(route, old, renewal);
+      if (patched !== old) client.setQueryData<unknown>([route], patched);
     }
   };
   const stopEvents = connection.onEvent((event: StreamEvent) => {

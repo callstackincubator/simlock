@@ -89,10 +89,12 @@ export function endsInInbox(data: unknown, renewal: Renewal): boolean {
   });
 }
 
-// why: a gateway names a lease `<worker>.<worker's id>`, which is the id its detail page is read by.
-export function leaseKeyOf(renewal: Renewal): readonly string[] {
-  return [
-    "lease",
-    renewal.workerId === undefined ? renewal.leaseId : `${renewal.workerId}.${renewal.leaseId}`,
-  ];
+// why: a gateway routes a lease under `<worker>.<worker's id>`, or under the bare id its requester
+// chose; the lease list says which, and an unlisted lease is taken as prefixed.
+export function leaseKeyOf(renewal: Renewal, leases: unknown): readonly string[] {
+  if (renewal.workerId === undefined) return ["lease", renewal.leaseId];
+  const listed = (leases as LeaseList | undefined)?.leases?.find((lease) =>
+    isRenewed(lease, renewal),
+  );
+  return ["lease", listed?.id ?? `${renewal.workerId}.${renewal.leaseId}`];
 }

@@ -581,6 +581,17 @@ describe("a lease renewal", () => {
     await settle();
     expect(state("/v1/leases").data).toBe(after);
 
+    // why: a renewal that moves no lease leaves the cache, and so the poll's schedule, alone.
+    const readsBefore = reads("/v1/leases");
+    for (let tick = 0; tick < 5; tick += 1) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      daemon
+        .openStream()
+        ?.send(renewed({ leaseId: "l_9", newDeadline: Date.now() + 1_000 }, 10 + tick));
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reads("/v1/leases") - readsBefore, "polls through 26 s of unmatched renewals").toBe(2);
+
     const gateway = start();
     const old = {
       leases: [
@@ -657,10 +668,23 @@ describe("a lease renewal", () => {
       ["a lease nothing shows", "/v1/inbox", "l_2", 20, []],
       ["another lease's page", "/v1/leases/l_1", "l_2", 20, []],
       ["a gateway lease's page", "/v1/leases/w1.l_1", "l_1", 20, ["/v1/leases/w1.l_1"]],
+      [
+        "a gateway lease its requester named, whose page has no worker prefix",
+        "/v1/leases/my-lease",
+        "my-lease",
+        20,
+        ["/v1/leases/my-lease"],
+      ],
     ] as const;
     for (const [label, path, leaseId, count, expected] of cases) {
       const { daemon, watch } = start();
-      daemon.reads = () => Promise.resolve({ body: path === "/v1/inbox" ? inbox : {}, date: null });
+      const listed = { leases: [lease("my-lease", { workerId: "w1", workerLeaseId: "my-lease" })] };
+      daemon.reads = (read) =>
+        Promise.resolve({
+          body: read === "/v1/inbox" ? inbox : read === "/v1/leases" ? listed : {},
+          date: null,
+        });
+      watch("/v1/leases");
       watch(path);
       await settle();
       const before = daemon.gets.length;
@@ -671,7 +695,7 @@ describe("a lease renewal", () => {
             {
               leaseId,
               newDeadline: Date.now() + 120_000 + renewal,
-              ...(path.includes("w1.") ? { workerId: "w1" } : {}),
+              ...(path.includes("w1.") || path.includes("my-lease") ? { workerId: "w1" } : {}),
             },
             renewal + 2,
           ),
