@@ -35,7 +35,7 @@ export const WORKER_VIEW_CATALOG_EVENTS = ["component.installed"] as const;
 export const WORKER_VIEW_UPDATE_EVENTS = ["daemon.update-started", "daemon.update-failed"] as const;
 
 type Output<Name extends keyof typeof OPERATIONS> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
-export type WorkerView = z.infer<typeof workerViewSchema>;
+type WorkerView = z.infer<typeof workerViewSchema>;
 
 /** The answers a view is built from. `catalog` and `config` are optional because a gateway's
  * per-event refresh re-reads only status and devices; a field left out stays as it was.

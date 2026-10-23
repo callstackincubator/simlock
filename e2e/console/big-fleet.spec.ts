@@ -1,8 +1,11 @@
 import type { Request } from "@playwright/test";
+import type { z } from "zod";
 
-import type { WorkerView } from "../../src/contract/index.js";
+import type { workerViewSchema } from "../../src/contract/index.js";
 import { expect, NAV, openFromNav, signIn, test } from "./fixtures.js";
 import { answer, leases, pad } from "./stub-answers.js";
+
+type WorkerView = z.infer<typeof workerViewSchema>;
 
 const WORKERS = 50;
 const DEVICES_PER_WORKER = 10;
