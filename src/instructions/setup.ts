@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import type { Filesystem } from "../ports/index.js";
+import type { Filesystem, ProcessRunner } from "../ports/index.js";
 import { renderSkill } from "./skill.js";
 
 const AGENT_TOOLS = {
@@ -16,10 +16,36 @@ const SKILL_FILE = "SKILL.md";
 
 export interface SetupToolReport {
   readonly tool: AgentTool;
+  readonly mcp?: {
+    readonly status: "connected" | "already" | "failed" | "skipped";
+    readonly reason?: string;
+  };
   readonly skill: {
     readonly status: "wrote" | "replaced" | "skipped";
     readonly path: string;
   };
+}
+
+export type ToolOutcome =
+  | { readonly outcome: "exited"; readonly code: number; readonly stderr: string }
+  | { readonly outcome: "not-found" }
+  | { readonly outcome: "timed-out" };
+
+export type RunTool = (
+  bin: string,
+  args: readonly string[],
+  options: { readonly cwd: string },
+) => Promise<ToolOutcome>;
+
+export function toolRunner(_runner: ProcessRunner): RunTool {
+  return async () => ({ outcome: "not-found" });
+}
+
+export class SetupMcpFailedError extends Error {
+  constructor(readonly report: SetupReport) {
+    super("");
+    this.name = "SetupMcpFailedError";
+  }
 }
 
 export interface SetupReport {
@@ -32,6 +58,8 @@ export interface SetupAgentToolsOptions {
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly scope: SetupScope;
+  readonly runTool: RunTool;
+  readonly mcp?: boolean | undefined;
   readonly codexHome?: string | undefined;
   readonly tool?: AgentTool | undefined;
 }

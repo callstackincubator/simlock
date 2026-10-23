@@ -95,11 +95,13 @@ export function renderInstructions(format: "text" | "json"): string {
 }
 
 export { renderSkill } from "./skill.js";
-export { setupAgentTools } from "./setup.js";
+export { SetupMcpFailedError, setupAgentTools, toolRunner } from "./setup.js";
 export type {
   AgentTool,
   SetupAgentToolsOptions,
   SetupReport,
   SetupScope,
   SetupToolReport,
+  ToolOutcome,
+  RunTool,
 } from "./setup.js";

@@ -1,10 +1,37 @@
 import { describe, expect, it } from "vitest";
 
-import { MemoryFilesystem } from "../ports/index.js";
-import { renderSkill, setupAgentTools, type SetupAgentToolsOptions } from "./index.js";
+import { MemoryFilesystem, ProcessSpawnError, type ProcessRunner } from "../ports/index.js";
+import {
+  renderSkill,
+  SetupMcpFailedError,
+  setupAgentTools,
+  toolRunner,
+  type SetupAgentToolsOptions,
+  type ToolOutcome,
+} from "./index.js";
 
 const HOME = "/home/operator";
 const CWD = "/work/project";
+
+interface ToolCall {
+  readonly bin: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+}
+
+function fakeTools(outcome: ToolOutcome = { outcome: "exited", code: 0, stderr: "" }): {
+  readonly calls: ToolCall[];
+  readonly runTool: SetupAgentToolsOptions["runTool"];
+} {
+  const calls: ToolCall[] = [];
+  return {
+    calls,
+    runTool: async (bin, args, { cwd }) => {
+      calls.push({ bin, args, cwd });
+      return outcome;
+    },
+  };
+}
 
 function setup(
   filesystem: MemoryFilesystem,
@@ -15,6 +42,7 @@ function setup(
     homeDirectory: HOME,
     workingDirectory: CWD,
     scope: "user",
+    runTool: fakeTools().runTool,
     ...options,
   });
 }
@@ -98,5 +126,167 @@ describe("setupAgentTools", () => {
       `${HOME}/.agents/skills/simlock`,
       `${HOME}/.agents/skills/simlock/SKILL.md`,
     ]);
+  });
+
+  it("connects MCP through the tool's own command, reports each outcome, and bounds the command at 30 s", async () => {
+    const claudeAdd = (scope: string): readonly string[] => [
+      "mcp",
+      "add",
+      "-s",
+      scope,
+      "simlock",
+      "--",
+      "simlock",
+      "mcp",
+    ];
+    const codexAdd = ["mcp", "add", "simlock", "--", "simlock", "mcp"];
+
+    for (const [scope, tool, bin, args] of [
+      ["user", "claude-code", "claude", claudeAdd("user")],
+      ["project", "claude-code", "claude", claudeAdd("project")],
+      ["user", "codex", "codex", codexAdd],
+    ] as const) {
+      const tools = fakeTools();
+      const report = await setup(await withBases(), {
+        scope,
+        tool,
+        mcp: true,
+        runTool: tools.runTool,
+      });
+      expect(tools.calls, `${scope} ${tool}`).toEqual([{ bin, args, cwd: CWD }]);
+      expect(report.tools[0]?.mcp, `${scope} ${tool}`).toEqual({ status: "connected" });
+    }
+
+    const long = `${"x".repeat(250)}\nsecond line`;
+    for (const [tool, outcome, mcp] of [
+      [
+        "claude-code",
+        {
+          outcome: "exited",
+          code: 1,
+          stderr: "MCP server simlock already exists in user config\n",
+        },
+        { status: "already" },
+      ],
+      [
+        "codex",
+        {
+          outcome: "exited",
+          code: 1,
+          stderr: "MCP server simlock already exists in user config\n",
+        },
+        { status: "failed", reason: "MCP server simlock already exists in user config" },
+      ],
+      [
+        "claude-code",
+        { outcome: "exited", code: 1, stderr: "boom: no config\nmore detail\n" },
+        { status: "failed", reason: "boom: no config" },
+      ],
+      [
+        "claude-code",
+        { outcome: "exited", code: 1, stderr: long },
+        { status: "failed", reason: "x".repeat(200) },
+      ],
+      [
+        "claude-code",
+        { outcome: "timed-out" },
+        { status: "failed", reason: "timed out after 30 s" },
+      ],
+      ["claude-code", { outcome: "not-found" }, { status: "skipped", reason: "claude not found" }],
+      ["codex", { outcome: "not-found" }, { status: "skipped", reason: "codex not found" }],
+    ] as const) {
+      const run = setup(await withBases(), {
+        tool,
+        mcp: true,
+        runTool: fakeTools(outcome).runTool,
+      });
+      const label = `${tool} ${JSON.stringify(outcome)}`;
+      if (mcp.status === "failed") {
+        const error = (await run.catch((caught: unknown) => caught)) as SetupMcpFailedError;
+        expect(error, label).toBeInstanceOf(SetupMcpFailedError);
+        expect(error.message, label).toBe(`MCP not connected for ${tool}: ${mcp.reason}`);
+        expect(error.report.tools[0]?.mcp, label).toEqual(mcp);
+        expect(error.report.tools[0]?.skill.status, label).toBe("wrote");
+      } else {
+        expect((await run).tools[0]?.mcp, label).toEqual(mcp);
+      }
+    }
+
+    const both = await withBases();
+    await both.mkdirp(`${HOME}/.claude`);
+    await both.mkdirp(`${HOME}/.codex`);
+    const failing = fakeTools({ outcome: "exited", code: 1, stderr: "nope" });
+    const error = (await setup(both, { mcp: true, runTool: failing.runTool }).catch(
+      (caught: unknown) => caught,
+    )) as SetupMcpFailedError;
+    expect(error.message).toBe(
+      "MCP not connected for claude-code: nope; MCP not connected for codex: nope",
+    );
+
+    const projectCodex = fakeTools();
+    const skipped = await setup(await withBases(), {
+      scope: "project",
+      tool: "codex",
+      mcp: true,
+      runTool: projectCodex.runTool,
+    });
+    expect(skipped.tools[0]?.mcp).toEqual({
+      status: "skipped",
+      reason: "codex mcp add has no project scope",
+    });
+
+    const unrequested = fakeTools();
+    const notAsked = await setup(await withBases(), {
+      tool: "claude-code",
+      mcp: false,
+      runTool: unrequested.runTool,
+    });
+    expect(notAsked.tools[0]).not.toHaveProperty("mcp");
+    const notInstalled = await withBases();
+    await notInstalled.mkdirp(`${HOME}/.claude`);
+    const skippedSkill = await setup(notInstalled, { mcp: true, runTool: unrequested.runTool });
+    expect(skippedSkill.tools[1]).toEqual({
+      tool: "codex",
+      skill: { status: "skipped", path: `${HOME}/.agents/skills/simlock` },
+    });
+    expect(unrequested.calls.map(({ bin }) => bin)).toEqual(["claude"]);
+    expect(projectCodex.calls).toEqual([]);
+
+    const seen: { command: string; args: readonly string[]; options: unknown }[] = [];
+    const runner = (
+      behave: () => Promise<{ code: number | null; stderr: string }>,
+    ): ProcessRunner =>
+      ({
+        run: async (command: string, args: readonly string[], options: unknown) => {
+          seen.push({ command, args, options });
+          return { stdout: "", ...(await behave()) };
+        },
+        spawn: () => {
+          throw new Error("unused");
+        },
+        spawnStreaming: () => {
+          throw new Error("unused");
+        },
+      }) as ProcessRunner;
+
+    const missing = toolRunner(
+      runner(async () => {
+        throw new ProcessSpawnError("claude", ["mcp"]);
+      }),
+    );
+    expect(await missing("claude", ["mcp"], { cwd: CWD })).toEqual({ outcome: "not-found" });
+    const killed = toolRunner(runner(async () => ({ code: null, stderr: "" })));
+    expect(await killed("claude", [], { cwd: CWD })).toEqual({ outcome: "timed-out" });
+    const exited = toolRunner(runner(async () => ({ code: 1, stderr: "bad" })));
+    expect(await exited("claude", ["a"], { cwd: "/somewhere" })).toEqual({
+      outcome: "exited",
+      code: 1,
+      stderr: "bad",
+    });
+    expect(seen.at(-1)).toEqual({
+      command: "claude",
+      args: ["a"],
+      options: { timeoutMs: 30_000, cwd: "/somewhere" },
+    });
   });
 });
