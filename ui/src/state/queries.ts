@@ -1,5 +1,6 @@
 import {
   focusManager,
+  hashKey,
   onlineManager,
   type Query,
   QueryClient,
@@ -78,6 +79,9 @@ export function createQueries(options: QueriesOptions): Queries {
   );
   client.mount();
 
+  // why: the ETag of each key's last answer, sent back so an unchanged answer costs no download.
+  const tags = new Map<string, string>();
+
   // why: one poll timer per key, not per page using it, so two pages on one key do not read twice.
   const polls = new Map<string, unknown>();
   const stopPoll = (hash: string): void => {
@@ -122,13 +126,20 @@ export function createQueries(options: QueriesOptions): Queries {
       client.unmount();
       client.clear();
     },
-    options: <T>(path: ApiPath): QueryObserverOptions<T> => ({
-      queryFn: async () => {
-        const answer = await connection.read<T>(path, { tag: undefined });
-        return answer.notModified === true ? (undefined as T) : answer.body;
-      },
-      queryKey: routeKey(path),
-      staleTime: timesOf(routeKey(path)).freshMs,
-    }),
+    options: <T>(path: ApiPath): QueryObserverOptions<T> => {
+      const key = routeKey(path);
+      const hash = hashKey(key);
+      return {
+        queryFn: async () => {
+          const answer = await connection.read<T>(path, { tag: tags.get(hash) });
+          if (answer.notModified === true) return client.getQueryData<T>(key) as T;
+          if (answer.tag === null) tags.delete(hash);
+          else tags.set(hash, answer.tag);
+          return answer.body;
+        },
+        queryKey: key,
+        staleTime: timesOf(key).freshMs,
+      };
+    },
   };
 }
