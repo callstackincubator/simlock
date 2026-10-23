@@ -12,9 +12,10 @@
 
 `device.exec` runs one `simctl`, `adb` or `devicectl` command against a
 lease on the worker that holds the device (ADR 0005 §19a). Only
-`devicectl` gets the device from the lease: the driver adds
-`--device <udid>` unless the arguments name one
-(`src/drivers/ios/devicectl-exec.ts:211`). For `simctl` and for `adb`
+physical devices get it from the lease: the driver adds
+`--device <udid>` to `devicectl` unless the arguments name one
+(`src/drivers/ios/devicectl-exec.ts:211`), and `-s <serial>` to a
+phone's `adb` (`src/drivers/android/physical-handler.ts:234`). For `simctl` and for `adb`
 on an emulator, the caller's arguments must name the device, and the
 daemon parses none of them (`src/daemon/dispatcher.ts:696-712`). So every
 caller copies the UDID or the adb serial out of the grant into every
@@ -54,8 +55,8 @@ each tool's grammar and refusal list (drivers rule 6).
      those options only `-a` takes a separate value.
    - **adb no-device subcommands**: `devices`, `help`, `version`,
      `connect`, `disconnect`, `pair`, `mdns`, `keygen`, `start-server`,
-     `kill-server`, `reconnect`, and `forward` / `reverse` followed by
-     `--list`.
+     `kill-server`, `reconnect offline`, and `forward --list`. `reconnect`
+     alone and `reverse --list` act on a device and get it filled in.
 
    A `simctl` verb not on its list (`list`, `runtime`, `help`, `pair`,
    `pbsync`, `clone`, …) passes as today, with nothing filled in and
@@ -94,7 +95,8 @@ each tool's grammar and refusal list (drivers rule 6).
    tool calls, so `lease_status` and `release_simulator` answer while a
    command runs. A release or a session end during a command goes ahead;
    the command runs on to its exit or `exec.timeoutMs`, as a command does
-   today when its connection closes (ADR 0005 §19e).
+   today when its connection closes (`docs/internal/flows/device-exec.md`,
+   "Detach").
 
 ```mermaid
 sequenceDiagram
