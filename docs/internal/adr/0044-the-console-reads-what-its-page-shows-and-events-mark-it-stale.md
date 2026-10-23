@@ -67,14 +67,15 @@ flowchart LR
 
 An event name maps to the keys it changes (the table in #905). An unknown
 name maps to none. The console collects the keys of a burst and acts 300 ms
-after the last event: a key a page on screen uses is read, any other key is
+after the last event, or 1 s after the first, whichever comes first: a key a page on screen uses is read, any other key is
 only marked stale and read when a page next needs it. The same keys are read
 once more 1.5 s later, because a gateway passes a worker's event on before it
 has refreshed that worker's view.
 
 `lease.renewed` reads nothing. Its `newDeadline` is written into the cached
 lease, matched by `workerId` and `workerLeaseId` on a gateway, by `id` on a
-worker.
+worker. When the cached Inbox shows that lease as ending, the Inbox is
+marked stale too.
 
 ```mermaid
 sequenceDiagram
@@ -105,11 +106,12 @@ poll of its page, 15 s.
   lease id, so a relayed event can be matched to it.
 - **`GET /v1/inbox`.** The Inbox rules move from the console
   (`ui/src/model/inbox.ts`) to `src/contract/inbox.ts`, and a new
-  `inbox.get` operation answers them in both modes. Items carry ids, labels
-  and the timestamps their times count from; the browser ticks the times. The
-  sidebar count, the Inbox page and the Overview's Needs you read it instead
-  of the four fleet lists. A drawer reads its worker, device or lease when it
-  opens.
+  `inbox.get` operation answers them in both modes. Each item embeds a small
+  copy of its subject: the worker's own fields (no devices, catalog, leases or
+  downloads), or the device, the lease with its holder, or the request. Its
+  times are the subject's timestamps; the browser ticks them. The sidebar
+  count, the Inbox page and the Overview's Needs you read it instead of the
+  four fleet lists.
 
 ### 4. The clock ticks in leaves
 
@@ -118,7 +120,7 @@ that build a page's view model.
 
 ## Consequences
 
-- An idle tab on any page makes at most 30 requests a minute against a
+- An idle tab on any page makes at most 40 requests a minute against a
   50-worker gateway, most of them 304s. A browser-lane test holds that line.
 - The public console page changes "within about a second" to say which
   changes take up to 15 s.
@@ -140,6 +142,9 @@ that build a page's view model.
   event; a second read is nearly free with 304s.
 - **Any unknown event marks every key stale.** Rejected: on a busy fleet it
   brings back a read of every list per burst.
+- **Inbox items with ids only, the drawer reading its subject on open.**
+  Rejected: a row's buttons need the subject's facts before any drawer
+  opens, so the Inbox page would read the fleet lists again.
 - **A count-only `GET /v1/inbox/summary`.** Rejected: the Inbox page would
   still read the four lists, and the rules would live on both sides.
 - **An event for a worker that connects as incompatible, so every change
