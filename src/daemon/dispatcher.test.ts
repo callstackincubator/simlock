@@ -2320,6 +2320,27 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
   const requests = (dispatcher: Dispatcher) =>
     dispatcher.dispatch("list.get", { kind: "requests" }, session({ role: "admin" }));
 
+  it("inbox.get on a worker answers a lease about to end and a request that has waited over 60 s", async () => {
+    const { clock, dispatcher, engine } = await buildDispatcher();
+    await request(dispatcher, "holder-1", { ttlMs: 1_000 });
+    await request(dispatcher, "holder-2");
+    void request(dispatcher, "agent-a");
+    await expect.poll(() => engine.queueDepth).toBe(1);
+    clock.advance(60_001);
+
+    const { items } = await dispatcher.dispatch("inbox.get", {}, session({ role: "admin" }));
+
+    expect(items.map((item) => [item.key.replace(/\/[^/]+\//, "/id/"), item.condition])).toEqual([
+      ["request/id/waiting", "waiting"],
+      ["lease/id/ending", "ending"],
+    ]);
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        lease: expect.objectContaining({ holder: "holder-1", model: "iPhone 17 Pro" }),
+      }),
+    );
+  });
+
   it("list.get requests on a worker returns every open request with its queue position", async () => {
     const { clock, dispatcher, engine } = await buildDispatcher();
     await fillIos(dispatcher);
