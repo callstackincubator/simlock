@@ -54,6 +54,8 @@ export interface CliEnvironment {
   readonly configPath: string;
   readonly daemonHome: DaemonHome;
   readonly requesterId: string;
+  readonly homeDirectory: string;
+  readonly filesystem: Filesystem;
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
   ) => Promise<SimlockAdminClient>;
@@ -91,6 +93,7 @@ export interface CliEnvironmentPorts {
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
   readonly daemonHome: DaemonHome;
+  readonly homeDirectory: string;
   readonly service?: ServiceSetup;
   readonly parentWatch?: ParentWatch;
   readonly signals?: Signals;

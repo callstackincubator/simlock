@@ -42,6 +42,7 @@ describe("the default parent watch", () => {
     const environment = buildCliEnvironment(
       {
         clock: new FakeClock(0),
+        homeDirectory: "/home/operator",
         daemonHome: {
           role: "worker",
           dataDirectory: mkdtempSync(join(tmpdir(), "simlock-cli-lazy-watch-")),

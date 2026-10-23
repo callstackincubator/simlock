@@ -1221,6 +1221,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1253,6 +1254,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
     expect(exitCode).toBe(1);
@@ -1283,6 +1285,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1325,6 +1328,7 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
         });
       }),
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     };
     return { clock, ports };
   }
@@ -1441,6 +1445,7 @@ describe("CLI: auto-launch's failed start (#672)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     let settled = false;
     const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
@@ -1487,6 +1492,7 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1526,6 +1532,7 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1586,6 +1593,7 @@ describe("CLI: auto-launch's daemon that lost the socket to another daemon (#760
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1628,6 +1636,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         ipc: dyingDaemon,
         launcher,
         daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+        homeDirectory: "/home/operator",
       });
       let settled = false;
       const exitCode = runCli(
@@ -7880,6 +7889,8 @@ function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {})
           configPath: "/simlock/config.json",
           daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
           requesterId: "test-requester",
+          homeDirectory: "/home/operator",
+          filesystem: new MemoryFilesystem(),
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
           daemonEndpointPresent: async () => false,
@@ -8155,6 +8166,7 @@ function realCliEnvironmentPorts(
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
     daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    homeDirectory: "/home/operator",
   };
 }
 
@@ -9302,6 +9314,7 @@ describe("CLI: daemon install (#830)", () => {
         ipc: ipcTransport,
         launcher: new FakeDaemonLauncher(),
         daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
+        homeDirectory: "/home/operator",
         service: {
           manager: serviceManager,
           platform: options.linux === true ? "linux" : "darwin",
@@ -9715,6 +9728,7 @@ describe("CLI: a start goes through the service (#830)", () => {
           spawner,
         }),
         daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+        homeDirectory: "/home/operator",
       });
 
       const exitCode = await runCli(testCase.argv, output.environmentWith());
@@ -9772,6 +9786,7 @@ describe("CLI: a start through a service that fails (#830)", () => {
             spawner: new FakeDaemonLauncher(),
           }),
           daemonHome: { role: "worker", dataDirectory: directory, gatewayPresent: false },
+          homeDirectory: "/home/operator",
         });
         let settled = false;
         const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
@@ -9861,6 +9876,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
         spawner: new FakeDaemonLauncher(() => undefined, { exit: { code: 1, signal: null } }),
       }),
       daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      homeDirectory: "/home/operator",
       service: {
         manager,
         platform: options.platform ?? "darwin",

@@ -94,6 +94,12 @@ export function renderInstructions(format: "text" | "json"): string {
     : AGENT_INSTRUCTIONS;
 }
 
-export function renderSkill(): string {
-  return "";
-}
+export { renderSkill } from "./skill.js";
+export { setupAgentTools } from "./setup.js";
+export type {
+  AgentTool,
+  SetupAgentToolsOptions,
+  SetupReport,
+  SetupScope,
+  SetupToolReport,
+} from "./setup.js";

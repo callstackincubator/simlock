@@ -35,6 +35,8 @@ Commands:
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
   instructions [--json]       Print the rules an agent must follow, for its prompt
+  setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]
+                              Install the Simlock skill into Claude Code and Codex
 Run 'simlock <command> --help' for command usage.
 
 Pass --token <secret> anywhere on the command line to connect as admin
@@ -140,6 +142,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
         notify: (line) => process.stderr.write(`${line}\n`),
       }),
       daemonHome,
+      homeDirectory: homedir(),
       service: {
         manager: serviceManager,
         platform: process.platform,
@@ -165,6 +168,7 @@ const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["config", "set"],
   ["mcp"],
   ["instructions"],
+  ["setup"],
 ];
 
 const GATEWAY_ALSO_HERE_HINT =

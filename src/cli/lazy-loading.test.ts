@@ -59,6 +59,7 @@ async function environment(): Promise<CliEnvironment> {
   const ports: CliEnvironmentPorts = {
     clock: new FakeClock(0),
     daemonHome: { role: "worker", dataDirectory: home, gatewayPresent: false },
+    homeDirectory: "/home/operator",
     filesystem: new MemoryFilesystem(),
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
