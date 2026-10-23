@@ -520,7 +520,7 @@ export class GatewayDispatcher {
       session.role === "admin" ? this.#fleetLeases() : this.#ownedFleetLeases(session.principal),
   });
 
-  // why: finds the record `lease.list` would hold for this session without building the list -- a gateway-issued lease through the index (its owner, or an admin), a worker's own local lease for an admin only, by a raw id the index does not rename.
+  // why: the one place a gateway lease record gets `workerLeaseId` (the worker's own id), so `lease.list`, `lease.get` and `list.get kind=leases` agree and `status.get` (which calls `project` directly) does not carry it.
   #fleetLease<Lease extends { readonly id: string; readonly requesterId: string }>(
     raw: Lease,
     view: { readonly id: string; readonly label?: string | undefined },

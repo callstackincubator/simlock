@@ -1185,9 +1185,9 @@ describe("Dispatcher: ownership", () => {
     const leaseId = await grantLease(dispatcher);
     const owner = session({ principal: "tok_owner", role: "agent" });
 
-    await expect(dispatcher.dispatch("lease.get", { leaseId }, owner)).resolves.toEqual({
-      lease: (await dispatcher.dispatch("lease.list", {}, owner)).leases[0],
-    });
+    const own = await dispatcher.dispatch("lease.get", { leaseId }, owner);
+    expect(own).toEqual({ lease: (await dispatcher.dispatch("lease.list", {}, owner)).leases[0] });
+    expect(own.lease).toMatchObject({ id: leaseId, ownerId: "tok_owner" });
     await expect(
       dispatcher.dispatch(
         "lease.get",

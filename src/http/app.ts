@@ -405,9 +405,9 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const id = c.req.valid("param").id;
     const { ttlMs } = c.req.valid("json");
 
-    // why: Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
+    // why: Dispatched directly (not via `findOwnedLease`/`lease.get`) so `lease.renew`'s own
     // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
-    // socket transport, rather than the `UNKNOWN_LEASE`/404 a `lease.list` filter would produce
+    // socket transport, rather than the `UNKNOWN_LEASE`/404 `lease.get`'s hidden-lease answer would produce
     // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself, and a
     // `ttlMs` above `lease.maxTtlMs` as `BAD_REQUEST`/400 -- the cap lives in the shared
     // dispatcher, and this route awaits it, so there is nothing to restate here. Answering it
@@ -443,10 +443,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     // unix socket or a future uplink gets the same `FORBIDDEN` this route now inherits
     // rather than defining.
 
-    // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
+    // why: dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
     // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
     // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
-    // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
+    // `lease.get` would produce (see `findOwnedLease`'s comment).
     // Where a chunk goes at each stage of this request's life, including after the client
     // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
     // and is tested.
