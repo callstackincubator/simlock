@@ -1,6 +1,12 @@
 import { join } from "node:path";
 
-import { ProcessSpawnError, type Filesystem, type ProcessRunner } from "../ports/index.js";
+import {
+  isMissingPathError,
+  ProcessSpawnError,
+  type Filesystem,
+  type PathDetails,
+  type ProcessRunner,
+} from "../ports/index.js";
 import { renderSkill } from "./skill.js";
 
 const AGENT_TOOLS = {
@@ -108,7 +114,12 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
         ? options.codexHome
         : join(base, layout.presence);
     const install = tool !== undefined || (await isDirectory(filesystem, presence));
-    report.push({ tool: id, skill: { status: install ? "wrote" : "skipped", path } });
+    const status = !install
+      ? "skipped"
+      : (await lstatKind(filesystem, path)) !== undefined
+        ? "replaced"
+        : "wrote";
+    report.push({ tool: id, skill: { status, path } });
   }
 
   const wantsMcp = new Set<AgentTool>();
@@ -128,8 +139,7 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
   const skill = renderSkill();
   for (const { skill: entry } of report) {
     if (entry.status === "skipped") continue;
-    await filesystem.mkdirp(entry.path);
-    await filesystem.writeFileAtomic(join(entry.path, SKILL_FILE), skill);
+    await installSkill(filesystem, entry.path, skill);
   }
   const connected: SetupToolReport[] = [];
   for (const entry of report) {
@@ -178,4 +188,30 @@ function firstLine(text: string): string {
 async function isDirectory(filesystem: Filesystem, path: string): Promise<boolean> {
   if (!(await filesystem.exists(path))) return false;
   return (await filesystem.stat(path)).kind === "directory";
+}
+
+async function installSkill(
+  filesystem: Filesystem,
+  directory: string,
+  skill: string,
+): Promise<void> {
+  await filesystem.mkdirp(directory);
+  const skillPath = join(directory, SKILL_FILE);
+  if ((await lstatKind(filesystem, skillPath)) !== "file") await filesystem.rm(skillPath);
+  await filesystem.writeFileAtomic(skillPath, skill);
+  for (const name of await filesystem.readdir(directory)) {
+    if (name !== SKILL_FILE) await filesystem.rm(join(directory, name));
+  }
+}
+
+async function lstatKind(
+  filesystem: Filesystem,
+  path: string,
+): Promise<PathDetails["kind"] | undefined> {
+  try {
+    return (await filesystem.lstat(path)).kind;
+  } catch (error: unknown) {
+    if (isMissingPathError(error)) return undefined;
+    throw error;
+  }
 }
