@@ -171,6 +171,8 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
 
 An `Idempotency-Key` header on `POST /v1/lease-requests` (1 to 200 characters) makes the request safe to send again: the same key returns the stored request instead of queueing a second one, for 10 minutes after it finished.
 
+A `GET` under `/v1` that answers `200` with JSON carries an `ETag` header. Send it back as `If-None-Match` on the next read of the same route: while the answer is unchanged, the reply is `304 Not Modified` with no body. Event streams carry no `ETag`.
+
 ## Through a gateway
 
 Send the same calls to the gateway, with a token created on the gateway. The gateway picks a worker for you and forwards renew, release and exec to it.
