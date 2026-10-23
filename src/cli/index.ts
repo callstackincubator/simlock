@@ -144,6 +144,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
       daemonHome,
       homeDirectory: homedir(),
       workingDirectory: process.cwd(),
+      codexHome: process.env.CODEX_HOME,
       service: {
         manager: serviceManager,
         platform: process.platform,

@@ -8,8 +8,9 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
     filesystem: environment.filesystem,
     homeDirectory: environment.homeDirectory,
     workingDirectory: environment.workingDirectory,
+    codexHome: environment.codexHome,
     scope: values.project === true ? "project" : "user",
-    tool: values.tool as AgentTool,
+    tool: values.tool as AgentTool | undefined,
   });
   return 0;
 }

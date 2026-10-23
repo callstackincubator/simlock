@@ -36,12 +36,35 @@ export interface SetupAgentToolsOptions {
   readonly tool?: AgentTool | undefined;
 }
 
+export const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
+
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
-  const { filesystem, tool = "claude-code" } = options;
-  const { scope } = options;
+  const { filesystem, scope, tool } = options;
   const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
-  const directory = join(base, AGENT_TOOLS[tool].skills, SIMLOCK_DIRECTORY);
-  await filesystem.mkdirp(directory);
-  await filesystem.writeFileAtomic(join(directory, SKILL_FILE), renderSkill());
-  return { scope, tools: [{ tool, skill: { status: "wrote", path: directory } }] };
+  const tools = tool === undefined ? AGENT_TOOL_IDS : [tool];
+
+  const report: SetupToolReport[] = [];
+  for (const id of tools) {
+    const layout = AGENT_TOOLS[id];
+    const path = join(base, layout.skills, SIMLOCK_DIRECTORY);
+    const presence =
+      id === "codex" && scope === "user" && options.codexHome !== undefined
+        ? options.codexHome
+        : join(base, layout.presence);
+    const install = tool !== undefined || (await isDirectory(filesystem, presence));
+    report.push({ tool: id, skill: { status: install ? "wrote" : "skipped", path } });
+  }
+
+  const skill = renderSkill();
+  for (const { skill: entry } of report) {
+    if (entry.status === "skipped") continue;
+    await filesystem.mkdirp(entry.path);
+    await filesystem.writeFileAtomic(join(entry.path, SKILL_FILE), skill);
+  }
+  return { scope, tools: report };
+}
+
+async function isDirectory(filesystem: Filesystem, path: string): Promise<boolean> {
+  if (!(await filesystem.exists(path))) return false;
+  return (await filesystem.stat(path)).kind === "directory";
 }

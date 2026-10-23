@@ -285,6 +285,7 @@ export function buildCliEnvironment(
     requesterId,
     homeDirectory: ports.homeDirectory,
     workingDirectory: ports.workingDirectory,
+    codexHome: ports.codexHome,
     filesystem,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
