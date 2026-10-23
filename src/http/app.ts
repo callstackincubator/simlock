@@ -26,6 +26,7 @@ import {
   tokenListRoute,
   updateRoute,
   workerDrainRoute,
+  inboxRoute,
   workerListRoute,
   workerRemoveRoute,
   workerUndrainRoute,
@@ -649,6 +650,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   // `FORBIDDEN`/403 from the shared dispatcher rather than from a second check here.
   app.openapi({ ...workerListRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity"))), 200),
+  );
+
+  app.openapi({ ...inboxRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("inbox.get", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
   app.openapi({ ...updateRoute, middleware: [agentAuth, emptyBodyAsNone] }, async (c) => {

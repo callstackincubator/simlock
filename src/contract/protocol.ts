@@ -86,6 +86,7 @@ export const CORE_ROUTE_SEGMENTS: readonly string[] = [
   "events",
   "healthz",
   "identity",
+  "inbox",
   "lease-requests",
   "leases",
   "stats",
