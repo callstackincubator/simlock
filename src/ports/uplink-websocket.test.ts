@@ -286,7 +286,11 @@ describe("WebSocketUplinkConnector liveness", () => {
     await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
     await vi.waitFor(() => expect(gateway.pings()).toBe(1));
     await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
-    await firstClosed;
+    const firstOutcome = await Promise.race([
+      firstClosed.then(() => "closed"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still open"), 1_000)),
+    ]);
+    expect(firstOutcome).toBe("closed");
 
     clock.advance(1_000);
     await vi.waitFor(() => expect(accepted).toBe(2));
