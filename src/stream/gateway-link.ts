@@ -2,7 +2,13 @@ import type { ScreenMeta } from "../core/index.js";
 import type { StreamCaller } from "./caller.js";
 import type { CapturedStream } from "./feed.js";
 import { checkedMeta } from "./framing.js";
-import { relayedRefusal, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
+import {
+  relayedRefusal,
+  StreamRefusalError,
+  streamUnavailable,
+  unknownDevice,
+  unknownLease,
+} from "./refusal.js";
 import type { StreamDeviceTarget, StreamLink } from "./service.js";
 
 export interface StreamLeasePlacement {
@@ -73,6 +79,9 @@ async function serveDevice(
   caller: StreamCaller,
   signal: AbortSignal,
 ): Promise<CapturedStream> {
+  // why: the same refusal an unknown device gets, before any relay, so an agent cannot reach a screen
+  // by naming a device.
+  if (caller.role !== "operator") throw unknownDevice(target.deviceId);
   const workerId = target.workerId ?? "";
   const response = await relayed(workerId, target.deviceId, () =>
     options.fleet.relay(workerId, {

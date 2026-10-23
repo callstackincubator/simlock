@@ -122,6 +122,9 @@ function requireTarget(
   caller: StreamCaller,
 ): { readonly lease?: LeaseRecord; readonly device: DeviceRecord } {
   if (typeof target === "string") return requireLease(options.registry, target, caller);
+  // why: only an operator watches a device, and an agent gets the answer an unknown device gets, so
+  // it cannot learn which devices exist or which one its lease holds.
+  if (caller.role !== "operator") throw unknownDevice(target.deviceId);
   // why: a worker answers only for its own id (ADR 0012 section 1); a gateway names the worker it relays to,
   // and a request that reaches the wrong worker is refused rather than answered with the wrong screen.
   if (target.workerId !== undefined && target.workerId !== options.instanceId) {
