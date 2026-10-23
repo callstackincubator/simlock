@@ -37,8 +37,10 @@ export interface SetupAgentToolsOptions {
 
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
   const { filesystem, tool } = options;
-  const directory = join(options.homeDirectory, AGENT_TOOLS[tool].skills, SIMLOCK_DIRECTORY);
+  const { scope } = options;
+  const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
+  const directory = join(base, AGENT_TOOLS[tool].skills, SIMLOCK_DIRECTORY);
   await filesystem.mkdirp(directory);
   await filesystem.writeFileAtomic(join(directory, SKILL_FILE), renderSkill());
-  return { scope: "user", tools: [{ tool, skill: { status: "wrote", path: directory } }] };
+  return { scope, tools: [{ tool, skill: { status: "wrote", path: directory } }] };
 }

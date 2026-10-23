@@ -55,6 +55,7 @@ export interface CliEnvironment {
   readonly daemonHome: DaemonHome;
   readonly requesterId: string;
   readonly homeDirectory: string;
+  readonly workingDirectory: string;
   readonly filesystem: Filesystem;
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
@@ -94,6 +95,7 @@ export interface CliEnvironmentPorts {
   readonly launcher: DaemonLauncher;
   readonly daemonHome: DaemonHome;
   readonly homeDirectory: string;
+  readonly workingDirectory: string;
   readonly service?: ServiceSetup;
   readonly parentWatch?: ParentWatch;
   readonly signals?: Signals;

@@ -60,6 +60,7 @@ async function environment(): Promise<CliEnvironment> {
     clock: new FakeClock(0),
     daemonHome: { role: "worker", dataDirectory: home, gatewayPresent: false },
     homeDirectory: "/home/operator",
+    workingDirectory: "/work/project",
     filesystem: new MemoryFilesystem(),
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
