@@ -392,6 +392,17 @@ describe("FleetLeaseIndex", () => {
       expect(index.resolve("wrk_1.ad-7f3a")).toBeUndefined();
     });
 
+    it("a stale snapshot does not re-add a lease whose relayed release event arrived before the worker's answer (#898)", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      index.add(entry());
+      index.removeByWorkerLease("wrk_1", "lse_1");
+      index.remove("wrk_1.lse_1");
+
+      index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
+
+      expect(index.leaseCount("alice")).toBe(0);
+    });
+
     it("a caller-chosen ID released and granted again is rebuilt from a later snapshot (#898)", () => {
       const index = new FleetLeaseIndex(PREFIX);
       const bare = entry({ gatewayLeaseId: "ad-7f3a", workerLeaseId: "ad-7f3a" });

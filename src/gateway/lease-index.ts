@@ -165,9 +165,11 @@ export class FleetLeaseIndex {
   /** Forgets one lease by its gateway id -- the gateway's own `lease.release` completing. */
   remove(gatewayLeaseId: string): FleetLeaseEntry | undefined {
     const entry = this.#byGatewayId.get(gatewayLeaseId);
+    // why: the worker's `lease.released` event travels the uplink before the RPC reply, so the
+    // relayed event may already have forgotten the entry; the answer still ends the lease.
+    remember(this.#endedByWorkerAnswer, gatewayLeaseId);
     if (entry === undefined) return undefined;
     this.#forget(entry);
-    remember(this.#endedByWorkerAnswer, gatewayLeaseId);
     return entry;
   }
 
