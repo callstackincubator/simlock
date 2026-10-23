@@ -212,12 +212,13 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     });
   });
 
-  // why: Hono's `etag()` buffers the body to hash it, so it runs only on a JSON answer to a GET that is not a mount's; a stream or a mount's own body is never read.
+  // why: Hono's `etag()` buffers the body to hash it, so it runs only under /v1 (a `*` step, so no `/v1/*` route is registered) on a JSON answer to a GET that is not a mount's; a stream or a mount's own body is never read.
   const mountPrefixes = (deps.mounts ?? []).map((mount) => `/v1/${mount.prefix}`);
   const etagStep = etag();
-  app.use("/v1/*", async (c, next) => {
+  app.use("*", async (c, next) => {
     await next();
     const path = c.req.path;
+    if (!path.startsWith("/v1/")) return;
     const mounted = mountPrefixes.some(
       (prefix) => path === prefix || path.startsWith(`${prefix}/`),
     );
