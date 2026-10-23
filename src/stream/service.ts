@@ -2,8 +2,17 @@ import type { CapturedStream } from "./feed.js";
 import type { StreamCaller } from "./caller.js";
 import { noSuchStream, StreamRefusalError } from "./refusal.js";
 
+// why: a stream is asked for by the lease it films (a plain lease id, the route #910 removes) or by the
+// device it films; `workerId` is absent on the relay door, where the gateway has already chosen the worker.
+export interface StreamDeviceTarget {
+  readonly deviceId: string;
+  readonly workerId?: string;
+}
+
+export type StreamTarget = string | StreamDeviceTarget;
+
 export interface StreamLink {
-  serve(leaseId: string, caller: StreamCaller, signal: AbortSignal): Promise<CapturedStream>;
+  serve(target: StreamTarget, caller: StreamCaller, signal: AbortSignal): Promise<CapturedStream>;
 }
 
 export interface StreamServiceOptions {
@@ -15,11 +24,27 @@ export interface StreamServiceOptions {
 }
 
 export function leaseIdOf(pathname: string): string | undefined {
-  const match = /^\/v1\/stream\/leases\/([^/]+)$/.exec(pathname);
-  const encoded = match?.[1];
-  if (encoded === undefined) return undefined;
+  const encoded = /^\/v1\/stream\/leases\/([^/]+)$/.exec(pathname)?.[1];
+  return encoded === undefined ? undefined : decoded(encoded);
+}
+
+export function streamTargetOf(pathname: string): StreamTarget | undefined {
+  const device = /^\/v1\/stream\/workers\/([^/]+)\/devices\/([^/]+)$/.exec(pathname);
+  if (device?.[1] === undefined || device[2] === undefined) return leaseIdOf(pathname);
+  const workerId = decoded(device[1]);
+  const deviceId = decoded(device[2]);
+  return workerId === undefined || deviceId === undefined ? undefined : { deviceId, workerId };
+}
+
+export function relayedDeviceTargetOf(pathname: string): StreamTarget | undefined {
+  const encoded = /^\/stream\/devices\/([^/]+)$/.exec(pathname)?.[1];
+  const deviceId = encoded === undefined ? undefined : decoded(encoded);
+  return deviceId === undefined ? undefined : { deviceId };
+}
+
+function decoded(segment: string): string | undefined {
   try {
-    return decodeURIComponent(encoded);
+    return decodeURIComponent(segment);
   } catch {
     return undefined;
   }
@@ -29,9 +54,9 @@ export async function handleStreamRequest(
   options: StreamServiceOptions,
   request: Request,
   caller: StreamCaller,
-  leaseId: string | undefined,
+  target: StreamTarget | undefined,
 ): Promise<Response> {
-  if (leaseId === undefined) return refusalResponse(noSuchStream());
+  if (target === undefined) return refusalResponse(noSuchStream());
   if (request.method !== "GET") {
     // why: 405 rather than a 404 for a path that does exist -- a caller that posted to a stream is one
     // command away from the right ask, and "no such thing" would send it looking elsewhere.
@@ -42,7 +67,7 @@ export async function handleStreamRequest(
 
   let stream: CapturedStream;
   try {
-    stream = await options.link.serve(leaseId, caller, request.signal);
+    stream = await options.link.serve(target, caller, request.signal);
   } catch (error) {
     const refusal =
       error instanceof StreamRefusalError
@@ -53,8 +78,8 @@ export async function handleStreamRequest(
             error instanceof Error ? error.message : String(error),
           );
     options.logger?.warn("Screen stream refused", {
+      ...targetFields(target),
       code: refusal.code,
-      leaseId,
       message: refusal.message,
     });
     return refusalResponse(refusal);
@@ -63,13 +88,13 @@ export async function handleStreamRequest(
   options.logger?.info("Screen stream opened", {
     codec: stream.meta.codec,
     height: stream.meta.height,
-    leaseId,
+    ...targetFields(target),
     width: stream.meta.width,
   });
-  return streamResponse(leaseId, stream);
+  return streamResponse(typeof target === "string" ? target : undefined, stream);
 }
 
-export function streamResponse(leaseId: string, stream: CapturedStream): Response {
+export function streamResponse(leaseId: string | undefined, stream: CapturedStream): Response {
   const { meta } = stream;
   // why: the codec and size are headers as well as the body's first frame, because a browser must
   // decide how to read a body before it has read any of it, and because a gateway reads the headers
@@ -82,10 +107,16 @@ export function streamResponse(leaseId: string, stream: CapturedStream): Respons
       "simlock-stream-fps": String(meta.fps),
       "simlock-stream-height": String(meta.height),
       "simlock-stream-width": String(meta.width),
-      "x-simlock-lease": leaseId,
+      ...(leaseId === undefined ? {} : { "x-simlock-lease": leaseId }),
     },
     status: 200,
   });
+}
+
+function targetFields(target: StreamTarget): Record<string, unknown> {
+  return typeof target === "string"
+    ? { leaseId: target }
+    : { deviceId: target.deviceId, workerId: target.workerId };
 }
 
 // why: one body shape for every refusal this route can make -- `{ "error": { "code", "message" } }`,

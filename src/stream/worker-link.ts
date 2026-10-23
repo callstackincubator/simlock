@@ -14,7 +14,7 @@ import type { CaptureRegistry } from "./captures.js";
 import type { StreamCaller } from "./caller.js";
 import { type CapturedStream, type FeedBounds, readScreenFeed } from "./feed.js";
 import { notStreamable, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
-import type { StreamLink } from "./service.js";
+import type { StreamLink, StreamTarget } from "./service.js";
 
 export interface StreamRegistry {
   readonly snapshot: {
@@ -42,12 +42,12 @@ export interface WorkerStreamLinkOptions {
 
 export function createWorkerStreamLink(options: WorkerStreamLinkOptions): StreamLink {
   return {
-    async serve(leaseId, caller, signal): Promise<CapturedStream> {
+    async serve(target, caller, signal): Promise<CapturedStream> {
       // why: ownership is proved before anything is asked of the machine. A link that looked for its
       // capture first would answer an agent one way for a lease this worker holds and another for a
       // lease that does not exist, which is a way of listing the fleet's leases.
-      const { device, lease } = requireLease(options.registry, leaseId, caller);
-      const slot = options.captures.begin(leaseId);
+      const { device, lease } = requireTarget(options.registry, target, caller);
+      const slot = options.captures.begin(lease?.id ?? device.id);
       // why: the listener, and not only the body's cancel, because a request aborted before its
       // first frame has no body being read yet -- which is what a page opened and closed quickly does.
       if (signal.aborted) void slot.release();
@@ -67,20 +67,22 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
         stream = await readScreenFeed(feed, options.bounds);
       } catch (error) {
         slot.abandon();
-        if (slot.ended.aborted) throw unknownLease(leaseId);
+        if (slot.ended.aborted && lease !== undefined) throw unknownLease(lease.id);
         throw refusalFor(error);
       }
       // why: the lease is read again once there is a picture, because a capture can take seconds to
       // start and the lease it was asked for can end and the device be granted to someone else in
       // that time; a slot that was stopped says so even if a new lease reused the id.
-      const still = options.registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
+      const still = options.registry.snapshot.leases.find(
+        (candidate) => candidate.id === lease?.id,
+      );
       if (signal.aborted) {
         await slot.release();
         throw streamUnavailable("The viewer went away before the picture started");
       }
-      if (slot.ended.aborted || still?.deviceId !== lease.deviceId) {
+      if (lease !== undefined && (slot.ended.aborted || still?.deviceId !== lease.deviceId)) {
         await slot.release();
-        throw unknownLease(leaseId);
+        throw unknownLease(lease.id);
       }
       return { ...stream, close: () => slot.release() };
     },
@@ -103,6 +105,18 @@ function refusalFor(error: unknown): StreamRefusalError {
     return streamUnavailable(error.message);
   }
   return streamUnavailable(String(error));
+}
+
+function requireTarget(
+  registry: StreamRegistry,
+  target: StreamTarget,
+  caller: StreamCaller,
+): { readonly lease?: LeaseRecord; readonly device: DeviceRecord } {
+  if (typeof target === "string") return requireLease(registry, target, caller);
+  const device = registry.snapshot.devices.find((candidate) => candidate.id === target.deviceId);
+  if (device === undefined)
+    throw new StreamRefusalError(404, "UNKNOWN_DEVICE", `Unknown device: ${target.deviceId}`);
+  return { device };
 }
 
 // why: ownership is proved against this worker's own registry rather than taken from whoever relayed

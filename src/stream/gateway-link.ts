@@ -1,8 +1,9 @@
 import type { ScreenMeta } from "../core/index.js";
+import type { StreamCaller } from "./caller.js";
 import type { CapturedStream } from "./feed.js";
 import { checkedMeta } from "./framing.js";
 import { relayedRefusal, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
-import type { StreamLink } from "./service.js";
+import type { StreamDeviceTarget, StreamLink } from "./service.js";
 
 export interface StreamLeasePlacement {
   readonly ownerId: string;
@@ -21,7 +22,7 @@ export interface FleetPort {
     call: {
       readonly request: Request;
       readonly tenant: string;
-      readonly leaseId: string;
+      readonly leaseId?: string;
     },
   ): Promise<Response>;
 }
@@ -34,7 +35,9 @@ const WORKER_STREAM_PATH = "/stream/leases/";
 
 export function createGatewayStreamLink(options: GatewayStreamLinkOptions): StreamLink {
   return {
-    async serve(leaseId, caller, signal): Promise<CapturedStream> {
+    async serve(target, caller, signal): Promise<CapturedStream> {
+      if (typeof target !== "string") return serveDevice(options, target, caller, signal);
+      const leaseId = target;
       const held = options.fleet.holder(leaseId);
       if (held === undefined) throw unknownLease(leaseId);
       if (caller.role !== "operator" && held.ownerId !== caller.principal) {
@@ -62,6 +65,25 @@ export function createGatewayStreamLink(options: GatewayStreamLinkOptions): Stre
       return fromResponse(held.workerId, leaseId, response);
     },
   };
+}
+
+async function serveDevice(
+  options: GatewayStreamLinkOptions,
+  target: StreamDeviceTarget,
+  caller: StreamCaller,
+  signal: AbortSignal,
+): Promise<CapturedStream> {
+  const workerId = target.workerId ?? "";
+  const response = await relayed(workerId, target.deviceId, () =>
+    options.fleet.relay(workerId, {
+      request: new Request(
+        `http://simlock-worker/stream/devices/${encodeURIComponent(target.deviceId)}`,
+        { method: "GET", signal },
+      ),
+      tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
+    }),
+  );
+  return fromResponse(workerId, target.deviceId, response);
 }
 
 // why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker

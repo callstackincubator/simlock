@@ -11,7 +11,7 @@ interface Relayed {
   readonly workerId: string;
   readonly url: string;
   readonly tenant: string;
-  readonly leaseId: string;
+  readonly leaseId: string | undefined;
 }
 
 class CodedError extends Error {
