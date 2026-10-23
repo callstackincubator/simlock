@@ -80,12 +80,12 @@ export function renewAnswer<T>(route: string, data: T, renewal: Renewal): T {
   return data;
 }
 
-// why: the Inbox shows a lease's time left only on its `ending` item, so only that item goes stale.
+// why: the Inbox shows a lease's time left only on its `ending` item, the only item that embeds a lease.
 export function endsInInbox(data: unknown, renewal: Renewal): boolean {
   const items = (data as { readonly items?: readonly unknown[] } | undefined)?.items;
   return (items ?? []).some((item) => {
-    const { condition, lease } = item as { condition?: unknown; lease?: LeaseRecord };
-    return condition === "ending" && lease !== undefined && isRenewed(lease, renewal);
+    const { lease } = item as { lease?: LeaseRecord };
+    return lease !== undefined && isRenewed(lease, renewal);
   });
 }
 
