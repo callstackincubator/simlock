@@ -1383,6 +1383,8 @@ export const workerViewSchema = z.object({
 export const statusLeaseSchema = leaseRecordSchema.extend({
   /** Which worker holds this lease; absent on a worker's own answer, set by a gateway. */
   workerId: z.string().optional(),
+  // why: the part of a gateway lease id after `<workerId>.`, so a relayed event naming the worker's lease can be matched; set only by a gateway's `lease.list`, `lease.get` and `list.get kind=leases`.
+  workerLeaseId: z.string().optional(),
 });
 
 const USAGE_MAX_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;

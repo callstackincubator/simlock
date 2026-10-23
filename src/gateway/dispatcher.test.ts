@@ -888,7 +888,7 @@ describe("GatewayDispatcher", () => {
       { id: "my-lease", workerLeaseId: "my-lease" },
       { id: "local_1", workerLeaseId: "local_1" },
     ];
-    const pick = (leases: readonly { id: string; workerLeaseId?: string }[]) =>
+    const pick = (leases: readonly { id: string; workerLeaseId?: string | undefined }[]) =>
       leases.map(({ id, workerLeaseId }) => ({ id, workerLeaseId }));
 
     const listed = await dispatcher.dispatch("lease.list", {}, session());
