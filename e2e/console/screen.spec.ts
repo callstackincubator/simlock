@@ -121,6 +121,13 @@ async function openDevice(page: Page, target: Target, search = "?tab=devices"): 
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
+// why: the page is already signed in on this origin, so the token form is not there to fill.
+async function reopen(page: Page, target: Target): Promise<void> {
+  const path = `/fleet/${encodeURIComponent(target.workerId)}/${encodeURIComponent(target.deviceId)}?tab=devices&drawer=screen`;
+  await page.goto(new URL(path, target.origin).toString());
+  await expect(page.getByRole("dialog")).toBeVisible();
+}
+
 // why: the stream numbers' popover is a dialog too, so the drawer is the one that holds the tabs.
 function drawer(page: Page) {
   return page.getByRole("dialog").filter({ has: page.getByRole("tablist") });
@@ -271,7 +278,7 @@ test.describe("the device drawer's Screen tab", () => {
 const SHUT_DOWN = "The device is shut down. Its screen shows while it runs.";
 
 test.describe("the Screen tab of a device that is not running", () => {
-  test("says why instead of starting a capture, starts the picture when the device runs, shows the sentence again when it is shut down while watched, and says streaming is off where it is", async ({
+  test("says why instead of starting a capture, starts the picture when the device runs, shows the sentence again when it is shut down while watched, shows the daemon's words for a refused stream, and says streaming is off where it is", async ({
     page,
   }) => {
     const started = await streamingHost({ warmPool: { enabled: false } });
@@ -309,6 +316,43 @@ test.describe("the Screen tab of a device that is not running", () => {
       await expect(drawer(page).getByText(SHUT_DOWN)).toBeVisible();
       await expect(screen(page)).toHaveCount(0);
       expect(await captureLogLines(started.dir, "opened")).toBe(1);
+
+      // why: the daemon's own words are the only thing a refused stream can tell the reader, so the
+      // answers are scripted per request; a 409 on a row that says `leased` is the row being behind.
+      const reasoned = await host.cli([...LEASE, "--agent-id", "console-screen-409", "--detach"]);
+      expect(reasoned.code, reasoned.stderr).toBe(0);
+      const refuse = (status: number, code: string, message: string) =>
+        page.route("**/v1/stream/**", (route) =>
+          route.fulfill({
+            body: JSON.stringify({ error: { code, message } }),
+            contentType: "application/json",
+            status,
+          }),
+        );
+      let held = "";
+      await expect
+        .poll(async () => {
+          const listed = await host.cli(["status", "--json"]);
+          const devices = (listed.json as { devices: { id: string; state: string }[] }).devices;
+          held = devices.find((device) => device.state === "leased")?.id ?? "";
+          return held;
+        })
+        .not.toBe("");
+      const target = { deviceId: held, origin: host.url, token: host.tokens.operator, workerId };
+      await refuse(409, "DEVICE_NOT_RUNNING", "The row is behind: the device stopped just now.");
+      await reopen(page, target);
+      await expect(
+        drawer(page).getByText("The row is behind: the device stopped just now."),
+      ).toBeVisible();
+      await expect(screen(page)).toHaveCount(0);
+      await expect(drawer(page).getByRole("alert")).toHaveCount(0);
+      await page.unroute("**/v1/stream/**");
+      await refuse(500, "CAPTURE_FAILED", "The capture program could not start.");
+      await reopen(page, target);
+      await expect(drawer(page).getByRole("alert")).toHaveText(
+        "The capture program could not start.",
+      );
+      await page.unroute("**/v1/stream/**");
 
       // why: a leased device is one the daemon would stream, so only the worker's own setting can be
       // the reason no request is made.
