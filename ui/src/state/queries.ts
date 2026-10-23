@@ -188,6 +188,12 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
       readMarked(later);
     }, AGAIN_MS);
   };
+  // why: a renewal needs a read only where its lease's deadline is shown from another answer: the
+  // inbox's ending item and an open lease page.
+  const renewalKeys = (renewal: Renewal): StaleKey[] => [
+    leaseKeyOf(renewal),
+    ...(endsInInbox(client.getQueryData(["inbox"]), renewal) ? [["inbox"]] : []),
+  ];
   const stopEvents = connection.onEvent((event: StreamEvent) => {
     const { data } = event;
     const parsed = readEvent(data);
@@ -204,16 +210,9 @@ export function createQueries({ clock, connection, visibility }: QueriesOptions)
       typeof data === "object" && data !== null
         ? (data as { payload?: unknown }).payload
         : undefined;
-    // why: a renewal needs a read only where its lease's deadline is shown from another answer: the
-    // inbox's ending item and an open lease page.
     const keys = [
       ...staleKeys(event.event, payload),
-      ...(renewal === undefined
-        ? []
-        : [
-            leaseKeyOf(renewal),
-            ...(endsInInbox(client.getQueryData(["inbox"]), renewal) ? [["inbox"]] : []),
-          ]),
+      ...(renewal === undefined ? [] : renewalKeys(renewal)),
     ];
     if (keys.length === 0) return;
     for (const queryKey of keys) {
