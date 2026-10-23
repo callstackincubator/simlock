@@ -29,7 +29,9 @@ interface StreamingHost {
   readonly host: RunningDaemon;
 }
 
-async function streamingHost(): Promise<StreamingHost> {
+async function streamingHost(
+  extraConfig: Readonly<Record<string, unknown>> = {},
+): Promise<StreamingHost> {
   const dir = await mkdtemp(join(tmpdir(), "simlock-screen-"));
   const command = await writeCaptureProgram(dir);
   let host: RunningDaemon | undefined;
@@ -37,6 +39,7 @@ async function streamingHost(): Promise<StreamingHost> {
     host = await startDaemon("worker", {
       config: {
         capabilities: { stream: { enabled: true, fps: 5 } },
+        ...extraConfig,
       },
       driverScript: { ios: { ...IOS, screenCaptureCommand: command } },
     });
@@ -90,6 +93,25 @@ async function warmDevice(host: RunningDaemon): Promise<string> {
     })
     .not.toBe("");
   return ready;
+}
+
+// why: with the warm pool off a released device is left shut down, which is the one state a viewer
+// can reach a device in without a lease changing under them.
+async function shutdownDevice(host: RunningDaemon): Promise<string> {
+  const granted = await host.cli([...LEASE, "--agent-id", "console-screen", "--detach"]);
+  expect(granted.code, granted.stderr).toBe(0);
+  const released = await host.cli(["release", "--all", "--yes"]);
+  expect(released.code, released.stderr).toBe(0);
+  let id = "";
+  await expect
+    .poll(async () => {
+      const listed = await host.cli(["status", "--json"]);
+      const [device] = (listed.json as { devices: { id: string; state: string }[] }).devices;
+      id = device?.state === "shutdown" ? device.id : "";
+      return id;
+    })
+    .not.toBe("");
+  return id;
 }
 
 async function openDevice(page: Page, target: Target, search = "?tab=devices"): Promise<void> {
@@ -240,6 +262,72 @@ test.describe("the device drawer's Screen tab", () => {
     } finally {
       if (fleet !== undefined) await disposeFleet(fleet);
       await rm(fleetDir, { force: true, recursive: true });
+      await cleanup(started);
+    }
+  });
+});
+
+const SHUT_DOWN = "The device is shut down. Its screen shows while it runs.";
+
+test.describe("the Screen tab of a device that is not running", () => {
+  test("says why instead of starting a capture, starts the picture when the device runs, shows the sentence again when it is shut down while watched, and says streaming is off where it is", async ({
+    page,
+  }) => {
+    const started = await streamingHost({ warmPool: { enabled: false } });
+    const off = await startDaemon("worker", {
+      config: { warmPool: { enabled: false } },
+      driverScript: { ios: IOS },
+    });
+    try {
+      const host = started.host;
+      const workerId = await workerIdOn(host);
+      const deviceId = await shutdownDevice(host);
+      const streams: string[] = [];
+      page.on("request", (request) => {
+        if (request.url().includes("/v1/stream/")) streams.push(request.url());
+      });
+
+      await openDevice(
+        page,
+        { deviceId, origin: host.url, token: host.tokens.operator, workerId },
+        "?tab=devices&drawer=screen",
+      );
+      await expect(drawer(page).getByText(SHUT_DOWN)).toBeVisible();
+      await expect(screen(page)).toHaveCount(0);
+      expect(streams).toEqual([]);
+      expect(await captureLogLines(started.dir, "opened")).toBe(0);
+
+      const leased = await host.cli([...LEASE, "--agent-id", "console-screen", "--detach"]);
+      expect(leased.code, leased.stderr).toBe(0);
+      await expect(screen(page)).toBeVisible();
+      await logReached(started.dir, "opened", 1);
+
+      const released = await host.cli(["release", "--all", "--yes"]);
+      expect(released.code, released.stderr).toBe(0);
+      await logReached(started.dir, "closed", 1);
+      await expect(drawer(page).getByText(SHUT_DOWN)).toBeVisible();
+      await expect(screen(page)).toHaveCount(0);
+      expect(await captureLogLines(started.dir, "opened")).toBe(1);
+
+      const silent = await shutdownDevice(off);
+      const quiet: string[] = [];
+      page.on("request", (request) => {
+        if (request.url().includes("/v1/stream/")) quiet.push(request.url());
+      });
+      await openDevice(
+        page,
+        {
+          deviceId: silent,
+          origin: off.url,
+          token: off.tokens.operator,
+          workerId: await workerIdOn(off),
+        },
+        "?tab=devices&drawer=screen",
+      );
+      await expect(drawer(page).getByText(/^Streaming is off on /)).toBeVisible();
+      expect(quiet).toEqual([]);
+    } finally {
+      await off.dispose();
       await cleanup(started);
     }
   });
