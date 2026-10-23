@@ -31,6 +31,7 @@ interface SendOptions {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly body?: string;
+  readonly ifNoneMatch?: string;
 }
 
 export async function send<T>(
@@ -57,6 +58,7 @@ export async function send<T>(
       credentials: "same-origin",
       headers: {
         ...(options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` }),
+        ...(options.ifNoneMatch === undefined ? {} : { "If-None-Match": options.ifNoneMatch }),
         ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(options.body === undefined ? {} : { body: options.body }),
@@ -141,7 +143,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   ): Promise<T> => {
     try {
       return await send(path, sendOptions, async (response) => {
-        await refuseError(response, refuse);
+        // why: a 304 answers the tag this read sent, so it is not a refusal.
+        if (response.status !== 304 || sendOptions.ifNoneMatch === undefined) {
+          await refuseError(response, refuse);
+        }
         return read(response);
       });
     } catch (error: unknown) {
@@ -158,12 +163,21 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   function get<T>(path: ApiPath, readOptions: ReadOptions): Promise<ConditionalResponse<T>>;
   function get<T>(
     path: ApiPath,
-    _readOptions?: ReadOptions,
+    readOptions?: ReadOptions,
   ): Promise<ApiResponse<T> | ConditionalResponse<T>> {
-    return watched(path, authorized(), async (response) => ({
-      body: (await response.json()) as T,
-      date: response.headers.get("Date"),
-    }));
+    const tag = readOptions?.tag;
+    return watched(
+      path,
+      { ...authorized(), ...(tag === undefined ? {} : { ifNoneMatch: tag }) },
+      async (response) => {
+        const date = response.headers.get("Date");
+        if (response.status === 304) return { date, notModified: true as const };
+        const body = (await response.json()) as T;
+        return readOptions === undefined
+          ? { body, date }
+          : { body, date, tag: response.headers.get("ETag") };
+      },
+    );
   }
   return {
     get,
