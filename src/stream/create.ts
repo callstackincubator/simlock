@@ -15,6 +15,7 @@ import { createWorkerStreamLink, type ScreenOpener, type StreamRegistry } from "
 
 export interface WorkerStreamOptions {
   readonly name: string;
+  readonly instanceId: string;
   readonly registry: StreamRegistry;
   readonly screens: ScreenOpener & {
     screenAvailability(): Promise<readonly ScreenAvailability[]>;

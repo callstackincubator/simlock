@@ -1,24 +1,41 @@
 import { describe, expect, it } from "vitest";
 
-import type { ScreenAvailability } from "../core/index.js";
+import { type ScreenAvailability, ScreenNotSupportedError } from "../core/index.js";
 import { FakeClock, NoopLogger } from "../ports/index.js";
 import { createWorkerStream } from "./create.js";
 import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
 
-function worker(availability: readonly ScreenAvailability[] = [], sendsMeta = true) {
+function worker(
+  availability: readonly ScreenAvailability[] = [],
+  sendsMeta = true,
+  unsupported = false,
+) {
   const clock = new FakeClock();
   const registry = new TestRegistry(
     [{ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent", requesterId: "gw:inst:agent-1" }],
-    [{ id: "dev_1", platform: "ios" }],
+    [
+      { id: "dev_1", platform: "ios" },
+      { id: "dev_ready", platform: "ios", state: "ready" },
+      { id: "dev_leased", platform: "ios", state: "leased" },
+      { id: "dev_shutdown", platform: "ios", state: "shutdown" },
+      { id: "dev_provisioning", platform: "ios", state: "provisioning" },
+      { id: "dev_reclaiming", platform: "ios", state: "reclaiming" },
+      { id: "dev_quarantined", platform: "ios", state: "quarantined" },
+      { id: "dev_absent", physical: true, platform: "ios", state: "absent" },
+    ],
   );
   const feeds: ScriptedFeed[] = [];
+  let opened = 0;
   const stream = createWorkerStream({
     clock,
+    instanceId: "w1",
     logger: new NoopLogger(),
     name: "stream",
     registry,
     screens: {
       openScreen: async () => {
+        opened += 1;
+        if (unsupported) throw new ScreenNotSupportedError("no capture here");
         const feed = new ScriptedFeed();
         if (sendsMeta) feed.meta();
         feeds.push(feed);
@@ -28,8 +45,13 @@ function worker(availability: readonly ScreenAvailability[] = [], sendsMeta = tr
     },
     settings: { bitrateKbps: 1500, fps: 30, maxDimension: 720 },
   });
-  return { clock, feeds, stream };
+  return { clock, feeds, opened: () => opened, stream };
 }
+
+const OPERATOR = { principal: "tok_op", role: "operator" };
+
+const deviceRequest = (worker: string, device: string) =>
+  new Request(`http://daemon/v1/stream/workers/${worker}/devices/${device}`);
 
 const relayed = () => new Request("http://simlock-worker/stream/leases/lse_1");
 
@@ -120,5 +142,67 @@ describe("createWorkerStream", () => {
       new AbortController().signal,
     );
     expect(feeds[0]?.closes).toBe(1);
+  });
+
+  it("serves an operator the stream of a ready or leased device, and refuses any other device with its reason before opening anything", async () => {
+    for (const device of ["dev_ready", "dev_leased"]) {
+      const { opened, stream } = worker();
+      const served = await stream.mount.handle(deviceRequest("w1", device), OPERATOR);
+      expect(served.status, device).toBe(200);
+      expect(opened(), device).toBe(1);
+      await served.body?.cancel();
+    }
+    const refusals: [string, string, number, string, string][] = [
+      [
+        "w1",
+        "dev_shutdown",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is shutdown; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_provisioning",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is provisioning; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_reclaiming",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is reclaiming; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_quarantined",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is quarantined; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_absent",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is absent; only a ready or leased device streams",
+      ],
+      ["w1", "dev_nope", 404, "UNKNOWN_DEVICE", "Unknown device: dev_nope"],
+      ["w2", "dev_ready", 404, "UNKNOWN_WORKER", "Unknown worker: w2"],
+    ];
+    for (const [workerId, device, status, code, message] of refusals) {
+      const { opened, stream } = worker();
+      const refused = await stream.mount.handle(deviceRequest(workerId, device), OPERATOR);
+      expect(refused.status, device).toBe(status);
+      expect(await refused.json(), device).toEqual({ error: { code, message } });
+      expect(opened(), device).toBe(0);
+    }
+    const { stream } = worker([], true, true);
+    const unsupported = await stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+    expect(unsupported.status).toBe(415);
+    expect(((await unsupported.json()) as { error: { code: string } }).error.code).toBe(
+      "STREAM_NOT_SUPPORTED",
+    );
   });
 });

@@ -20,6 +20,7 @@ export interface TestDevice {
   readonly id: string;
   readonly platform: Platform;
   readonly physical?: boolean;
+  readonly state?: string;
 }
 
 export class TestRegistry implements StreamRegistry {
@@ -42,6 +43,7 @@ export class TestRegistry implements StreamRegistry {
             enrolledApps: [],
             id: device.id,
             physical: device.physical === true,
+            state: device.state ?? "ready",
             spec: { platform: device.platform },
           }) as unknown as DeviceRecord,
       ),

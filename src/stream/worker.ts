@@ -6,6 +6,7 @@ import type { StreamModuleConfig } from "./definition.js";
 export function createWorker(ctx: WorkerContext<StreamModuleConfig>): WorkerModule {
   const stream = createWorkerStream({
     clock: ctx.clock,
+    instanceId: ctx.instanceId,
     logger: ctx.logger,
     name: ctx.name,
     registry: ctx.registry,
