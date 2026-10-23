@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS } from "../src/instructions/index.js";
 import { waitFor, withDaemon } from "./helpers/index.js";
 
 interface McpErrorPayload {
@@ -69,6 +70,42 @@ describe("MCP session semantics", () => {
         leaseId: leased.lease.id,
         released: true,
       });
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  it("gives a connecting client the server instructions, and serves the full rules text as the resource simlock://instructions", async () => {
+    const env = await withDaemon({ mode: "auto" });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "rules-reader" } });
+
+    try {
+      const instructions = mcp.client.getInstructions();
+      expect(instructions).toBe(MCP_SERVER_INSTRUCTIONS);
+      expect(instructions?.startsWith("# ")).toBe(true);
+      expect(instructions).toContain("## Rules for every agent");
+      expect(instructions).toContain("## MCP");
+      expect(instructions?.length).toBeLessThanOrEqual(4096);
+
+      const { resources } = await mcp.client.listResources();
+      expect(resources).toEqual([
+        expect.objectContaining({ uri: "simlock://instructions", mimeType: "text/markdown" }),
+      ]);
+      const read = await mcp.client.readResource({ uri: "simlock://instructions" });
+      expect(read.contents).toEqual([
+        expect.objectContaining({
+          uri: "simlock://instructions",
+          mimeType: "text/markdown",
+          text: AGENT_INSTRUCTIONS,
+        }),
+      ]);
+      expect(read.contents[0]).toMatchObject({ text: (await env.cli(["instructions"])).stdout });
+
+      const { tools } = await mcp.client.listTools();
+      expect(tools.length).toBeGreaterThan(0);
+      for (const tool of tools) {
+        expect(AGENT_INSTRUCTIONS, tool.name).toContain(`\`${tool.name}\``);
+      }
     } finally {
       await mcp.close();
     }
