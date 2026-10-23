@@ -85,8 +85,6 @@ function useScreen(workerId: string, deviceId: string, enabled: boolean): Screen
     setPhase("stopped");
   }, []);
 
-  // why: leaving the page stops the capture with the same abort the Stop button performs — a page that
-  // was navigated away from must not leave a device being filmed for a viewer that is no longer there.
   const start = useCallback(() => {
     const abort = new AbortController();
     controller.current = abort;

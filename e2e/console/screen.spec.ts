@@ -310,7 +310,12 @@ test.describe("the Screen tab of a device that is not running", () => {
       await expect(screen(page)).toHaveCount(0);
       expect(await captureLogLines(started.dir, "opened")).toBe(1);
 
-      const silent = await shutdownDevice(off);
+      // why: a leased device is one the daemon would stream, so only the worker's own setting can be
+      // the reason no request is made.
+      const heldOff = await off.cli([...LEASE, "--agent-id", "console-screen", "--detach"]);
+      expect(heldOff.code, heldOff.stderr).toBe(0);
+      const [silent = ""] = await deviceIds(off);
+      expect(silent).not.toBe("");
       const quiet: string[] = [];
       page.on("request", (request) => {
         if (request.url().includes("/v1/stream/")) quiet.push(request.url());
