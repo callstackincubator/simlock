@@ -321,6 +321,7 @@ export class Dispatcher {
       "events.unsubscribe": this.#eventsUnsubscribe,
       "identity.get": identityGet,
       "token.create": this.#tokenCreate,
+      "inbox.get": this.#inboxGet,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
       "component.install": this.#componentInstall,
@@ -1051,6 +1052,8 @@ export class Dispatcher {
     const { record, secret } = await this.#requireTokens().create(input.role, input.label);
     return { secret, token: record };
   };
+
+  #inboxGet: Handler<"inbox.get"> = () => ({ items: [] });
 
   #tokenList: Handler<"token.list"> = async () => ({ tokens: await this.#requireTokens().list() });
 

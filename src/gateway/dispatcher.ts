@@ -241,6 +241,7 @@ export class GatewayDispatcher {
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
+      "inbox.get": this.#inboxGet,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
       "worker.list": this.#workerList,
@@ -410,6 +411,8 @@ export class GatewayDispatcher {
     if (revoked) await this.options.closeUplinksForToken?.(input.id);
     return { revoked };
   };
+
+  #inboxGet: Handler<"inbox.get"> = () => ({ items: [] });
 
   #workerList: Handler<"worker.list"> = () => ({ workers: this.options.workers.views() });
 

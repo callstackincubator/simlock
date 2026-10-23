@@ -960,6 +960,31 @@ describe("GatewayDispatcher", () => {
     expect(Object.keys(views[0] ?? {})).not.toContain("leases");
   });
 
+  it("inbox.get answers the items the fleet's views, leases, waiting requests and tokens make", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.connected("wrk_2", "mac-mini-2", "0.3.0");
+    workers.disconnected("wrk_2");
+
+    const answer = await dispatcher.dispatch("inbox.get", {}, session());
+
+    expect(answer).toEqual({
+      items: [
+        {
+          condition: "disconnected",
+          group: "Broken",
+          key: "wrk_2/disconnected",
+          worker: expect.objectContaining({
+            connection: "disconnected",
+            heldLeases: 0,
+            id: "wrk_2",
+            leasedDevices: 0,
+          }),
+        },
+      ],
+    });
+  });
+
   it("lists each of an owner's gateway-issued leases under its own record, and none whose worker has no view", async () => {
     const { dispatcher, leaseIndex, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);
