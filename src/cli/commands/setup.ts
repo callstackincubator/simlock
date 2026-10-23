@@ -9,7 +9,7 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
     homeDirectory: environment.homeDirectory,
     workingDirectory: environment.workingDirectory,
     codexHome: environment.codexHome,
-    runTool: async () => ({ outcome: "not-found" }),
+    runTool: environment.runTool,
     scope: values.project === true ? "project" : "user",
     tool: values.tool as AgentTool | undefined,
   });

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import type { Filesystem, ProcessRunner } from "../ports/index.js";
+import { ProcessSpawnError, type Filesystem, type ProcessRunner } from "../ports/index.js";
 import { renderSkill } from "./skill.js";
 
 const AGENT_TOOLS = {
@@ -37,13 +37,30 @@ export type RunTool = (
   options: { readonly cwd: string },
 ) => Promise<ToolOutcome>;
 
-export function toolRunner(_runner: ProcessRunner): RunTool {
-  return async () => ({ outcome: "not-found" });
+const TOOL_TIMEOUT_MS = 30_000;
+const MAX_REASON_LENGTH = 200;
+
+export function toolRunner(runner: ProcessRunner): RunTool {
+  return async (bin, args, { cwd }) => {
+    try {
+      const result = await runner.run(bin, args, { timeoutMs: TOOL_TIMEOUT_MS, cwd });
+      if (result.code === null) return { outcome: "timed-out" };
+      return { outcome: "exited", code: result.code, stderr: result.stderr };
+    } catch (error: unknown) {
+      if (error instanceof ProcessSpawnError) return { outcome: "not-found" };
+      throw error;
+    }
+  };
 }
 
 export class SetupMcpFailedError extends Error {
   constructor(readonly report: SetupReport) {
-    super("");
+    super(
+      report.tools
+        .filter(({ mcp }) => mcp?.status === "failed")
+        .map(({ tool, mcp }) => `MCP not connected for ${tool}: ${mcp?.reason}`)
+        .join("; "),
+    );
     this.name = "SetupMcpFailedError";
   }
 }
@@ -89,7 +106,49 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
     await filesystem.mkdirp(entry.path);
     await filesystem.writeFileAtomic(join(entry.path, SKILL_FILE), skill);
   }
-  return { scope, tools: report };
+  const connected: SetupToolReport[] = [];
+  for (const entry of report) {
+    const mcp =
+      options.mcp === true && entry.skill.status !== "skipped"
+        ? await connectMcp(options.runTool, entry.tool, scope, options.workingDirectory)
+        : undefined;
+    connected.push(mcp === undefined ? entry : { ...entry, mcp });
+  }
+  const result: SetupReport = { scope, tools: connected };
+  if (connected.some(({ mcp }) => mcp?.status === "failed")) throw new SetupMcpFailedError(result);
+  return result;
+}
+
+type McpResult = NonNullable<SetupToolReport["mcp"]>;
+
+async function connectMcp(
+  runTool: RunTool,
+  tool: AgentTool,
+  scope: SetupScope,
+  cwd: string,
+): Promise<McpResult> {
+  if (tool === "codex" && scope === "project") {
+    return { status: "skipped", reason: "codex mcp add has no project scope" };
+  }
+  const bin = tool === "claude-code" ? "claude" : "codex";
+  const args =
+    tool === "claude-code"
+      ? ["mcp", "add", "-s", scope, "simlock", "--", "simlock", "mcp"]
+      : ["mcp", "add", "simlock", "--", "simlock", "mcp"];
+  const outcome = await runTool(bin, args, { cwd });
+  if (outcome.outcome === "not-found") return { status: "skipped", reason: `${bin} not found` };
+  if (outcome.outcome === "timed-out") {
+    return { status: "failed", reason: "timed out after 30 s" };
+  }
+  if (outcome.code === 0) return { status: "connected" };
+  if (tool === "claude-code" && outcome.stderr.includes("already exists in")) {
+    return { status: "already" };
+  }
+  return { status: "failed", reason: firstLine(outcome.stderr) };
+}
+
+function firstLine(text: string): string {
+  return (text.split("\n")[0] ?? "").slice(0, MAX_REASON_LENGTH);
 }
 
 async function isDirectory(filesystem: Filesystem, path: string): Promise<boolean> {
