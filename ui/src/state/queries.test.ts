@@ -106,6 +106,42 @@ describe("the query layer", () => {
   });
 });
 
+describe("data no page uses", () => {
+  it("is dropped a minute after the last page using it closes", async () => {
+    // why: each row is path, ms away, whether a read is sent again, whether the kept data shows at once.
+    const cases = [
+      ["/v1/workers", 1_999, false, true],
+      ["/v1/workers", 2_000, true, true],
+      ["/v1/workers", 59_999, true, true],
+      ["/v1/workers", 60_000, true, false],
+      ["/v1/stats?since=1h", 29_999, false, true],
+      ["/v1/stats?since=1h", 30_000, true, true],
+      ["/v1/tokens", 59_999, false, true],
+      ["/v1/tokens", 60_000, true, false],
+    ] as const;
+    for (const [path, gone, rereads, keptAtOnce] of cases) {
+      const { queries, reads, watch } = start();
+      const leave = watch(path);
+      await settle();
+      expect(reads(path)).toBe(1);
+      leave();
+
+      await vi.advanceTimersByTimeAsync(gone);
+      const observer = new QueryObserver(queries.client, queries.options(path));
+      const label = `${path} back after ${gone} ms`;
+      expect(observer.getCurrentResult().data !== undefined, `${label}: data at once`).toBe(
+        keptAtOnce,
+      );
+      observer.subscribe(() => undefined);
+      await settle();
+      expect(reads(path), `${label}: reads`).toBe(rereads ? 2 : 1);
+      expect(observer.getCurrentResult().data, `${label}: data after the read`).toEqual({
+        read: rereads ? 2 : 1,
+      });
+    }
+  });
+});
+
 describe("a read's answers and failures", () => {
   it("a read that fails at the network level marks the console disconnected", async () => {
     const { daemon, connection, state, watch } = start(false);
