@@ -435,7 +435,11 @@ export interface Fleet {
  * leases through the gateway or reads a card's capacity right away would see that gap.
  */
 export async function startFleet(
-  workers: readonly { readonly label: string; readonly driverScript?: FakeDriverScript }[],
+  workers: readonly {
+    readonly label: string;
+    readonly driverScript?: FakeDriverScript;
+    readonly config?: Readonly<Record<string, unknown>>;
+  }[],
 ): Promise<Fleet> {
   const gateway = await startDaemon("gateway");
   const started: RunningDaemon[] = [];
@@ -444,6 +448,7 @@ export async function startFleet(
       started.push(
         await startDaemon("worker", {
           config: {
+            ...worker.config,
             gateway: {
               label: worker.label,
               token: gateway.tokens.worker,
