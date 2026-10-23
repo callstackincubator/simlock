@@ -127,6 +127,9 @@ function html(view: WorkerPageView): string {
   return inConsole(<WorkerPageBody page={view} />);
 }
 
+const GATEWAY = { mode: () => "gateway" as const };
+const UPDATE = { forced: false, from: "1.4.0", leases: 2, startedAt: NOW, to: "1.5.0" };
+
 function text(markup: string): string {
   return markup
     .replace(/<[^>]+>/g, " ")
@@ -142,6 +145,36 @@ describe("the fleet table", () => {
 
     expect(none(true, "all")).toContain("No workers have connected.");
     expect(none(false, "issues")).toContain("No worker matches.");
+  });
+});
+
+describe("a worker's update on the Fleet screen", () => {
+  it("reads its stage on the row, and the failed worker's page offers Update again", () => {
+    const updating = { ...WORKER, update: { ...UPDATE, stage: "waiting" as const } };
+    const failed = {
+      ...WORKER,
+      lastUpdateFailure: {
+        at: NOW - 60_000,
+        from: "1.4.0",
+        message: "EACCES",
+        stage: "installing" as const,
+        to: "1.5.0",
+      },
+      latestVersion: "1.5.0",
+    };
+    const idle = html(page(WORKER));
+
+    expect(text(inConsole(<FleetBody page={fleet([updating])} />))).toContain(
+      "waiting for 2 leases",
+    );
+    expect(text(inConsole(<FleetBody page={fleet([WORKER])} />))).not.toContain("waiting for");
+    const again = text(inConsole(<WorkerPageBody page={page(failed)} />, GATEWAY));
+    expect(again).toContain("Update to 1.5.0 failed (installing): EACCES Update again");
+    expect(inConsole(<WorkerPageBody page={page(failed)} />)).toContain(
+      '<span class="page-note">simlock 1.4.0 · 1.5.0 available</span>',
+    );
+    expect(text(idle)).not.toContain("Update again");
+    expect(text(inConsole(<WorkerPageBody page={page(failed)} />))).not.toContain("Update again");
   });
 });
 

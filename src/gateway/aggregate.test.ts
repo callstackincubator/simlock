@@ -48,7 +48,12 @@ function view(overrides: Partial<WorkerView> & { readonly id: string }): WorkerV
 
 describe("aggregateStatus", () => {
   it("returns the same shape a worker returns, with the gateway named in the daemon block", () => {
-    const status = aggregateStatus([], { health: "running", host: GATEWAY_HOST, queueDepth: 0 });
+    const status = aggregateStatus([], {
+      health: "running",
+      version: "0.0.0-test",
+      host: GATEWAY_HOST,
+      queueDepth: 0,
+    });
 
     // The contract is the arbiter: a gateway's answer parses as `status.get`'s output or it is
     // not the same shape.
@@ -58,7 +63,12 @@ describe("aggregateStatus", () => {
   });
 
   it("carries physicalQueueDepth only when the options name one", () => {
-    const base = { health: "running", host: GATEWAY_HOST, queueDepth: 0 } as const;
+    const base = {
+      health: "running",
+      version: "0.0.0-test",
+      host: GATEWAY_HOST,
+      queueDepth: 0,
+    } as const;
 
     expect(aggregateStatus([], { ...base, physicalQueueDepth: 2 })).toHaveProperty(
       "physicalQueueDepth",
@@ -75,7 +85,7 @@ describe("aggregateStatus", () => {
         view({ connection: "disconnected", id: "wrk_b", warmPool: block }),
         view({ id: "wrk_c" }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.warmPool).toStrictEqual({
@@ -106,7 +116,7 @@ describe("aggregateStatus", () => {
 
     const status = aggregateStatus(
       [view({ id: "wrk_a", label: "mac-mini-1", leases: [leaseFixture("lease_1", "dev_1")] })],
-      { health: "running", host: GATEWAY_HOST, leaseIndex, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, leaseIndex, queueDepth: 0 },
     );
 
     expect(status.leases).toEqual([
@@ -128,7 +138,7 @@ describe("aggregateStatus", () => {
 
     const status = aggregateStatus(
       [view({ id: "wrk_a", label: "mac-mini-1", leases: [leaseFixture("lease_1", "dev_1")] })],
-      { health: "running", host: GATEWAY_HOST, leaseIndex, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, leaseIndex, queueDepth: 0 },
     );
 
     expect(status.leases).toEqual([
@@ -143,7 +153,7 @@ describe("aggregateStatus", () => {
         view({ capacity: capacity(1, 2), id: "wrk_a" }),
         view({ capacity: capacity(2, 4), id: "wrk_b" }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity?.ios).toMatchObject({ limit: 6, running: 3, used: 3, warm: 2 });
@@ -158,7 +168,7 @@ describe("aggregateStatus", () => {
         view({ capacity: capacity(1, 2), id: "wrk_a" }),
         view({ capacity: capacity(9, 9), connection: "disconnected", id: "wrk_b" }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity?.ios).toMatchObject({ limit: 2, running: 1 });
@@ -174,7 +184,7 @@ describe("aggregateStatus", () => {
           id: "wrk_b",
         }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity?.ios.overLimit).toBe(true);
@@ -198,7 +208,7 @@ describe("aggregateStatus", () => {
           id: "wrk_d",
         }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     // 8 GiB used of a 12 GiB fleet limit, yet over: wrk_b is past its own 4 GiB.
@@ -221,7 +231,7 @@ describe("aggregateStatus", () => {
           id: "wrk_a",
         }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity?.ramBudget?.overLimit).toBe(false);
@@ -240,7 +250,7 @@ describe("aggregateStatus", () => {
           id: "wrk_b",
         }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity).not.toHaveProperty("ramBudget");
@@ -256,7 +266,7 @@ describe("aggregateStatus", () => {
         }),
         view({ devices: [deviceFixture("dev_2")], id: "wrk_b" }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.devices).toEqual([
@@ -277,7 +287,7 @@ describe("aggregateStatus", () => {
           leases: [leaseFixture("lease_1", "dev_1")],
         }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.leases).toEqual([expect.objectContaining({ id: "lease_1", workerId: "wrk_a" })]);
@@ -302,7 +312,7 @@ describe("aggregateStatus", () => {
           leases: [leaseFixture("lease_1", "dev_1")],
         }),
       ],
-      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.devices).toEqual([expect.objectContaining({ id: "dev_1", workerId: "wrk_b" })]);
@@ -314,6 +324,7 @@ describe("aggregateStatus", () => {
   it("reports the gateway's own queue depth and health, not any worker's", () => {
     const status = aggregateStatus([view({ health: "failed", id: "wrk_a", queueDepth: 7 })], {
       health: "starting",
+      version: "0.0.0-test",
       host: GATEWAY_HOST,
       queueDepth: 0,
     });
@@ -340,7 +351,7 @@ describe("aggregateStatus", () => {
           view({ id: "wrk_b", installs: [install("35", 5)] }),
           view({ id: "wrk_c" }),
         ],
-        { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+        { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
       );
 
       expect(status.installs).toEqual([
@@ -365,7 +376,7 @@ describe("aggregateStatus", () => {
             ),
           }),
         ],
-        { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+        { health: "running", version: "0.0.0-test", host: GATEWAY_HOST, queueDepth: 0 },
       );
 
       expect(status.installs?.map((entry) => entry.since)).toEqual(
@@ -941,7 +952,12 @@ describe("aggregateStatus at-RAM-budget flag", () => {
       ios: { ...base.ios, atRamBudget: ios },
     };
   };
-  const options = { health: "running", host: GATEWAY_HOST, queueDepth: 0 } as const;
+  const options = {
+    health: "running",
+    version: "0.0.0-test",
+    host: GATEWAY_HOST,
+    queueDepth: 0,
+  } as const;
 
   it("reports atRamBudget for a platform only when every connected worker does", () => {
     const status = aggregateStatus(

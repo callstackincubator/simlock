@@ -1043,6 +1043,37 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
+  it("handles a worker's DAEMON_UPDATING answer as NO_CAPACITY: the view is read again, the request stays queued and is placed once the view changes", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("DAEMON_UPDATING", "domain", "The daemon is updating", {}),
+      kind: "error",
+    });
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const outcome = coordinator.request(REQUEST, requestOptions());
+    const state = promiseState(outcome);
+    await tick();
+
+    expect(state.state).toBe("pending");
+    expect(coordinator.queueDepth).toBe(1);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+
+    workers.refresh("wrk_a", {
+      update: { forced: false, from: "0.3.0", stage: "installing", startedAt: 1, to: "0.4.0" },
+    });
+    await tick();
+    expect(state.state).toBe("pending");
+
+    workers.refresh("wrk_a", { update: null });
+    await tick();
+
+    expect((await outcome).lease.worker?.id).toBe("wrk_a");
+  });
+
   it("forwards device.exec with the namespaced requesterId reaching the scripted worker client", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
@@ -2193,6 +2224,38 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     },
   );
 
+  it("Gateway routes a lease while a worker is updating: it skips the worker with reason updating, the request waits, and the worker is picked once the update ends", async () => {
+    const fleetHarness = harness();
+    const { coordinator, directory, workers } = fleetHarness;
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", {
+      update: {
+        forced: false,
+        from: "0.3.0",
+        stage: "installing",
+        startedAt: 1,
+        to: "0.4.0",
+      },
+    });
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+
+    expect(state.state).toBe("pending");
+    expect(coordinator.waitingRequests()[0]).toMatchObject({
+      workers: [{ reason: "updating", workerId: "wrk_a" }],
+    });
+    expect(leaseRequests(client)).toEqual([]);
+
+    workers.refresh("wrk_a", { update: null });
+    await tick();
+
+    expect((await outcome).lease.worker?.id).toBe("wrk_a");
+  });
+
   it.each([
     {
       change: (workers: WorkerRegistry) => workers.disconnected("wrk_a"),
@@ -2666,6 +2729,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
     },
     "boot-timeout": "worker",
     killed: "worker",
+    updating: "worker",
     "daemon-restarted": "worker",
   };
 
@@ -4784,6 +4848,22 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
       {
         build: () => fleet(["wrk_a", "wrk_b"], (id) => (id === "wrk_b" ? { queueDepth: 1 } : {})),
         row: "busy with a queue of its own",
+      },
+      {
+        build: () => {
+          const built = fleet(["wrk_a", "wrk_b"]);
+          built.workers.refresh("wrk_b", {
+            update: {
+              forced: false,
+              from: "0.3.0",
+              stage: "installing",
+              startedAt: 1,
+              to: "0.4.0",
+            },
+          });
+          return built;
+        },
+        row: "updating",
       },
     ])("leaves the request queued when the other worker is $row", async ({ build }) => {
       const { clients, coordinator } = build();

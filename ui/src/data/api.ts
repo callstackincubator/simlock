@@ -30,6 +30,7 @@ interface SendOptions {
   readonly token?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  readonly body?: string;
 }
 
 export async function send<T>(
@@ -54,7 +55,11 @@ export async function send<T>(
     const response = await options.fetch(path, {
       cache: "no-store",
       credentials: "same-origin",
-      headers: options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` },
+      headers: {
+        ...(options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` }),
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(options.body === undefined ? {} : { body: options.body }),
       ...(options.method === undefined ? {} : { method: options.method }),
       signal: controller.signal,
     });
@@ -85,7 +90,13 @@ export interface ApiClient {
     headTimeoutMs?: number,
   ): Promise<ApiResponse<ReadableStream<Uint8Array>>>;
   healthz(): Promise<ApiResponse<boolean>>;
-  write(method: "DELETE" | "POST", path: ApiPath): Promise<void>;
+  // why: the answer is the parsed JSON body, `undefined` when the daemon sent none.
+  write(method: "DELETE" | "POST", path: ApiPath, options?: WriteOptions): Promise<unknown>;
+}
+
+export interface WriteOptions {
+  readonly body?: unknown;
+  readonly timeoutMs?: number;
 }
 
 export type ApiFailure = "unauthorized" | "not-simlock";
@@ -146,7 +157,19 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         if (response.body === null) throw new ApiError(response.status, undefined, "No body");
         return { body: response.body, date: response.headers.get("Date") };
       }),
-    write: (method, path) => watched(path, { ...authorized(), method }, async () => undefined),
+    write: (method, path, writeOptions) =>
+      watched(
+        path,
+        {
+          ...authorized(undefined, writeOptions?.timeoutMs),
+          method,
+          ...(writeOptions?.body === undefined ? {} : { body: JSON.stringify(writeOptions.body) }),
+        },
+        async (response) => {
+          const text = await response.text();
+          return text === "" ? undefined : (JSON.parse(text) as unknown);
+        },
+      ),
     healthz: () =>
       send("/v1/healthz", { fetch: options.fetch }, async (response) => ({
         body: response.ok,

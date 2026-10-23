@@ -35,17 +35,17 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [ga
 4. The reported stage is the last rank that removed a worker, else the last that decided.
    `reason` is `warm-hit` when that stage is `warm-hit`, else `free-capacity`.
 
-| Stage              | Kind          | Keeps or prefers                                                                                      | Physical |
-| ------------------ | ------------- | ----------------------------------------------------------------------------------------------------- | -------- |
-| `takes-requests`   | filter        | connected, not drained, capacity and catalog read this session (`starting`: a catalog held)           | yes      |
-| `has-capabilities` | filter        | every `requires` entry `available`                                                                    | yes      |
-| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device | yes      |
-| `healthy`          | filter        | health `running`                                                                                      | yes      |
-| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                    | no       |
-| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); physical: a pickable one    | yes      |
-| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                          | no       |
-| `ram-budget`       | rank          | `atRamBudget` not true                                                                                | no       |
-| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                | no       |
+| Stage              | Kind          | Keeps or prefers                                                                                          | Physical |
+| ------------------ | ------------- | --------------------------------------------------------------------------------------------------------- | -------- |
+| `takes-requests`   | filter        | connected, not drained, not updating, capacity and catalog read this session (`starting`: a catalog held) | yes      |
+| `has-capabilities` | filter        | every `requires` entry `available`                                                                        | yes      |
+| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device     | yes      |
+| `healthy`          | filter        | health `running`                                                                                          | yes      |
+| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                        | no       |
+| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); physical: a pickable one        | yes      |
+| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                              | no       |
+| `ram-budget`       | rank          | `atRamBudget` not true                                                                                    | no       |
+| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                    | no       |
 
 A physical request has one rank, `warm-hit`: with no pickable device nothing is picked, and it waits.
 

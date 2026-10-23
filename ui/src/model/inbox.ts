@@ -24,7 +24,7 @@ import {
 export type InboxItem =
   | {
       readonly key: string;
-      readonly condition: "disconnected" | "incompatible" | "drained";
+      readonly condition: "disconnected" | "incompatible" | "drained" | "update failed";
       readonly worker: WorkerView;
     }
   | {
@@ -118,6 +118,9 @@ function workerItems(worker: WorkerView): InboxItem[] {
     items.push({ condition: worker.connection, key: key(worker.connection), worker });
   }
   if (worker.drained) items.push({ condition: "drained", key: key("drained"), worker });
+  if (worker.lastUpdateFailure !== undefined && worker.lastUpdateFailure !== null) {
+    items.push({ condition: "update failed", key: key("update-failed"), worker });
+  }
   const ramBudget = worker.capacity?.ramBudget;
   if (ramBudget?.overLimit === true) {
     items.push({
@@ -318,6 +321,12 @@ const SAY: Say = {
   quarantined: (item) =>
     `${item.device.spec.model} is quarantined and cannot be leased until it is dealt with.`,
   stalled: (item) => `${item.device.spec.model} has stayed in one state longer than expected.`,
+  "update failed": (item) => {
+    const failure = item.worker.lastUpdateFailure;
+    return failure === undefined || failure === null
+      ? ""
+      : `The update of ${workerName(item.worker)} to ${failure.to} failed while ${failure.stage}: ${failure.message}. It runs ${failure.from} again.`;
+  },
   waiting: (item) =>
     `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)} for a device.`,
 };
@@ -368,6 +377,18 @@ function causeFacts(device: {
   ];
 }
 
+function updateFailureFacts(worker: WorkerView, now: number): readonly InboxFact[] {
+  const failure = worker.lastUpdateFailure;
+  return failure === undefined || failure === null
+    ? []
+    : [
+        { label: "From", value: failure.from },
+        { label: "To", value: failure.to },
+        { label: "Stage", value: failure.stage },
+        { label: "When", value: `${formatDuration(now - failure.at)} ago` },
+      ];
+}
+
 function workerFacts(
   item: Exclude<WorkerItem, { readonly device: unknown }>,
   now: number,
@@ -385,6 +406,7 @@ function workerFacts(
   if (item.condition === "drained") {
     return [{ label: "Leases still held", value: String(worker.leases?.length ?? 0) }];
   }
+  if (item.condition === "update failed") return updateFailureFacts(worker, now);
   const { protocol } = worker;
   return protocol === undefined
     ? []

@@ -108,13 +108,22 @@ const COLUMNS: readonly Column<WorkerRow>[] = [
         <Link to={row.to} title={row.name}>
           {row.name}
         </Link>
-        {row.system === undefined ? null : <span className="worker-system">{row.system}</span>}
+        {row.system === undefined && row.version === undefined ? null : (
+          <span className="worker-system">
+            {[row.system, row.version].filter((part) => part !== undefined).join(" · ")}
+          </span>
+        )}
       </span>
     ),
     header: "Worker",
   },
   {
-    cell: (row) => <Status tone={row.health.tone}>{row.health.word}</Status>,
+    cell: (row) => (
+      <span className="worker-name">
+        <Status tone={row.health.tone}>{row.health.word}</Status>
+        {row.stage === undefined ? null : <span className="worker-system">{row.stage}</span>}
+      </span>
+    ),
     header: "State",
   },
   { cell: (row) => <Slots slots={row.slots} label={row.slotsLabel} />, header: "Slots" },

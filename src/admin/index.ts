@@ -27,6 +27,8 @@ export type {
   ComponentInstallOutput,
   ComponentInstallProgress,
   DaemonStopOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   DeviceAddInput,
   DeviceAddOutput,
   DeviceRecoveredPush,
@@ -82,6 +84,8 @@ export type {
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
+  WorkerUpdateInput,
+  WorkerUpdateOutput,
   WorkerView,
 } from "../simlock-client/client.js";
 export { isSimlockError, SimlockError } from "../simlock-client/client.js";

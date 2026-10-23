@@ -36,6 +36,10 @@ import {
   FakeClock,
   FakeHostInfo,
   FakeHostLoadProbe,
+  FakeNpmCli,
+  FakeUpdaterLauncher,
+  type NpmCli,
+  type NpmOutcome,
   type HostLoadCounters,
   FakeProcessSupervisor,
   daemonDataDirectory,
@@ -4122,5 +4126,238 @@ describe("startDaemon state.db", () => {
     expect([...fromModule.keys()].sort()).toEqual(["android", "ios"]);
     expect(fromModule.get("ios")?.name).toBe("fake-device-data");
     expect(fromModule).not.toBe(fakeDeviceDataTables);
+  });
+});
+
+describe("startDaemon version check", () => {
+  const operator = {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startChecked(npm: NpmCli, overrides: Partial<StartDaemonOptions> = {}) {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [],
+      filesystem: new MemoryFilesystem(),
+      hostLoadProbe: null,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+      npm,
+      version: "0.3.0",
+      ...overrides,
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { clock, daemon, sink };
+  }
+
+  const latestOf = async (daemon: DaemonServer) =>
+    ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
+      .daemon.latestVersion;
+
+  it("a start that fails after the version check began leaves no timer and asks npm no more", async () => {
+    class SecretRefusingFilesystem extends MemoryFilesystem {
+      override async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (arguments_[0].endsWith("admin.token")) throw new Error("disk is read-only");
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const failedStart = async (check: boolean) => {
+      const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0\n" }] });
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-fail-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: { update: { check } },
+          dataDirectory: directory,
+          drivers: [],
+          filesystem: new SecretRefusingFilesystem(),
+          hostLoadProbe: null,
+          logger: new NoopLogger(),
+          npm,
+          socketPath: join(directory, "daemon.sock"),
+          version: "0.3.0",
+        } as StartDaemonOptions),
+      ).rejects.toThrow("disk is read-only");
+      // why: the answer is processed after the call; wait it out so a leaked next-check timer exists before it is counted.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      const pending = clock.pendingTimerCount;
+      clock.advance(2 * 24 * 60 * 60 * 1000);
+      return { calls: npm.calls.length, pending };
+    };
+
+    const checked = await failedStart(true);
+    const unchecked = await failedStart(false);
+
+    expect(checked).toEqual({ calls: 1, pending: unchecked.pending });
+  });
+
+  it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value; a stopped daemon never schedules the next check", async () => {
+    const pending: ((outcome: NpmOutcome) => void)[] = [];
+    const npm: NpmCli = {
+      view: () => new Promise<NpmOutcome>((resolve) => pending.push(resolve)),
+      install: () => Promise.reject(new Error("unused")),
+      globalRoot: () => Promise.reject(new Error("unused")),
+    };
+    const day = 24 * 60 * 60 * 1000;
+
+    const { clock, daemon, sink } = await startChecked(npm);
+
+    expect(pending).toHaveLength(1);
+    expect(await latestOf(daemon)).toBeNull();
+    pending[0]?.({ ok: true, output: "0.4.0\n" });
+    await expect.poll(() => latestOf(daemon)).toBe("0.4.0");
+    const query = (await daemon.dispatch("daemon.update", { query: true }, operator)) as {
+      latestVersion: unknown;
+    };
+    expect(query.latestVersion).toBe("0.4.0");
+
+    clock.advance(day - 1);
+    expect(pending).toHaveLength(1);
+    const later: NpmOutcome[] = [
+      { ok: false, message: "npm did not finish within 30 seconds" },
+      { ok: true, output: "not a version\n" },
+      { ok: true, output: "0.5.0\n" },
+    ];
+    for (const [index, outcome] of later.entries()) {
+      clock.advance(index === 0 ? 1 : day);
+      await expect.poll(() => pending.length).toBe(index + 2);
+      pending[index + 1]?.(outcome);
+      const failed = index < 2;
+      if (failed) {
+        await expect
+          .poll(() => sink.records.filter((record) => record.level === "warn").length)
+          .toBe(index + 1);
+      }
+      await expect.poll(() => latestOf(daemon)).toBe(failed ? "0.4.0" : "0.5.0");
+    }
+
+    const off = new FakeNpmCli({ view: [{ ok: true, output: "0.9.0\n" }] });
+    const disabled = await startChecked(off, { configOverrides: { update: { check: false } } });
+    disabled.clock.advance(2 * day);
+    expect(off.calls).toEqual([]);
+    expect(await latestOf(disabled.daemon)).toBeNull();
+
+    const stopping = await startChecked(npm);
+    expect(pending).toHaveLength(5);
+    await stopping.daemon.stop("test");
+    pending[4]?.({ ok: true, output: "0.7.0\n" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(stopping.clock.pendingTimerCount).toBe(0);
+
+    // why: stopping while the next check is scheduled (no npm call in flight) must cancel that timer.
+    const scheduled = new FakeNpmCli({ view: [{ ok: true, output: "0.8.0\n" }] });
+    const idle = await startChecked(scheduled);
+    await expect.poll(() => latestOf(idle.daemon)).toBe("0.8.0");
+    await expect.poll(() => idle.clock.pendingTimerCount).toBeGreaterThan(0);
+    const armed = idle.clock.pendingTimerCount;
+    await idle.daemon.stop("test");
+    expect(idle.clock.pendingTimerCount).toBeLessThan(armed);
+    idle.clock.advance(2 * day);
+    expect(scheduled.calls).toHaveLength(1);
+
+    const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
+    const gateway = await startChecked(gatewayNpm, { role: "gateway" });
+    await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
+  });
+});
+
+describe("startDaemon gateway update", () => {
+  const operator = {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startUpdatable(
+    launcher: FakeUpdaterLauncher,
+    filesystem = new MemoryFilesystem(),
+    given?: string,
+  ) {
+    await filesystem.mkdirp("/opt/simlock");
+    const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-update-")));
+    if (given === undefined) temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: {
+        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+      },
+      dataDirectory: directory,
+      drivers: [],
+      filesystem,
+      hostLoadProbe: null,
+      logger: new NoopLogger(),
+      npm: new FakeNpmCli({
+        globalRoot: [{ ok: true, output: "/opt" }],
+        view: [{ ok: true, output: "0.4.0" }],
+      }),
+      role: "gateway",
+      updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+      version: "0.3.0",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { daemon, directory, filesystem };
+  }
+
+  const daemonOf = async (daemon: DaemonServer) =>
+    ((await daemon.dispatch("status.get", {}, operator)) as { daemon: Record<string, unknown> })
+      .daemon;
+
+  it("a failed install shows in the gateway's status.get as lastUpdateFailure, and the gateway keeps serving", async () => {
+    const launcher = new FakeUpdaterLauncher({
+      exit: 1,
+      lines: [JSON.stringify({ failed: { message: "npm exited 1", stage: "installing" } })],
+    });
+    const { daemon } = await startUpdatable(launcher);
+
+    await daemon.dispatch("daemon.update", {}, operator);
+
+    await expect
+      .poll(async () => (await daemonOf(daemon)).lastUpdateFailure)
+      .toEqual({
+        at: 1_000,
+        from: "0.3.0",
+        message: "npm exited 1",
+        stage: "installing",
+        to: "0.4.0",
+      });
+    expect(await daemonOf(daemon)).toMatchObject({ health: "running", update: null });
+  });
+
+  it("a gateway that starts after a rolled-back update reports the failure in status.get and announces daemon.update-failed", async () => {
+    const filesystem = new MemoryFilesystem();
+    const failure = {
+      at: 900,
+      from: "0.3.0",
+      message: "the new version did not start",
+      stage: "restarting",
+      to: "0.4.0",
+    };
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-gw-rolled-back-"));
+    temporaryDirectories.push(directory);
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "update-result.json"),
+      JSON.stringify(failure),
+    );
+    const { daemon } = await startUpdatable(new FakeUpdaterLauncher(), filesystem, directory);
+
+    expect((await daemonOf(daemon)).lastUpdateFailure).toEqual(failure);
+    await expect(
+      daemon.dispatch("events.replay", {}, operator) as Promise<readonly { event: string }[]>,
+    ).resolves.toContainEqual(expect.objectContaining({ event: "daemon.update-failed" }));
+    await expect(filesystem.exists(join(directory, "update-result.json"))).resolves.toBe(false);
   });
 });

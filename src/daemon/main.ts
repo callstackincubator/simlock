@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { type Alerts, createAlerts } from "../alerts/index.js";
 import { EventBus, type EventBusLogger } from "../bus/index.js";
-import { fitHostFacts, fitHostLoad } from "../contract/index.js";
+import { fitHostFacts, fitHostLoad, type ProtocolRange } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
 import {
   createEventHistory,
@@ -73,6 +73,7 @@ import {
   LoggingProcessRunner,
   NodeFileLogSink,
   type Clock,
+  type DaemonRole,
   type Filesystem,
   type HostInfo,
   type HostLoadProbe,
@@ -93,8 +94,12 @@ import {
   serviceDefinition,
   type ServiceDefinition,
   type ServiceManager,
+  NodeNpmCli,
+  type NpmCli,
   NodeProcessSupervisor,
   NodeSystemStats,
+  NodeUpdaterLauncher,
+  type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
   NodeTcpStreamConnector,
@@ -131,6 +136,9 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
+import { socketHeld } from "../updater/index.js";
+import { createUpdateCoordinator, type UpdateCoordinatorOptions } from "./update-coordinator.js";
+import { startVersionCheck, type VersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
   DaemonEndpointHost,
@@ -166,7 +174,17 @@ export interface StartDaemonOptions {
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
+  /** why: test-only, replaces the npm CLI the version check and the update coordinator run. */
+  readonly npm?: NpmCli;
   readonly processRunner?: ProcessRunner;
+  /** why: test-only, replaces the launcher, package root and shared-install check of the gateway's update coordinator. */
+  readonly updater?: {
+    readonly launcher: UpdaterLauncher;
+    readonly otherRoleRunning: () => Promise<boolean>;
+    readonly packageRoot: string;
+  };
+  /** why: test-only, the protocol range the worker daemon announces. */
+  readonly protocolVersion?: number | ProtocolRange;
   readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
   readonly systemStats?: SystemStats;
@@ -176,14 +194,64 @@ export interface StartDaemonOptions {
   readonly webhookPoster?: WebhookPoster;
 }
 
+interface UpdateOptionsParts {
+  readonly clock: Clock;
+  readonly dataDirectory: string;
+  readonly eventBus: EventBus;
+  readonly filesystem: Filesystem;
+  readonly ipc: IpcConnector & IpcListenerFactory;
+  readonly npm: NpmCli;
+  readonly role: DaemonRole;
+  readonly version: string;
+  readonly versionCheck: VersionCheck;
+}
+
+// why: both roles share these; each adds what it holds leases with.
+function updateOptionsFor(
+  parts: UpdateOptionsParts,
+): Omit<UpdateCoordinatorOptions, "leasing" | "registry"> {
+  const { dataDirectory, ipc, role } = parts;
+  return {
+    clock: parts.clock,
+    dataDirectory,
+    eventBus: parts.eventBus,
+    filesystem: parts.filesystem,
+    latestVersion: () => parts.versionCheck.latest(),
+    launcher: new NodeUpdaterLauncher(),
+    logPath: join(dataDirectory, "daemon.log"),
+    npm: parts.npm,
+    otherRoleRunning: () =>
+      socketHeld(
+        ipc,
+        resolveDaemonSocketPath(
+          daemonDataDirectory(resolveSimlockHome(), role === "worker" ? "gateway" : "worker"),
+        ),
+      ),
+    packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
+    pid: process.pid,
+    role,
+    simlockHome: resolveSimlockHome(),
+    version: parts.version,
+  };
+}
+
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   let opened: StateDatabase | undefined;
+  let check: VersionCheck | undefined;
   try {
-    return await composeDaemon(options, (state) => {
-      opened = state;
-    });
+    return await composeDaemon(
+      options,
+      (state) => {
+        opened = state;
+      },
+      (started) => {
+        check = started;
+      },
+    );
   } catch (error: unknown) {
+    // why: the check's 24 h timer would keep a failed start's process alive and re-ask npm; a running daemon disposes it in `dispose`.
+    check?.dispose();
     // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
     opened?.close();
     throw error;
@@ -194,6 +262,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 async function composeDaemon(
   options: StartDaemonOptions,
   onStateOpened: (state: StateDatabase) => void,
+  onVersionCheck: (check: VersionCheck) => void,
 ): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
   const role = options.role ?? "worker";
@@ -286,6 +355,15 @@ async function composeDaemon(
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
   // through the worker's composition below.
+  const npm =
+    options.npm ?? new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory });
+  const versionCheck = startVersionCheck({
+    npm,
+    clock,
+    logger: logger.child("version-check"),
+    enabled: config.update.check,
+  });
+  onVersionCheck(versionCheck);
   if (role === "gateway") {
     return startGatewayDaemon({
       auth,
@@ -302,10 +380,13 @@ async function composeDaemon(
       idGenerator,
       ipc,
       logger,
+      npm,
       optionalModules: moduleDefinitions,
       socketPath,
       state,
+      ...(options.updater === undefined ? {} : { updater: options.updater }),
       version: version,
+      versionCheck,
       ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
     });
   }
@@ -577,6 +658,7 @@ async function composeDaemon(
     }),
     leases: leasing,
     logger: logger.child("server"),
+    ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
     processRunner,
     execEnv: process.env,
@@ -594,6 +676,21 @@ async function composeDaemon(
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,
     tokens: auth.tokens,
+    update: createUpdateCoordinator({
+      ...updateOptionsFor({
+        clock,
+        dataDirectory,
+        eventBus,
+        filesystem,
+        ipc,
+        npm,
+        role,
+        version,
+        versionCheck,
+      }),
+      leasing,
+      registry,
+    }),
     version: version,
     converge: convergeStartup,
     settle: async () => {
@@ -603,6 +700,7 @@ async function composeDaemon(
     },
     // Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
     dispose: async () => {
+      versionCheck.dispose();
       core.dispose();
       leasing.dispose();
       // Before the drivers: a running install is ended through its signal while its driver
@@ -757,10 +855,13 @@ interface GatewayDaemonOptions {
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
+  readonly npm: NpmCli;
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
   readonly state: StateDatabase;
+  readonly updater?: StartDaemonOptions["updater"];
   readonly version: string;
+  readonly versionCheck: VersionCheck;
   readonly webhookPoster?: WebhookPoster;
 }
 
@@ -896,6 +997,23 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
 
   let alerts: Alerts | undefined;
 
+  // why: a gateway holds no leases of its own and fleet admission is not changed (ADR 0042 §6), so an update never waits.
+  const update = createUpdateCoordinator({
+    ...updateOptionsFor({
+      clock,
+      dataDirectory,
+      eventBus,
+      filesystem,
+      ipc: options.ipc,
+      npm: options.npm,
+      role: "gateway",
+      version: options.version,
+      versionCheck: options.versionCheck,
+    }),
+    ...options.updater,
+    leasing: { holdForUpdate: async () => {}, releaseUpdateHold: async () => {} },
+    registry: { snapshot: { leases: [] } },
+  });
   const gatewayDispatcher = new GatewayDispatcher({
     awaitReady: () => Promise.resolve(),
     clock,
@@ -906,10 +1024,13 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     directory: gatewayService,
     eventHistory,
     health: () => daemon.health,
+    version: options.version,
     host: fitHostFacts({ ...options.hostSystem, tools: [] }),
     ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
     leaseIndex,
+    latestVersion: () => options.versionCheck.latest(),
     logger: logger.child("gateway"),
+    update,
     // why: `alerts` is built after this dispatcher but before start(), and only with destinations; without any, the option stays out.
     ...(config.gateway.alerts.destinations.length === 0
       ? {}
@@ -927,6 +1048,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     ...(hostLoad === undefined ? {} : { hostLoad }),
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: gatewayDispatcher,
+    update,
     eventBus,
     host: new DaemonEndpointHost({
       connector: options.ipc,
@@ -953,6 +1075,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       fleetCoordinator.start();
     },
     dispose: async () => {
+      options.versionCheck.dispose();
       gatewayDispatcher.dispose();
       fleetCoordinator.dispose();
       gatewayOwnerRoutedFacts.dispose();

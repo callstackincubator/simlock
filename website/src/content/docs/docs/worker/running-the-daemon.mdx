@@ -178,7 +178,34 @@ When the daemon starts again, after a `daemon stop`, a crash or a reboot, it com
 
 Settings in `config.json` are read only at start, so a restart is how a config change takes effect.
 
+## Update Simlock
+
+`simlock update` installs the newest Simlock on this machine and restarts the daemon, after the leases it holds have ended:
+
+```sh
+simlock update
+```
+
+```text
+Updating simlock 0.3.0 → 0.4.0
+Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.
+Installing simlock@0.4.0
+Restarting the daemon
+simlock 0.4.0 is running
+```
+
+From the moment you run it, the daemon takes no new leases: a request gets `DAEMON_UPDATING`, and a request that was waiting in the queue gets it too. Leases already held renew and release as usual. `simlock status` shows `Updating to 0.4.0: waiting for 2 leases`, and a `daemon.update-started` event is recorded. `--force` (given at the start, or later from another shell) does not wait: the leases survive the restart, as for any restart (see [What a restart keeps](#what-a-restart-keeps)). `--version 0.4.0` installs that exact version, an older one included.
+
+- **The install fails** (for example npm cannot write its global folder): the old daemon keeps serving and takes leases again. `simlock status` shows `Last update failed (installing): <npm's message>`, and `daemon.update-failed` is recorded.
+- **The new version does not start** within two minutes: Simlock installs the old version again and starts it, with the database files it had before. `simlock status` then shows `Last update failed (restarting): …`.
+- **Simlock was not installed with `npm i -g simlock`** (a source checkout, a pnpm global): `UPDATE_UNSUPPORTED_INSTALL`. Nothing changes.
+- **A worker and a gateway of one user share one install.** While the other one runs, the update stops with `UPDATE_SHARED_INSTALL`. Stop one role, update the other, and start the stopped one again; it starts the new install.
+
+The same update runs over HTTP as `POST /v1/update` with an admin token. A daemon older than the version that adds this command answers `PROTOCOL_VERSION_UNSUPPORTED`; upgrade it by hand, as below.
+
 ## Upgrade Simlock
+
+To upgrade by hand instead of with `simlock update`:
 
 <Steps>
 

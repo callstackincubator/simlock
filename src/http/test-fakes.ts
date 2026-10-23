@@ -65,6 +65,7 @@ export function testConfig(
     },
     http: { enabled: true, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
     android: {
       defaultModels: {},

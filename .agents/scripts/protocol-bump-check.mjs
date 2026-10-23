@@ -10,7 +10,13 @@
 import { execFileSync } from "node:child_process";
 
 const PROTOCOL = "src/contract/protocol.ts";
-const NOT_SHAPES = new Set(["index.ts", "console-url.ts", "duration.ts", "os-range.ts"]);
+const NOT_SHAPES = new Set([
+  "index.ts",
+  "console-url.ts",
+  "duration.ts",
+  "os-range.ts",
+  "version-order.ts",
+]);
 const RANGE = /PROTOCOL_VERSION_RANGE[^=]*=\s*\{\s*min:\s*(\d+),\s*max:\s*(\d+)/;
 const TRAILER = /^Protocol-bump: none \(.+\)\s*$/m;
 

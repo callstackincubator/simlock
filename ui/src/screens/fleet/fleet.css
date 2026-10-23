@@ -126,6 +126,14 @@
   font-size: var(--text-sm);
 }
 
+.worker-banner-error {
+  border-color: var(--status-error);
+}
+
+.worker-banner button {
+  margin-left: var(--space-3);
+}
+
 .device-drawer-body {
   margin: 0;
   padding: var(--space-4) var(--space-6);
