@@ -142,6 +142,108 @@ describe("data no page uses", () => {
   });
 });
 
+function send(
+  daemon: ReturnType<typeof start>["daemon"],
+  name: string,
+  payload: Record<string, unknown> = {},
+): void {
+  const data = JSON.stringify({ event: name, payload, seq: 1, timestamp: 1 });
+  daemon.openStream()?.send(`event: ${name}\ndata: ${data}\n\n`);
+}
+
+describe("events mark keys stale", () => {
+  it("per the map, in bursts", async () => {
+    const LEASES: ApiPath[] = ["/v1/leases", "/v1/leases/l_1", "/v1/leases/l_2"];
+    const WATCHED = [
+      ...LEASES,
+      "/v1/lease-requests",
+      "/v1/workers",
+      "/v1/stats?since=1h",
+      "/v1/tokens",
+    ] as const;
+    // why: each row is an event, its payload, and exactly the routes it marks.
+    const rows: readonly (readonly [string, Record<string, unknown>, readonly string[]])[] = [
+      ["lease.granted", {}, [...LEASES, "/v1/workers"]],
+      ["lease.released", {}, [...LEASES, "/v1/workers"]],
+      ["lease.expired", {}, [...LEASES, "/v1/workers"]],
+      ["lease.requested", {}, ["/v1/lease-requests"]],
+      ["lease.queued", {}, ["/v1/lease-requests"]],
+      ["lease.rejected", {}, ["/v1/lease-requests"]],
+      ["lease.declined", {}, ["/v1/lease-requests"]],
+      ["request.granted", {}, ["/v1/lease-requests"]],
+      ["request.dispatched", {}, ["/v1/lease-requests"]],
+      ["queue.changed", {}, ["/v1/lease-requests"]],
+      ["lease.renewed", { leaseId: "l_1" }, []],
+      ["device.ready", {}, ["/v1/workers"]],
+      ["device.quarantined", { leaseId: "l_1" }, ["/v1/workers", ...LEASES.slice(1)]],
+      ["worker.connected", {}, ["/v1/workers"]],
+      ["worker.drain-started", {}, ["/v1/workers"]],
+      ["capacity.changed", {}, ["/v1/workers"]],
+      ["component.installed", {}, ["/v1/workers"]],
+      ["daemon.update-started", {}, ["/v1/workers"]],
+      ["disk.pressure-detected", {}, []],
+      ["lease.something-new", {}, []],
+    ];
+    for (const [name, payload, marked] of rows) {
+      const { daemon, watch } = start();
+      for (const path of WATCHED) watch(path);
+      await settle();
+      const before = daemon.gets.length;
+
+      send(daemon, name, payload);
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(
+        daemon.gets
+          .slice(before)
+          .map((get) => get.path)
+          .sort(),
+        name,
+      ).toEqual([...marked].sort());
+    }
+
+    const burst = start();
+    burst.watch("/v1/workers");
+    await settle();
+    for (let event = 0; event < 50; event += 1) {
+      send(burst.daemon, "lease.granted");
+      await vi.advanceTimersByTimeAsync(4);
+    }
+    await vi.advanceTimersByTimeAsync(295);
+    expect(burst.reads("/v1/workers"), "300 ms after the last of 50 events, just before").toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(burst.reads("/v1/workers"), "300 ms after the last of 50 events").toBe(2);
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(burst.reads("/v1/workers"), "1.5 s later, just before").toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(burst.reads("/v1/workers"), "1.5 s later").toBe(3);
+
+    const steady = start();
+    steady.watch("/v1/workers");
+    await settle();
+    for (let event = 0; event < 4; event += 1) {
+      send(steady.daemon, "lease.granted");
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    send(steady.daemon, "lease.granted");
+    await vi.advanceTimersByTimeAsync(199);
+    expect(steady.reads("/v1/workers"), "events every 200 ms, just before 1 s").toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(steady.reads("/v1/workers"), "events every 200 ms, 1 s after the first").toBe(2);
+
+    const away = start();
+    away.watch("/v1/workers");
+    away.watch("/v1/leases")();
+    await settle();
+    send(away.daemon, "lease.granted");
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(away.reads("/v1/leases"), "a key no page shows is not read").toBe(1);
+    away.watch("/v1/leases");
+    await settle();
+    expect(away.reads("/v1/leases"), "and is read once a page shows it").toBe(2);
+  });
+});
+
 describe("a read's answers and failures", () => {
   it("a read that fails at the network level marks the console disconnected", async () => {
     const { daemon, connection, state, watch } = start(false);
