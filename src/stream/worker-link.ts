@@ -80,31 +80,35 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
         stream = await readScreenFeed(feed, options.bounds);
       } catch (error) {
         slot.abandon();
-        if (slot.ended.aborted)
-          throw lease === undefined ? deviceStopped() : unknownLease(lease.id);
+        if (slot.ended.aborted) throw stopped(lease);
         throw refusalFor(error);
       }
       // why: the lease is read again once there is a picture, because a capture can take seconds to
       // start and the lease it was asked for can end and the device be granted to someone else in
       // that time; a slot that was stopped says so even if a new lease reused the id.
-      const still = options.registry.snapshot.leases.find(
-        (candidate) => candidate.id === lease?.id,
-      );
       if (signal.aborted) {
         await slot.release();
         throw streamUnavailable("The viewer went away before the picture started");
       }
-      if (
-        lease === undefined
-          ? slot.ended.aborted
-          : slot.ended.aborted || still?.deviceId !== lease.deviceId
-      ) {
+      if (slot.ended.aborted || !leaseHolds(options.registry, lease)) {
         await slot.release();
-        throw lease === undefined ? deviceStopped() : unknownLease(lease.id);
+        throw stopped(lease);
       }
       return { ...stream, close: () => slot.release() };
     },
   };
+}
+
+// why: a stream of a device has no lease to lose, so it is only ever stopped; a lease's stream is also
+// refused when the lease is gone or has been granted to another device since the capture began.
+function leaseHolds(registry: StreamRegistry, lease: LeaseRecord | undefined): boolean {
+  if (lease === undefined) return true;
+  const still = registry.snapshot.leases.find((candidate) => candidate.id === lease.id);
+  return still?.deviceId === lease.deviceId;
+}
+
+function stopped(lease: LeaseRecord | undefined): StreamRefusalError {
+  return lease === undefined ? deviceStopped() : unknownLease(lease.id);
 }
 
 // why: the feed's reader, the viewer and the lease's end can each close a capture, and a driver's

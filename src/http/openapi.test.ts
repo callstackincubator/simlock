@@ -407,7 +407,7 @@ describe("buildOpenApiDocument with a module that carries http", () => {
       "502": ["STREAM_UNAVAILABLE"],
       "503": ["STREAM_UNAVAILABLE", "WORKER_UNREACHABLE"],
     });
-    expect(sortedKeys(((device?.responses ?? {})["200"] as OkResponse).headers)).toEqual([
+    expect(sortedKeys(okHeaders(device))).toEqual([
       "simlock-stream-codec",
       "simlock-stream-fps",
       "simlock-stream-height",
@@ -421,6 +421,10 @@ describe("buildOpenApiDocument with a module that carries http", () => {
     expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["stream"]);
   });
 });
+
+function okHeaders(operation: { responses?: object } | undefined): Record<string, unknown> {
+  return ((operation?.responses ?? {}) as Record<string, OkResponse>)["200"]?.headers ?? {};
+}
 
 type OkResponse = { content?: Record<string, unknown>; headers?: Record<string, unknown> };
 
