@@ -122,8 +122,12 @@ test.describe("the console's layout", () => {
           .evaluate((toast) => {
             const box = toast.getBoundingClientRect();
             const close = toast.querySelector(".toast-close")?.getBoundingClientRect();
-            const text = toast.querySelector(".toast-title")?.getBoundingClientRect();
-            if (close === undefined || text === undefined) throw new Error("toast has no parts");
+            const title = toast.querySelector(".toast-title");
+            if (close === undefined || title === null) throw new Error("toast has no parts");
+            // why: the title's box is stretched to the close button's row, so only a range over its text shows where the text sits.
+            const range = document.createRange();
+            range.selectNodeContents(title);
+            const text = range.getBoundingClientRect();
             return {
               closeInside:
                 close.left >= box.left &&
