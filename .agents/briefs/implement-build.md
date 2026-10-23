@@ -15,13 +15,32 @@ what the earlier cycles showed. Never build a layer ahead of the test that
 reaches it, and never write the tests in bulk first: tests written before
 the code check an imagined shape.
 
+Before the first cycle, open `docs/internal/agent-rules/testing.md` and
+read rules 1 to 3, 6, 7 and 10: they are what the review's tests lens
+judges every test by, and the questions below are their short form, not
+their replacement.
+
 For each line, one cycle:
 
-1. **Red.** Write the one test the line asks for at the seam it names, or
-   extend the existing test it names (testing rule 7). A line that lists
-   cases is one test, its cases a table in its body. Its title is the line's
-   claim, word for word where it fits. Read it against testing rules 6, 8
-   and 10. The commit hook typechecks the whole project, so a test that
+1. **Red.** Before writing the test, answer four questions; one you cannot
+   answer means the line gets no new test:
+   - What does it protect? A behaviour a caller, a user, a stored record
+     or an event can see, at the seam the line names.
+   - What realistic bug makes it fail, on a named assertion?
+   - Why does no existing test catch that bug? Search first: a test that
+     proves the behaviour next to it is extended (a case, a row), never
+     copied (testing rule 7).
+   - Does it need a hook in production code (an exported helper, a
+     test-only flag or argument)? Then test from the real entry point.
+
+   A line that only wires, re-exports, delegates or changes a type gets no
+   red step: the tracer bullet proves the wiring. A line that lists cases
+   is one test, its cases a table in its body. Its title is the line's
+   claim, word for word where it fits. No assertion on a deadline, a
+   duration, a throughput or a frame time without a fake clock: a bound on
+   real time belongs in a `*.timing.test.ts` file or the slow lane, never
+   in a unit or e2e assertion; it is the cause of most `flaky-test`
+   issues. The commit hook typechecks the whole project, so a test that
    calls code not yet written cannot commit: add only the stub it calls,
    its real signature returning the type's emptiest value (`[]`, `0`,
    `undefined`, or doing nothing), never the logic. Run its file: it fails
@@ -33,6 +52,7 @@ For each line, one cycle:
    test proves the line, else keep it and list the line under `open` as
    `already green: <line>`), or code an earlier cycle built ahead of its
    test: keep it and list the line as `built ahead: <line>`.
+
 2. **Green.** Write only the code this test needs to pass: no branch,
    case, field or error path that a later Tests line asks for, even when
    you can see it coming. What you write is the general logic the spec

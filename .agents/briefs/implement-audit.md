@@ -29,23 +29,34 @@ when and assumptions; retain earlier evidence for unaffected claims.
 - **Promised.** For every Scope and Done when line, name the hunk or test
   that delivers it. None: do it, or leave the line unticked and say why
   under `open`. Never tick a box on intent.
-- **Covered.** List every function whose body the diff adds or changes,
-  one line per file, as the review's behaviour lens will. For each: what
-  a caller, a user, a stored record or an event sees when it runs, and
-  which test goes red when its body, its new branch or its new argument
-  is deleted (testing rule 3). Delete it once and run that test's file to
-  see. No test goes red: write the one that does, through the module's
-  surface (rule 6), or put the line under `open`. Report `covered <c>/<f>`
-  on the `audit:` line: `f` functions listed, `c` with a red test. The
-  review's tests lens asks the same question on a far costlier model;
-  every gap it still finds is this step's miss.
+- **Covered, in the strict test areas only** (`toolchain.md`, "Project
+  checks": `src/leasing/`, the named files of `src/core/`, the wire
+  validators in `src/contract/`). List every function the diff adds or
+  changes there, one line per file. For each: what a caller, a user, a
+  stored record or an event sees when it runs, and which test goes red
+  when its body, its new branch or its new argument is deleted (testing
+  rule 3). Delete it once and run that test's file to see. No test goes
+  red: write the one that does, through the module's surface (rule 6),
+  or put the line under `open`. Report `covered <c>/<f>` on the `audit:`
+  line: `f` functions listed, `c` with a red test; `0/0` when the diff
+  touches no strict area. Outside the strict areas the spec's Tests lines
+  set the tests, and you add none: a behaviour you find untested goes
+  under `open` as `spec needs: <behaviour> at <seam>`, and a test the
+  build added at a seam the Tests section does not name is folded into
+  the test at the named seam, or deleted when that test already proves
+  its claim (rule 7).
 
 **Check every test you added or changed**, including setup or assertions
 edited after its `test:` commit:
 
 - Its title, assertions and fixture state make the same claim. A title with
-  two claims has an assertion for each. Walk testing rule 10's list against
-  it.
+  two claims has an assertion for each. Open
+  `docs/internal/agent-rules/testing.md` and walk rule 10's list against
+  it: a title clause with no assertion; "every" or "any" proved by one
+  case; an order or a write read from the end state; an assertion a
+  failure also satisfies; an expected value the code under test computed;
+  state read from a copy taken before the act; a time boundary not
+  straddled.
 - It proves a claim no other test proves, through the module's surface
   (testing rules 6 and 7). One that repeats another test's claim is folded
   into that test. One that imports a module's internal file instead of its
