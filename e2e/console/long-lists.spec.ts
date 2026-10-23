@@ -11,6 +11,7 @@ import {
   startDaemon,
   test as base,
 } from "./fixtures.js";
+import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -276,6 +277,7 @@ test.describe("long lists page", () => {
     await expect(range).toHaveText("51–60 of 60");
 
     count = 30;
+    await returnToTab(page);
 
     // why: the list refresh is asynchronous; its final page may take more than one poll cycle.
     // The next refresh leaves no third page: the second, now the last, shows.
@@ -310,6 +312,7 @@ test.describe("long lists page", () => {
     // Twice: the daemon answers once more, then the row's countdown moves, so a render follows.
     for (let refresh = 0; refresh < 2; refresh += 1) {
       const since = served;
+      await returnToTab(page);
       await expect.poll(() => served, { timeout: 3_000 }).toBeGreaterThan(since);
       const before = await expires.textContent();
       await expect.poll(() => expires.textContent(), { timeout: 3_000 }).not.toBe(before);
@@ -372,6 +375,7 @@ test.describe("long lists page", () => {
 
     // One row more and the list needs a second page: the pager shows.
     count = 26;
+    await returnToTab(page);
     await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
   });
 
