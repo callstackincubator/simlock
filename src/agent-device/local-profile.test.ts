@@ -8,6 +8,7 @@ import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import { seedTokensDatabase } from "../auth/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -45,12 +46,16 @@ interface Rig {
   readonly port: number;
 }
 
-async function launch(host = "127.0.0.1"): Promise<Rig> {
+async function launch(
+  host = "127.0.0.1",
+  seed: Parameters<typeof seedTokensDatabase>[1] = [],
+): Promise<Rig> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-local-profile-"));
   temporaryDirectories.push(directory);
   const clock = new FakeClock(1_000);
   const filesystem = new MemoryFilesystem();
   const logs = new MemoryLogSink();
+  await seedTokensDatabase(directory, seed);
   const port = await freeLoopbackPort();
   const daemon = await startDaemon({
     clock,
@@ -91,7 +96,7 @@ async function tokens(rig: Rig) {
 
 describe("the local agent-device profile", () => {
   it("is written before HTTP listens, and its token leases for a local agent", async () => {
-    const rig = await launch();
+    const rig = await launch("127.0.0.1", [["tok_operator", "slk_operator", "operator", LABEL]]);
 
     const text = await rig.filesystem.readFile(rig.profilePath);
     const profile = JSON.parse(text) as Record<string, string>;
@@ -117,6 +122,7 @@ describe("the local agent-device profile", () => {
     const labelled = (await tokens(rig)).filter((token) => token.label === LABEL);
     expect(labelled).toHaveLength(1);
     expect(labelled[0]?.role).toBe("agent");
+    expect(labelled[0]?.id).not.toBe("tok_operator");
 
     const response = await fetch(`http://127.0.0.1:${rig.port}/v1/agent-device/rpc`, {
       body: JSON.stringify({
@@ -148,5 +154,18 @@ describe("the local agent-device profile", () => {
       ownerId: string;
     }[];
     expect(leases.map((lease) => lease.ownerId)).toEqual([labelled[0]?.id]);
+
+    const bases = [
+      ["0.0.0.0", "http://127.0.0.1"],
+      ["::", "http://127.0.0.1"],
+      ["::1", "http://[::1]"],
+    ] as const;
+    for (const [host, origin] of bases) {
+      const other = await launch(host);
+      const written = JSON.parse(await other.filesystem.readFile(other.profilePath)) as {
+        daemonBaseUrl: string;
+      };
+      expect(written.daemonBaseUrl, host).toBe(`${origin}:${other.port}/v1/agent-device`);
+    }
   });
 });

@@ -29,7 +29,12 @@ async function writeLocalProfile(
   const { localProfile } = definition;
   if (localProfile === undefined) return;
   const { tokens } = options;
-  const { secret } = await tokens.create("agent", localProfile.tokenLabel);
+  const { record, secret } = await tokens.create("agent", localProfile.tokenLabel);
+  for (const other of await tokens.list()) {
+    if (other.label === localProfile.tokenLabel && other.id !== record.id) {
+      await tokens.revoke(other.id);
+    }
+  }
   await options.context.filesystem.writeFileAtomic(
     join(options.context.dataDirectory, localProfile.fileName),
     localProfile.render(profileOrigin(options.config.http.host, options.config.http.port), secret),
