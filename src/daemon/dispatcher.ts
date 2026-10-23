@@ -304,6 +304,7 @@ export class Dispatcher {
       "lease.renew": this.#leaseRenew,
       "lease.release": this.#leaseRelease,
       "lease.list": this.#leaseList,
+      "lease.get": this.#leaseGet,
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
       "relay.request": this.#relayRequest,
@@ -623,6 +624,8 @@ export class Dispatcher {
     const leaseIds = await this.options.leases.releaseAll("killed");
     return { leaseIds: [...leaseIds] };
   };
+
+  #leaseGet: Handler<"lease.get"> = () => ({ lease: undefined as never });
 
   #leaseList: Handler<"lease.list"> = (_input, session) => {
     const leases = this.options.registry.snapshot.leases.filter(

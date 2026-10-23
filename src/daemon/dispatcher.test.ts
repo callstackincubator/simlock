@@ -1178,6 +1178,33 @@ describe("Dispatcher: ownership", () => {
     expect(admin.leases).toHaveLength(1);
   });
 
+  it("lease.get: an agent reads its own lease, another agent's or an unknown id is UNKNOWN_LEASE, admin reads any", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const leaseId = await grantLease(dispatcher);
+    const owner = session({ principal: "tok_owner", role: "agent" });
+
+    await expect(dispatcher.dispatch("lease.get", { leaseId }, owner)).resolves.toEqual({
+      lease: (await dispatcher.dispatch("lease.list", {}, owner)).leases[0],
+    });
+    await expect(
+      dispatcher.dispatch(
+        "lease.get",
+        { leaseId },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
+    await expect(
+      dispatcher.dispatch("lease.get", { leaseId: "lse_nope" }, owner),
+    ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.get",
+        { leaseId },
+        session({ principal: "tok_other", role: "admin" }),
+      ),
+    ).resolves.toMatchObject({ lease: { id: leaseId } });
+  });
+
   it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
     const { dispatcher } = await buildDispatcher();
 

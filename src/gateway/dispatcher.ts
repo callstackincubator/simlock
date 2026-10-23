@@ -252,6 +252,7 @@ export class GatewayDispatcher {
       "daemon.update": this.#daemonUpdate,
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
+      "lease.get": this.#leaseGet,
       "list.get": this.#listGet,
       "identity.get": identityGet,
 
@@ -514,6 +515,8 @@ export class GatewayDispatcher {
    * itself issued, so it cannot produce that collision. An admin session sees the whole fleet,
    * which is what `GET /v1/leases` is for.
    */
+  #leaseGet: Handler<"lease.get"> = () => ({ lease: undefined as never });
+
   #leaseList: Handler<"lease.list"> = (_input, session) => ({
     leases:
       session.role === "admin" ? this.#fleetLeases() : this.#ownedFleetLeases(session.principal),
