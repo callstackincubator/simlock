@@ -49,7 +49,7 @@ function renewLease(
 }
 
 // why: the same list when no lease changed, so an observer of it is not told of an update.
-export function renewLeases(list: LeaseList, renewal: Renewal): LeaseList {
+function renewLeases(list: LeaseList, renewal: Renewal): LeaseList {
   const leases = list.leases.map((lease) =>
     renewLease(lease, renewal, (candidate) => isRenewed(candidate, renewal)),
   );
