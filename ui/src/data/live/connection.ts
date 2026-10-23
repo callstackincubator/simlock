@@ -1,4 +1,10 @@
-import { ApiError, type ApiClient, type ApiPath, RequestTimeoutError } from "../api";
+import {
+  ApiError,
+  type ApiClient,
+  type ApiPath,
+  type ReadOptions,
+  RequestTimeoutError,
+} from "../api";
 import { createSseParser, type SseMessage } from "./sse";
 import { clockOffset } from "./clock";
 
@@ -72,6 +78,10 @@ export function isRefusal(error: unknown): boolean {
   return error instanceof ApiError || error instanceof SyntaxError;
 }
 
+export type ConditionalRead<T> =
+  | { readonly notModified: true }
+  | { readonly notModified?: false; readonly body: T; readonly tag: string | null };
+
 export class LiveConnection {
   readonly #api: LiveApi;
   readonly #clock: Clock;
@@ -108,11 +118,11 @@ export class LiveConnection {
   // why: one GET with the classification every read gets: a refusal is the route's own answer and
   // the daemon is there; a timeout while the daemon starts is asked again; anything else is the
   // connection lost.
-  async read<T>(path: ApiPath): Promise<T> {
+  async read<T>(path: ApiPath, options: ReadOptions): Promise<ConditionalRead<T>> {
     for (;;) {
       let response;
       try {
-        response = await this.#api.get<T>(path);
+        response = await this.#api.get<T>(path, options);
       } catch (error: unknown) {
         if (this.#disposed) throw error;
         switch (this.#classify(error)) {
@@ -132,7 +142,9 @@ export class LiveConnection {
         this.#answeredAt = this.#clock.now();
         this.#daemonAnswered();
       }
-      return response.body;
+      return response.notModified === true
+        ? { notModified: true }
+        : { body: response.body, tag: response.tag };
     }
   }
 

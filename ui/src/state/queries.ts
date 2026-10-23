@@ -123,7 +123,10 @@ export function createQueries(options: QueriesOptions): Queries {
       client.clear();
     },
     options: <T>(path: ApiPath): QueryObserverOptions<T> => ({
-      queryFn: () => connection.read<T>(path),
+      queryFn: async () => {
+        const answer = await connection.read<T>(path, { tag: undefined });
+        return answer.notModified === true ? (undefined as T) : answer.body;
+      },
       queryKey: routeKey(path),
       staleTime: timesOf(routeKey(path)).freshMs,
     }),

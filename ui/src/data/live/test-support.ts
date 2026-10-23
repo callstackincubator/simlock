@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-import { type ApiPath, type ApiResponse } from "../api";
+import { type ApiPath, type ApiResponse, type ConditionalResponse, type ReadOptions } from "../api";
 import {
   type Clock,
   LiveConnection,
@@ -39,7 +39,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 class FakeDaemon implements LiveApi {
-  readonly gets: { readonly path: ApiPath; readonly at: number }[] = [];
+  readonly gets: { readonly path: ApiPath; readonly at: number; readonly tag?: string }[] = [];
   readonly healthChecks: number[] = [];
   readonly streams: FakeStream[] = [];
   reads: "answer" | "hold" | ((path: ApiPath) => Promise<ApiResponse<unknown>>) = "answer";
@@ -47,20 +47,40 @@ class FakeDaemon implements LiveApi {
   refuseStreams: (() => Promise<never>) | undefined;
   health: "up" | "down" | "unreachable" = "up";
   date: string | null = null;
+  // why: the tag every route answers with; a read that sends it back gets a 304.
+  etag: string | undefined;
   readonly #held: Deferred<ApiResponse<unknown>>[] = [];
   readonly #heldStreams: (() => void)[] = [];
   readonly #encoder = new TextEncoder();
 
-  get(path: ApiPath): Promise<ApiResponse<never>> {
-    this.gets.push({ at: Date.now(), path });
+  get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  get<T>(path: ApiPath, options: ReadOptions): Promise<ConditionalResponse<T>>;
+  get(
+    path: ApiPath,
+    options?: ReadOptions,
+  ): Promise<ApiResponse<unknown> | ConditionalResponse<unknown>> {
+    this.gets.push({
+      at: Date.now(),
+      path,
+      ...(options?.tag === undefined ? {} : { tag: options.tag }),
+    });
     const reads = this.reads;
-    if (typeof reads === "function") return reads(path) as Promise<ApiResponse<never>>;
-    if (reads === "hold") {
-      const held = deferred<ApiResponse<unknown>>();
-      this.#held.push(held);
-      return held.promise as Promise<ApiResponse<never>>;
+    if (reads === "answer" && this.etag !== undefined && options?.tag === this.etag) {
+      return Promise.resolve({ date: this.date, notModified: true });
     }
-    return Promise.resolve({ body: { read: this.gets.length }, date: this.date } as never);
+    if (typeof reads === "function") return reads(path) as Promise<ApiResponse<unknown>>;
+    if (reads === "hold") return this.#hold() as Promise<ApiResponse<unknown>>;
+    return Promise.resolve({
+      body: { read: this.gets.length },
+      date: this.date,
+      tag: this.etag ?? null,
+    } as never);
+  }
+
+  #hold(): Promise<ApiResponse<unknown>> {
+    const held = deferred<ApiResponse<unknown>>();
+    this.#held.push(held);
+    return held.promise;
   }
 
   openHeldStreams(): void {

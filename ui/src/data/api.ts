@@ -79,9 +79,19 @@ export interface ApiResponse<T> {
   readonly date: string | null;
 }
 
+export interface ReadOptions {
+  // why: the ETag of the last answer to this route; `undefined` asks for the whole answer.
+  readonly tag: string | undefined;
+}
+
+export type ConditionalResponse<T> =
+  | { readonly notModified: true; readonly date: string | null }
+  | (ApiResponse<T> & { readonly notModified?: false; readonly tag: string | null });
+
 export interface ApiClient {
   getJson<T>(path: ApiPath): Promise<T>;
   get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  get<T>(path: ApiPath, options: ReadOptions): Promise<ConditionalResponse<T>>;
   // why: a stream's bound, 10 seconds unless `headTimeoutMs` says otherwise, covers its headers
   // only; the body stays open until it ends or `signal` aborts it.
   stream(
@@ -144,11 +154,18 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       throw error;
     }
   };
-  const get = <T>(path: ApiPath) =>
-    watched(path, authorized(), async (response) => ({
+  function get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  function get<T>(path: ApiPath, readOptions: ReadOptions): Promise<ConditionalResponse<T>>;
+  function get<T>(
+    path: ApiPath,
+    _readOptions?: ReadOptions,
+  ): Promise<ApiResponse<T> | ConditionalResponse<T>> {
+    return watched(path, authorized(), async (response) => ({
       body: (await response.json()) as T,
       date: response.headers.get("Date"),
+      tag: null,
     }));
+  }
   return {
     get,
     getJson: async <T>(path: ApiPath) => (await get<T>(path)).body,

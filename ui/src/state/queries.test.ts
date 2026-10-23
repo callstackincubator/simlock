@@ -266,3 +266,27 @@ describe("a read's answers and failures", () => {
     expect(connection.serverNow() - Date.now()).toBe(-30_000);
   });
 });
+
+describe("a route's ETag", () => {
+  it("a re-read of an unchanged route sends the first tag, and a 304 keeps the same data object with no update", async () => {
+    const { daemon, queries } = start();
+    daemon.etag = '"v1"';
+    const observer = new QueryObserver(queries.client, {
+      ...queries.options("/v1/workers"),
+      notifyOnChangeProps: ["data"],
+    });
+    const updates = vi.fn();
+    disposers.push(observer.subscribe(updates));
+    await settle();
+    const first = observer.getCurrentResult().data;
+    expect(first).toBeDefined();
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined]);
+    updates.mockClear();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(daemon.gets.map((get) => get.tag)).toEqual([undefined, '"v1"']);
+    expect(observer.getCurrentResult().data).toBe(first);
+    expect(updates).not.toHaveBeenCalled();
+  });
+});
