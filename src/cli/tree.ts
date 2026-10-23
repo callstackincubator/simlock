@@ -130,5 +130,4 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "adb", load: () => import("./commands/passthrough.js") },
   { name: "mcp", load: () => import("./commands/mcp.js") },
   { name: "instructions", load: () => import("./commands/instructions.js") },
-  { name: "instructions", load: () => import("./commands/instructions.js") },
 ];

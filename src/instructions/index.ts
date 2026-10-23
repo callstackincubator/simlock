@@ -81,7 +81,12 @@ export const AGENT_INSTRUCTIONS = `${[
   MORE,
 ].join("\n\n")}\n`;
 
-export const MCP_SERVER_INSTRUCTIONS = "";
+export const MCP_SERVER_INSTRUCTIONS = `${[
+  TITLE,
+  RULES_FOR_EVERY_AGENT,
+  MCP,
+  "Run `simlock instructions` for the rest: agent-device, iOS builds and the CLI.",
+].join("\n\n")}\n`;
 
 export function renderInstructions(format: "text" | "json"): string {
   return format === "json"
