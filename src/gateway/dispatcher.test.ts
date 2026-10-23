@@ -961,28 +961,45 @@ describe("GatewayDispatcher", () => {
   });
 
   it("inbox.get answers the items the fleet's views, leases, waiting requests and tokens make", async () => {
-    const { dispatcher, workers } = harness();
-    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
-    workers.connected("wrk_2", "mac-mini-2", "0.3.0");
-    workers.disconnected("wrk_2");
+    const holders = async (options: Parameters<typeof harness>[0]) => {
+      const { clock, dispatcher, workers } = harness(options);
+      workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+      workers.refresh("wrk_1", {
+        devices: [deviceFixture("dev_1", "leased")],
+        health: "running",
+        leases: [{ ...leaseFixture("lease_1", "dev_1"), ttlDeadline: 121_000 }],
+        waiting: [
+          {
+            createdAt: 500,
+            id: "req_1",
+            requesterId: "agent-2",
+            spec: { model: "iPhone 17", platform: "ios" },
+            stage: "starting",
+          },
+        ],
+      });
+      workers.connected("wrk_2", "mac-mini-2", "0.3.0");
+      workers.disconnected("wrk_2");
+      clock.advance(60_000);
+      const { items } = await dispatcher.dispatch("inbox.get", {}, session());
+      return items;
+    };
 
-    const answer = await dispatcher.dispatch("inbox.get", {}, session());
+    const named = await holders({ tokenRecords: [{ id: "agent-1", label: "ci-runner" }] });
 
-    expect(answer).toEqual({
-      items: [
-        {
-          condition: "disconnected",
-          group: "Broken",
-          key: "wrk_2/disconnected",
-          worker: expect.objectContaining({
-            connection: "disconnected",
-            heldLeases: 0,
-            id: "wrk_2",
-            leasedDevices: 0,
-          }),
-        },
-      ],
-    });
+    expect(named).toEqual([
+      expect.objectContaining({ condition: "disconnected", key: "wrk_2/disconnected" }),
+      expect.objectContaining({ condition: "waiting", key: "request/req_1/waiting" }),
+      expect.objectContaining({
+        condition: "ending",
+        key: "lease/wrk_1.lease_1/ending",
+        lease: expect.objectContaining({ holder: "ci-runner", model: "iPhone 17" }),
+      }),
+    ]);
+    const unnamed = await holders({ withoutTokens: true });
+    expect(unnamed).toContainEqual(
+      expect.objectContaining({ lease: expect.objectContaining({ holder: "agent-1" }) }),
+    );
   });
 
   it("lists each of an owner's gateway-issued leases under its own record, and none whose worker has no view", async () => {
