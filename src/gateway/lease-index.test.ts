@@ -392,6 +392,30 @@ describe("FleetLeaseIndex", () => {
       expect(index.resolve("wrk_1.ad-7f3a")).toBeUndefined();
     });
 
+    it("a stale snapshot does not re-add a lease whose relayed release event arrived before the worker's answer (#898)", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      index.add(entry());
+      index.removeByWorkerLease("wrk_1", "lse_1");
+      index.remove("wrk_1.lse_1");
+
+      index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
+
+      expect(index.leaseCount("alice")).toBe(0);
+    });
+
+    it("a caller-chosen ID released and granted again is rebuilt from a later snapshot (#898)", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      const bare = entry({ gatewayLeaseId: "ad-7f3a", workerLeaseId: "ad-7f3a" });
+      index.add(bare);
+      index.remove("ad-7f3a");
+      index.add(bare);
+      index.forgetWorker("wrk_1");
+
+      index.rebuildFromWorker("wrk_1", [chosen("ad-7f3a")]);
+
+      expect(index.resolve("ad-7f3a")).toMatchObject({ workerId: "wrk_1" });
+    });
+
     it("a rebuilt lease flagged idChosenByRequester whose ID does not match the leaseId pattern is prefixed and logged", () => {
       const logger = new RecordingLogger();
       const index = new FleetLeaseIndex(PREFIX, logger);

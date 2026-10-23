@@ -73,19 +73,14 @@ export class FleetLeaseIndex {
    * again by the *next* `rebuildFromWorker` call for that worker: still absent one full
    * generation later is what promotes "missing" to "gone" (see `rebuildFromWorker`'s own doc). */
   readonly #missingSince = new Map<string, number>();
-  /** C1 (round 2 review): gateway lease ids `removeByWorkerLease` just forgot -- an ordinary
-   * worker-relayed `lease.expired`/`lease.released` -- kept around only long enough to flag the
-   * one thing that should never legitimately happen next: the *same* id reappearing in a
-   * `rebuildFromWorker` snapshot moments later. That can only mean a snapshot that started
-   * gathering data before the relayed fact landed is completing after it, stale by the time it
-   * arrives; a worker never reissues a lease id, so this is not a real re-grant to admit
-   * quietly. Bounded (see `#noteRemovedByEvent`) so a long-running gateway's memory does not grow
-   * with every release it has ever relayed. */
+  /** why: an id a relayed `lease.expired`/`lease.released` just forgot that reappears in a
+   * snapshot means that snapshot is stale, which `#addReported` logs. Bounded so a long-running
+   * gateway does not remember every release it ever relayed. */
   readonly #removedByEvent = new Map<string, true>();
-  /** How many recently-event-removed ids `#removedByEvent` remembers before evicting the
-   * oldest -- generous relative to how many leases could plausibly be mid-flight across the
-   * fleet at once, small relative to a gateway's uptime. */
-  static readonly #removedByEventCapacity = 200;
+  /** why: a worker view read before the worker answered a release can land after it and still
+   * list the lease; re-adding it refuses the requester's next lease until two more views miss it.
+   * The answer is newer than that view, so `#addReported` skips these ids. */
+  readonly #endedByWorkerAnswer = new Map<string, true>();
 
   constructor(
     private readonly gatewayRequesterPrefix: string,
@@ -158,6 +153,7 @@ export class FleetLeaseIndex {
   add(entry: FleetLeaseEntry): boolean {
     const existing = this.#byGatewayId.get(entry.gatewayLeaseId);
     if (existing !== undefined && existing.workerId !== entry.workerId) return false;
+    this.#endedByWorkerAnswer.delete(entry.gatewayLeaseId);
     this.#byGatewayId.set(entry.gatewayLeaseId, entry);
     const ids = this.#byRequester.get(entry.requesterId) ?? new Set<string>();
     ids.add(entry.gatewayLeaseId);
@@ -169,6 +165,9 @@ export class FleetLeaseIndex {
   /** Forgets one lease by its gateway id -- the gateway's own `lease.release` completing. */
   remove(gatewayLeaseId: string): FleetLeaseEntry | undefined {
     const entry = this.#byGatewayId.get(gatewayLeaseId);
+    // why: the worker's `lease.released` event travels the uplink before the RPC reply, so the
+    // relayed event may already have forgotten the entry; the answer still ends the lease.
+    remember(this.#endedByWorkerAnswer, gatewayLeaseId);
     if (entry === undefined) return undefined;
     this.#forget(entry);
     return entry;
@@ -187,18 +186,8 @@ export class FleetLeaseIndex {
     const entry = this.findByWorkerLease(workerId, workerLeaseId);
     if (entry === undefined) return undefined;
     this.#forget(entry);
-    this.#noteRemovedByEvent(entry.gatewayLeaseId);
+    remember(this.#removedByEvent, entry.gatewayLeaseId);
     return entry;
-  }
-
-  /** Records `gatewayLeaseId` as just forgotten by a relayed worker event, for `#addReported`'s
-   * resurrection check -- see `#removedByEvent`'s own doc. Evicts the oldest entry once the
-   * bound is hit; `Map` iterates insertion order, so its first key is always the oldest. */
-  #noteRemovedByEvent(gatewayLeaseId: string): void {
-    this.#removedByEvent.set(gatewayLeaseId, true);
-    if (this.#removedByEvent.size <= FleetLeaseIndex.#removedByEventCapacity) return;
-    const oldest = this.#removedByEvent.keys().next().value;
-    if (oldest !== undefined) this.#removedByEvent.delete(oldest);
   }
 
   /**
@@ -256,7 +245,7 @@ export class FleetLeaseIndex {
       }
       reported.add(gatewayLeaseId);
       this.#missingSince.delete(gatewayLeaseId);
-      if (existing !== undefined) continue;
+      if (existing !== undefined || this.#endedByWorkerAnswer.has(gatewayLeaseId)) continue;
       // C1 (round 2 review): this id was forgotten moments ago by the worker's own relayed
       // `lease.expired`/`lease.released` -- reappearing in a snapshot now means that snapshot
       // was gathered before the relayed fact landed and is only completing late (see
@@ -367,6 +356,17 @@ export class FleetLeaseIndex {
     this.#missingSince.delete(entry.gatewayLeaseId);
     for (const listener of this.#removalListeners) listener(entry);
   }
+}
+
+// why: generous next to how many leases can be mid-flight at once, small next to a gateway's uptime.
+const REMOVED_IDS_CAPACITY = 200;
+
+// why: a Map iterates in insertion order, so its first key is the oldest to evict.
+function remember(ids: Map<string, true>, gatewayLeaseId: string): void {
+  ids.set(gatewayLeaseId, true);
+  if (ids.size <= REMOVED_IDS_CAPACITY) return;
+  const oldest = ids.keys().next().value;
+  if (oldest !== undefined) ids.delete(oldest);
 }
 
 function workerKey(workerId: string, workerLeaseId: string): string {
