@@ -26,8 +26,8 @@ export function readRenewal(event: ConsoleEvent): Renewal | undefined {
   };
 }
 
-// why: a gateway's lease list names a lease by `<worker>.<worker's id>`, so its record is found by
-// the worker and the worker's own id; a worker's records carry the id the event names.
+// why: a gateway's lease list names a lease by `<worker>.<worker's id>` unless the requester chose
+// the id, so its record is found by the worker and the worker's own id; a worker's records carry the id the event names.
 function isRenewed(lease: LeaseRecord, renewal: Renewal): boolean {
   return renewal.workerId === undefined
     ? lease.id === renewal.leaseId
@@ -89,10 +89,12 @@ export function endsInInbox(data: unknown, renewal: Renewal): boolean {
   });
 }
 
-// why: a gateway names a lease `<worker>.<worker's id>`, which is the id its detail page is read by.
-export function leaseKeyOf(renewal: Renewal): readonly string[] {
-  return [
-    "lease",
-    renewal.workerId === undefined ? renewal.leaseId : `${renewal.workerId}.${renewal.leaseId}`,
-  ];
+// why: a gateway routes a lease under `<worker>.<worker's id>`, or under the bare id its requester
+// chose; the lease list says which, and an unlisted lease is taken as prefixed.
+export function leaseKeyOf(renewal: Renewal, leases: unknown): readonly string[] {
+  if (renewal.workerId === undefined) return ["lease", renewal.leaseId];
+  const listed = (leases as LeaseList | undefined)?.leases?.find((lease) =>
+    isRenewed(lease, renewal),
+  );
+  return ["lease", listed?.id ?? `${renewal.workerId}.${renewal.leaseId}`];
 }
