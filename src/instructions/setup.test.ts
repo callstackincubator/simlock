@@ -15,7 +15,6 @@ function setup(
     homeDirectory: HOME,
     workingDirectory: CWD,
     scope: "user",
-    tool: "claude-code",
     ...options,
   });
 }
@@ -62,5 +61,42 @@ describe("setupAgentTools", () => {
       }
       expect(await tree(filesystem, other), scope).toEqual([]);
     }
+  });
+
+  it("with no tool named, installs the tools set up here and skips the others; a named tool is installed anyway", async () => {
+    const claudeOnly = await withBases();
+    await claudeOnly.mkdirp(`${HOME}/.claude`);
+
+    expect((await setup(claudeOnly)).tools).toEqual([
+      { tool: "claude-code", skill: { status: "wrote", path: `${HOME}/.claude/skills/simlock` } },
+      { tool: "codex", skill: { status: "skipped", path: `${HOME}/.agents/skills/simlock` } },
+    ]);
+    expect(await claudeOnly.exists(`${HOME}/.claude/skills/simlock/SKILL.md`)).toBe(true);
+    expect(await claudeOnly.exists(`${HOME}/.agents`)).toBe(false);
+
+    const codexFile = await withBases();
+    await codexFile.mkdirp(`${HOME}/.claude`);
+    await codexFile.writeFileAtomic(`${HOME}/.codex`, "not a directory");
+    const afterFile = await setup(codexFile);
+    expect(afterFile.tools.map(({ skill }) => skill.status)).toEqual(["wrote", "skipped"]);
+    expect(await codexFile.readFile(`${HOME}/.codex`)).toBe("not a directory");
+
+    const customHome = await withBases();
+    await customHome.mkdirp("/custom/codex-home");
+    const viaCodexHome = await setup(customHome, { codexHome: "/custom/codex-home" });
+    expect(viaCodexHome.tools.map(({ skill }) => skill.status)).toEqual(["skipped", "wrote"]);
+    expect(await customHome.exists(`${HOME}/.agents/skills/simlock/SKILL.md`)).toBe(true);
+
+    const bare = await withBases();
+    const named = await setup(bare, { tool: "codex" });
+    expect(named.tools).toEqual([
+      { tool: "codex", skill: { status: "wrote", path: `${HOME}/.agents/skills/simlock` } },
+    ]);
+    expect(await tree(bare, HOME)).toEqual([
+      `${HOME}/.agents`,
+      `${HOME}/.agents/skills`,
+      `${HOME}/.agents/skills/simlock`,
+      `${HOME}/.agents/skills/simlock/SKILL.md`,
+    ]);
   });
 });

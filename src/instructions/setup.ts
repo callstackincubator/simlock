@@ -32,11 +32,12 @@ export interface SetupAgentToolsOptions {
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly scope: SetupScope;
-  readonly tool: AgentTool;
+  readonly codexHome?: string | undefined;
+  readonly tool?: AgentTool | undefined;
 }
 
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
-  const { filesystem, tool } = options;
+  const { filesystem, tool = "claude-code" } = options;
   const { scope } = options;
   const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
   const directory = join(base, AGENT_TOOLS[tool].skills, SIMLOCK_DIRECTORY);
