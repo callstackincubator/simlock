@@ -149,6 +149,8 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
 
 ## Running commands with exec
 
+A command runs on the worker machine, as the user who runs the worker daemon. `simctl spawn` and similar commands start programs on that machine, so treat an agent token like shell access to the worker. Agents that must not see each other's work belong on separate workers. The command does not get the daemon's environment: it gets only `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`, every `LC_*` variable, `TERM`, `DEVELOPER_DIR`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_USER_HOME`, `ANDROID_AVD_HOME`, `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME` and `JAVA_HOME` from it, plus what Simlock sets to reach the device, such as `ANDROID_ADB_SERVER_PORT` for `adb`. Any other variable, such as a token the daemon was started with, is not passed to the command. That is not secrecy: the command runs as the same user and can read the daemon's own environment.
+
 - **Name your device in the arguments.** Use the lease's `udid` for `simctl`. Other agents' devices are on the same worker, so never use `booted`.
 - **On Android, find the emulator's serial first.** The lease's `udid` is the emulator's AVD name (`simlock_…`), not its adb serial. Run `adb devices`, then `adb -s <serial> emu avd name` on each emulator until the name matches, and use that serial with `-s`.
 - **On a physical device, Simlock names the device for you.** `devicectl` gets `--device <UDID>` added, and `adb` on a physical Android phone gets the phone's serial.
