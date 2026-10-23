@@ -363,6 +363,11 @@ export class GatewayDispatcher {
     const { principal } = session;
     return withoutQuarantineMessages({
       ...answer,
+      // why: a worker's view repeats its admin-read leases and waiting requests, other principals' included.
+      workers: answer.workers?.map(({ leases: _leases, ...worker }) => ({
+        ...worker,
+        waiting: [],
+      })),
       leases: this.#ownedFleetLeases(principal),
       // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester decides.
       waiting: (answer.waiting ?? []).filter(

@@ -1048,6 +1048,28 @@ describe("GatewayDispatcher", () => {
     );
 
     expect(seen).toEqual(cases.map(([name, , leases, waiting]) => ({ leases, name, waiting })));
+
+    // why: `workers[]` repeats each worker's own leases and waiting requests, so an agent must not read them there.
+    const held = (status: Awaited<ReturnType<typeof dispatcher.dispatch<"status.get">>>) =>
+      (status.workers ?? []).flatMap((worker) => [
+        ...(worker.leases ?? []).map((lease) => lease.id),
+        ...(worker.waiting ?? []).map((request) => request.requesterId),
+      ]);
+    expect(
+      held(
+        await dispatcher.dispatch(
+          "status.get",
+          {},
+          session({ principal: "operator-1", role: "admin" }),
+        ),
+      ),
+    ).not.toEqual([]);
+    for (const principal of ["agent-1", "agent-2", "nobody"]) {
+      expect(
+        held(await dispatcher.dispatch("status.get", {}, session({ principal, role: "agent" }))),
+        principal,
+      ).toEqual([]);
+    }
   });
 
   it("replays and subscribes to its own bus, which carries the fleet's events", async () => {
