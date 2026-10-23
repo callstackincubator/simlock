@@ -7,6 +7,7 @@ export {
 export type { PathDetails } from "./filesystem.js";
 export { readPackageVersion } from "./package-version.js";
 export {
+  DATA_DIRECTORY_MODE,
   daemonDataDirectory,
   type DaemonRole,
   type DaemonFlag,

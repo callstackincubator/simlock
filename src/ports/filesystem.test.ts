@@ -98,6 +98,29 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.stat(directory)).resolves.toMatchObject({ kind: "directory" });
   });
 
+  it("gives every directory it creates, parents included, the mode it asks for, past the umask, and leaves an existing directory alone", async () => {
+    // why: under umask 0o077 Node's own default for a new directory is 0o700, so a mode of 0o750
+    // the umask would strip to 0o700 shows the adapter set the bits after mkdir, on the parent too.
+    const previousUmask = process.umask(0o077);
+    try {
+      const filesystem = create();
+      const directory = `${temporaryDirectory}/home/gateway`;
+      const existing = `${temporaryDirectory}/existing`;
+      await filesystem.mkdirp(existing);
+      await filesystem.chmod(existing, 0o755);
+
+      await filesystem.mkdirp(directory, { mode: 0o750 });
+      await filesystem.mkdirp(directory, { mode: 0o750 });
+      await filesystem.mkdirp(existing, { mode: 0o750 });
+
+      expect((await filesystem.stat(directory)).mode).toBe(0o750);
+      expect((await filesystem.stat(`${temporaryDirectory}/home`)).mode).toBe(0o750);
+      expect((await filesystem.stat(existing)).mode).toBe(0o755);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
   it("writes a file exclusively, refusing the second writer rather than replacing", async () => {
     const filesystem = create();
     const file = `${temporaryDirectory}/instance.json`;

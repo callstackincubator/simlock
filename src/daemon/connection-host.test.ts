@@ -1,3 +1,7 @@
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,6 +11,7 @@ import {
   MemoryFilesystem,
   MemoryIpcTransport,
   MemoryLogSink,
+  NodeFilesystem,
   type IpcConnection,
   type IpcConnector,
   type IpcListenerFactory,
@@ -28,6 +33,29 @@ describe("DaemonEndpointHost", () => {
     expect(await filesystem.exists(endpoint)).toBe(false);
     expect(await filesystem.exists("/simlock/other.sock")).toBe(true);
     await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
+  });
+
+  it("creates the directory its endpoint lives in owner-only", async () => {
+    // why: under the umask every real host starts from, a directory made without a mode comes
+    // out 0755, so only a mode the host asks for ends at 0700.
+    const previousUmask = process.umask(0o022);
+    const base = await mkdtemp(join(tmpdir(), "simlock-endpoint-"));
+    const ipc = new MemoryIpcTransport();
+    const host = new DaemonEndpointHost({
+      connector: ipc,
+      endpoint: join(base, "home", "daemon.sock"),
+      filesystem: new NodeFilesystem(),
+      listenerFactory: ipc,
+    });
+    try {
+      await host.start(() => undefined);
+
+      expect((await stat(join(base, "home"))).mode & 0o777).toBe(0o700);
+    } finally {
+      process.umask(previousUmask);
+      await host.stop();
+      await rm(base, { force: true, recursive: true });
+    }
   });
 
   it("rejects a live endpoint before binding", async () => {

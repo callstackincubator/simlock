@@ -5,7 +5,9 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 
 ## Both modes, before the branch
 
-1. `loadConfig` reads `config.json`; its warnings are logged once the logger exists.
+1. `prepareDataDirectory` creates the data directory `0700` when missing; an existing one keeps
+   its mode, and one group or others can reach is a `warn` line once the logger exists.
+   `loadConfig` reads `config.json`; its warnings are logged once the logger exists.
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.

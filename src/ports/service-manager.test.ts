@@ -162,10 +162,21 @@ describe("LaunchdServiceManager (#830)", () => {
     }
   });
 
-  it("install creates daemon.log at 0600 when it is missing and keeps one that exists", async () => {
+  it("install creates daemon.log at 0600 in a data directory it creates owner-only when they are missing, and keeps a log that exists", async () => {
+    // why: a directory the memory filesystem creates without a mode is already 0700, so the
+    // mode install asks for is read from the call it makes, not from the directory.
+    class RecordingFilesystem extends MemoryFilesystem {
+      readonly directories: Array<{ path: string; mode: number | undefined }> = [];
+      override async mkdirp(path: string, options?: { readonly mode?: number }): Promise<void> {
+        this.directories.push({ path, mode: options?.mode });
+        await super.mkdirp(path, options);
+      }
+    }
     const definition = definitionFor("worker");
-    const created = await installed(definition);
+    const recording = new RecordingFilesystem();
+    const created = await installed(definition, recording);
     expect((await created.filesystem.stat(definition.logPath)).mode).toBe(0o600);
+    expect(recording.directories).toContainEqual({ path: root, mode: 0o700 });
 
     const existing = new MemoryFilesystem();
     await existing.mkdirp(root);
