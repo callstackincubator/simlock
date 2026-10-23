@@ -60,7 +60,6 @@ function setup(
     filesystem,
     homeDirectory: HOME,
     workingDirectory: CWD,
-    scope: "user",
     runTool: fakeTools().runTool,
     confirm: fakeConfirm().confirm,
     interactive: false,
