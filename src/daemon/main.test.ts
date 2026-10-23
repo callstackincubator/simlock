@@ -3382,6 +3382,36 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
+    const version = (stdout: string) => ({
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout },
+    });
+
+    // why: the simulator daemon's version answer is the row's own text when it is not the running one, and the phone daemon's follows `phones`.
+    function scriptedDaemons(
+      setup: Awaited<ReturnType<typeof setUp>>,
+      tcpProbe: FakeTcpProbe,
+      simulator: string,
+      phones: string | undefined,
+    ): ScriptedProcessRunner {
+      if (simulator === "missing") return new ScriptedProcessRunner([]);
+      return new ScriptedProcessRunner([
+        version(simulator === "running" ? "0.21.28\n" : simulator),
+        {
+          hangs: true,
+          match: { args: [entry, `--simlock-home=${setup.directory}`], command: process.execPath },
+          onSpawn: async () => {
+            await setup.filesystem.writeFileAtomic(
+              join(setup.directory, "agent-device", "daemon.json"),
+              JSON.stringify({ httpPort: 4310, pid: 2, token: "t" }),
+            );
+            tcpProbe.startListening(4310);
+          },
+        },
+        version(phones === undefined || phones === "unstartable" ? "0.21.28\n" : phones),
+      ]);
+    }
+
     const findingLabel = (finding: { readonly module?: string; readonly message?: string }) => {
       if (finding.module === "alpha") return "alpha";
       return finding.message?.startsWith("phone daemon: ") === true ? "phones" : "simulator";
@@ -3437,37 +3467,10 @@ describe("startDaemon with the agent-device edge", () => {
             alpha: { enabled: true },
           },
         });
-        const version = (stdout: string) => ({
-          match: { args: [realCli, "--version"], command: process.execPath },
-          result: { code: 0, stderr: "", stdout },
-        });
         const health = new FakeAgentDeviceHealth();
         health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
         const tcpProbe = new FakeTcpProbe();
-        const runner = new ScriptedProcessRunner(
-          simulator === "missing"
-            ? []
-            : [
-                version(simulator === "running" ? "0.21.28\n" : simulator),
-                {
-                  hangs: true,
-                  match: {
-                    args: [entry, `--simlock-home=${setup.directory}`],
-                    command: process.execPath,
-                  },
-                  onSpawn: async () => {
-                    await setup.filesystem.writeFileAtomic(
-                      join(setup.directory, "agent-device", "daemon.json"),
-                      JSON.stringify({ httpPort: 4310, pid: 2, token: "t" }),
-                    );
-                    tcpProbe.startListening(4310);
-                  },
-                },
-                ...(phones === "unstartable" || phones === undefined
-                  ? [version("0.21.28\n")]
-                  : [version(phones)]),
-              ],
-        );
+        const runner = scriptedDaemons(setup, tcpProbe, simulator, phones);
         const { clock, daemon } = await startEdge(setup, {
           agentDevice: agentDeviceModuleWith({ health }),
           clock: new FakeClock(1_000),

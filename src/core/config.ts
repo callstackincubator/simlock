@@ -44,13 +44,7 @@ import {
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
-/**
- * `lease.defaultTtlMs`'s default (ADR 0004 §4): the width a request that names no `ttlMs` is
- * granted. Exported because `Registry` needs the same number to migrate a lease record written
- * before ADR 0004, which has no stored width of its own -- one definition, read from both
- * places, rather than the same fifteen minutes spelled twice.
- */
-export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
+const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 
 /** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
