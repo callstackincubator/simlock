@@ -70,11 +70,6 @@ export function WorkerPageBody({ page }: { readonly page: WorkerPageView }) {
       {...(page.version === undefined ? {} : { note: page.version })}
       actions={<ActionBar label={`Actions for ${page.title}`} entries={entries} />}
     >
-      <nav className="crumbs" aria-label="Breadcrumb">
-        <span className="crumb">
-          <Link to={page.back}>Fleet</Link>
-        </span>
-      </nav>
       <p className="worker-line">
         <Status tone={page.health.tone}>{page.health.word}</Status>
         {page.system === undefined ? null : <> · {page.system}</>}

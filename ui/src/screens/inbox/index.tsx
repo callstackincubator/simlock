@@ -142,6 +142,7 @@ export function InboxBody(props: {
 
 function InboxActions(props: { readonly row: InboxRow; readonly actions: InboxRowActions }) {
   const { actions, row } = props;
+  const rest = actions.menu.filter((entry) => entry.key !== actions.fix?.key);
   return (
     <span className="inbox-actions">
       {actions.fix === undefined ? null : (
@@ -149,9 +150,7 @@ function InboxActions(props: { readonly row: InboxRow; readonly actions: InboxRo
           {actions.fix.label}
         </Button>
       )}
-      {actions.menu.length === 0 ? null : (
-        <RowMenu label={`Actions for ${row.subject}`} entries={actions.menu} />
-      )}
+      <RowMenu label={`Actions for ${row.subject}`} entries={rest} />
     </span>
   );
 }

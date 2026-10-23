@@ -165,3 +165,8 @@
 .worker-events li > :last-child {
   grid-column: 2;
 }
+
+.panel .facts + .table-card {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
