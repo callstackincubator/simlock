@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { CORE_ROUTE_SEGMENTS, MAX_CAPABILITIES, capabilityNameSchema } from "../contract/index.js";
-import type { Clock, Logger } from "../ports/index.js";
+import type { Clock, Filesystem, Logger } from "../ports/index.js";
 import type {
   GatewayHostOptions,
   GatewayModule,
@@ -22,6 +22,22 @@ function profileOrigin(host: string, port: number): string {
   return `http://${reachable.includes(":") ? `[${reachable}]` : reachable}:${String(port)}`;
 }
 
+async function readProfileSecret(
+  filesystem: Filesystem,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await filesystem.readFile(path));
+    const secret =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as { daemonAuthToken?: unknown }).daemonAuthToken
+        : undefined;
+    return typeof secret === "string" ? secret : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function writeLocalProfile(
   definition: OptionalModuleDefinition<unknown>,
   options: ModuleHostOptions,
@@ -29,17 +45,24 @@ async function writeLocalProfile(
   const { localProfile } = definition;
   if (localProfile === undefined) return;
   const { tokens } = options;
-  const { record, secret } = await tokens.create("agent", localProfile.tokenLabel);
+  const { filesystem } = options.context;
+  const path = join(options.context.dataDirectory, localProfile.fileName);
+  const stored = await readProfileSecret(filesystem, path);
+  const verified = stored === undefined ? undefined : await tokens.verify(stored);
+  const kept = verified?.label === localProfile.tokenLabel ? verified : undefined;
+  const made =
+    kept === undefined ? await tokens.create("agent", localProfile.tokenLabel) : undefined;
+  const id = kept?.id ?? made?.record.id;
+  const secret = made?.secret ?? stored ?? "";
   for (const other of await tokens.list()) {
-    if (other.label === localProfile.tokenLabel && other.id !== record.id) {
-      await tokens.revoke(other.id);
-    }
+    if (other.label === localProfile.tokenLabel && other.id !== id) await tokens.revoke(other.id);
   }
-  await options.context.filesystem.writeFileAtomic(
-    join(options.context.dataDirectory, localProfile.fileName),
-    localProfile.render(profileOrigin(options.config.http.host, options.config.http.port), secret),
-    { mode: 0o600 },
+  const contents = localProfile.render(
+    profileOrigin(options.config.http.host, options.config.http.port),
+    secret,
   );
+  if (kept !== undefined && (await filesystem.readFile(path)) === contents) return;
+  await filesystem.writeFileAtomic(path, contents, { mode: 0o600 });
 }
 
 const HOOK_DEADLINE_MS = 30_000;
