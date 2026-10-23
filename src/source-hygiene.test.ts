@@ -317,7 +317,7 @@ describe("a GitHub workflow", () => {
   });
 
   it("writes no credential into a URL", () => {
-    expect(workflowLines(/https?:\/\/[^\s/"']*@/)).toEqual([]);
+    expect(workflowLines(/https?:\/\/[^/"'\n]*@/)).toEqual([]);
   });
 });
 
@@ -331,9 +331,15 @@ describe("the Release workflow's push (.github/workflows/release.yml)", () => {
       `auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\\n')`,
     );
     expect(step).toContain(`echo "::add-mask::$auth"`);
-    expect(step).toContain(`GIT_CONFIG_COUNT=1`);
-    expect(step).toContain(`GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"`);
-    expect(step).toContain(`GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"`);
+    const exported = [
+      `export GIT_CONFIG_COUNT=1`,
+      `export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"`,
+      `export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"`,
+    ];
+    for (const line of exported) {
+      expect(step).toContain(line);
+      expect(step.indexOf(line)).toBeLessThan(step.indexOf("git push"));
+    }
     expect(push).toContain(`"https://github.com/\${GITHUB_REPOSITORY}.git"`);
     expect(push).not.toMatch(/GITHUB_TOKEN|\$auth|\s-c\s/);
   });
