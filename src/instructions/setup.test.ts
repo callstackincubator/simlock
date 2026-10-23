@@ -1,6 +1,15 @@
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { MemoryFilesystem, ProcessSpawnError, type ProcessRunner } from "../ports/index.js";
+import {
+  MemoryFilesystem,
+  NodeFilesystem,
+  ProcessSpawnError,
+  type ProcessRunner,
+} from "../ports/index.js";
 import {
   renderSkill,
   SetupMcpFailedError,
@@ -377,5 +386,56 @@ describe("setupAgentTools", () => {
     });
     expect(projectAsk.questions).toEqual([CLAUDE_PROMPT]);
     expect(atProject.tools.map(({ mcp }) => mcp?.status)).toEqual(["connected", undefined]);
+  });
+
+  it("a second run replaces only its own files: same bytes, stale entries gone, a SKILL.md directory turned into the file", async () => {
+    const filesystem = await withBases();
+    await filesystem.mkdirp(`${HOME}/.claude`);
+    await filesystem.mkdirp(`${HOME}/.codex`);
+    await setup(filesystem);
+    const first = await tree(filesystem, HOME);
+
+    const second = await setup(filesystem);
+
+    expect(second.tools.map(({ skill }) => skill.status)).toEqual(["replaced", "replaced"]);
+    expect(await tree(filesystem, HOME)).toEqual(first);
+
+    await filesystem.mkdirp(`${HOME}/.claude/skills/simlock/old`);
+    await filesystem.writeFileAtomic(`${HOME}/.claude/skills/simlock/old/notes.md`, "stale");
+    await filesystem.writeFileAtomic(`${HOME}/.claude/skills/simlock/SKILL.md`, "old rules");
+    await filesystem.writeFileAtomic(`${HOME}/.claude/skills/other.md`, "not ours");
+    await setup(filesystem, { tool: "claude-code" });
+    expect(await tree(filesystem, `${HOME}/.claude/skills`)).toEqual([
+      `${HOME}/.claude/skills/other.md`,
+      `${HOME}/.claude/skills/simlock`,
+      `${HOME}/.claude/skills/simlock/SKILL.md`,
+    ]);
+    expect(await filesystem.readFile(`${HOME}/.claude/skills/simlock/SKILL.md`)).toBe(
+      renderSkill(),
+    );
+    expect(await filesystem.readFile(`${HOME}/.claude/skills/other.md`)).toBe("not ours");
+
+    // why: a rename onto a directory fails on the real filesystem, and the in-memory double
+    // would let it through.
+    const root = await mkdtemp(join(tmpdir(), "simlock-setup-"));
+    try {
+      const simlock = join(root, ".agents/skills/simlock");
+      await mkdir(join(simlock, "SKILL.md/nested"), { recursive: true });
+      const report = await setupAgentTools({
+        filesystem: new NodeFilesystem(),
+        homeDirectory: root,
+        workingDirectory: CWD,
+        scope: "user",
+        tool: "codex",
+        runTool: fakeTools().runTool,
+        confirm: fakeConfirm().confirm,
+        interactive: false,
+      });
+      expect(report.tools.map(({ skill }) => skill.status)).toEqual(["replaced"]);
+      expect(await readdir(simlock)).toEqual(["SKILL.md"]);
+      expect(await readFile(join(simlock, "SKILL.md"), "utf8")).toBe(renderSkill());
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
