@@ -250,10 +250,17 @@ export async function startDaemon(
     join(dataDirectory, "config.json"),
     JSON.stringify({
       ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it.
-      ...(mode === "worker" ? { capabilities: { "agent-device": { enabled: false } } } : {}),
       http: httpConfig,
       ...extraConfig,
+      // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
+      ...(mode === "worker"
+        ? {
+            capabilities: {
+              "agent-device": { enabled: false },
+              ...(extraConfig.capabilities as object | undefined),
+            },
+          }
+        : {}),
     }),
   );
   if (options.driverScript !== undefined) {
