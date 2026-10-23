@@ -38,4 +38,32 @@ test.describe("the console's layout", () => {
       await disposeFleet(fleet);
     }
   });
+
+  test("a worker page has no breadcrumb, and its Warm pool tab draws a 1px --border line between the facts and the table", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "layout-a" }]);
+    try {
+      const listed = await fleet.gateway.cli(["worker", "list", "--json"]);
+      const id = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
+      await openPage(page, fleet.gateway, `/fleet/${id}?tab=warm-pool`, "layout-a", false);
+
+      await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toHaveCount(0);
+      const panel = page.getByRole("region", { name: "Warm pool", exact: true });
+      await expect(panel.locator(".facts")).toBeVisible();
+      const line = await panel.locator(".table-card").evaluate((card) => {
+        const style = getComputedStyle(card);
+        const probe = document.createElement("span");
+        probe.style.color = "var(--border)";
+        document.body.append(probe);
+        const border = getComputedStyle(probe).color;
+        probe.remove();
+        return { border, color: style.borderTopColor, width: style.borderTopWidth };
+      });
+      expect(line.width).toBe("1px");
+      expect(line.color).toBe(line.border);
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
 });

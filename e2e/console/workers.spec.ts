@@ -930,7 +930,7 @@ test.describe("the workers page", () => {
       await expect(figure(page, "Leases").locator(".figure-count")).toHaveText("1", {
         timeout: 10_000,
       });
-      await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
+      await page.goBack();
       await expect(running()).toHaveText(/^1 \/ \d+$/, { timeout: 10_000 });
     } finally {
       await disposeFleet(fleet);
@@ -1130,7 +1130,7 @@ test.describe("the workers page", () => {
         timeout: 10_000,
       });
 
-      await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
+      await page.goBack();
       await expect(row(page, "worker-b").getByRole("cell").nth(1)).toHaveText("disconnected");
       await expect(row(page, "worker-a").getByRole("cell").nth(1)).not.toHaveText("disconnected");
       await expect(page.getByText("1 / 2 up")).toBeVisible();
@@ -1287,10 +1287,7 @@ test.describe("the workers page", () => {
     await page.keyboard.press("Enter");
     await expect(host_tab).toHaveAttribute("aria-selected", "true");
 
-    await follow(
-      page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Fleet" }),
-      "backward",
-    );
+    await follow(page.getByRole("link", { name: "Fleet", exact: true }), "backward");
     await expect(page).toHaveURL(/\/fleet$/);
   });
 });

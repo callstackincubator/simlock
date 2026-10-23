@@ -418,7 +418,7 @@ test.describe("long lists page", () => {
 
     await page.reload();
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
-    await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link").click();
+    await page.goBack();
     await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
   });
 
