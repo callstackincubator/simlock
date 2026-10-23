@@ -46,6 +46,7 @@ const config: Config = {
     emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
   },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+  update: { check: true },
   warmPool: {
     enabled: true,
     maxConcurrentBoots: 1,

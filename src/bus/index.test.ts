@@ -46,6 +46,8 @@ const EVENT_NAMES: Record<EventName, true> = {
   "device.orphan-purged": true,
   "daemon.started": true,
   "daemon.stopping": true,
+  "daemon.update-failed": true,
+  "daemon.update-started": true,
   "disk.pressure-detected": true,
   "cleanup.executed": true,
   "doctor.reconciled": true,

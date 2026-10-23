@@ -60,7 +60,11 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
 }
 
 function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
-  const takers = views.filter((worker) => takesRequests.check(worker, request) === undefined);
+  // why: an updating worker comes back by itself (ADR 0042 §3), so a request that only it can serve waits instead of failing.
+  const takers = views.filter((worker) => {
+    const refusal = takesRequests.check(worker, request);
+    return refusal === undefined || refusal.reason === "updating";
+  });
   if (takers.length === 0) return noWorker();
 
   const known = views.filter(isKnown);

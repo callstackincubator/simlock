@@ -36,6 +36,7 @@ import {
   type LeaseRequestFailure,
 } from "../core/index.js";
 import {
+  DaemonUpdatingError,
   IdempotencyConflictError,
   LeaseIdTakenError,
   LeaseRequestForbiddenError,
@@ -110,6 +111,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   // startup just to recognize it.
   if (error instanceof NoCapacityError) {
     return "NO_CAPACITY";
+  }
+  if (error instanceof DaemonUpdatingError) {
+    return "DAEMON_UPDATING";
   }
   if (error instanceof ProvisionFailedError) {
     return "PROVISION_FAILED";

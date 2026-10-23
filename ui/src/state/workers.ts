@@ -62,7 +62,13 @@ export function useWorkerPageMenu(page: WorkerPage): readonly MenuEntry[] {
   const mode = useDaemonMode();
   return entries(
     workerActions(
-      { connection: page.connection, drained: page.drained, id: page.id, name: page.title },
+      {
+        connection: page.connection,
+        drained: page.drained,
+        id: page.id,
+        name: page.title,
+        updateFacts: page.updateFacts,
+      },
       mode,
     ),
   );

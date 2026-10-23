@@ -95,6 +95,14 @@ export class ProvisionFailedError extends Error {
   }
 }
 
+/** why: mapped to `DAEMON_UPDATING`; the message is what a refused agent reads. */
+export class DaemonUpdatingError extends Error {
+  constructor() {
+    super("this daemon is updating and takes no new leases");
+    this.name = "DaemonUpdatingError";
+  }
+}
+
 class NukeCancelledError extends Error {
   constructor() {
     super("Request cancelled by nuke");
@@ -204,6 +212,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #activeWorkflows = new Set<Promise<void>>();
   readonly #driving = new WeakSet<AcquisitionWaiter>();
   #admissionClosed = false;
+  // why: apart from #admissionClosed, which also stops the warm pool; an update refuses leases and leaves the pool running.
+  #updateHold = false;
   #maintenanceDepth = 0;
   readonly #logger: Logger;
 
@@ -249,6 +259,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         const replay = this.options.requests.replay(request, options);
         if (replay !== undefined) return { replay };
         const requestId = newLeaseRequestId(this.options.idGenerator);
+        if (this.#updateHold) {
+          this.#refuseForUpdate(requestId, request, options);
+          throw new DaemonUpdatingError();
+        }
         if (this.#admissionClosed) {
           emitLeaseRefusal(
             this.options.eventBus,
@@ -382,6 +396,52 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     while (this.#activeWorkflows.size > 0) {
       await Promise.allSettled(this.#activeWorkflows);
     }
+  }
+
+  async holdForUpdate(): Promise<void> {
+    await this.options.decisions.run(async () => {
+      this.#updateHold = true;
+      // why: a request already provisioning is granted (#825 Decisions), so only the ones not yet provisioning, `new` (still resolving its spec) or queued, are refused.
+      for (const waiter of this.options.queue.pending() as readonly AcquisitionWaiter[]) {
+        if (waiter.state !== "queued" && waiter.state !== "new") continue;
+        if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
+          this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
+        }
+      }
+    });
+  }
+
+  // why: every waiter passes `#nextPlan` before a provision starts, in whatever state `markNew` or `#defer` left it, so the update hold refuses here (#825 Decisions).
+  #refuseUnderHold(waiter: AcquisitionWaiter): boolean {
+    if (!this.#updateHold) return false;
+    if (this.options.queue.reject(waiter, new DaemonUpdatingError())) {
+      this.#refuseForUpdate(waiter.id, waiter.request, waiter.options);
+    }
+    return true;
+  }
+
+  async releaseUpdateHold(): Promise<void> {
+    await this.options.decisions.run(async () => {
+      this.#updateHold = false;
+    });
+  }
+
+  #refuseForUpdate(
+    requestId: string,
+    request: DeviceRequest,
+    options: Pick<LeaseRequestOptions, "requesterId" | "fleetRequestId">,
+  ): void {
+    emitLeaseRefusal(
+      this.options.eventBus,
+      {
+        requestId,
+        requester: options.requesterId,
+        requestSpec: request,
+        reason: "updating",
+        fleetRequestId: options.fleetRequestId,
+      },
+      "lease-acquisition-coordinator",
+    );
   }
 
   /** Reopens acquisition admission after an administrative maintenance operation. */
@@ -928,6 +988,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
+    if (this.#refuseUnderHold(waiter)) return undefined;
     const head = this.options.queue.head;
     if (head !== undefined && head !== waiter) {
       const reason = "behind-earlier-request";

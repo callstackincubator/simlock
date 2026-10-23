@@ -107,6 +107,30 @@ describe("the search results", () => {
   });
 });
 
+describe("the update actions in the search", () => {
+  it("offers Update… for a worker behind the latest and Update now for one that waits, as its menu does", () => {
+    const behind = worker("wrk_2", "mac-studio-2", { latestVersion: "0.4.0", version: "0.3.0" });
+    const waiting = worker("wrk_3", "mac-mini-3", {
+      latestVersion: "0.4.0",
+      update: {
+        forced: false,
+        from: "0.3.0",
+        leases: 1,
+        stage: "waiting",
+        startedAt: 1,
+        to: "0.4.0",
+      },
+      version: "0.3.0",
+    });
+    const current = worker("wrk_4", "mac-pro-4", { latestVersion: "0.3.0", version: "0.3.0" });
+    expect(search("update", { workers: [behind, waiting, current] })).toEqual([
+      "Actions: Update now — mac-mini-3",
+      "Actions: Update… — mac-studio-2",
+    ]);
+    expect(search("update", { mode: "worker", workers: [behind] })).toEqual([]);
+  });
+});
+
 describe("a group that is still loading", () => {
   it("lists no results, so Actions and Leases appear only once every read has settled", () => {
     const workers = [worker("wrk_2", "mac-studio-2", { devices: [PHONE] })];

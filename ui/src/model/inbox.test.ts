@@ -443,6 +443,39 @@ describe("the Inbox groups", () => {
   });
 });
 
+describe("the Inbox's update failed item", () => {
+  it("is a warn item in Needs a look, counted as a problem, with its drawer sentence and facts, and gone when lastUpdateFailure is null", () => {
+    const failure = {
+      at: NOW - 120_000,
+      from: "0.3.0",
+      message: "EACCES: permission denied",
+      stage: "installing",
+      to: "0.4.0",
+    } as const;
+    const failed = worker({ id: "wrk/1", label: "mac-mini-1", lastUpdateFailure: failure });
+    const page = pageOf([failed, worker({ id: "wrk_2", drained: true })], "wrk/1/update-failed");
+
+    expect(page.rows.map((row) => [row.group, row.key, row.tone, row.word, row.subject])).toEqual([
+      ["Needs a look", "wrk/1/update-failed", "warn", "update failed", "mac-mini-1"],
+      ["Needs a look", "wrk_2/drained", "warn", "drained", "wrk_2"],
+    ]);
+    expect(page.problems).toBe(2);
+    const shown = shownOf(page);
+    expect(shown.what).toBe(
+      "The update of mac-mini-1 to 0.4.0 failed while installing: EACCES: permission denied. It runs 0.3.0 again.",
+    );
+    expect(shown.facts).toEqual([
+      { label: "From", value: "0.3.0" },
+      { label: "To", value: "0.4.0" },
+      { label: "Stage", value: "installing" },
+      { label: "When", value: "2 min ago" },
+    ]);
+    expect(
+      pageOf([worker({ drained: true, lastUpdateFailure: null })]).rows.map((row) => row.key),
+    ).toEqual(["wrk_1/drained"]);
+  });
+});
+
 describe("the Inbox page", () => {
   it("lists a row per item, naming the worker or the device on its worker", () => {
     const page = pageOf([

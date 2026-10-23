@@ -180,6 +180,44 @@ describe("createApiClient", () => {
     expect(writeRefused).not.toHaveBeenCalled();
   });
 
+  it("an action sends its body: write sends a JSON body with its content type, resolves the parsed answer or undefined, and waits as long as asked", async () => {
+    const sent = answering(202, { started: true });
+    const writer = createApiClient({ fetch: sent.fetch, token: () => "slk_operator" });
+
+    const answer = await writer.write("POST", "/v1/workers/wrk_1/update", {
+      body: { force: true },
+    });
+
+    expect(answer).toEqual({ started: true });
+    expect(sent.calls[0]?.init.body).toBe('{"force":true}');
+    expect(sent.calls[0]?.init.headers).toEqual({
+      Authorization: "Bearer slk_operator",
+      "Content-Type": "application/json",
+    });
+    await writer.write("DELETE", "/v1/leases/lse_1");
+    expect(sent.calls[1]?.init.body).toBeUndefined();
+    expect(sent.calls[1]?.init.headers).toEqual({ Authorization: "Bearer slk_operator" });
+
+    const empty = createApiClient({
+      fetch: async () => new Response(null, { status: 204 }),
+      token: () => "slk_operator",
+    });
+    expect(await empty.write("DELETE", "/v1/leases/lse_1")).toBeUndefined();
+
+    vi.useFakeTimers();
+    const slow = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });
+    const outcome = slow
+      .write("POST", "/v1/workers/wrk_1/update", { body: {}, timeoutMs: 100_000 })
+      .then(
+        () => "answered",
+        (error: unknown) => error,
+      );
+    await vi.advanceTimersByTimeAsync(99_999);
+    expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(RequestTimeoutError);
+  });
+
   it("a read hands back the response's Date header with its body", async () => {
     const date = "Fri, 02 Oct 2026 12:00:00 GMT";
     const fetch: Fetch = async () =>

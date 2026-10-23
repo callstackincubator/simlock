@@ -65,7 +65,7 @@ import type {
   StatusGetOutput,
   TokenListOutput,
 } from "../simlock-client/client.js";
-import { connectSimlockAdmin } from "../admin/index.js";
+import { connectSimlockAdmin, type WorkerView } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
 import { buildCliEnvironment } from "./environment.js";
@@ -419,7 +419,14 @@ describe("CLI: exit codes", () => {
   describe("remote passthrough (ADR 0005 device.exec)", () => {
     const gatewayStatus = {
       ...EMPTY_STATUS,
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
     };
     const ownLease = {
       deviceId: "dev_1",
@@ -4128,7 +4135,14 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
       const output = outputCapture();
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
-        daemon: { health: "running", mode: "gateway" },
+        daemon: {
+          health: "running",
+          mode: "gateway",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         load: { ageMs: 4_000, ...PARTS },
         workers: [
           {
@@ -4267,6 +4281,70 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain("incompatible");
     expect(output.stdout).toContain("protocol 4-4 vs gateway 5-5");
+  });
+
+  it("worker list shows a worker's version, the latest only when newer, and its update stage", async () => {
+    const waiting = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const cases: readonly {
+      expected: string;
+      latestVersion: string | null;
+      update: WorkerView["update"];
+      version: string | undefined;
+    }[] = [
+      {
+        expected: " -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: waiting for 2 leases",
+        latestVersion: "0.4.0",
+        update: waiting,
+        version: "0.3.0",
+      },
+      {
+        expected: " -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: installing",
+        latestVersion: "0.4.0",
+        update: {
+          forced: false,
+          from: "0.3.0",
+          stage: "installing",
+          startedAt: 1_000,
+          to: "0.4.0",
+        },
+        version: "0.3.0",
+      },
+      {
+        expected: " -- updating to 0.4.0: waiting for 1 lease",
+        latestVersion: null,
+        update: { ...waiting, leases: 1 },
+        version: undefined,
+      },
+      { expected: " -- simlock 0.4.0", latestVersion: "0.4.0", update: null, version: "0.4.0" },
+      { expected: " -- simlock 0.5.0", latestVersion: "0.4.0", update: null, version: "0.5.0" },
+      { expected: " -- simlock 0.4.0", latestVersion: null, update: null, version: "0.4.0" },
+    ];
+    for (const { expected, latestVersion, update, version } of cases) {
+      const output = outputCapture();
+      const worker = {
+        ...connectedWorker,
+        latestVersion,
+        update,
+        ...(version === undefined ? {} : { version }),
+      };
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ listWorkers: () => Promise.resolve({ workers: [worker] }) }),
+      });
+
+      await runCli(["worker", "list"], environment);
+
+      expect(output.stdout.trimEnd().slice(-expected.length)).toBe(expected);
+      if (!expected.includes("available")) expect(output.stdout).not.toContain("available");
+      if (update === null) expect(output.stdout).not.toContain("updating");
+    }
   });
 
   it("emits the raw contract value under --json", async () => {
@@ -4476,7 +4554,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           warm: 0,
         },
       },
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       devices: [
         {
@@ -4671,7 +4756,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
               getStatus: () =>
                 Promise.resolve({
                   ...EMPTY_STATUS,
-                  daemon: { health: "running" as const, mode },
+                  daemon: {
+                    health: "running" as const,
+                    mode,
+                    version: "0.0.0-test",
+                    update: null,
+                    lastUpdateFailure: null,
+                    latestVersion: null,
+                  },
                   warmPool,
                 }),
             }),
@@ -4680,6 +4772,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toBe(
         `Daemon: running (${mode})\n` +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4694,7 +4787,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         const output = outputCapture();
         const answer = {
           ...EMPTY_STATUS,
-          daemon: { health: "running", mode },
+          daemon: { ...EMPTY_STATUS.daemon, mode },
           physicalQueueDepth: 1,
           queueDepth: 2,
         } as unknown as StatusGetOutput;
@@ -4708,6 +4801,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
         expect(output.stdout).toBe(
           `Daemon: running (${mode})\n` +
+            "Simlock: 0.0.0-test\n" +
             "Host: macOS 15.5 arm64\n" +
             "Running global: 0 + 0 reserved/2, warm 0\n" +
             "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4774,7 +4868,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
   describe("against a starting daemon", () => {
     const STARTING: StatusGetOutput = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
     };
 
@@ -4789,6 +4890,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toBe(
         "Daemon: starting (worker)\n" +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           "Devices, leases and capacity appear once startup finishes.\n",
       );
@@ -4870,7 +4972,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const FULL_LINE =
       "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago\n";
     const STARTING = {
-      daemon: { health: "starting" as const, mode: "worker" as const },
+      daemon: {
+        health: "starting" as const,
+        mode: "worker" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
     };
 
@@ -4892,6 +5001,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     it("simlock status prints the Load line after the Host line, on a starting daemon and a running one", async () => {
       expect(await print({ ...STARTING, load: LOAD })).toBe(
         "Daemon: starting (worker)\n" +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           FULL_LINE +
           "Devices, leases and capacity appear once startup finishes.\n",
@@ -4983,7 +5093,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
 
     expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
-      "Daemon: running (worker)\nConsole: http://127.0.0.1:4700/\nHost: ",
+      "Daemon: running (worker)\nSimlock: 0.0.0-test\nConsole: http://127.0.0.1:4700/\nHost: ",
     );
     expect(await print(EMPTY_STATUS)).not.toContain("Console:");
   });
@@ -5118,7 +5228,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     };
     const status: StatusGetOutput = {
       ...EMPTY_STATUS,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       installs: [{ ...install, workerId: "wrk_1" }],
       workers: [
         {
@@ -7176,9 +7293,408 @@ const EMPTY_STATUS = {
     },
     global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
   },
-  daemon: { health: "running", mode: "worker" },
+  daemon: {
+    health: "running",
+    mode: "worker",
+    version: "0.0.0-test",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+  },
   queueDepth: 0,
 } satisfies StatusGetOutput;
+
+describe("simlock update and simlock status", () => {
+  type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateDaemon"]>>;
+  type Step = UpdateAnswer | SimlockError;
+  const lost = () =>
+    new SimlockError("DAEMON_CONNECTION_LOST", "transport", "The daemon connection was lost", {});
+  const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+    ...overrides,
+  });
+  const state = (
+    stage: "waiting" | "installing" | "restarting",
+    leases = 0,
+  ): NonNullable<UpdateAnswer["update"]> => {
+    const base = { from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1_000 };
+    return stage === "waiting" ? { stage, leases, ...base } : { stage, ...base };
+  };
+  const failure = (stage: "installing" | "restarting", message: string) => ({
+    stage,
+    from: "0.3.0",
+    to: "0.4.0",
+    message,
+    at: 2_000,
+  });
+  const started = (update = state("installing")) =>
+    answer({ started: true, resolved: "0.4.0", update });
+  const running = (version = "0.4.0", overrides: Partial<UpdateAnswer> = {}) =>
+    answer({ version, ...overrides });
+
+  async function runUpdate(
+    argv: readonly string[],
+    script: {
+      readonly first: UpdateAnswer | SimlockError;
+      readonly polls?: readonly Step[];
+      readonly after?: readonly (Step | Error)[];
+      readonly onPoll?: (index: number, interrupt: () => void) => void;
+      readonly onReconnect?: (interrupt: () => void) => void;
+    },
+  ) {
+    const output = outputCapture();
+    const clock = new FakeClock(0);
+    const calls: unknown[] = [];
+    const polls = [...(script.polls ?? [])];
+    const after = [...(script.after ?? [])];
+    let pollCount = 0;
+    const signals = new EventEmitter();
+    let opened = 0;
+    const closedClients = new Set<number>();
+    const clientOver = (steps: Step[], first?: UpdateAnswer | SimlockError) => {
+      const id = opened++;
+      return fakeClient({
+        close: async () => {
+          closedClients.add(id);
+        },
+        updateDaemon: async (input) => {
+          calls.push(input);
+          const isFirst = first !== undefined && calls.length === 1;
+          if (!isFirst) script.onPoll?.(pollCount++, () => signals.emit("SIGINT"));
+          const step = isFirst ? first : steps.length > 1 ? steps.shift() : steps[0];
+          if (step === undefined) throw new Error("no scripted answer");
+          if (step instanceof Error) throw step;
+          return step;
+        },
+      });
+    };
+    const environment = output.environmentWith({
+      clock,
+      connectAdmin: async () => clientOver(polls, script.first),
+      connectExistingAdmin: async () => {
+        script.onReconnect?.(() => signals.emit("SIGINT"));
+        const step = after.length > 1 ? after.shift() : after[0];
+        if (step === undefined || step instanceof Error) throw step ?? new Error("refused");
+        return clientOver([step]);
+      },
+      sleep: async (milliseconds) => clock.advance(milliseconds),
+      signals: signals as unknown as CliEnvironment["signals"],
+    });
+    const code = await runCli(argv, environment);
+    return {
+      code,
+      calls,
+      stdout: output.stdout,
+      stderr: output.stderr,
+      opened,
+      closed: closedClients.size,
+    };
+  }
+
+  it("follows an update to simlock <v> is running, reports a failure and a rollback, says when nothing is needed, stops following on Ctrl-C only, prints --json, refuses bad input, and shows the version, the update and the last failure in simlock status", async () => {
+    let reconnects = 0;
+    // why: the follower reconnects every second and gives up when 15 minutes have passed since the last answer, so the last attempt is at 14:59 on the fake clock.
+    const RECONNECTS_IN_15_MINUTES = 899;
+    const header = "Updating simlock 0.3.0 → 0.4.0\n";
+    const wait =
+      "Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.\n";
+    const cases: readonly {
+      readonly name: string;
+      readonly argv: readonly string[];
+      readonly script: Parameters<typeof runUpdate>[1];
+      readonly code: number;
+      readonly stdout: string;
+      readonly calls?: readonly unknown[];
+      readonly reconnects?: number;
+    }[] = [
+      {
+        name: "follows to running",
+        argv: ["update"],
+        script: {
+          first: started(state("waiting", 2)),
+          polls: [
+            answer({ update: state("waiting", 2) }),
+            answer({ update: state("waiting", 1) }),
+            answer({ update: state("installing") }),
+            answer({ update: state("restarting") }),
+            lost(),
+          ],
+          after: [new Error("refused"), running()],
+        },
+        code: 0,
+        stdout: `${header}${wait}Waiting for 1 lease to end.\nInstalling simlock@0.4.0\nRestarting the daemon\nsimlock 0.4.0 is running\n`,
+        calls: [{}, ...Array.from({ length: 6 }, () => ({ query: true }))],
+      },
+      {
+        name: "follows an update that already runs, whatever version it names",
+        argv: ["update", "--version", "0.9.9"],
+        script: {
+          first: answer({ update: state("installing") }),
+          polls: [lost()],
+          after: [running()],
+        },
+        code: 0,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nsimlock 0.4.0 is running\n`,
+      },
+      {
+        name: "reports a failed install",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ lastUpdateFailure: failure("installing", "npm error code EACCES") })],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nUpdate failed (installing): npm error code EACCES\nsimlock 0.3.0 is still running and takes leases again.\n`,
+      },
+      {
+        name: "reports a version that did not start and the rollback",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ update: state("restarting") }), lost()],
+          after: [
+            answer({
+              lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
+            }),
+          ],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
+      },
+      {
+        name: "waits through a daemon that answers while it is still starting",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [lost()],
+          after: [
+            answer({ health: "starting" }),
+            answer({ health: "starting" }),
+            answer({ health: "starting" }),
+            answer({
+              lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
+            }),
+          ],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
+      },
+      {
+        name: "gives up when the daemon does not come back in 15 minutes",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ update: state("restarting") }), lost()],
+          after: [new Error("refused")],
+          onReconnect: () => {
+            reconnects += 1;
+          },
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nThe daemon did not come back; run simlock status.\n`,
+        reconnects: RECONNECTS_IN_15_MINUTES,
+      },
+      {
+        name: "stops with the daemon's own error when a poll is refused for a reason other than a lost connection",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [new SimlockError("UPDATE_RESOLVE_FAILED", "domain", "npm is down", {})],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\n`,
+      },
+      {
+        name: "prints its usage for --help and asks the daemon nothing",
+        argv: ["update", "--help"],
+        script: { first: answer() },
+        code: 0,
+        stdout: "Usage: simlock update [--version <version>] [--force] [--json]\n",
+        calls: [],
+      },
+      {
+        name: "the latest version is the running one",
+        argv: ["update"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already the latest\n",
+        calls: [{}],
+      },
+      {
+        name: "the named version is the running one",
+        argv: ["update", "--version", "0.3.0"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already running\n",
+        calls: [{ version: "0.3.0" }],
+      },
+      {
+        name: "the running version is newer than the latest",
+        argv: ["update"],
+        script: { first: answer({ upToDate: true, resolved: "0.4.0", version: "0.5.0-rc.1" }) },
+        code: 0,
+        stdout:
+          "simlock 0.5.0-rc.1 is newer than the latest (0.4.0). Use --version to install another version.\n",
+      },
+      {
+        name: "sends force and the version",
+        argv: ["update", "--force", "--version", "0.4.0-rc.1"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already running\n",
+        calls: [{ force: true, version: "0.4.0-rc.1" }],
+      },
+      {
+        name: "--json prints the final answer only",
+        argv: ["update", "--json"],
+        script: { first: started(state("waiting", 1)), polls: [lost()], after: [running()] },
+        code: 0,
+        stdout: `${JSON.stringify(running())}\n`,
+      },
+      {
+        name: "--json with nothing to do prints the answer at once",
+        argv: ["update", "--json"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: `${JSON.stringify(answer({ upToDate: true, resolved: "0.3.0" }))}\n`,
+        calls: [{}],
+      },
+      {
+        name: "Ctrl-C stops following and sends nothing more",
+        argv: ["update"],
+        script: {
+          first: started(state("waiting", 2)),
+          polls: [answer({ update: state("waiting", 2) })],
+          onPoll: (_index, interrupt) => interrupt(),
+        },
+        code: 0,
+        stdout: `${header}${wait}Stopped following. The update goes on; run simlock status to see it.\n`,
+        calls: [{}, { query: true }],
+      },
+      {
+        name: "Ctrl-C while the daemon restarts stops following",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [lost()],
+          after: [new Error("refused")],
+          onReconnect: (interrupt) => interrupt(),
+        },
+        code: 0,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nStopped following. The update goes on; run simlock status to see it.\n`,
+        calls: [{}, { query: true }],
+      },
+    ];
+    for (const { name, argv, script, code, stdout, calls, reconnects: expected } of cases) {
+      reconnects = 0;
+      const result = await runUpdate(argv, script);
+      if (expected !== undefined) expect(reconnects, name).toBe(expected);
+      expect({ name, code: result.code, stdout: result.stdout }, name).toEqual({
+        name,
+        code,
+        stdout,
+      });
+      if (calls !== undefined) expect(result.calls, name).toEqual(calls);
+      expect(result.closed, `${name}: every client opened is closed`).toBe(result.opened);
+    }
+
+    const refusals: readonly [readonly string[], number, string][] = [
+      [["update", "--version", "latest"], 2, "--version takes a version, e.g. 0.4.0"],
+      [["update", "--version", "../x"], 2, "--version takes a version, e.g. 0.4.0"],
+      [["update", "--version", `1.0.0-${"a".repeat(59)}`], 2, "--version takes a version"],
+    ];
+    for (const [argv, code, message] of refusals) {
+      const result = await runUpdate(argv, { first: answer() });
+      expect({ argv, code, stderr: result.stderr.includes(message), calls: result.calls }).toEqual({
+        argv,
+        code,
+        stderr: true,
+        calls: [],
+      });
+    }
+
+    const refused = [
+      ["UPDATE_RESOLVE_FAILED", 1, "could not resolve simlock@9.9.9: No match found"],
+      ["UPDATE_UNSUPPORTED_INSTALL", 2, "simlock was not installed with npm i -g"],
+    ] as const;
+    for (const [codeName, exit, message] of refused) {
+      const result = await runUpdate(["update"], {
+        first: new SimlockError(codeName, "domain", message, {}),
+      });
+      expect({ code: result.code, stdout: result.stdout }).toEqual({ code: exit, stdout: "" });
+      expect(JSON.parse(result.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: codeName, message },
+      });
+    }
+
+    const next = "Host: macOS 15.5 arm64";
+    expect(await statusLines({ version: "0.3.0" })).toEqual([
+      "Daemon: running (worker)",
+      "Simlock: 0.3.0",
+      next,
+      expect.stringMatching(/^Running global/),
+    ]);
+    for (const [update, line] of [
+      [state("waiting", 2), "Updating to 0.4.0: waiting for 2 leases"],
+      [state("waiting", 1), "Updating to 0.4.0: waiting for 1 lease"],
+      [state("installing"), "Updating to 0.4.0: installing"],
+      [state("restarting"), "Updating to 0.4.0: restarting"],
+    ] as const) {
+      expect((await statusLines({ version: "0.3.0", update })).slice(0, 3)).toEqual([
+        "Daemon: running (worker)",
+        "Simlock: 0.3.0",
+        line,
+      ]);
+    }
+    expect(
+      (
+        await statusLines({
+          version: "0.3.0",
+          lastUpdateFailure: failure("installing", "npm error code EACCES"),
+        })
+      ).slice(0, 3),
+    ).toEqual([
+      "Daemon: running (worker)",
+      "Simlock: 0.3.0",
+      "Last update failed (installing): npm error code EACCES",
+    ]);
+  });
+
+  it("simlock status says when the daemon has seen a newer Simlock version on npm", async () => {
+    for (const [version, latestVersion, line] of [
+      ["0.3.0", "0.4.0", "Simlock: 0.3.0 (0.4.0 available)"],
+      ["0.9.0", "0.10.0", "Simlock: 0.9.0 (0.10.0 available)"],
+      ["0.4.0-rc.2", "0.4.0", "Simlock: 0.4.0-rc.2 (0.4.0 available)"],
+      ["0.4.0", "0.4.0", "Simlock: 0.4.0"],
+      ["0.5.0-rc.1", "0.4.0", "Simlock: 0.5.0-rc.1"],
+      ["0.3.0", null, "Simlock: 0.3.0"],
+    ] as const) {
+      expect((await statusLines({ version, latestVersion }))[1]).toBe(line);
+    }
+  });
+});
+
+async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
+  const output = outputCapture();
+  await runCli(
+    ["status"],
+    output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getStatus: () =>
+            Promise.resolve({ ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, ...daemon } }),
+        }),
+    }),
+  );
+  return output.stdout.split("\n").slice(0, 4);
+}
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
@@ -7246,6 +7762,17 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     runNuke: () => Promise.resolve({ deletedDevices: [], releasedLeaseIds: [] }),
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
+    updateDaemon: () =>
+      Promise.resolve({
+        started: false,
+        upToDate: true,
+        resolved: null,
+        version: "test",
+        health: "running" as const,
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      }),
     replayEvents: () => Promise.resolve([]),
     usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
@@ -7261,6 +7788,18 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     undrainWorker: (input) =>
       Promise.resolve({ drained: false as const, workerId: input.workerId }),
     removeWorker: (input) => Promise.resolve({ removed: true, workerId: input.workerId }),
+    updateWorker: (input) =>
+      Promise.resolve({
+        health: "running" as const,
+        lastUpdateFailure: null,
+        latestVersion: null,
+        resolved: null,
+        started: false,
+        update: null,
+        upToDate: false,
+        version: "0.3.0",
+        workerId: input.workerId,
+      }),
     testAlertDestination: (input) =>
       Promise.resolve({ destination: input.destination, status: 200 }),
     installComponent: (input) =>
@@ -7718,6 +8257,7 @@ function testConfig(): Config {
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -7942,6 +8482,7 @@ describe("simlock list --requests", () => {
       ["incompatible", "ios", undefined, "protocol mismatch"],
       ["not-ready", "ios", undefined, "not ready yet"],
       ["unhealthy", "ios", undefined, "not running"],
+      ["updating", "ios", undefined, "updating"],
       ["drained", "ios", undefined, "drained"],
       ["busy", "ios", undefined, "busy with its own queue"],
       ["no-driver", "ios", undefined, "no iOS support"],
@@ -8356,7 +8897,14 @@ describe("CLI: a worker's capabilities", () => {
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: platform,
       },
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       leases: [],
@@ -9374,5 +9922,176 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
       code: "SERVICE_FAILED",
       message: `launchctl kickstart gui/501/${name} failed: Could not find service`,
     });
+  });
+});
+
+describe("simlock worker update", () => {
+  type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateWorker"]>>;
+  type View = Awaited<ReturnType<SimlockAdminClient["listWorkers"]>>["workers"][number];
+  const view = (overrides: Partial<View> = {}): View => ({
+    connection: "connected",
+    drained: false,
+    id: "3f81a2c4",
+    label: "mac-studio-2",
+    lastSeenAt: 1_000,
+    version: "0.3.0",
+    ...overrides,
+  });
+  const run = { forced: false, from: "0.3.0", startedAt: 1_000, to: "0.4.0" } as const;
+  const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
+    health: "running",
+    lastUpdateFailure: null,
+    latestVersion: "0.4.0",
+    resolved: "0.4.0",
+    started: true,
+    update: { ...run, stage: "installing" },
+    upToDate: false,
+    version: "0.3.0",
+    workerId: "3f81a2c4",
+    ...overrides,
+  });
+
+  it("follows the update to is running, reports a failure with exit 1, says why the worker is up to date, detaches, and refuses on a worker daemon", async () => {
+    const failure = {
+      at: 2_000,
+      from: "0.3.0",
+      message: "npm exited 1",
+      stage: "installing",
+      to: "0.4.0",
+    } as const;
+    const cases: readonly {
+      readonly name: string;
+      readonly argv: readonly string[];
+      readonly answer: UpdateAnswer | SimlockError;
+      readonly lists?: readonly View[];
+      readonly code: number;
+      readonly stdout?: string;
+      readonly stderr?: string;
+      readonly polls?: number;
+    }[] = [
+      {
+        name: "follows to running",
+        argv: ["worker", "update", "3f81a2c4", "--version", "0.4.0", "--force"],
+        answer: answer(),
+        lists: [
+          view({ update: { ...run, leases: 2, stage: "waiting" } }),
+          view({ update: { ...run, stage: "installing" } }),
+          view({ connection: "disconnected", update: { ...run, stage: "restarting" } }),
+          view({ update: { ...run, stage: "restarting" }, version: "0.4.0" }),
+          view({ update: null, version: "0.4.0" }),
+        ],
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is running 0.4.0\n",
+        polls: 5,
+      },
+      {
+        name: "fails with the stage and message",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer(),
+        lists: [view({ lastUpdateFailure: failure, update: null })],
+        code: 1,
+        stdout: "Update failed (installing): npm exited 1\n",
+        polls: 1,
+      },
+      {
+        name: "already on the latest",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)\n",
+        polls: 1,
+      },
+      {
+        name: "already running the requested version",
+        argv: ["worker", "update", "3f81a2c4", "--version", "0.4.0"],
+        answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is already running 0.4.0\n",
+        polls: 1,
+      },
+      {
+        name: "newer than the latest",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer({
+          resolved: "0.3.0",
+          started: false,
+          update: null,
+          upToDate: true,
+          version: "0.4.0",
+        }),
+        code: 0,
+        stdout:
+          "mac-studio-2 (3f81a2c4) is newer than the latest (0.3.0). Use --version to install another version.\n",
+        polls: 1,
+      },
+      {
+        name: "detach",
+        argv: ["worker", "update", "3f81a2c4", "--detach"],
+        answer: answer(),
+        code: 0,
+        stdout:
+          "Updating mac-studio-2 (3f81a2c4) 0.3.0 → 0.4.0. Follow it with simlock worker list.\n",
+        polls: 1,
+      },
+      {
+        name: "worker daemon",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: new SimlockError(
+          "UNSUPPORTED_IN_WORKER_MODE",
+          "domain",
+          "worker.update is a gateway operation",
+          { operation: "worker.update" },
+        ),
+        code: 2,
+        stderr: "worker.update is a gateway operation",
+        polls: 0,
+      },
+    ];
+    for (const spec of cases) {
+      const output = outputCapture();
+      const clock = new FakeClock(0);
+      const sent: unknown[] = [];
+      const lists = [...(spec.lists ?? [view()])];
+      let polls = 0;
+      const environment = output.environmentWith({
+        clock,
+        connectAdmin: async () =>
+          fakeClient({
+            listWorkers: async () => {
+              polls += 1;
+              const next = lists.length > 1 ? lists.shift() : lists[0];
+              return { workers: next === undefined ? [] : [next] };
+            },
+            updateWorker: async (input) => {
+              sent.push(input);
+              if (spec.answer instanceof Error) throw spec.answer;
+              return spec.answer;
+            },
+          }),
+        // why: a follow that never reaches an outcome fails on this line, not by timing out.
+        sleep: async (milliseconds) => {
+          if (polls > (spec.lists ?? []).length + 2)
+            throw new Error(`${spec.name}: the follow never ended`);
+          clock.advance(milliseconds);
+        },
+      });
+
+      const code = await runCli(spec.argv, environment);
+
+      expect({ code, name: spec.name, stdout: output.stdout }).toEqual({
+        code: spec.code,
+        name: spec.name,
+        stdout: spec.stdout ?? "",
+      });
+      if (spec.stderr !== undefined) expect(output.stderr).toContain(spec.stderr);
+      expect({ name: spec.name, polls }).toEqual({ name: spec.name, polls: spec.polls ?? 0 });
+      expect(sent).toEqual([
+        {
+          workerId: "3f81a2c4",
+          ...(spec.argv.includes("--version") ? { version: "0.4.0" } : {}),
+          ...(spec.argv.includes("--force") ? { force: true } : {}),
+        },
+      ]);
+    }
   });
 });

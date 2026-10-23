@@ -1,7 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 import { ApiError } from "../data/api";
-import type { MenuEntry } from "../ds";
+import type { MenuEntry, ToastSpec } from "../ds";
 import type { ItemAction } from "../model/actions";
 import { navigate } from "./router";
 import { useApi, useConfirm, useNotify } from "./services";
@@ -37,6 +37,33 @@ export interface Actions {
   readonly entries: (actions: readonly ItemAction[]) => readonly MenuEntry[];
 }
 
+// why: the toast an action earns: its outcome (or success) words, the view link, or Undo.
+function successToast(
+  action: ItemAction,
+  answer: unknown,
+  run: (action: ItemAction) => Promise<void>,
+): ToastSpec {
+  const { description, title, view } = action.outcome?.(answer) ?? action.success;
+  const { undo } = action;
+  return {
+    title,
+    ...(description === undefined ? {} : { description }),
+    ...(view === undefined
+      ? {}
+      : { action: { label: view.label, onClick: () => navigate(view.to) } }),
+    ...(undo === undefined
+      ? {}
+      : {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              void run(undo);
+            },
+          },
+        }),
+  };
+}
+
 export function useActions(): Actions {
   const api = useApi();
   const confirm = useConfirm();
@@ -49,26 +76,11 @@ export function useActions(): Actions {
         if (inFlight.has(action.itemKey)) return;
         setInFlight(action.itemKey, true);
         try {
-          await api.write(action.method, action.path);
-          const { description, title, view } = action.success;
-          const { undo } = action;
-          notify({
-            title,
-            ...(description === undefined ? {} : { description }),
-            ...(view === undefined
-              ? {}
-              : { action: { label: view.label, onClick: () => navigate(view.to) } }),
-            ...(undo === undefined
-              ? {}
-              : {
-                  action: {
-                    label: "Undo",
-                    onClick: () => {
-                      void run(undo);
-                    },
-                  },
-                }),
+          const answer = await api.write(action.method, action.path, {
+            ...(action.body === undefined ? {} : { body: action.body }),
+            ...(action.timeoutMs === undefined ? {} : { timeoutMs: action.timeoutMs }),
           });
+          notify(successToast(action, answer, run));
         } catch (error: unknown) {
           // why: a 401 has already signed the session out, and that is not a toast.
           if (error instanceof ApiError && error.status === 401) return;

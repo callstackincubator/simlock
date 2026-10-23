@@ -5,7 +5,7 @@ description: Open the web console on a gateway and read what it adds for a fleet
 
 The gateway serves the same web console as a worker, with the whole fleet in it: every worker that joined, every lease made through the gateway, and the fleet queue. This page covers what is different on a gateway. Signing in, finding your way and each page's common parts are in [Web console](/simlock/docs/worker/console).
 
-The console only shows. To drain, undrain or remove a worker, use the CLI; see [Manage workers](/simlock/docs/gateway/managing-workers).
+The console shows the fleet and can update a worker, see [Update a worker](/simlock/docs/worker/console#update-a-worker). To drain, undrain or remove a worker, use the CLI; see [Manage workers](/simlock/docs/gateway/managing-workers).
 
 ## Open the console
 
@@ -37,6 +37,7 @@ The square takes the worst of the worker's states. On top of the colours a singl
 | --- | --- | --- |
 | `disconnected` | Red | The worker's connection to the gateway closed. The gateway shows what it last reported. |
 | `incompatible` | Red | The worker is connected, but its Simlock version cannot talk to the gateway's. It gets no requests. |
+| `updating` | Amber | The worker updates and takes no new leases. Under the word, the row says `waiting for 2 leases`, `installing` or `restarting`. |
 | `drained` | Amber | The worker takes no new leases from the gateway. Its leases keep running. |
 | `starting` | Amber | The worker is starting up. |
 
@@ -84,6 +85,7 @@ On a gateway, **Attention** also lists workers:
 | `disconnected` | Red | Check the worker machine and its log with `simlock daemon logs`. When it is gone for good, remove it. |
 | `incompatible` | Red | Update the older of the worker and the gateway. |
 | `drained` | Amber | Undrain the worker when its maintenance is done. |
+| `update failed` | Amber | Select **Update…** to try again, or read the failure's **Stage** and message first. The worker runs its old version. |
 
 A worker that is both disconnected and drained shows as two items, since each clears on its own.
 

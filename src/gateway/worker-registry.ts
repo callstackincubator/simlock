@@ -36,10 +36,13 @@ export type WorkerViewSnapshot = Pick<
   | "health"
   | "host"
   | "installs"
+  | "lastUpdateFailure"
+  | "latestVersion"
   | "lease"
   | "leases"
   | "load"
   | "queueDepth"
+  | "update"
   | "version"
   | "waiting"
   | "warmPool"
@@ -379,6 +382,18 @@ export class WorkerRegistry {
     if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
     this.#warnOnLowerMaxTtl(existing, next);
     this.#notifyViewsChanged();
+  }
+
+  // why: both the operator's `worker.update` and an incompatible worker's query read these three fields from a `daemon.update` answer.
+  refreshUpdate(
+    workerId: string,
+    answer: Pick<WorkerView, "lastUpdateFailure" | "latestVersion" | "update">,
+  ): void {
+    this.refresh(workerId, {
+      lastUpdateFailure: answer.lastUpdateFailure,
+      latestVersion: answer.latestVersion,
+      update: answer.update,
+    });
   }
 
   /**
