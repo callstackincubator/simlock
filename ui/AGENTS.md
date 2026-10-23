@@ -2,7 +2,7 @@
 
 Does: the operator's web console — a React page the daemon serves from `dist/ui`.
 Entry: `src/main.tsx` → `App` (`src/app/app.tsx`).
-Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and `version-order.ts`'s `isNewerVersion` as a value, imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle); this one `past-index` exemption in `.dependency-cruiser.mjs` is maintainer-authorized (#825 Decisions).
+Uses: the daemon's `/v1` HTTP API and event stream; contract types from `src/contract/` (type-only), and two files as values, each imported by its own path (the index would pull the schemas, and zod's `eval`, into the bundle): `version-order.ts`'s `isNewerVersion` and `inbox.ts`'s helpers (`holderOf`, `isExpiring`, `problemCount`, ...), which the daemon's Inbox rules share. Both `past-index` exemptions in `.dependency-cruiser.mjs` are maintainer-authorized (#825 Decisions, ADR 0044 §3).
 Surface: [console.mdx](../website/src/content/docs/docs/worker/console.mdx). Look and voice: [DESIGN.md](../docs/internal/DESIGN.md).
 
 ## Layers
@@ -57,9 +57,11 @@ and `useDaemonFacts` (`state/live.tsx`) give them to state and to the sidebar's 
 
 ## Reads
 
+The Inbox is the daemon's: `GET /v1/inbox` (`inbox.get`, rules in `src/contract/inbox.ts`) answers the items, and `['inbox']` is the only key the sidebar's count reads, on every page. The Inbox page and the Overview's Needs you read it and `['workers']` (for names, links and lease counts); a read that fails shows the page's refusal. `model/inbox.ts` only draws rows, tones, filters and the drawer from the items, counting a wait or the time left from the item's own timestamp against the daemon's clock. Events that mark workers, leases or requests stale mark `['inbox']` too.
+
 A page reads a route only while it is on screen (`useRouteQuery`, `state/live.tsx`). `state/queries.ts`
 holds the TanStack `QueryClient` (the dependency rules keep it out of `data/` and `model/`) and the keys and times of ADR 0044:
-`['workers']` every 15 s, `['leases']` and `['lease', id]` 10 s, `['lease-requests']` 5 s,
+`['workers']` every 15 s, `['leases']`, `['lease', id]` and `['inbox']` 10 s, `['lease-requests']` 5 s,
 `['stats', range]` 60 s, `['tokens']` never; a read stays fresh 2 s (stats 30 s, tokens 5 min);
 data no page uses is dropped after 60 s. A key polls only while a page uses it, the tab is shown and
 the connection is up; a hidden tab or a lost connection reads nothing, and coming back reads each key
