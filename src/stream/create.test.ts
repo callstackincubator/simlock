@@ -9,6 +9,7 @@ function worker(
   availability: readonly ScreenAvailability[] = [],
   sendsMeta = true,
   unsupported = false,
+  openGate: Promise<void> = Promise.resolve(),
 ) {
   const clock = new FakeClock();
   const registry = new TestRegistry(
@@ -35,6 +36,7 @@ function worker(
     screens: {
       openScreen: async () => {
         opened += 1;
+        await openGate;
         if (unsupported) throw new ScreenNotSupportedError("no capture here");
         const feed = new ScriptedFeed();
         if (sendsMeta) feed.meta();
@@ -45,7 +47,7 @@ function worker(
     },
     settings: { bitrateKbps: 1500, fps: 30, maxDimension: 720 },
   });
-  return { clock, feeds, opened: () => opened, stream };
+  return { clock, feeds, opened: () => opened, registry, stream };
 }
 
 const STREAM_HEADERS = {
@@ -310,5 +312,55 @@ describe("createWorkerStream", () => {
       expect(await refused.json(), workerId).toEqual({ error: { code, message } });
     }
     expect(relays.map((relay) => relay.workerId)).toEqual(["w1", "w_busy", "w_missing", "w_gone"]);
+  });
+
+  it("follows its device: a lease granted leaves the stream running, a lease ended stops the capture before the reclaim hook returns, and a hook that runs while the capture opens refuses with 409", async () => {
+    {
+      const { feeds, registry, stream } = worker();
+      const ended = (leaseId: string) =>
+        ({ deviceId: "dev_ready", leaseId }) as Parameters<typeof stream.leaseEnd.leaseEnded>[0];
+      const served = await stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      const reader = served.body!.getReader();
+      await reader.read();
+
+      registry.devices = registry.devices.map((device) =>
+        device.id === "dev_ready" ? { ...device, state: "leased" } : device,
+      );
+      registry.leases.push({
+        deviceId: "dev_ready",
+        id: "lse_2",
+        ownerId: "tok_agent",
+        requesterId: "agent-2",
+      });
+      feeds[0]?.keyframe([9]);
+      expect((await reader.read()).done).toBe(false);
+      expect(feeds[0]?.closes).toBe(0);
+
+      await stream.leaseEnd.leaseEnded(ended("lse_2"), new AbortController().signal);
+      expect(feeds[0]?.closes).toBe(1);
+      expect((await reader.read()).done).toBe(true);
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { feeds, stream } = worker([], true, false, gate);
+      const asked = stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      await settledWithin(asked);
+      const ending = stream.leaseEnd.leaseEnded(
+        { deviceId: "dev_ready", leaseId: "lse_3" } as Parameters<
+          typeof stream.leaseEnd.leaseEnded
+        >[0],
+        new AbortController().signal,
+      );
+      openIt();
+      const refused = await asked;
+      await ending;
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+        "DEVICE_NOT_RUNNING",
+      );
+      expect(feeds[0]?.closes).toBe(1);
+    }
   });
 });
