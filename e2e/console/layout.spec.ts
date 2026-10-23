@@ -145,8 +145,8 @@ test.describe("the console's layout", () => {
       expect(drained.overlap).toBe(false);
 
       await page.getByRole("button", { name: "Undrain", exact: true }).click();
-      await expect(page.getByText("layout-a undrained", { exact: true })).toBeVisible();
-      const undrained = await measure("layout-a undrained");
+      await expect(page.getByText("layout-a takes leases again", { exact: true })).toBeVisible();
+      const undrained = await measure("layout-a takes leases again");
       expect(undrained.hasAction).toBe(false);
       expect(undrained.closeInside).toBe(true);
       expect(undrained.overlap).toBe(false);
