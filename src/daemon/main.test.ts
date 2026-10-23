@@ -342,6 +342,24 @@ describe("the data directory", () => {
   });
 });
 
+describe("the data directory", () => {
+  it("makes the parent of a gateway's data directory owner-only too when it creates it", async () => {
+    // why: a gateway started first creates `<root>`, which is the worker's data directory later.
+    const previousUmask = process.umask(0o022);
+    try {
+      const root = join(await mkdtemp(join(tmpdir(), "simlock-dd-")), "home");
+      temporaryDirectories.push(join(root, ".."));
+
+      await start({ dataDirectory: join(root, "gateway"), filesystem: new NodeFilesystem() });
+
+      expect((await stat(root)).mode & 0o777).toBe(0o700);
+      expect((await stat(join(root, "gateway"))).mode & 0o777).toBe(0o700);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+});
+
 describe("the version a daemon reports", () => {
   it("is the version in package.json when the caller names none", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
