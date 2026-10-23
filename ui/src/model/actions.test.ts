@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { inboxActions, leaseActions, requestActions, workerActions } from "./actions";
-import { inboxItems } from "./inbox";
+import { inboxItems } from "../../../src/contract/inbox";
 import type { LeaseRecord } from "./leases";
 import type { UpdateFacts } from "./versions";
 import type { WaitingRequest } from "./waiting";
@@ -163,7 +163,7 @@ function checksInbox(): void {
       ],
     }),
   ];
-  const context = { mode: "gateway", now: NOW, tokens: [], workers } as const;
+  const context = { mode: "gateway", workers } as const;
   const items = inboxItems(workers, { leases: [ending], now: NOW, requests: [waiting] });
   const of = (key: string) => {
     const item = items.find((candidate) => candidate.key === key);
@@ -194,6 +194,10 @@ function checksInbox(): void {
   expect(heldLease.menu[0]?.confirm?.body).toBe(
     "iPhone 16 on mac-mini-1 goes back to the pool now, and agent-1's next command on it fails.",
   );
+  expect(heldLease.menu[0]?.success.view).toEqual({
+    label: "View device",
+    to: "/fleet/wrk_1/dev_1",
+  });
   const drainedItem = items.find((item) => item.key === "wrk_drained/drained");
   if (drainedItem === undefined) throw new Error("no drained item");
   expect(inboxActions(drainedItem, { ...context, mode: undefined })).toEqual({ menu: [] });

@@ -30,13 +30,9 @@ export function OverviewScreen() {
   const view = useOverview(range);
   return (
     <Page title="Overview">
-      {view.kind === "refused" ? (
-        <p className="muted">Could not check: workers</p>
-      ) : (
-        <Loaded view={view}>
-          {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
-        </Loaded>
-      )}
+      <Loaded view={view}>
+        {(overview) => <OverviewBody overview={overview} range={range} onRange={setRange} />}
+      </Loaded>
     </Page>
   );
 }
@@ -142,14 +138,10 @@ function PlatformBar({ platform }: { readonly platform: PlatformCapacity }) {
 }
 
 function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
-  const unchecked =
-    inbox.couldNotCheck.length === 0 ? null : (
-      <p className="muted">{`Could not check: ${inbox.couldNotCheck.join(", ")}`}</p>
-    );
   if (inbox.problems === 0) {
     return (
       <Panel title="Needs you">
-        {unchecked ?? <p className="muted needs-you-none">Nothing needs you</p>}
+        <p className="muted needs-you-none">Nothing needs you</p>
       </Panel>
     );
   }
@@ -170,7 +162,6 @@ function NeedsYou({ inbox }: { readonly inbox: OverviewInbox }) {
           <Link to="/inbox">{`All in Inbox (${inbox.problems})`}</Link>
         </p>
       </Panel>
-      {unchecked}
     </div>
   );
 }

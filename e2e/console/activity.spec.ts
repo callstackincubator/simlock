@@ -10,6 +10,7 @@ import {
   settled,
   test,
 } from "./fixtures.js";
+import { fetchFull } from "./full-fetch.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -555,7 +556,7 @@ test.describe("the Activity page", () => {
             return;
           }
           // why: the page holds only the newest two events, so the rest must come from the daemon's older page.
-          const body = (await (await route.fetch()).json()) as {
+          const body = (await (await fetchFull(route)).json()) as {
             events: Array<Envelope & { readonly seq: number }>;
           };
           all = body.events.toSorted((a, b) => b.seq - a.seq);

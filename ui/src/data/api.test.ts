@@ -227,6 +227,36 @@ describe("createApiClient", () => {
     expect(await api.get("/v1/workers")).toEqual({ body: { workers: [] }, date });
   });
 
+  it("a read with a tag sends it as If-None-Match and answers a 304 as not modified, a 200 with its body and tag", async () => {
+    const date = "Fri, 02 Oct 2026 12:00:00 GMT";
+    const sent: (string | undefined)[] = [];
+    let answer: () => Response = () => new Response(null, { headers: { Date: date }, status: 304 });
+    const fetch: Fetch = async (_input, init) => {
+      sent.push(new Headers(init.headers).get("If-None-Match") ?? undefined);
+      return answer();
+    };
+    const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
+
+    expect(await api.get("/v1/workers", { tag: '"a"' })).toEqual({ date, notModified: true });
+    answer = () =>
+      new Response(JSON.stringify({ workers: [] }), {
+        headers: { Date: date, ETag: '"b"' },
+        status: 200,
+      });
+    expect(await api.get("/v1/workers", { tag: '"a"' })).toEqual({
+      body: { workers: [] },
+      date,
+      tag: '"b"',
+    });
+    answer = () => new Response(JSON.stringify({ workers: [] }), { status: 200 });
+    expect(await api.get("/v1/workers", { tag: undefined })).toEqual({
+      body: { workers: [] },
+      date: null,
+      tag: null,
+    });
+    expect(sent).toEqual(['"a"', '"a"', undefined]);
+  });
+
   it("/v1/healthz is asked with no token, and only a success status counts as up", async () => {
     const date = "Fri, 02 Oct 2026 12:00:00 GMT";
     const up = answering(200, { ok: true });

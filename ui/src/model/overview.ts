@@ -1,13 +1,7 @@
-import {
-  inboxGroup,
-  type InboxContext,
-  inboxItems,
-  inGroupOrder,
-  inboxSubject,
-  inboxTone,
-} from "./inbox";
+import { type InboxItem, inGroupOrder, inboxSubject, inboxTone } from "./inbox";
 import { platformSlots } from "./fleet";
-import { isExpiring, type LeaseRecord, type TokenRecord } from "./leases";
+import { isExpiring } from "../../../src/contract/inbox";
+import type { LeaseRecord } from "./leases";
 import type { FiguresState } from "./figures";
 import { formatCount } from "./paging";
 import { inboxPath } from "./paths";
@@ -33,8 +27,6 @@ export interface OverviewItem {
 }
 
 export interface OverviewInbox {
-  // why: a read that failed leaves the Inbox unchecked there, so the page never says it is clear.
-  readonly couldNotCheck: readonly string[];
   readonly problems: number;
   readonly needsYou: readonly OverviewItem[];
 }
@@ -178,56 +170,35 @@ function endingSoon(leases: readonly LeaseRecord[] | undefined, now: number): Ov
 }
 
 // why: Needs you lists problems only, in the Inbox's own order, so its first rows are the Inbox's.
-function inboxOf(input: {
-  readonly workers: readonly WorkerView[];
-  readonly couldNotCheck: readonly string[];
-  readonly context: InboxContext;
-}): OverviewInbox {
-  const { context, couldNotCheck, workers } = input;
-  const problems = inGroupOrder(inboxItems(workers, context)).filter(
-    (item) => inboxGroup(item) !== "Heads-up",
-  );
+function inboxOf(items: readonly InboxItem[], now: number): OverviewInbox {
+  const problems = inGroupOrder(items).filter((item) => item.group !== "Heads-up");
   return {
     needsYou: problems.slice(0, NEEDS_YOU_ROWS).map((item) => ({
       key: item.key,
-      subject: inboxSubject(item),
+      subject: inboxSubject(item, now),
       to: inboxPath(item.key),
-      tone: inboxTone(item.condition),
+      tone: inboxTone(item.group),
       word: item.condition,
     })),
-    couldNotCheck,
     problems: problems.length,
   };
 }
 
-// why: the overview reads three routes the other pages read too, and every figure on it is worked
+// why: the overview reads routes the other pages read too, and every figure on it is worked
 // out here from those, so a figure on the overview and the same figure on its page always agree.
 export function overviewOf(input: {
   readonly workers: readonly WorkerView[];
   readonly requests: readonly WaitingRequest[];
+  readonly items?: readonly InboxItem[];
   readonly leases?: readonly LeaseRecord[] | undefined;
-  readonly tokens?: readonly TokenRecord[] | undefined;
   readonly figures?: FiguresState;
-  readonly couldNotCheck?: readonly string[];
   readonly now: number;
 }): Overview {
-  const {
-    couldNotCheck = [],
-    figures = { kind: "loading" },
-    leases,
-    now,
-    requests,
-    tokens,
-    workers,
-  } = input;
+  const { figures = { kind: "loading" }, items = [], leases, now, requests, workers } = input;
   return {
     capacity: [platformCapacity(workers, "ios"), platformCapacity(workers, "android")],
     ending: endingSoon(leases, now),
-    inbox: inboxOf({
-      context: { leases, now, requests, tokens },
-      couldNotCheck,
-      workers,
-    }),
+    inbox: inboxOf(items, now),
     figures,
     tiles: tiles(workers, requests, now),
     ...(figures.kind === "ready" ? { wait: figures.data.wait } : {}),

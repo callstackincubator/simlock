@@ -98,7 +98,7 @@ describe("the routes createHttpApp registers", () => {
     ).toEqual(["declared but not registered: GET /v1/status"]);
   });
 
-  it("CORE_ROUTE_SEGMENTS names the twelve core first segments and uplink", () => {
+  it("CORE_ROUTE_SEGMENTS names the core first segments and uplink", () => {
     expect([...CORE_ROUTE_SEGMENTS].sort()).toEqual(
       [
         "catalog",
@@ -107,6 +107,7 @@ describe("the routes createHttpApp registers", () => {
         "events",
         "healthz",
         "identity",
+        "inbox",
         "lease-requests",
         "leases",
         "stats",

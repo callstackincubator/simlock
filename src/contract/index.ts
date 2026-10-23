@@ -9,6 +9,7 @@ export * from "./relay.js";
 export * from "./roles.js";
 export * from "./schemas.js";
 export * from "./events-page.js";
+export * from "./inbox.js";
 export * from "./usage-window.js";
 export * from "./version-order.js";
 export * from "./worker-view.js";

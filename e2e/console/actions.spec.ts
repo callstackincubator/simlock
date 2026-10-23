@@ -10,6 +10,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
+import { addInboxItems, drainedWorkerItem } from "./inbox-stub.js";
 import { answerWithoutLoad } from "./workers-answers.js";
 
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
@@ -543,6 +544,8 @@ test.describe("the console acts", () => {
     try {
       await page.clock.install();
       await openPage(page, fleet.gateway, "/fleet", "Fleet");
+      // why: the page tells its views of an answer through a timer, which a frozen clock never fires, so a table still loading when time freezes never shows.
+      await expect(rowOf(page, "toast-d")).toBeVisible();
       // why: with time frozen, only the fast-forwards below age a toast, however slow the machine.
       await page.clock.pauseAt(new Date(Date.now() + 1_000));
       const toasts = page.getByRole("region", { name: "Notifications" });
@@ -552,10 +555,16 @@ test.describe("the console acts", () => {
         await rowOf(page, worker)
           .getByRole("button", { name: `Actions for ${worker}` })
           .press("Enter");
-        await page
+        const entry = page
           .getByRole("menu", { name: `Actions for ${worker}` })
-          .getByRole("menuitem", { name: item, exact: true })
-          .click();
+          .getByRole("menuitem", { name: item, exact: true });
+        // why: the answer to the read an earlier action set off lands in real time, and the page shows it only once the frozen clock moves again, so until the menu offers the item the clock moves a little at a time.
+        let tries = 0;
+        await expect(async () => {
+          if (tries++ > 0) await page.clock.runFor(500);
+          await expect(entry).toBeVisible({ timeout: 1_000 });
+        }).toPass({ timeout: 20_000 });
+        await entry.click();
         // why: a pointer left on the clicked item can sit where the toast appears, and a hovered
         // toast never times out.
         await page.mouse.move(0, 0);
@@ -669,19 +678,9 @@ test.describe("the console acts", () => {
       await expect(page.getByRole("menuitem")).toHaveText(["Release lease"]);
       await page.keyboard.press("Escape");
 
-      // why: a single host has no drained worker, so the list says one is, to give the Inbox a row
-      // that offers Undrain on a gateway.
-      await page.route(
-        (url) => url.pathname === "/v1/workers",
-        async (route) => {
-          const response = await route.fetch();
-          const body = (await response.json()) as { workers: Record<string, unknown>[] };
-          await route.fulfill({
-            json: { ...body, workers: body.workers.map((view) => ({ ...view, drained: true })) },
-            response,
-          });
-        },
-      );
+      // why: a single host has no drained worker, so the Inbox is given a drained worker's item, to
+      // give it a row that offers Undrain on a gateway.
+      await addInboxItems(page, () => [drainedWorkerItem("wrk_solo")]);
       await page.goto(new URL("/inbox", daemon.url).toString());
       await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
       await expect(page.locator("main .inbox-list li")).toHaveCount(1);
