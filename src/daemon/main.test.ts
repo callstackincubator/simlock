@@ -2900,7 +2900,11 @@ describe("startDaemon with the agent-device edge", () => {
     await filesystem.writeFileAtomic(`${packageRoot}/package.json`, '{"name":"agent-device"}');
     await filesystem.writeFileAtomic(entry, "");
     filesystem.defineSymlink(command, realCli);
-    await filesystem.writeFileAtomic(join(directory, "config.json"), JSON.stringify(config));
+    // why: HTTP and agent-device are on by default for a standalone worker (ADR 0046); a test here asks for agent-device and never for HTTP, and two daemons would clash on 4701.
+    await filesystem.writeFileAtomic(
+      join(directory, "config.json"),
+      JSON.stringify({ http: { enabled: false }, ...(config as Record<string, unknown>) }),
+    );
     if (options.record !== undefined) {
       await filesystem.writeFileAtomic(
         join(directory, "agent-device-daemon.json"),
@@ -3372,6 +3376,22 @@ describe("startDaemon with the agent-device edge", () => {
         capability: "unavailable",
       },
       {
+        name: "not found, and capabilities.agent-device.enabled never set: it is on only by default",
+        simulator: "missing",
+        phones: undefined,
+        enabled: undefined,
+        findings: ["alpha"],
+        capability: "off",
+      },
+      {
+        name: "a wrong version, and capabilities.agent-device.enabled never set",
+        simulator: "0.20.3\n",
+        phones: undefined,
+        enabled: undefined,
+        findings: ["simulator", "phones", "alpha"],
+        capability: "unavailable",
+      },
+      {
         name: "the phone daemon finds a wrong version",
         simulator: "running",
         phones: "0.20.3\n",
@@ -3386,13 +3406,13 @@ describe("startDaemon with the agent-device edge", () => {
         capability: "available",
       },
     ] as const)(
-      "lists a phone daemon finding that starts with `phone daemon: ` after the simulator daemon's and before another module's, while the capability follows the simulator daemon: $name",
-      async ({ capability, findings, phones, simulator }) => {
+      "lists a phone daemon finding that starts with `phone daemon: ` after the simulator daemon's and before another module's, while the capability follows the simulator daemon, and says nothing of a command never found while agent-device is on only by default: $name",
+      async ({ capability, findings, phones, simulator, ...row }) => {
         const setup = await setUp({
           capabilities: {
             "agent-device": {
               command: simulator === "missing" ? "/opt/missing/agent-device" : command,
-              enabled: true,
+              ...("enabled" in row ? {} : { enabled: true }),
             },
             alpha: { enabled: true },
           },
@@ -3408,7 +3428,7 @@ describe("startDaemon with the agent-device edge", () => {
           simulator === "missing"
             ? []
             : [
-                version("0.21.28\n"),
+                version(simulator === "running" ? "0.21.28\n" : simulator),
                 {
                   hangs: true,
                   match: {
