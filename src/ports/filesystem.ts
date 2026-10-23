@@ -117,6 +117,31 @@ export interface Filesystem {
   directorySize(path: string): Promise<number>;
 }
 
+// why: only the directories that are absent get the mode, so one that is already there keeps its own.
+async function missingDirectories(path: string): Promise<string[]> {
+  const missing: string[] = [];
+  for (let at = path; ; at = dirname(at)) {
+    try {
+      await stat(at);
+      return missing;
+    } catch (error: unknown) {
+      if (!hasCode(error, "ENOENT") || dirname(at) === at) throw error;
+      missing.unshift(at);
+    }
+  }
+}
+
+// why: false means another process made it first, and its mode is left alone.
+async function createDirectory(directory: string, mode: number): Promise<boolean> {
+  try {
+    await mkdir(directory, { mode });
+    return true;
+  } catch (error: unknown) {
+    if (hasCode(error, "EEXIST") && (await stat(directory)).isDirectory()) return false;
+    throw error;
+  }
+}
+
 export class NodeFilesystem implements Filesystem {
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
@@ -199,26 +224,12 @@ export class NodeFilesystem implements Filesystem {
       await mkdir(path, { recursive: true });
       return;
     }
-    const missing: string[] = [];
-    for (let at = path; ; at = dirname(at)) {
-      try {
-        await stat(at);
-        break;
-      } catch (error: unknown) {
-        if (!hasCode(error, "ENOENT") || dirname(at) === at) throw error;
-        missing.unshift(at);
+    for (const directory of await missingDirectories(path)) {
+      if (await createDirectory(directory, options.mode)) {
+        // why: the umask can only take bits from `mkdir`'s mode, so a restrictive one would leave the
+        // directory short of what was asked; `chmod` sets exactly those bits, as the device root does.
+        await chmod(directory, options.mode);
       }
-    }
-    for (const directory of missing) {
-      try {
-        await mkdir(directory, { mode: options.mode });
-      } catch (error: unknown) {
-        if (hasCode(error, "EEXIST") && (await stat(directory)).isDirectory()) continue;
-        throw error;
-      }
-      // why: the umask can only take bits from `mkdir`'s mode, so a restrictive one would leave the
-      // directory short of what was asked; `chmod` sets exactly those bits, as the device root does.
-      await chmod(directory, options.mode);
     }
   }
 
