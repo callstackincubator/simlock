@@ -96,6 +96,16 @@ function buildHarness(
     ),
   });
 
+  dispatcher.handlers["lease.get"] = (input: { leaseId: string }, session) => {
+    const lease = registry.leases.find(
+      (candidate) =>
+        candidate.id === input.leaseId &&
+        (session.role === "admin" || candidate.ownerId === session.principal),
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    return { lease };
+  };
+
   const app = createHttpApp({
     clock,
     config,
@@ -279,6 +289,35 @@ describe("authentication and role/ownership (via the shared dispatcher)", () => 
     const response = await app.request(`/v1/lease-requests/${id}`, { headers: otherAgentAuth });
     expect(response.status).toBe(403);
   });
+
+  it.each([
+    ["GET /v1/leases/{id}", "/v1/leases/lse_1"],
+    ["GET /v1/leases/{id}/events", "/v1/leases/lse_1/events"],
+  ])(
+    "%s finds the lease with lease.get under the caller's session, and a lease.get that answers UNKNOWN_LEASE is a 404",
+    async (_route, path) => {
+      const { app, dispatcher, registry } = buildHarness();
+      registry.devices = [makeDevice({ id: "dev_1" })];
+      registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+
+      const found = await app.request(path, { headers: agentAuth });
+      expect(found.status).toBe(200);
+      expect(dispatcher.calls).toEqual([
+        expect.objectContaining({
+          input: { leaseId: "lse_1" },
+          operation: "lease.get",
+          session: expect.objectContaining({ principal: "tok_agent", role: "agent" }),
+        }),
+      ]);
+
+      registry.leases = [];
+      const missing = await app.request(path, { headers: agentAuth });
+      expect(missing.status).toBe(404);
+      expect(((await missing.json()) as { error: { code: string } }).error.code).toBe(
+        "UNKNOWN_LEASE",
+      );
+    },
+  );
 
   it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.list's own filter now, not a separate check", async () => {
     const { app, registry } = buildHarness();
@@ -1363,14 +1402,12 @@ describe("lease routes", () => {
         snapshot: { devices: [device("wrk_a", "UDID-A"), device("wrk_b", "UDID-B")] },
       },
     });
-    dispatcher.handlers["lease.list"] = () => ({
-      leases: [
-        {
-          ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
-          worker: { id: "wrk_b", label: "mac-b" },
-          workerId: "wrk_b",
-        },
-      ],
+    dispatcher.handlers["lease.get"] = () => ({
+      lease: {
+        ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
+        worker: { id: "wrk_b", label: "mac-b" },
+        workerId: "wrk_b",
+      },
     });
 
     const response = await app.request("/v1/leases/wrk_b.lse_1", { headers: agentAuth });
@@ -1445,14 +1482,12 @@ describe("lease routes", () => {
         },
       },
     });
-    dispatcher.handlers["lease.list"] = () => ({
-      leases: [
-        {
-          ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
-          worker: { id: "wrk_a" },
-          workerId: "wrk_a",
-        },
-      ],
+    dispatcher.handlers["lease.get"] = () => ({
+      lease: {
+        ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
+        worker: { id: "wrk_a" },
+        workerId: "wrk_a",
+      },
     });
 
     const response = await app.request("/v1/leases/wrk_a.lse_p", { headers: agentAuth });
