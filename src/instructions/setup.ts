@@ -65,6 +65,13 @@ export function toolRunner(runner: ProcessRunner): RunTool {
   };
 }
 
+export class SetupRefusedError extends Error {
+  constructor(readonly path: string) {
+    super("");
+    this.name = "SetupRefusedError";
+  }
+}
+
 export class SetupMcpFailedError extends Error {
   constructor(readonly report: SetupReport) {
     super(

@@ -13,6 +13,7 @@ import {
 import {
   renderSkill,
   SetupMcpFailedError,
+  SetupRefusedError,
   setupAgentTools,
   toolRunner,
   type SetupAgentToolsOptions,
@@ -436,6 +437,43 @@ describe("setupAgentTools", () => {
       expect(await readFile(join(simlock, "SKILL.md"), "utf8")).toBe(renderSkill());
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a file or a symlink where the skill directory goes, and writes nothing for any tool", async () => {
+    for (const [kind, place] of [
+      [
+        "file",
+        (filesystem: MemoryFilesystem, path: string) => filesystem.writeFileAtomic(path, "mine"),
+      ],
+      [
+        "symlink",
+        async (filesystem: MemoryFilesystem, path: string) => {
+          await filesystem.mkdirp("/elsewhere");
+          filesystem.defineSymlink(path, "/elsewhere");
+        },
+      ],
+    ] as const) {
+      const filesystem = await withBases();
+      await filesystem.mkdirp(`${HOME}/.claude`);
+      await filesystem.mkdirp(`${HOME}/.codex`);
+      await filesystem.mkdirp(`${HOME}/.agents/skills`);
+      // why: codex comes second, so a refusal that only stopped at the bad tool would already
+      // have written claude-code's skill.
+      await place(filesystem, `${HOME}/.agents/skills/simlock`);
+      const before = await tree(filesystem, "/");
+      const tools = fakeTools();
+
+      const error = (await setup(filesystem, { mcp: true, runTool: tools.runTool }).catch(
+        (caught: unknown) => caught,
+      )) as SetupRefusedError;
+
+      expect(error, kind).toBeInstanceOf(SetupRefusedError);
+      expect(error.message, kind).toBe(
+        `Refusing to install: ${HOME}/.agents/skills/simlock exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
+      );
+      expect(await tree(filesystem, "/"), kind).toEqual(before);
+      expect(tools.calls, kind).toEqual([]);
     }
   });
 });

@@ -95,7 +95,7 @@ export function renderInstructions(format: "text" | "json"): string {
 }
 
 export { renderSkill } from "./skill.js";
-export { SetupMcpFailedError, setupAgentTools, toolRunner } from "./setup.js";
+export { SetupMcpFailedError, SetupRefusedError, setupAgentTools, toolRunner } from "./setup.js";
 export type {
   AgentTool,
   SetupAgentToolsOptions,
