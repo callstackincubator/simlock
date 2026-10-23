@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { LEASE_ENDED_MESSAGE } from "../agent-device/index.js";
@@ -9,7 +13,9 @@ import {
   REFUSED_SIMCTL_VERBS,
   SHUTDOWN_ALL_TARGET,
 } from "../drivers/ios/index.js";
-import { AGENT_INSTRUCTIONS } from "./index.js";
+import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS } from "./index.js";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const HEADINGS = [
   "## Rules for every agent",
@@ -117,5 +123,24 @@ describe("the rules text", () => {
     expect(AGENT_INSTRUCTIONS.trimEnd().split("\n").at(-1)).toBe(
       "More: https://callstackincubator.github.io/simlock/docs/",
     );
+  });
+
+  it.each([
+    ["the rules text", AGENT_INSTRUCTIONS],
+    ["the MCP server instructions", MCP_SERVER_INSTRUCTIONS],
+  ])("%s names no path or Markdown file of this repository", (_name, text) => {
+    const prose = text.replace(/https:\/\/\S+/g, "");
+    const files = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8" })
+      .split("\0")
+      .filter((name) => name.length > 0);
+    expect(files.length).toBeGreaterThan(100);
+    const topLevel = new Set(
+      files.filter((name) => name.includes("/")).map((name) => name.split("/")[0]),
+    );
+    expect(topLevel.size).toBeGreaterThan(5);
+
+    expect([...topLevel].filter((directory) => prose.includes(`${directory}/`))).toEqual([]);
+    const markdown = prose.match(/[\w.-]+\.md\b/g) ?? [];
+    expect(markdown.filter((name) => name !== "AGENTS.md" && name !== "CLAUDE.md")).toEqual([]);
   });
 });

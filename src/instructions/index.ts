@@ -81,6 +81,8 @@ export const AGENT_INSTRUCTIONS = `${[
   MORE,
 ].join("\n\n")}\n`;
 
+export const MCP_SERVER_INSTRUCTIONS = "";
+
 export function renderInstructions(format: "text" | "json"): string {
   return format === "json"
     ? JSON.stringify({ instructions: AGENT_INSTRUCTIONS })
