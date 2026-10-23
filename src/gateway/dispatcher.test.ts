@@ -867,6 +867,50 @@ describe("GatewayDispatcher", () => {
     await expect(get("lease_1", session())).rejects.toMatchObject(unknown);
   });
 
+  it("names the worker's own lease id as workerLeaseId on the leases of lease.list, lease.get and list.get kind=leases, never on status.get", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const issued = (id: string, chosen: boolean) => ({
+      ...leaseFixture(id, `dev_${id}`),
+      idChosenByRequester: chosen,
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+    });
+    workers.refresh("wrk_1", {
+      leases: [
+        issued("lse_42", false),
+        issued("my-lease", true),
+        leaseFixture("local_1", "dev_local"),
+      ],
+    });
+    const expected = [
+      { id: "wrk_1.lse_42", workerLeaseId: "lse_42" },
+      { id: "my-lease", workerLeaseId: "my-lease" },
+      { id: "local_1", workerLeaseId: "local_1" },
+    ];
+    const pick = (leases: readonly { id: string; workerLeaseId?: string }[]) =>
+      leases.map(({ id, workerLeaseId }) => ({ id, workerLeaseId }));
+
+    const listed = await dispatcher.dispatch("lease.list", {}, session());
+    expect(pick(listed.leases)).toEqual(expected);
+    const fleet = await dispatcher.dispatch("list.get", { kind: "leases" }, session());
+    expect(pick(fleet as never)).toEqual(expected);
+    const owned = await dispatcher.dispatch(
+      "lease.list",
+      {},
+      session({ principal: "agent-1", role: "agent" }),
+    );
+    expect(pick(owned.leases)).toEqual(expected.slice(0, 2));
+    for (const { id, workerLeaseId } of expected) {
+      const { lease } = await dispatcher.dispatch("lease.get", { leaseId: id }, session());
+      expect(lease).toMatchObject({ id, workerLeaseId });
+    }
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    expect((status.leases ?? []).map((lease) => Object.keys(lease))).toEqual(
+      expected.map(() => expect.not.arrayContaining(["workerLeaseId"])),
+    );
+  });
+
   it("lists no device or lease for a worker that is starting, whether the session is an admin or the owner of a lease the gateway indexed on it, and answers worker.list with the view as it is", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);

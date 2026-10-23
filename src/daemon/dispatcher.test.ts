@@ -1167,6 +1167,7 @@ describe("Dispatcher: ownership", () => {
       session({ principal: "tok_owner", role: "agent" }),
     );
     expect(own.leases).toHaveLength(1);
+    expect(own.leases[0]).not.toHaveProperty("workerLeaseId");
 
     const otherAgent = await dispatcher.dispatch(
       "lease.list",
