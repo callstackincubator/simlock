@@ -80,15 +80,15 @@ not (its highlight is an index it resets when the items change), so the listbox 
 
 ## Pages
 
-| Path                         | Screen   | Layout                                                                                                                                         |
-| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                          | Overview | range chips in the toolbar, five stat tiles, Needs you, capacity, two charts, workers table                                                    |
-| `/fleet[/<id>[/<deviceId>]]` | Fleet    | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` |
-| `/leases[/<id>]`             | Leases   | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Screen, Events)                                                     |
-| `/queue[/<id>]`              | Queue    | Wait p95 tile + table; a request opens in a `Drawer`                                                                                           |
-| `/inbox[/<key>]`             | Inbox    | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                          |
-| `/activity[/<id>]`           | Activity | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload          |
-| `/usage`                     | Usage    | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                  |
+| Path                         | Screen   | Layout                                                                                                                                                                                           |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/`                          | Overview | range chips in the toolbar, five stat tiles, Needs you, capacity, two charts, workers table                                                                                                      |
+| `/fleet[/<id>[/<deviceId>]]` | Fleet    | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` (Details, Screen; `?drawer=screen` holds the tab) |
+| `/leases[/<id>]`             | Leases   | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Events)                                                                                                               |
+| `/queue[/<id>]`              | Queue    | Wait p95 tile + table; a request opens in a `Drawer`                                                                                                                                             |
+| `/inbox[/<key>]`             | Inbox    | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                                                                            |
+| `/activity[/<id>]`           | Activity | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload                                                            |
+| `/usage`                     | Usage    | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                                                                    |
 
 The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue), then
 Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.

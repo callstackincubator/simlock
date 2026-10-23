@@ -129,6 +129,15 @@ Select the worker to see three tabs:
 - **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
 
+### Open a device
+
+Select a device on the worker to open its drawer, which has two tabs:
+
+- **Details**: the model, runtime, state, holder, lease and UDID. The drawer opens here.
+- **Screen**: the device's live picture, whether or not it is leased. The picture starts when you open the tab and stops when you leave it or close the drawer. The **Stream details** button (ⓘ) shows the stream's state, picture size, frames, rate, bandwidth and dropped frames. A device that is not running says why instead: for example "The device is shut down. Its screen shows while it runs." The picture starts by itself once the device is `ready` again. Where screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watching the screen](/simlock/docs/using-devices/watching-the-screen).
+
+The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens it. On a gateway the drawer works the same, for a device on any connected worker.
+
 ### Update a worker
 
 On a gateway, a worker that runs an older version than the gateway knows of shows `simlock 0.3.0 · 0.4.0 available` beside its name. Its **⋯** menu, and the search (⌘K), offer **Update…**. The dialog says how many leases the worker holds: with none it installs at once; otherwise it takes no new leases and waits for them to end, then restarts by itself. Confirm with **Update** and a toast says `Updating <name> to <version>`; if the worker already updates you see `<name> is already updating to <version>`, and if it already runs the version, `<name> already runs <version>`.
@@ -156,7 +165,9 @@ Select a lease to see:
 - **Expires in**: the time left, counting down, how long it has been held, when it was last renewed, and when it was granted.
 - **Device**: the model, runtime, mode, image tag, physical or virtual, the worker, the device id and the UDID.
 - **Lease**: the lease id, the request it came from, and the holder.
-- **Screen**: the device's live picture. Press **Show screen** to start it and **Stop** to end it. Leaving the page or closing the tab also stops it. The button works only when screen streaming is on for the worker; otherwise the panel says "Streaming is off on" and the worker's name. See [Watching the screen](/simlock/docs/using-devices/watching-the-screen).
+- **Events**: the events of the last hour about the lease.
+
+To watch the device's screen, open the device from its worker's page; see [Open a device](#open-a-device).
 
 A lease that was released or has expired says "Lease not found."
 

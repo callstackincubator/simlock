@@ -162,7 +162,7 @@ put together from them and draws nothing of its own that one of them already dra
   device row opens the drawer. Choosing a lease, a device, a request or an event opens a **drawer**: a 480px
   panel (full width under 768px) at the right edge over the page, with a dim layer over everything
   else, the sidebar included. It has a title (a lease's holder, a device's model and runtime, a request's requester, an event's name), a 40px square close button
-  (`IconButton`) and, for a lease, tabs. Escape, the close button and the dim layer close it. It slides in once, when it opens,
+  (`IconButton`) and, for a lease or a device, tabs: a device's are Details and Screen, a lease's Details and Events. Escape, the close button and the dim layer close it. It slides in once, when it opens,
   and switching its tabs does not replay that. A lease's drawer uses no status colour of its own;
   a device's shows the device's state as a status, word and square.
 - **Menu.** A table row ends in a **⋯** `IconButton` that opens a small list; a right-click on the

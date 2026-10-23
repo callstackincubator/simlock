@@ -5,7 +5,7 @@ description: Watch a leased simulator, emulator or physical device live in the c
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The console can show the live screen of any leased device: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type. Nothing is captured until someone presses **Show screen**, and the capture stops when they stop watching or the lease ends.
+The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type. Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
 
 ## Before you start
 
@@ -52,23 +52,23 @@ To turn streaming off, set `capabilities.stream.enabled` to `false` and restart 
 
 <Steps>
 
-1. Open the console and go to **Leases**.
-2. Select the lease.
-3. In the **Screen** panel, press **Show screen**.
+1. Open the console and go to **Fleet**, then select the worker. On a gateway, select the worker that holds the device.
+2. Select the device.
+3. Open the **Screen** tab.
 
 </Steps>
 
-The picture appears with its size, codec, frame rate and bandwidth under it. Press **Stop** to end it. Leaving the page, closing the tab and signing out stop it the same way.
+The picture starts by itself. The **Stream details** button (ⓘ) shows its size, codec, frame rate and bandwidth. Leaving the tab, closing the drawer, leaving the page and signing out stop it. A lease being taken on the device while you watch does not interrupt the picture.
 
-When streaming is off on the lease's worker, the button cannot be pressed and the panel says "Streaming is off on" and the worker's name. When the worker cannot capture this device, the panel says why.
+A device that is not running has no picture, and the tab says why: shut down, starting, being reset, quarantined, not connected. The picture starts by itself once the device is `ready` again. When streaming is off on the device's worker, the tab says "Streaming is off on" and the worker's name. When the worker cannot capture this device, the tab says why.
 
 ## What to expect
 
 - **The first picture can take a while.** A simulator usually shows within seconds. A physical Android phone takes longer: Simlock checks the phone's screen and adb server before it starts. The console waits up to 200 seconds.
 - **A phone with its screen off is woken first.** If it does not wake, you are told to turn it on. While a phone streams, it is kept awake as long as it is charging, and its setting is put back when the stream ends.
-- **The picture ends with the lease.** When the lease is released, expires or loses its device, the stream stops, so a device is never watched after it is handed back.
+- **The picture ends with the device's run.** When the device is shut down, loses its connection, is quarantined or deleted, or its lease is released, expires or loses it, the stream stops, so a device is never watched after it is handed back or reset. The tab then says why.
 - **A frozen device does not look live.** A stream that gets no frames for 30 seconds ends with an error.
-- **Each viewer is a separate capture.** Two browser tabs on one lease capture the device twice.
+- **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
 - **A rotated iOS simulator or iPhone keeps the first picture's scale.** An Android device's picture follows the rotation.
 
 ## Physical iPhone requirements
@@ -100,7 +100,7 @@ At the defaults, a screen that is busy redrawing costs about 1.4 Mbit/s, and a s
 
 ## Stream from your own tool
 
-Anything with an operator token can read the screen of a running device, leased or not, over HTTP at `GET /v1/stream/workers/<worker-id>/devices/<device-id>`, on a worker (which answers only for its own id) or on a gateway (which relays to the named worker), with streaming on. A device streams while it is `ready` or `leased`; any other state answers 409 `DEVICE_NOT_RUNNING`. The stream ends when the device stops running or its lease ends. An agent token cannot read a device's screen. The older `GET /v1/stream/leases/<lease-id>` still works for now. The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. Most users watch in the console instead.
+Anything with an operator token can read the screen of a running device, leased or not, over HTTP at `GET /v1/stream/workers/<worker-id>/devices/<device-id>`, on a worker (which answers only for its own id) or on a gateway (which relays to the named worker), with streaming on. A device streams while it is `ready` or `leased`; any other state answers 409 `DEVICE_NOT_RUNNING`. The stream ends when the device stops running or its lease ends. An agent token cannot read a device's screen. The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. Most users watch in the console instead.
 
 ## When it does not work
 
@@ -108,9 +108,9 @@ Anything with an operator token can read the screen of a running device, leased 
 | --- | --- | --- |
 | "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` is not `true` on that worker. | Turn it on and restart the worker's daemon. |
 | The panel says the screen cannot be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker on an Xcode older than 27. | Update the iPhone or the worker's Xcode. |
-| "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone and press **Show screen** again. |
-| The panel gives up waiting for the first picture | The device painted nothing for 30 seconds. | Press **Show screen** again. |
-| The picture stops on a lease that is still active | The device stopped sending frames. | Press **Stop**, then **Show screen** again. |
+| "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone, then leave the **Screen** tab and open it again. |
+| The tab gives up waiting for the first picture | The device painted nothing for 30 seconds. | Leave the **Screen** tab and open it again. |
+| The picture stops on a device that is still running | The device stopped sending frames. | Leave the **Screen** tab and open it again. |
 
 ## Related
 
