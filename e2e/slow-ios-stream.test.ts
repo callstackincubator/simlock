@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEVICE_READY_MS,
   deviceStreamUrl,
-  listDevices,
   REPO_ROOT,
   SCREEN_TAGS as TAG,
   readScreenFrames as readFrames,
