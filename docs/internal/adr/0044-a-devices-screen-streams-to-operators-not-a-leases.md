@@ -1,0 +1,75 @@
+# 0044. A device's screen streams to operators, not a lease's
+
+- **Status:** Proposed
+- **Date:** 2026-10-23
+- **Issue:** [#906](https://github.com/callstackincubator/simlock/issues/906)
+- **Depends on:** ADR 0030 (stream is an optional module), ADR 0031 (screen-source seam), ADR 0039 (joined workers serve no HTTP of their own).
+
+## Context
+
+Today the only stream route is `GET /v1/stream/leases/{id}` (`src/stream/definition.ts:27` at `192cb5fbb`). The worker finds the lease, checks that the caller owns it unless the caller is an operator (`src/stream/worker-link.ts:120-121`), and keys each capture by lease id (`src/stream/captures.ts:37`). The lease-end participant stops every capture of the ended lease (`src/stream/captures.ts:102`). The module manual says a capture never outlives its lease. No ADR decided that.
+
+The driver opens a screen from a device and a platform, with no lease (`src/core/driver-catalog.ts:96-106`). The lease is there only to find the device and to check the caller.
+
+The console is the only caller (`ui/src/state/screen.ts:129`). An operator therefore cannot watch an idle or warm-pool device, and has to find a device's lease before watching it.
+
+## Decision
+
+1. **The route names a device.** A worker serves `GET /v1/stream/devices/{deviceId}`. A gateway serves `GET /v1/stream/workers/{workerId}/devices/{deviceId}` and relays it to that worker. A device id is unique only within one worker, so the gateway's path names the worker. `GET /v1/stream/leases/{id}` is removed. Nothing published depends on it.
+2. **Operators only.** An agent token gets 404 `UNKNOWN_DEVICE` for any device, so an agent cannot list a fleet's devices this way. On a gateway the gateway checks the role. The worker serves any relayed device stream: a relay arrives only on a gateway's uplink session, so it is trusted as far as that session is. The uplink message does not change.
+3. **A running device streams.** A device in state `ready` or `leased` streams. Any other state (`provisioning`, `shutdown`, `reclaiming`, `quarantined`, `absent`, `deleted`) gets 409 `DEVICE_NOT_RUNNING`, with the device's state in the message. An unknown device gets 404 `UNKNOWN_DEVICE`. A driver that cannot capture keeps 415 `STREAM_NOT_SUPPORTED`. Every other refusal stays as it is.
+4. **A stream outlives a lease grant, not a reclaim.** A device that gets leased while it is watched keeps streaming, a physical iPhone included. A stream ends when:
+   - the viewer closes it;
+   - the capture ends or goes silent past the existing bound, which is also how a warm simulator that shuts down ends its stream;
+   - the device is reclaimed after a lease ends. The lease-end participant stops every capture on the ended lease's device before the device is erased.
+5. **One capture per viewer, as today.** Sharing one capture between viewers (#602) is left to that issue, keyed by device.
+6. **No business events.** Watching changes no lease and no device, as before. The daemon log keeps recording each stream opened and refused.
+
+```mermaid
+sequenceDiagram
+  participant C as Console (operator)
+  participant G as Gateway
+  participant W as Worker
+  participant D as Driver
+  C->>G: GET /v1/stream/workers/w1/devices/d1
+  alt not an operator
+    G-->>C: 404 UNKNOWN_DEVICE
+  else operator
+    G->>W: relay GET /stream/devices/d1
+    alt unknown device
+      W-->>C: 404 UNKNOWN_DEVICE
+    else state not ready or leased
+      W-->>C: 409 DEVICE_NOT_RUNNING
+    else running
+      W->>D: openScreen(platform, device)
+      D-->>W: frames
+      W-->>C: 200, frames until close, capture end, silence or reclaim
+    end
+  end
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> Streaming: device ready or leased
+  Streaming --> Streaming: device leased
+  Streaming --> [*]: viewer closes
+  Streaming --> [*]: capture ends or goes silent (warm shutdown)
+  Streaming --> [*]: lease ends, device reclaimed
+```
+
+## Consequences
+
+- `src/stream/AGENTS.md`'s "a capture never outlives its lease" becomes "a capture never outlives its device's reclaim".
+- ADR 0040 names the lease route as an example of a module route. That example now names the device routes. The rule itself does not change.
+- The console shows the screen in the device drawer. The lease drawer has no Screen tab.
+- The website's "Watching the screen" page describes the device routes and an operator token only.
+
+## Alternatives
+
+- **Keep the lease route beside the device route.** Rejected: only the console calls it, and it keeps a second access model (lease owners) to secure and test.
+- **The relay carries the caller's role.** Rejected: it changes the uplink message, and it only defends against a gateway that is already trusted with every lease.
+- **Reuse 415 for a device that is not running.** Rejected: 415 says the device can never stream, and 409 says it cannot stream now.
+
+## Verification
+
+The stream module's tests drive both routes with faked drivers: role, state and lifetime cases. The slow-lane stream tests move to the device routes. The feature's tasks name them.

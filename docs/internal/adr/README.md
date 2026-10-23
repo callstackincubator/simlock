@@ -82,3 +82,4 @@ the status is stale.
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
 | [0042](0042-simlock-updates-itself-through-a-frozen-call-and-a-detached-updater.md) | Simlock updates itself through a frozen call and a detached updater | Accepted — not yet implemented; narrows 0009's `takes-requests` stage |
 | [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part |
+| [0044](0044-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Proposed |
