@@ -44,10 +44,16 @@ interface Rig {
   readonly logs: MemoryLogSink;
   readonly profilePath: string;
   readonly port: number;
-  readonly restart: (options?: { readonly port?: number }) => Promise<Rig>;
+  readonly restart: (options?: Switches & { readonly port?: number }) => Promise<Rig>;
 }
 
-interface LaunchOptions {
+interface Switches {
+  readonly http?: boolean;
+  readonly agentDevice?: boolean;
+  readonly role?: "gateway";
+}
+
+interface LaunchOptions extends Switches {
   readonly host?: string;
   readonly seed?: Parameters<typeof seedTokensDatabase>[1];
   readonly port?: number;
@@ -69,9 +75,10 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const daemon = await startDaemon({
     clock,
     configOverrides: {
-      capabilities: { "agent-device": { enabled: true } },
-      http: { enabled: true, host, port },
+      capabilities: { "agent-device": { enabled: options.agentDevice ?? true } },
+      http: { enabled: options.http ?? true, host, port },
     },
+    ...(options.role === undefined ? {} : { role: options.role }),
     dataDirectory: directory,
     deviceDataTables: fakeDeviceDataTables,
     drivers: [
@@ -100,6 +107,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
       await daemon.stop("test");
       return launch({
         host,
+        ...restartOptions,
         port: restartOptions.port ?? port,
         resume: { directory, filesystem },
       });
@@ -253,5 +261,27 @@ describe("the local agent-device profile", () => {
         200,
       );
     }
+  });
+
+  it("is withdrawn where it does not apply: HTTP off, agent-device off, a gateway", async () => {
+    const withdrawals: [string, Switches][] = [
+      ["HTTP off", { http: false }],
+      ["agent-device off", { agentDevice: false }],
+    ];
+    for (const [name, off] of withdrawals) {
+      const on = await launch();
+      expect(await on.filesystem.exists(on.profilePath), name).toBe(true);
+
+      const withdrawn = await on.restart(off);
+
+      expect(await withdrawn.filesystem.exists(withdrawn.profilePath), name).toBe(false);
+      expect(
+        (await tokens(withdrawn)).filter((token) => token.label === LABEL),
+        name,
+      ).toEqual([]);
+    }
+
+    const gateway = await launch({ role: "gateway" });
+    expect(await gateway.filesystem.exists(gateway.profilePath)).toBe(false);
   });
 });
