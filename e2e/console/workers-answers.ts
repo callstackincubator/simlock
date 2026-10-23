@@ -9,7 +9,7 @@ interface LoadPayload {
   memory?: { availableBytes?: number; pressure?: string; totalBytes?: number } | undefined;
 }
 
-// why: the page re-reads the list every second, so a re-read can be intercepted just as the test's
+// why: the page re-reads the list every 15 seconds, so a re-read can be intercepted just as the test's
 // `finally` stops the gateway; the refused connect it gets is the fleet going away, not a failure of
 // the test, and Playwright would otherwise charge the rejection to it. Only connect-level errors are
 // dropped: any other error is a real fault and must still kill the test.

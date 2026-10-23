@@ -6,11 +6,11 @@ import { formatDuration } from "../model/time";
 import type { Toned } from "../model/tones";
 import type { WorkerList } from "../model/workers";
 import { useInboxReads } from "./inbox";
-import { useConnection, useLiveResource, useNow } from "./live";
+import { useConnection, useRouteQuery, useNow } from "./live";
 import { useApi, useSession } from "./services";
 
 export function useInboxCount(): number | undefined {
-  const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers;
+  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers;
   const { leases, tokens, waiting } = useInboxReads();
   const now = useNow();
   if (workers === undefined) return undefined;
