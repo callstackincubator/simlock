@@ -163,7 +163,6 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return watched(path, authorized(), async (response) => ({
       body: (await response.json()) as T,
       date: response.headers.get("Date"),
-      tag: null,
     }));
   }
   return {
