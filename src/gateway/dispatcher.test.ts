@@ -992,7 +992,7 @@ describe("GatewayDispatcher", () => {
       expect.objectContaining({ condition: "waiting", key: "request/req_1/waiting" }),
       expect.objectContaining({
         condition: "ending",
-        key: "lease/wrk_1.lease_1/ending",
+        key: "lease/lease_1/ending",
         lease: expect.objectContaining({ holder: "ci-runner", model: "iPhone 17" }),
       }),
     ]);

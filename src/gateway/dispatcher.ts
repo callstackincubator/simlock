@@ -413,10 +413,24 @@ export class GatewayDispatcher {
     return { revoked };
   };
 
-  // why: the rules read the same views, as `worker.list` serves them.
-  #inboxGet: Handler<"inbox.get"> = () => ({
-    items: [...inboxItems(this.options.workers.views())],
-  });
+  // why: the rules read what `worker.list`, `lease.list`, `list.get` and `token.list` serve an admin, so
+  // the Inbox never disagrees with the pages that list the same things; a token store that is
+  // unavailable leaves holders named by their ids, as the console did with no tokens.
+  #inboxGet: Handler<"inbox.get"> = async () => {
+    const tokens = await Promise.resolve()
+      .then(() => this.#requireTokens().list())
+      .catch(() => []);
+    return {
+      items: [
+        ...inboxItems(this.options.workers.views(), {
+          leases: this.#fleetLeases(),
+          now: this.options.clock.now(),
+          requests: this.#fleetWaiting(),
+          tokens,
+        }),
+      ],
+    };
+  };
 
   #workerList: Handler<"worker.list"> = () => ({ workers: this.options.workers.views() });
 
