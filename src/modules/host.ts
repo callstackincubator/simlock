@@ -48,27 +48,34 @@ async function revokeLabelled(tokens: ModuleTokens, label: string, keep?: string
   }
 }
 
+async function liveProfileToken(
+  tokens: ModuleTokens,
+  label: string,
+  stored: { readonly secret: string } | undefined,
+): Promise<{ readonly id: string; readonly secret: string; readonly reused: boolean }> {
+  const verified = stored === undefined ? undefined : await tokens.verify(stored.secret);
+  if (stored !== undefined && verified?.label === label) {
+    return { id: verified.id, reused: true, secret: stored.secret };
+  }
+  const made = await tokens.create("agent", label);
+  return { id: made.record.id, reused: false, secret: made.secret };
+}
+
 async function publishLocalProfile(
   localProfile: ModuleLocalProfile,
   path: string,
   options: ModuleHostOptions,
 ): Promise<void> {
-  const { tokens } = options;
   const { filesystem } = options.context;
   const stored = await readStoredProfile(filesystem, path);
-  const verified = stored === undefined ? undefined : await tokens.verify(stored.secret);
-  const live = verified?.label === localProfile.tokenLabel ? verified : undefined;
-  const made =
-    live === undefined ? await tokens.create("agent", localProfile.tokenLabel) : undefined;
-  const id = live?.id ?? made?.record.id;
-  await revokeLabelled(tokens, localProfile.tokenLabel, id);
+  const token = await liveProfileToken(options.tokens, localProfile.tokenLabel, stored);
+  await revokeLabelled(options.tokens, localProfile.tokenLabel, token.id);
   const contents = localProfile.render(
     profileOrigin(options.config.http.host, options.config.http.port),
-    made?.secret ?? stored?.secret ?? "",
+    token.secret,
   );
-  if (live === undefined || stored?.text !== contents) {
-    await filesystem.writeFileAtomic(path, contents, { mode: 0o600 });
-  }
+  if (token.reused && stored?.text === contents) return;
+  await filesystem.writeFileAtomic(path, contents, { mode: 0o600 });
 }
 
 async function prepareLocalProfile(
