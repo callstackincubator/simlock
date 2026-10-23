@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   REPO_ROOT,
+  deviceStreamUrl,
   SCREEN_TAGS as TAG,
   type TestEnv,
   readScreenFrames as readFrames,
@@ -44,7 +45,7 @@ const missing =
       : undefined;
 
 interface Grant {
-  readonly device: { readonly driverDeviceId: string };
+  readonly device: { readonly driverDeviceId: string; readonly id: string };
   readonly environment: Record<string, string>;
   readonly lease: { readonly id: string };
 }
@@ -489,9 +490,9 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         const daemon = await rig();
         await enroll(daemon.env, udid);
         const grant = await leasePhysical(daemon.env, "phone-lane-stream");
-        const open = async (leaseId: string, signal: AbortSignal) => {
+        const open = async (deviceId: string, signal: AbortSignal) => {
           const response = await fetch(
-            `${daemon.base}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
+            await deviceStreamUrl(daemon.base, daemon.env.home, deviceId),
             { headers: daemon.auth, signal },
           );
           if (response.body === null) throw new Error("the stream answered without a body");
@@ -514,7 +515,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         };
 
         const viewer = new AbortController();
-        const first = await open(grant.lease.id, viewer.signal);
+        const first = await open(grant.device.id, viewer.signal);
         const firstReader = await reading(first);
         expect(first.response.headers.get("simlock-stream-codec")).toBe("h264");
         const frames = await readFrames(firstReader, (read) =>
@@ -544,7 +545,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
           false,
         );
 
-        const second = await open(grant.lease.id, new AbortController().signal);
+        const second = await open(grant.device.id, new AbortController().signal);
         if (second.response.status === 200) {
           await readFrames(second.reader!, (read) =>
             read.some((frame) => frame.tag === TAG.keyframe),
@@ -571,7 +572,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         // why: the stream's own first-frame bound is 30 s, so a body that produced no key frame by
         // then has already failed or will not fail visibly; the race only names the claim.
         const again = await leasePhysical(daemon.env, "phone-lane-stream-2");
-        const reopened = await open(again.lease.id, new AbortController().signal);
+        const reopened = await open(again.device.id, new AbortController().signal);
         const reopenedReader = await reading(reopened);
         const keyFrameArrived = await Promise.race([
           readFrames(reopenedReader, (read) =>
@@ -599,7 +600,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         const grant = await leasePhysical(daemon.env, "phone-lane-old-ios");
         const asked = Date.now();
         const response = await fetch(
-          `${daemon.base}/v1/stream/leases/${encodeURIComponent(grant.lease.id)}`,
+          await deviceStreamUrl(daemon.base, daemon.env.home, grant.device.id),
           { headers: daemon.auth, signal: AbortSignal.timeout(10_000) },
         );
         // why: the status is read before any reader is taken; a 200's endless body is never read.
