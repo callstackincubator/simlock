@@ -121,8 +121,9 @@ async function openDevice(page: Page, target: Target, search = "?tab=devices"): 
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
+// why: the stream numbers' popover is a dialog too, so the drawer is the one that holds the tabs.
 function drawer(page: Page) {
-  return page.getByRole("dialog");
+  return page.getByRole("dialog").filter({ has: page.getByRole("tablist") });
 }
 
 function screen(page: Page) {
@@ -328,6 +329,56 @@ test.describe("the Screen tab of a device that is not running", () => {
       expect(quiet).toEqual([]);
     } finally {
       await off.dispose();
+      await cleanup(started);
+    }
+  });
+});
+
+test.describe("the stream numbers", () => {
+  test("sit behind the Stream details button, in a popover that Escape or a second click closes while the drawer and its capture stay", async ({
+    page,
+  }) => {
+    const started = await streamingHost();
+    try {
+      const host = started.host;
+      const target = {
+        deviceId: await warmDevice(host),
+        origin: host.url,
+        token: host.tokens.operator,
+        workerId: await workerIdOn(host),
+      };
+      await openDevice(page, target, "?tab=devices&drawer=screen");
+      await expect(screen(page)).toBeVisible();
+      await logReached(started.dir, "opened", 1);
+
+      const details = drawer(page).getByRole("button", { name: "Stream details" });
+      const numbers = page.getByRole("dialog", { name: "Stream details" });
+      await expect(drawer(page).getByText("Picture", { exact: true })).toHaveCount(0);
+      await expect(numbers).toHaveCount(0);
+
+      await details.click();
+      await expect(numbers).toBeVisible();
+      const labels = await numbers.locator(".facts dt").allInnerTexts();
+      expect(labels).toEqual(["State", "Picture", "Frames", "Rate", "Bandwidth", "Dropped"]);
+      await expect(drawer(page).getByText("Picture", { exact: true })).toHaveCount(0);
+      const picture = numbers
+        .locator(".facts > div")
+        .filter({ has: page.getByText("Picture", { exact: true }) })
+        .getByRole("definition");
+      await expect(picture).toHaveText("120 × 240 mjpeg", { timeout: 10_000 });
+
+      await page.keyboard.press("Escape");
+      await expect(numbers).toHaveCount(0);
+      await expect(drawer(page)).toBeVisible();
+
+      await details.click();
+      await expect(numbers).toBeVisible();
+      await details.click();
+      await expect(numbers).toHaveCount(0);
+      await expect(drawer(page)).toBeVisible();
+      await expect(screen(page)).toBeVisible();
+      expect(await captureLogLines(started.dir, "closed")).toBe(0);
+    } finally {
       await cleanup(started);
     }
   });
