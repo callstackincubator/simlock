@@ -13,6 +13,13 @@ import {
 import type { StreamServiceOptions } from "./service.js";
 import { createWorkerStreamLink, type ScreenOpener, type StreamRegistry } from "./worker-link.js";
 
+const DEVICE_STOP_EVENTS = [
+  "device.shutdown",
+  "device.absence-detected",
+  "device.quarantined",
+  "device.deleted",
+] as const;
+
 export interface WorkerStreamOptions {
   readonly name: string;
   readonly instanceId: string;
@@ -54,6 +61,14 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
     }),
     logger: options.logger,
   };
+  // why: a device that stops with no lease end (the warm pool's shutdown, the reaper, a phone unplugged,
+  // quarantine, a delete) runs no reclaim hook, and a capture does not end by itself when its device
+  // does -- a simulator's repeats its last frame -- so these four events are what end it.
+  for (const event of DEVICE_STOP_EVENTS) {
+    options.events.subscribe(event, (envelope) => {
+      void captures.stopOnDevice(envelope.payload.deviceId);
+    });
+  }
   return {
     capabilitySource: {
       name: options.name,
