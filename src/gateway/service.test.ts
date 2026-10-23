@@ -58,6 +58,7 @@ function fleet(
   options: {
     readonly authenticate?: (
       credential: string | undefined,
+      workerId: string | undefined,
     ) => UplinkAuthOutcome | UplinkAuthResult;
     readonly leaseMaxTtlMs?: number;
     readonly logger?: Logger;
@@ -75,7 +76,8 @@ function fleet(
   // the way a peer that completes the WebSocket upgrade and then falls silent would.
   const connectState = { hangNext: false };
   const service = new GatewayService({
-    authenticate: async (credential) => options.authenticate?.(credential) ?? "accept",
+    authenticate: async (credential, workerId) =>
+      options.authenticate?.(credential, workerId) ?? "accept",
     clock,
     connect: async () => {
       if (connectState.hangNext) {
@@ -1822,7 +1824,7 @@ describe("GatewayService", () => {
 
   // The two refusals reach the event stream apart, because they point at different fixes:
   // the join token itself, or the role it was minted with (ADR 0005 §4).
-  it.each(["unauthenticated", "forbidden"] as const)(
+  it.each(["unauthenticated", "forbidden", "worker-mismatch"] as const)(
     "reports a %s uplink it turned away, without inventing a worker for it",
     async (reason) => {
       const harness = fleet({ authenticate: () => reason });
@@ -1846,6 +1848,42 @@ describe("GatewayService", () => {
       await harness.service.stop();
     },
   );
+
+  it("refuses a second worker id on a token pinned to another worker as worker-mismatch, leaving that worker's link alone, while the pinned worker's own redial replaces its link", async () => {
+    const pins = new Map<string | undefined, string | undefined>();
+    const harness = fleet({
+      authenticate: (credential, workerId) => {
+        if (!pins.has(credential)) pins.set(credential, workerId);
+        return pins.get(credential) === workerId
+          ? { outcome: "accept" as const, tokenId: "tok_a" }
+          : "worker-mismatch";
+      },
+    });
+    await harness.service.start();
+    const workerEndA = await harness.join("wrk_a", new ScriptedWorkerClient("admin", "1.0.0"));
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_a")?.connection).toBe("connected"),
+    );
+
+    await expect(
+      harness.join("wrk_b", new ScriptedWorkerClient(), "intruder"),
+    ).rejects.toMatchObject({ code: "rejected" });
+
+    expect(harness.events.filter((event) => event.event === "worker.rejected")).toMatchObject([
+      { payload: { label: "intruder", reason: "worker-mismatch", workerId: "wrk_b" } },
+    ]);
+    expect(harness.service.workers.view("wrk_b")).toBeUndefined();
+    expect(workerEndA.closed).toBe(false);
+    expect(harness.service.workers.view("wrk_a")?.connection).toBe("connected");
+
+    await harness.join("wrk_a", new ScriptedWorkerClient("admin", "2.0.0"));
+
+    await vi.waitFor(() => expect(workerEndA.closed).toBe(true));
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_a")?.version).toBe("2.0.0"));
+    expect(harness.service.workers.view("wrk_a")?.connection).toBe("connected");
+
+    await harness.service.stop();
+  });
 
   // P-2: `GET /v1/uplink` needs no credential to reach `authenticate`, and before this fix every
   // refusal emitted its own `worker.rejected` -- so a flood of refused dials (deliberate, or a

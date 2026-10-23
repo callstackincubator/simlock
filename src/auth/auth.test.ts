@@ -302,13 +302,54 @@ describe("authenticateUplink", () => {
   it("answers unauthenticated for none and unknown, forbidden for a token that is not a worker's, accept with the token id for a worker token", async () => {
     const auth = createAuth(await options());
 
-    await expect(auth.authenticateUplink(undefined)).resolves.toBe("unauthenticated");
-    await expect(auth.authenticateUplink("slk_unknown")).resolves.toBe("unauthenticated");
-    await expect(auth.authenticateUplink("slk_operator")).resolves.toBe("forbidden");
-    await expect(auth.authenticateUplink("slk_agent")).resolves.toBe("forbidden");
-    await expect(auth.authenticateUplink("slk_worker")).resolves.toEqual({
+    await expect(auth.authenticateUplink(undefined, "wrk_a")).resolves.toBe("unauthenticated");
+    await expect(auth.authenticateUplink("slk_unknown", "wrk_a")).resolves.toBe("unauthenticated");
+    await expect(auth.authenticateUplink("slk_operator", "wrk_a")).resolves.toBe("forbidden");
+    await expect(auth.authenticateUplink("slk_agent", "wrk_a")).resolves.toBe("forbidden");
+    await expect(auth.authenticateUplink("slk_worker", "wrk_a")).resolves.toEqual({
       outcome: "accept",
       tokenId: "tok_worker",
+    });
+  });
+
+  it("pins a worker token to the first worker id that joins with it: that id is accepted again, another or an empty one is worker-mismatch", async () => {
+    const auth = createAuth(await options());
+    const accepted = { outcome: "accept", tokenId: "tok_worker" };
+
+    await expect(auth.authenticateUplink("slk_worker", "")).resolves.toBe("worker-mismatch");
+    await expect(auth.authenticateUplink("slk_worker", undefined)).resolves.toBe("worker-mismatch");
+    await expect(auth.authenticateUplink("slk_worker", "wrk_a")).resolves.toEqual(accepted);
+    await expect(auth.authenticateUplink("slk_worker", "wrk_a")).resolves.toEqual(accepted);
+    await expect(auth.authenticateUplink("slk_worker", "wrk_b")).resolves.toBe("worker-mismatch");
+    expect((await auth.tokens.list()).find((token) => token.id === "tok_worker")?.workerId).toBe(
+      "wrk_a",
+    );
+  });
+
+  it("accepts exactly one of two first joins with one worker token at once, and refuses the other as worker-mismatch", async () => {
+    const auth = createAuth(await options());
+
+    const answers = await Promise.all([
+      auth.authenticateUplink("slk_worker", "wrk_a"),
+      auth.authenticateUplink("slk_worker", "wrk_b"),
+    ]);
+
+    expect(answers).toEqual([{ outcome: "accept", tokenId: "tok_worker" }, "worker-mismatch"]);
+  });
+
+  it("refuses a worker id another worker token is pinned to as worker-mismatch, until that token is revoked", async () => {
+    const auth = createAuth(await options());
+    const { record, secret } = await auth.tokens.create("worker", "replacement");
+    await expect(auth.authenticateUplink("slk_worker", "wrk_a")).resolves.toMatchObject({
+      outcome: "accept",
+    });
+
+    await expect(auth.authenticateUplink(secret, "wrk_a")).resolves.toBe("worker-mismatch");
+    await auth.tokens.revoke("tok_worker");
+
+    await expect(auth.authenticateUplink(secret, "wrk_a")).resolves.toEqual({
+      outcome: "accept",
+      tokenId: record.id,
     });
   });
 });

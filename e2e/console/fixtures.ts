@@ -426,6 +426,14 @@ export async function startDaemon(
 export interface Fleet {
   readonly gateway: RunningDaemon;
   readonly workers: readonly RunningDaemon[];
+  readonly joinTokens: readonly string[];
+}
+
+/** why: a gateway pins a join token to the first worker that joins with it, so each worker needs its own. */
+export async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
+  const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+  expect(minted.code, minted.stderr).toBe(0);
+  return (minted.json as { secret: string }).secret;
 }
 
 /**
@@ -439,14 +447,17 @@ export async function startFleet(
 ): Promise<Fleet> {
   const gateway = await startDaemon("gateway");
   const started: RunningDaemon[] = [];
+  const joinTokens: string[] = [];
   try {
     for (const worker of workers) {
+      const token = await mintJoinToken(gateway);
+      joinTokens.push(token);
       started.push(
         await startDaemon("worker", {
           config: {
             gateway: {
               label: worker.label,
-              token: gateway.tokens.worker,
+              token,
               url: `ws://127.0.0.1:${gateway.port}`,
             },
           },
@@ -474,7 +485,7 @@ export async function startFleet(
       },
       { label: "every worker connected to the gateway and read by it" },
     );
-    return { gateway, workers: started };
+    return { gateway, joinTokens, workers: started };
   } catch (error: unknown) {
     await disposeFleet({ gateway, workers: started });
     throw error;
@@ -482,7 +493,7 @@ export async function startFleet(
 }
 
 export async function disposeFleet(
-  fleet: Fleet,
+  fleet: Pick<Fleet, "gateway" | "workers">,
   options: { readonly preservePages?: readonly Page[] } = {},
 ): Promise<void> {
   await Promise.all(fleet.workers.map((worker) => worker.dispose(options)));
@@ -502,9 +513,10 @@ export async function joinOldWorker(
   gateway: RunningDaemon,
   identity: { readonly id: string; readonly label: string },
 ): Promise<() => void> {
+  const token = await mintJoinToken(gateway);
   const socket = new WebSocket(`ws://127.0.0.1:${gateway.port}/v1/uplink`, {
     headers: {
-      authorization: `Bearer ${gateway.tokens.worker}`,
+      authorization: `Bearer ${token}`,
       "x-simlock-worker-id": identity.id,
       "x-simlock-worker-label": encodeURIComponent(identity.label),
     },

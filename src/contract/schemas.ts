@@ -1204,6 +1204,7 @@ export const tokenRecordSchema = z.object({
   role: tokenRoleSchema,
   label: z.string().optional(),
   createdAt: z.number(),
+  workerId: z.string().optional(),
 });
 
 // ---- modes and worker views (ADR 0005) --------------------------------------------------------
