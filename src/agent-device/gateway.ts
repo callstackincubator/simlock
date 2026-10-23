@@ -15,31 +15,27 @@ type Context = GatewayContext<AgentDeviceModuleConfig>;
 type FleetLeaseFacts = ReturnType<FleetPort["leasesOf"]>[number];
 
 // why: the context lists workers whose agent-device is available; the rest of what makes one fit for agent-device is judged here.
-function serving(view: WorkerView, withDrained: boolean): FleetWorker | undefined {
+function serving(view: WorkerView): FleetWorker | undefined {
   const maxTtlMs = view.lease?.maxTtlMs;
-  if (
-    (view.drained && !withDrained) ||
-    view.catalogReadAt === undefined ||
-    maxTtlMs === undefined
-  ) {
+  if (view.catalogReadAt === undefined || maxTtlMs === undefined) {
     return undefined;
   }
   const platforms = (view.catalog ?? []).flatMap((entry) =>
     entry.platform === "ios" || entry.platform === "android" ? [entry.platform] : [],
   );
-  return { id: view.id, leaseMaxTtlMs: maxTtlMs, platforms };
+  return { id: view.id, drained: view.drained, leaseMaxTtlMs: maxTtlMs, platforms };
 }
 
 function fleetPort(ctx: Context): FleetPort {
   return {
     capableWorkers: () =>
       ctx.serving().flatMap((view) => {
-        const worker = serving(view, false);
+        const worker = serving(view);
         return worker === undefined ? [] : [worker];
       }),
     holder: (workerId) => {
       const view = ctx.serving().find((candidate) => candidate.id === workerId);
-      return view === undefined ? undefined : serving(view, true);
+      return view === undefined ? undefined : serving(view);
     },
     instanceId: ctx.instanceId,
     leasesOf: (ownerId) =>
