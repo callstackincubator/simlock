@@ -67,7 +67,9 @@ export function toolRunner(runner: ProcessRunner): RunTool {
 
 export class SetupRefusedError extends Error {
   constructor(readonly path: string) {
-    super("");
+    super(
+      `Refusing to install: ${path} exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
+    );
     this.name = "SetupRefusedError";
   }
 }
@@ -121,11 +123,7 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
         ? options.codexHome
         : join(base, layout.presence);
     const install = tool !== undefined || (await isDirectory(filesystem, presence));
-    const status = !install
-      ? "skipped"
-      : (await lstatKind(filesystem, path)) !== undefined
-        ? "replaced"
-        : "wrote";
+    const status = install ? await installStatus(filesystem, path) : "skipped";
     report.push({ tool: id, skill: { status, path } });
   }
 
@@ -221,4 +219,11 @@ async function lstatKind(
     if (isMissingPathError(error)) return undefined;
     throw error;
   }
+}
+
+async function installStatus(filesystem: Filesystem, path: string): Promise<"wrote" | "replaced"> {
+  const kind = await lstatKind(filesystem, path);
+  if (kind === undefined) return "wrote";
+  if (kind !== "directory") throw new SetupRefusedError(path);
+  return "replaced";
 }
