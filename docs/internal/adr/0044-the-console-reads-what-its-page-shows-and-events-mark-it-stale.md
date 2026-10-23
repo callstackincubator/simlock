@@ -50,8 +50,13 @@ console is disconnected:
 | `['workers']` | 15 s | 2 s | 60 s |
 | `['stats', range]` | 60 s | 30 s | 60 s |
 | `['tokens']` | none | 5 min | 60 s |
-| `['events', 'recent']` | none (the stream fills it) | always | 60 s |
-| `['events', 'history', filter]` | none, 10 pages at most | always | 30 s |
+
+The recent events the Inbox and lease drawers show come from one feed per
+tab, filled by the stream and kept 60 s after its last user. Activity keeps
+its own feed and scroll-back, dropped when the operator leaves it.
+
+A read lost to the network leaves the key as it was; the sidebar says
+Reconnecting, as today.
 
 ```mermaid
 flowchart LR
@@ -96,7 +101,7 @@ poll of its page, 15 s.
 ### 3. The server helps
 
 - **ETag.** Every `GET` under `/v1` that answers 200 with JSON carries a
-  strong ETag, the SHA-1 of its body. A matching `If-None-Match` gets 304
+  strong ETag, Hono's digest of its body (SHA-1, chained per 256 KiB). A matching `If-None-Match` gets 304
   with no body. Streams and mounts carry none. The console sends back the
   last ETag per key and keeps its data on a 304.
 - **`lease.get`.** `GET /v1/leases/{id}` and its `/events` read one lease
@@ -110,13 +115,9 @@ poll of its page, 15 s.
   copy of its subject: the worker's own fields (no devices, catalog, leases or
   downloads), or the device, the lease with its holder, or the request. Its
   times are the subject's timestamps; the browser ticks them. The sidebar
-  count, the Inbox page and the Overview's Needs you read it instead of the
-  four fleet lists.
-
-### 4. The clock ticks in leaves
-
-The per-second tick re-renders the labels that show a time, not the hooks
-that build a page's view model.
+  count reads only this route. The Inbox page and the Overview's Needs you
+  read it and `/v1/workers` (for names, links and lease counts), and no
+  longer read leases, tokens or waiting requests.
 
 ## Consequences
 
@@ -126,6 +127,8 @@ that build a page's view model.
   changes take up to 15 s.
 - A new event that should refresh a page needs a row in the event map; until
   then it waits for the poll.
+- The per-second clock still rebuilds views that show a time; making it
+  cheaper is left to later work.
 - The console gains one dependency, `@tanstack/react-query`.
 - Two contract changes (`lease.get` with `workerLeaseId`, `inbox.get`) each
   bump the protocol.
