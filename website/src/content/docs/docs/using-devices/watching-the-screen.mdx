@@ -100,7 +100,7 @@ At the defaults, a screen that is busy redrawing costs about 1.4 Mbit/s, and a s
 
 ## Stream from your own tool
 
-Anything with an agent or operator token can read a lease's screen over HTTP at `GET /v1/stream/leases/<lease-id>`, on a worker or a gateway with streaming on. An agent token can read only its own leases. The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. Most users watch in the console instead.
+Anything with an operator token can read the screen of a running device, leased or not, over HTTP at `GET /v1/stream/workers/<worker-id>/devices/<device-id>`, on a worker (which answers only for its own id) or on a gateway (which relays to the named worker), with streaming on. A device streams while it is `ready` or `leased`; any other state answers 409 `DEVICE_NOT_RUNNING`. The stream ends when the device stops running or its lease ends. An agent token cannot read a device's screen. The older `GET /v1/stream/leases/<lease-id>` still works for now. The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. Most users watch in the console instead.
 
 ## When it does not work
 

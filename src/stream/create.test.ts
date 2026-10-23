@@ -1,24 +1,52 @@
 import { describe, expect, it } from "vitest";
 
-import type { ScreenAvailability } from "../core/index.js";
+import { type ScreenAvailability, ScreenNotSupportedError } from "../core/index.js";
 import { FakeClock, NoopLogger } from "../ports/index.js";
-import { createWorkerStream } from "./create.js";
+import { createGatewayStream, createWorkerStream } from "./create.js";
 import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
 
-function worker(availability: readonly ScreenAvailability[] = [], sendsMeta = true) {
+function worker(
+  availability: readonly ScreenAvailability[] = [],
+  sendsMeta = true,
+  unsupported = false,
+  openGate: Promise<void> = Promise.resolve(),
+) {
   const clock = new FakeClock();
   const registry = new TestRegistry(
     [{ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent", requesterId: "gw:inst:agent-1" }],
-    [{ id: "dev_1", platform: "ios" }],
+    [
+      { id: "dev_1", platform: "ios" },
+      { id: "dev_ready", platform: "ios", state: "ready" },
+      { id: "dev_leased", platform: "ios", state: "leased" },
+      { id: "dev_shutdown", platform: "ios", state: "shutdown" },
+      { id: "dev_provisioning", platform: "ios", state: "provisioning" },
+      { id: "dev_reclaiming", platform: "ios", state: "reclaiming" },
+      { id: "dev_quarantined", platform: "ios", state: "quarantined" },
+      { id: "dev_absent", physical: true, platform: "ios", state: "absent" },
+    ],
   );
   const feeds: ScriptedFeed[] = [];
+  let opened = 0;
+  const handlers = new Map<string, ((envelope: { payload: { deviceId: string } }) => void)[]>();
   const stream = createWorkerStream({
     clock,
+    events: {
+      subscribe: (event, handler) => {
+        const forEvent = handlers.get(event) ?? [];
+        forEvent.push(handler as (typeof forEvent)[number]);
+        handlers.set(event, forEvent);
+        return () => undefined;
+      },
+    },
+    instanceId: "w1",
     logger: new NoopLogger(),
     name: "stream",
     registry,
     screens: {
       openScreen: async () => {
+        opened += 1;
+        await openGate;
+        if (unsupported) throw new ScreenNotSupportedError("no capture here");
         const feed = new ScriptedFeed();
         if (sendsMeta) feed.meta();
         feeds.push(feed);
@@ -28,8 +56,23 @@ function worker(availability: readonly ScreenAvailability[] = [], sendsMeta = tr
     },
     settings: { bitrateKbps: 1500, fps: 30, maxDimension: 720 },
   });
-  return { clock, feeds, stream };
+  const emit = (event: string, deviceId: string) => {
+    for (const handler of handlers.get(event) ?? []) handler({ payload: { deviceId } });
+  };
+  return { clock, emit, feeds, opened: () => opened, registry, stream };
 }
+
+const STREAM_HEADERS = {
+  "simlock-stream-codec": "h264",
+  "simlock-stream-fps": "30",
+  "simlock-stream-height": "720",
+  "simlock-stream-width": "330",
+};
+
+const OPERATOR = { principal: "tok_op", role: "operator" };
+
+const deviceRequest = (worker: string, device: string) =>
+  new Request(`http://daemon/v1/stream/workers/${worker}/devices/${device}`);
 
 const relayed = () => new Request("http://simlock-worker/stream/leases/lse_1");
 
@@ -120,5 +163,263 @@ describe("createWorkerStream", () => {
       new AbortController().signal,
     );
     expect(feeds[0]?.closes).toBe(1);
+  });
+
+  it("serves an operator the stream of a ready or leased device, and refuses any other device with its reason before opening anything", async () => {
+    for (const device of ["dev_ready", "dev_leased"]) {
+      const { opened, stream } = worker();
+      const served = await stream.mount.handle(deviceRequest("w1", device), OPERATOR);
+      expect(served.status, device).toBe(200);
+      expect(opened(), device).toBe(1);
+      await served.body?.cancel();
+    }
+    const refusals: [string, string, number, string, string][] = [
+      [
+        "w1",
+        "dev_shutdown",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is shutdown; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_provisioning",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is provisioning; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_reclaiming",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is reclaiming; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_quarantined",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is quarantined; only a ready or leased device streams",
+      ],
+      [
+        "w1",
+        "dev_absent",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is absent; only a ready or leased device streams",
+      ],
+      ["w1", "dev_nope", 404, "UNKNOWN_DEVICE", "Unknown device: dev_nope"],
+      ["w2", "dev_ready", 404, "UNKNOWN_WORKER", "Unknown worker: w2"],
+    ];
+    for (const [workerId, device, status, code, message] of refusals) {
+      const { opened, stream } = worker();
+      const refused = await stream.mount.handle(deviceRequest(workerId, device), OPERATOR);
+      expect(refused.status, device).toBe(status);
+      expect(await refused.json(), device).toEqual({ error: { code, message } });
+      expect(opened(), device).toBe(0);
+    }
+    const { stream } = worker([], true, true);
+    const unsupported = await stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+    expect(unsupported.status).toBe(415);
+    expect(((await unsupported.json()) as { error: { code: string } }).error.code).toBe(
+      "STREAM_NOT_SUPPORTED",
+    );
+  });
+
+  it("answers an agent token asking for a device's stream with 404 UNKNOWN_DEVICE, on a worker and through a gateway, opening and relaying nothing", async () => {
+    const agent = { principal: "tok_agent", role: "agent" };
+    const { opened, stream } = worker();
+    expect((await stream.mount.handle(deviceRequest("w1", "dev_1"), OPERATOR)).status).toBe(200);
+    const onWorker = await stream.mount.handle(deviceRequest("w1", "dev_1"), agent);
+    expect(onWorker.status).toBe(404);
+    expect(await onWorker.json()).toEqual({
+      error: { code: "UNKNOWN_DEVICE", message: "Unknown device: dev_1" },
+    });
+    expect(opened()).toBe(1);
+
+    const relays: string[] = [];
+    const gateway = createGatewayStream({
+      fleet: {
+        holder: () => undefined,
+        knowsWorker: () => true,
+        relay: async (workerId) => {
+          relays.push(workerId);
+          return new Response(null, { status: 500 });
+        },
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const throughGateway = await gateway.mount.handle(deviceRequest("w1", "dev_1"), agent);
+    expect(throughGateway.status).toBe(404);
+    expect(await throughGateway.json()).toEqual({
+      error: { code: "UNKNOWN_DEVICE", message: "Unknown device: dev_1" },
+    });
+    expect(relays).toEqual([]);
+    await gateway.mount.handle(deviceRequest("w1", "dev_1"), OPERATOR);
+    expect(relays).toEqual(["w1"]);
+  });
+
+  it("relays an operator's device stream through a gateway, keeping the worker's refusal code, and refuses an unknown or disconnected worker", async () => {
+    const refusal = (status: number, code: string, message: string) =>
+      new Response(JSON.stringify({ error: { code, message } }), { status });
+    const answers: Record<string, () => Response | Promise<Response>> = {
+      w1: () => new Response(new ReadableStream(), { headers: STREAM_HEADERS }),
+      w_busy: () =>
+        refusal(
+          409,
+          "DEVICE_NOT_RUNNING",
+          "The device is shutdown; only a ready or leased device streams",
+        ),
+      w_missing: () => refusal(404, "UNKNOWN_DEVICE", "Unknown device: dev_9"),
+      w_gone: () => {
+        throw Object.assign(new Error("Worker w_gone is not connected"), {
+          code: "WORKER_UNREACHABLE",
+        });
+      },
+    };
+    const relays: { workerId: string; url: string; tenant: string }[] = [];
+    const gateway = createGatewayStream({
+      fleet: {
+        holder: () => undefined,
+        knowsWorker: (workerId) => workerId in answers,
+        relay: async (workerId, call) => {
+          relays.push({ tenant: call.tenant, url: call.request.url, workerId });
+          return (answers[workerId] ?? (() => new Response(null, { status: 500 })))();
+        },
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const ask = (workerId: string) =>
+      gateway.mount.handle(deviceRequest(workerId, "dev_9"), OPERATOR);
+
+    const served = await ask("w1");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("simlock-stream-codec")).toBe("h264");
+    await served.body?.cancel();
+    expect(relays).toEqual([
+      {
+        tenant: "gw:inst:tok_op",
+        url: "http://simlock-worker/stream/devices/dev_9",
+        workerId: "w1",
+      },
+    ]);
+
+    const expected: [string, number, string, string][] = [
+      [
+        "w_busy",
+        409,
+        "DEVICE_NOT_RUNNING",
+        "The device is shutdown; only a ready or leased device streams",
+      ],
+      ["w_missing", 404, "UNKNOWN_DEVICE", "Unknown device: dev_9"],
+      ["w_gone", 503, "WORKER_UNREACHABLE", "Worker w_gone is not connected"],
+      ["w_nobody", 404, "UNKNOWN_WORKER", "Unknown worker: w_nobody"],
+    ];
+    for (const [workerId, status, code, message] of expected) {
+      const refused = await ask(workerId);
+      expect(refused.status, workerId).toBe(status);
+      expect(await refused.json(), workerId).toEqual({ error: { code, message } });
+    }
+    expect(relays.map((relay) => relay.workerId)).toEqual(["w1", "w_busy", "w_missing", "w_gone"]);
+  });
+
+  it("follows its device: a lease granted leaves the stream running, a lease ended or a device that stops running ends the capture, and one that comes while the capture opens refuses with 409", async () => {
+    {
+      const { feeds, registry, stream } = worker();
+      const ended = (leaseId: string) =>
+        ({ deviceId: "dev_ready", leaseId }) as Parameters<typeof stream.leaseEnd.leaseEnded>[0];
+      const served = await stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      const reader = served.body!.getReader();
+      await reader.read();
+
+      registry.devices = registry.devices.map((device) =>
+        device.id === "dev_ready" ? { ...device, state: "leased" } : device,
+      );
+      registry.leases.push({
+        deviceId: "dev_ready",
+        id: "lse_2",
+        ownerId: "tok_agent",
+        requesterId: "agent-2",
+      });
+      feeds[0]?.keyframe([9]);
+      expect((await reader.read()).done).toBe(false);
+      expect(feeds[0]?.closes).toBe(0);
+
+      await stream.leaseEnd.leaseEnded(ended("lse_2"), new AbortController().signal);
+      expect(feeds[0]?.closes).toBe(1);
+      expect((await reader.read()).done).toBe(true);
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { feeds, stream } = worker([], true, false, gate);
+      const asked = stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      await settledWithin(asked);
+      const ending = stream.leaseEnd.leaseEnded(
+        { deviceId: "dev_ready", leaseId: "lse_3" } as Parameters<
+          typeof stream.leaseEnd.leaseEnded
+        >[0],
+        new AbortController().signal,
+      );
+      openIt();
+      const refused = await asked;
+      await ending;
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+        "DEVICE_NOT_RUNNING",
+      );
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    for (const event of [
+      "device.shutdown",
+      "device.absence-detected",
+      "device.quarantined",
+      "device.deleted",
+    ]) {
+      const { emit, feeds, stream } = worker();
+      const watched = await stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      const other = await stream.mount.handle(deviceRequest("w1", "dev_leased"), OPERATOR);
+      const watchedReader = watched.body!.getReader();
+      const otherReader = other.body!.getReader();
+      await watchedReader.read();
+      await otherReader.read();
+      emit(event, "dev_ready");
+      await settledWithin(Promise.resolve());
+      expect(feeds[0]?.closes, event).toBe(1);
+      expect((await watchedReader.read()).done, event).toBe(true);
+      expect(feeds[1]?.closes, event).toBe(0);
+      feeds[1]?.keyframe([5]);
+      expect((await otherReader.read()).done, event).toBe(false);
+      await otherReader.cancel();
+    }
+
+    {
+      let openIt = () => {};
+      const gate = new Promise<void>((resolve) => (openIt = resolve));
+      const { emit, feeds, stream } = worker([], true, false, gate);
+      const asked = stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      await settledWithin(asked);
+      emit("device.shutdown", "dev_ready");
+      openIt();
+      const refused = await asked;
+      expect(refused.status).toBe(409);
+      expect(feeds[0]?.closes).toBe(1);
+    }
+
+    {
+      const { emit, feeds, stream } = worker([], false);
+      const asked = stream.mount.handle(deviceRequest("w1", "dev_ready"), OPERATOR);
+      await settledWithin(asked);
+      expect(feeds).toHaveLength(1);
+      emit("device.shutdown", "dev_ready");
+      const refused = await asked;
+      expect(refused.status).toBe(409);
+      expect(feeds[0]?.closes).toBe(1);
+    }
   });
 });

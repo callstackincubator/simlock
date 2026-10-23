@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { DEVICE_READY_MS, waitFor, withHttpDaemon } from "./helpers/index.js";
+import { DEVICE_READY_MS, deviceStreamUrl, waitFor, withHttpDaemon } from "./helpers/index.js";
 
 const ANDROID_HOME =
   process.env.ANDROID_HOME ??
@@ -84,18 +84,17 @@ describe.skipIf(!hasAndroidSdk)(
           );
           expect(lease.code, `lease failed: ${lease.stdout} ${lease.stderr}`).toBe(0);
           const leaseId = (lease.json as { lease: { id: string } }).lease.id;
+          const deviceId = (lease.json as { device: { id: string } }).device.id;
+          const streamUrl = await deviceStreamUrl(baseUrl, env.home, deviceId);
           const created = await env.cli(["token", "create", "--role", "operator"]);
           expect(created.code, created.stderr).toBe(0);
           const authorization = `Bearer ${(created.json as { secret: string }).secret}`;
 
           const viewer = new AbortController();
-          const response = await fetch(
-            `${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
-            {
-              headers: { authorization },
-              signal: viewer.signal,
-            },
-          );
+          const response = await fetch(streamUrl, {
+            headers: { authorization },
+            signal: viewer.signal,
+          });
           expect(
             response.status,
             await response
@@ -153,10 +152,7 @@ describe.skipIf(!hasAndroidSdk)(
           // why: an untouched emulator's encoder sends nothing once its picture is still, so a stream
           // held well past the 30 s silence bound proves the still screen is kept alive on a real
           // device, and the lease released under that viewer proves the stop on a device too.
-          const watching = await fetch(
-            `${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
-            { headers: { authorization } },
-          );
+          const watching = await fetch(streamUrl, { headers: { authorization } });
           expect(watching.status).toBe(200);
           if (watching.body === null) throw new Error("the stream answered without a body");
           const watched = watching.body.getReader();
@@ -209,7 +205,7 @@ describe.skipIf(!hasAndroidSdk)(
             },
           );
 
-          const last = await fetch(`${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+          const last = await fetch(streamUrl, {
             headers: { authorization },
           });
           expect(last.status).toBe(200);

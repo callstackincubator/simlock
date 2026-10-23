@@ -1,5 +1,5 @@
 import type { ScreenAvailability, ScreenSettings } from "../core/index.js";
-import type { ModuleLeaseEndParticipant } from "../modules/index.js";
+import type { ModuleLeaseEndParticipant, WorkerContext } from "../modules/index.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 import { DEFAULT_SILENCE_MS, DEFAULT_START_MS } from "./feed.js";
@@ -13,8 +13,17 @@ import {
 import type { StreamServiceOptions } from "./service.js";
 import { createWorkerStreamLink, type ScreenOpener, type StreamRegistry } from "./worker-link.js";
 
+const DEVICE_STOP_EVENTS = [
+  "device.shutdown",
+  "device.absence-detected",
+  "device.quarantined",
+  "device.deleted",
+] as const;
+
 export interface WorkerStreamOptions {
   readonly name: string;
+  readonly instanceId: string;
+  readonly events: WorkerContext<unknown>["events"];
   readonly registry: StreamRegistry;
   readonly screens: ScreenOpener & {
     screenAvailability(): Promise<readonly ScreenAvailability[]>;
@@ -45,12 +54,21 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
     link: createWorkerStreamLink({
       bounds: { clock: options.clock, silenceMs: DEFAULT_SILENCE_MS, startMs: DEFAULT_START_MS },
       captures,
+      instanceId: options.instanceId,
       registry: options.registry,
       screens: options.screens,
       settings: options.settings,
     }),
     logger: options.logger,
   };
+  // why: a device that stops with no lease end (the warm pool's shutdown, the reaper, a phone unplugged,
+  // quarantine, a delete) runs no reclaim hook, and a capture does not end by itself when its device
+  // does -- a simulator's repeats its last frame -- so these four events are what end it.
+  for (const event of DEVICE_STOP_EVENTS) {
+    options.events.subscribe(event, (envelope) => {
+      void captures.stopOnDevice(envelope.payload.deviceId);
+    });
+  }
   return {
     capabilitySource: {
       name: options.name,

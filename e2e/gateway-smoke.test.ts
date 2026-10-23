@@ -448,7 +448,7 @@ describe("gateway smoke", () => {
         headers: auth,
         method: "POST",
       });
-      expect(created.status).toBe(201);
+      expect(created.status, await created.clone().text()).toBe(201);
       return (await created.json()) as RequestBody;
     };
     const readGranted = async (requestId: string): Promise<RequestBody> => {

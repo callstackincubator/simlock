@@ -11,7 +11,7 @@ interface Relayed {
   readonly workerId: string;
   readonly url: string;
   readonly tenant: string;
-  readonly leaseId: string;
+  readonly leaseId: string | undefined;
 }
 
 class CodedError extends Error {
@@ -31,6 +31,7 @@ function fleet(answer: () => Response): { port: FleetPort; relayed: Relayed[] } 
         leaseId === "w1.lse_9"
           ? { ownerId: "tok_agent", requesterId: "agent-1", workerId: "w1", workerLeaseId: "lse_9" }
           : undefined,
+      knowsWorker: () => true,
       relay: async (workerId, call) => {
         relayed.push({
           leaseId: call.leaseId,

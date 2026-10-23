@@ -1,7 +1,8 @@
-// why: a capture belongs to a lease, not to a connection -- the lease is the thing that says this
-// machine still owns that device. A viewer going away stops a capture through its own request; this
-// covers what that cannot, a lease that ends somewhere else (released elsewhere, expired, the device
-// lost) while somebody is still watching, or while a capture is still starting.
+// why: a capture belongs to the lease or the device it films, not to a connection -- the lease is the thing
+// that says this machine still owns that device, and the device is the thing that says it still runs. A
+// viewer going away stops a capture through its own request; this covers what that cannot, a lease that
+// ends somewhere else (released elsewhere, expired, the device lost) while somebody is still watching, or
+// while a capture is still starting.
 import type { ModuleLeaseEndParticipant } from "../modules/index.js";
 
 export interface CaptureSlot {
@@ -21,6 +22,10 @@ export interface CaptureRegistry {
   begin(leaseId: string): CaptureSlot;
   stop(leaseId: string): Promise<number>;
   leases(): string[];
+  // why: a device's stream belongs to the device, not to a lease, because a device nobody leases streams
+  // too; its captures end when the device stops running or its lease ends, whoever the viewer is.
+  beginOnDevice(deviceId: string): CaptureSlot;
+  stopOnDevice(deviceId: string): Promise<number>;
 }
 
 interface Slot {
@@ -33,7 +38,13 @@ interface Slot {
   closing: Promise<void> | undefined;
 }
 
-export function createCaptureRegistry(): CaptureRegistry {
+interface SlotTable {
+  begin(key: string): CaptureSlot;
+  stop(key: string): Promise<number>;
+  keys(): string[];
+}
+
+function createSlotTable(): SlotTable {
   const running = new Map<string, Set<Slot>>();
 
   const closeSlot = async (slot: Slot): Promise<void> => {
@@ -87,7 +98,7 @@ export function createCaptureRegistry(): CaptureRegistry {
         },
       };
     },
-    leases: () => [...running.keys()],
+    keys: () => [...running.keys()],
     stop: async (leaseId) => {
       const forLease = running.get(leaseId);
       if (forLease === undefined) return 0;
@@ -99,6 +110,18 @@ export function createCaptureRegistry(): CaptureRegistry {
   };
 }
 
+export function createCaptureRegistry(): CaptureRegistry {
+  const leases = createSlotTable();
+  const devices = createSlotTable();
+  return {
+    begin: leases.begin,
+    beginOnDevice: devices.begin,
+    leases: leases.keys,
+    stop: leases.stop,
+    stopOnDevice: devices.stop,
+  };
+}
+
 export function createStreamLeaseEnd(captures: CaptureRegistry): ModuleLeaseEndParticipant {
   return {
     // why: waits for each capture's close, which a driver bounds, so a reclaim does not wipe or
@@ -106,7 +129,7 @@ export function createStreamLeaseEnd(captures: CaptureRegistry): ModuleLeaseEndP
     // the wait if leasing gives up first.
     leaseEnded: async (ended, signal) => {
       await Promise.race([
-        captures.stop(ended.leaseId),
+        Promise.all([captures.stop(ended.leaseId), captures.stopOnDevice(ended.deviceId)]),
         new Promise<void>((resolve) => {
           if (signal.aborted) resolve();
           else signal.addEventListener("abort", () => resolve(), { once: true });

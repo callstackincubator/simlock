@@ -148,6 +148,7 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
       environment: {},
       events: { subscribe: (event, handler) => bus.subscribe(event, handler) },
       filesystem: new MemoryFilesystem(),
+      instanceId: "fake-worker",
       leaseEnvironment: {},
       logger: new NoopLogger(),
       name,
