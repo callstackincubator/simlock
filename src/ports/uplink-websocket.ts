@@ -36,6 +36,14 @@ import {
   type UplinkTransportConnection,
 } from "./uplink.js";
 
+/** why: a ping that finds no pong since the previous one terminates the link, so a gateway that
+ * vanished without closing is noticed within two of these. */
+export const UPLINK_PING_INTERVAL_MS = 15_000;
+
+/** why: a dial into a host that drops packets would otherwise wait for the OS connect timeout
+ * (about 75s on macOS) before the next backoff step. */
+const UPLINK_HANDSHAKE_TIMEOUT_MS = 10_000;
+
 function rawBytes(data: RawData): Buffer {
   if (Array.isArray(data)) return Buffer.concat(data);
   return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
@@ -275,10 +283,19 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
 
 /** The worker's half: dials `gateway.url` with the join token and its instance id. */
 export class WebSocketUplinkConnector implements UplinkConnector {
+  readonly #handshakeTimeoutMs: number;
+
+  /** why: `handshakeTimeoutMs` exists so a test can see the dial give up without waiting the
+   * real `UPLINK_HANDSHAKE_TIMEOUT_MS`; production passes nothing. */
+  constructor(options: { readonly handshakeTimeoutMs?: number } = {}) {
+    this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? UPLINK_HANDSHAKE_TIMEOUT_MS;
+  }
+
   async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
     // `options.url` is `gateway.url`, the gateway's base URL; the endpoint is this worker's to
     // derive (ADR 0005 §4), so an operator configures one URL and never an internal path.
     const socket = new WebSocket(resolveUplinkUrl(options.url), {
+      handshakeTimeout: this.#handshakeTimeoutMs,
       headers: {
         authorization: `Bearer ${options.token}`,
         [WORKER_ID_HEADER]: options.workerId,
@@ -298,8 +315,28 @@ export class WebSocketUplinkConnector implements UplinkConnector {
       socket.terminate();
       throw error;
     }
+    watchLiveness(socket);
     return connection;
   }
+}
+
+/** why: over the uplink only the gateway writes, so a worker whose gateway vanished sees no
+ * `close` unless it pings; terminating makes the `close` that drives `GatewayUplink`'s redial. */
+function watchLiveness(socket: WebSocket): void {
+  let awaitingPong = false;
+  socket.on("pong", () => {
+    awaitingPong = false;
+  });
+  const timer = setInterval(() => {
+    if (awaitingPong) {
+      socket.terminate();
+      return;
+    }
+    awaitingPong = true;
+    socket.ping();
+  }, UPLINK_PING_INTERVAL_MS);
+  timer.unref();
+  socket.once("close", () => clearInterval(timer));
 }
 
 function waitForOpen(socket: WebSocket): Promise<void> {
