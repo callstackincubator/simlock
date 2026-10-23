@@ -14,7 +14,7 @@
  * fabricated request object.
  */
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -27,6 +27,7 @@ import type {
   UplinkAuthOutcome,
   UplinkTransportConnection,
 } from "./uplink.js";
+import { UplinkError } from "./uplink.js";
 import {
   UPLINK_PING_INTERVAL_MS,
   WebSocketUplinkConnector,
@@ -310,5 +311,27 @@ describe("WebSocketUplinkConnector liveness", () => {
 
     expect(gateway.pings()).toBe(4);
     expect(worker.closed).toBe(false);
+  });
+});
+
+describe("WebSocketUplinkConnector handshake", () => {
+  it("fails the dial with an UplinkError when the server accepts TCP but never completes the handshake", async () => {
+    const sockets: Array<{ destroy(): unknown }> = [];
+    const silent = createTcpServer((socket) => sockets.push(socket));
+    await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+    const { port } = silent.address() as AddressInfo;
+    try {
+      const outcome = await Promise.race([
+        new WebSocketUplinkConnector({ handshakeTimeoutMs: 100 })
+          .connect(dialOptions(`ws://127.0.0.1:${port}`))
+          .catch((error: unknown) => error),
+        new Promise<string>((resolve) => setTimeout(() => resolve("still dialling"), 2_000)),
+      ]);
+
+      expect(outcome).toBeInstanceOf(UplinkError);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      silent.close();
+    }
   });
 });
