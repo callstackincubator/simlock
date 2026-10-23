@@ -46,7 +46,7 @@ each tool's grammar and refusal list (drivers rule 6).
    The two lists, read from `xcrun simctl help` (Xcode 27.0) and
    `adb help` (platform-tools 37.0.0):
 
-   - **simctl device verbs**, device first: `addmedia`, `appinfo`, `boot`,
+   - **simctl device verbs**, device first: `addmedia`, `appinfo`, `boot`, `bootstatus`,
      `get_app_container`, `getenv`, `icloud_sync`, `install`,
      `install_app_data`, `io`, `keychain`, `listapps`, `location`,
      `openurl`, `privacy`, `push`, `reboot`, `rename`, `shutdown`,
@@ -122,7 +122,10 @@ sequenceDiagram
   never copies a UDID or serial. The website's "name your device in the
   arguments" advice and the Android serial lookup go away.
 - An HTTP caller that sends `booted` today, which the docs already tell
-  it never to do, gets `PASSTHROUGH_REFUSED`.
+  it never to do, gets `PASSTHROUGH_REFUSED`. So does `simlock simctl`
+  through a gateway, which runs on `device.exec` (`src/cli/AGENTS.md:85`):
+  the website's `simlock --gateway simctl install booted ./MyApp.app`
+  example is refused until task #958 rewrites it.
 - Each driver keeps a device-verb list (iOS) or a no-device list
   (Android). A new `simctl` verb is passed through unfilled until it is
   added to the list.
