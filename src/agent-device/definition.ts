@@ -42,6 +42,8 @@ export const agentDeviceModule: OptionalModuleDefinition<AgentDeviceModuleConfig
     render: (origin, secret) =>
       `${JSON.stringify(
         {
+          // why: agent-device refuses a proxy open without a clientId; it is a constant so the file's bytes stay stable.
+          clientId: "a51a51a51a51a51a",
           daemonAuthToken: secret,
           daemonBaseUrl: `${origin}/v1/agent-device`,
           daemonTransport: "http",

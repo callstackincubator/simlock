@@ -93,6 +93,7 @@ whether or not the command is found), the module host writes `<data dir>/agent-d
 
 ```json
 {
+  "clientId": "a51a51a51a51a51a",
   "daemonAuthToken": "slk_…",
   "daemonBaseUrl": "http://127.0.0.1:4701/v1/agent-device",
   "daemonTransport": "http",

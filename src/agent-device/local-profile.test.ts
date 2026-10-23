@@ -244,6 +244,7 @@ describe("the local agent-device profile", () => {
     const profile = JSON.parse(text) as Record<string, string>;
     expect((await rig.filesystem.stat(rig.profilePath)).mode).toBe(0o600);
     expect(Object.keys(profile)).toEqual([
+      "clientId",
       "daemonAuthToken",
       "daemonBaseUrl",
       "daemonTransport",
@@ -254,6 +255,7 @@ describe("the local agent-device profile", () => {
     ]);
     expect(text).toBe(`${JSON.stringify(profile, null, 2)}\n`);
     expect(profile).toMatchObject({
+      clientId: "a51a51a51a51a51a",
       daemonBaseUrl: `http://127.0.0.1:${rig.port}/v1/agent-device`,
       daemonTransport: "http",
       leaseProvider: "proxy",
