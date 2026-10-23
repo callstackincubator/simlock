@@ -165,7 +165,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
 | `DELETE /v1/lease-requests/<id>` | Cancel a request that is still queued. `204` on success; `409 REQUEST_NOT_CANCELLABLE` once device work has started or it was granted (release the lease instead). |
 | `GET /v1/leases/<id>` | Read the lease again, for example after your agent restarts. `expiresAt` is the current deadline. |
 | `GET /v1/leases/<id>/events` | Server-Sent Events for `device_unhealthy`, `device_recovered` and `lease_lost`. The stream ends after `lease_lost`. |
-| `GET /v1/leases` | Your leases. |
+| `GET /v1/leases` | Your leases. On a gateway each one also carries `workerLeaseId`, the id its worker knows it by. |
 | `GET /v1/catalog?platform=ios` | The models and runtimes you can ask for, as `simlock catalog --json` prints them. |
 | `GET /v1/identity` | Who the token is. |
 

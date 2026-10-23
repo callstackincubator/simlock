@@ -138,7 +138,8 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
   daemon restart, so a polling client loses the health facts it had not drained. It needs
   a durable record of why a lease ended first.
 - **Single-lease reads answer 404, not 403, for an unowned lease.** `GET /v1/leases/{id}`
-  and its `/events` filter `lease.list` (`findOwnedLease`); there is no `lease.get`.
+  and its `/events` dispatch `lease.get` (`findOwnedLease`), which answers `UNKNOWN_LEASE` for a
+  lease that is not there and for one the caller does not own alike.
   Renew and release dispatch directly and answer 403.
 - **Error codes outside the contract union.** `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`,
   `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so

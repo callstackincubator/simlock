@@ -32,7 +32,7 @@ park on readiness (all but `status.get`) → handler → parse output.
 every operation but `daemon.stop`, which `DaemonServer` answers.
 
 - `agent`: `catalog.get`, `status.get`, `component.list`, `lease.request`, `lease.cancel`,
-  `lease.renew`, `lease.release`, `lease.list`, `driver.passthrough`, `device.exec`,
+  `lease.renew`, `lease.release`, `lease.list`, `lease.get`, `driver.passthrough`, `device.exec`,
   `doctor.run` without `fix` or `purgeOrphans`.
 - `admin`: every other operation (`list.get`, `config.get`, `daemon.stop`, `events.*`,
   `token.*`, `worker.*`, `component.install`, `device.add`, `relay.request`, ...).

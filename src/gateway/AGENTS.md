@@ -99,8 +99,9 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
 
-**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) answer from
-views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`,
+**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) and `lease.get` (one lease, as `lease.list` would hold it for
+the caller) answer from views; a gateway lease record also carries `workerLeaseId`, the worker's own
+id (not on `status.get`). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`,
 `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
 
 **Uplink drop.** View → `disconnected`, kept; `worker.disconnected`. In-flight calls → `WORKER_UNREACHABLE`, an in-flight lease request → `worker-failed`. `token.revoke` closes its uplinks.
