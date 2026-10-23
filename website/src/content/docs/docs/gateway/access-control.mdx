@@ -13,7 +13,7 @@ This page uses the gateway in its examples. Tokens work the same way on a worker
 
 | Role | Made for | May |
 | --- | --- | --- |
-| `agent` | A coding agent that leases devices over HTTP. | Read the catalog and status, list installed runtimes, request, renew and release its own leases, cancel its own waiting requests, and run commands on the devices it leases. |
+| `agent` | A coding agent that leases devices over HTTP. | Read the catalog and status (only its own leases and waiting requests), list installed runtimes, request, renew and release its own leases, cancel its own waiting requests, and run commands on the devices it leases. |
 | `operator` | A person, or a script that manages the fleet. | Everything an agent may, for every requester's leases, plus the console, events, usage figures, tokens, worker commands and component installs. |
 | `worker` | A worker machine joining a gateway. | Open one worker's connection to the gateway, and nothing else. The first worker that joins with it is paired with it; another worker with the same token, and any other request with it, is refused with `403`. |
 
@@ -28,7 +28,7 @@ Over HTTP, the token is the requester. Every lease and request made with one age
 ### An agent token reaches the worker's machine
 
 <Aside type="caution">
-An agent token is a credential for the worker machine, not for one device. Commands an agent runs on its device, such as `adb pull` or `simctl` commands, run on the worker as the user who runs the worker daemon, and can read and write any file that user can. This holds through a gateway too: the command runs on the worker that holds the lease. Give an agent token only to something you would let run commands on your workers.
+An agent token is a credential for the worker machine, not for one device. Commands an agent runs on its device, such as `adb pull` or `simctl` commands, run on the worker as the user who runs the worker daemon, and can read and write any file that user can. This holds through a gateway too: the command runs on the worker that holds the lease. Give an agent token only to something you would let run commands on your workers. `simctl spawn` alone starts any program on the worker, so treat an agent token like shell access to it. A command gets only a short fixed list of the daemon's environment variables (see [Running commands with exec](/simlock/docs/using-devices/remote-agents#running-commands-with-exec)), so a secret in that environment stays out of reach; a secret in a file that user can read does not.
 </Aside>
 
 ## Make, list and revoke tokens

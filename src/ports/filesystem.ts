@@ -44,6 +44,11 @@ export interface WriteFileExclusiveOptions {
   readonly mode?: number;
 }
 
+export interface MkdirpOptions {
+  /** why: the bits the directory ends with whatever the umask, which can only remove them. */
+  readonly mode?: number;
+}
+
 /**
  * What an un-followed `lstat` reports, narrowed to what ownership validation asks of a
  * path: what it really is, who owns it, and how exposed it is. Anything richer would be
@@ -73,7 +78,12 @@ export interface Filesystem {
     contents: string,
     options?: WriteFileExclusiveOptions,
   ): Promise<void>;
-  mkdirp(path: string): Promise<void>;
+  /**
+   * why: a `mode` applies only to the last directory and only when this call creates it, so a
+   * caller can make its own directory owner-only without tightening a parent it does not own,
+   * or overriding the mode a user chose for a directory that is already there.
+   */
+  mkdirp(path: string, options?: MkdirpOptions): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
   /**
    * Moves a path in one step, so what it names becomes visible complete or not at all.
@@ -183,8 +193,21 @@ export class NodeFilesystem implements Filesystem {
     }
   }
 
-  async mkdirp(path: string): Promise<void> {
-    await mkdir(path, { recursive: true });
+  async mkdirp(path: string, options: MkdirpOptions = {}): Promise<void> {
+    if (options.mode === undefined) {
+      await mkdir(path, { recursive: true });
+      return;
+    }
+    await mkdir(dirname(path), { recursive: true });
+    try {
+      await mkdir(path, { mode: options.mode });
+    } catch (error: unknown) {
+      if (hasCode(error, "EEXIST") && (await stat(path)).isDirectory()) return;
+      throw error;
+    }
+    // why: the umask can only take bits from `mkdir`'s mode, so a restrictive one would leave the
+    // directory short of what was asked; `chmod` sets exactly those bits, as the device root does.
+    await chmod(path, options.mode);
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -368,9 +391,10 @@ export class MemoryFilesystem implements Filesystem {
     });
   }
 
-  async mkdirp(path: string): Promise<void> {
+  async mkdirp(path: string, options: MkdirpOptions = {}): Promise<void> {
     this.#failIfDefined(path);
     let currentPath = "";
+    let created: MemoryEntry | undefined;
 
     for (const segment of path.split("/")) {
       if (segment === "") {
@@ -380,13 +404,17 @@ export class MemoryFilesystem implements Filesystem {
 
       currentPath = joinMemoryPath(currentPath, segment);
       const entry = this.#entries.get(currentPath);
+      created = undefined;
 
       if (entry === undefined) {
-        this.#entries.set(currentPath, this.#newEntry({ kind: "directory" }));
+        created = this.#newEntry({ kind: "directory" });
+        this.#entries.set(currentPath, created);
       } else if (entry.kind !== "directory") {
         throw new Error(`Cannot create directory over file: ${currentPath}`);
       }
     }
+
+    if (created !== undefined && options.mode !== undefined) created.mode = options.mode & 0o777;
   }
 
   /**
@@ -449,7 +477,7 @@ export class MemoryFilesystem implements Filesystem {
       kind: entry.kind === "file" ? "file" : "directory",
       size: entry.kind === "file" ? Buffer.byteLength(entry.contents) : 0,
       modifiedAtMs: entry.modifiedAtMs,
-      mode: entry.kind === "file" ? entry.mode : 0o755,
+      mode: entry.mode,
       identity: String(entry.identity),
     };
   }
@@ -692,8 +720,12 @@ function errnoError(code: string, message: string): NodeJS.ErrnoException {
   return error;
 }
 
+function hasCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
 export function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+  return hasCode(error, "ENOENT");
 }
 
 function enoent(path: string): NodeJS.ErrnoException {

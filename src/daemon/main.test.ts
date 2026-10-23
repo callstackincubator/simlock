@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
@@ -53,6 +53,7 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  NodeFilesystem,
   NodeSqliteOpener,
   NoopLogger,
   ScriptedProcessRunner,
@@ -289,6 +290,57 @@ const hasEvent =
   (name: string) =>
   (events: readonly EventEnvelope[]): boolean =>
     events.some((event) => event.event === name);
+
+describe("the data directory", () => {
+  it("creates a missing data directory owner-only, and for one other users can reach logs one warning at start and leaves its mode", async () => {
+    // why: under the umask every real host starts from, a directory made without a mode comes
+    // out 0755, so only the daemon asking for 0700 ends there.
+    const previousUmask = process.umask(0o022);
+    try {
+      const base = await mkdtemp(join(tmpdir(), "simlock-dd-"));
+      temporaryDirectories.push(base);
+      const cases = [
+        { name: "new", existing: undefined, mode: 0o700, warned: undefined },
+        { name: "700", existing: 0o700, mode: 0o700, warned: undefined },
+        { name: "750", existing: 0o750, mode: 0o750, warned: "750" },
+        { name: "755", existing: 0o755, mode: 0o755, warned: "755" },
+      ];
+
+      for (const testCase of cases) {
+        const dataDirectory = join(base, testCase.name);
+        if (testCase.existing !== undefined) {
+          await mkdir(dataDirectory);
+          await chmod(dataDirectory, testCase.existing);
+        }
+
+        const { sink } = await start({ dataDirectory, filesystem: new NodeFilesystem() });
+
+        expect(
+          {
+            mode: (await stat(dataDirectory)).mode & 0o777,
+            warnings: sink.records
+              .filter((record) => record.message.startsWith("data directory"))
+              .map((record) => [record.level, record.message]),
+          },
+          testCase.name,
+        ).toEqual({
+          mode: testCase.mode,
+          warnings:
+            testCase.warned === undefined
+              ? []
+              : [
+                  [
+                    "warn",
+                    `data directory ${dataDirectory} is accessible to other users (mode ${testCase.warned}); run chmod 700 ${dataDirectory}`,
+                  ],
+                ],
+        });
+      }
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+});
 
 describe("the version a daemon reports", () => {
   it("is the version in package.json when the caller names none", async () => {
@@ -1027,6 +1079,48 @@ describe("startDaemon wires core and leasing together", () => {
 
     const entry = status.devices?.find((device) => device.driverDeviceId === "UDID-WIRED-PRESENCE");
     expect(entry).toMatchObject({ presence: { present: true } });
+  });
+
+  it("starts a device.exec child from the allowlisted keys of the daemon's environment plus the command's own env, without a secret the daemon inherited", async () => {
+    const clock = new FakeClock(1_000);
+    const runner = new ScriptedProcessRunner([
+      { match: { args: ["list", "devices"], command: "fake-simctl" } },
+    ]);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: () => ({
+        args: ["list", "devices"],
+        command: "fake-simctl",
+        env: { SIMLOCK_SCOPED: "1" },
+      }),
+      passthroughTools: ["simctl"],
+      platform: "ios",
+    });
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret");
+    vi.stubEnv("LC_CTYPE", "simlock-test-locale");
+    try {
+      const { daemon } = await start({
+        clock,
+        drivers: [driver],
+        hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+        processRunner: runner,
+      });
+      const grant = (await daemon.dispatch("lease.request", ios, agent)) as Grant;
+
+      await daemon.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: grant.lease.id, tool: "simctl" },
+        agent,
+      );
+
+      const env = runner.calls.find((call) => call.command === "fake-simctl")?.options.env;
+      expect(env).toMatchObject({ LC_CTYPE: "simlock-test-locale", SIMLOCK_SCOPED: "1" });
+      expect(env?.PATH).toBe(process.env.PATH);
+      expect(env).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("announces the capacity figures and then the queue depth once startup is done", async () => {
