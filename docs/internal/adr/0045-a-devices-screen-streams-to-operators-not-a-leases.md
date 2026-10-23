@@ -1,4 +1,4 @@
-# 0044. A device's screen streams to operators, not a lease's
+# 0045. A device's screen streams to operators, not a lease's
 
 - **Status:** Proposed
 - **Date:** 2026-10-23
@@ -18,10 +18,11 @@ The console is the only caller (`ui/src/state/screen.ts:129`). An operator there
 1. **The route names a worker and a device.** Every daemon serves `GET /v1/stream/workers/{workerId}/devices/{deviceId}`. A device id is unique only within one worker, so the path names the worker. A gateway relays the request to that worker over its uplink, to the worker's internal `/stream/devices/{deviceId}`. A worker answers the same public path as a fleet of one, as ADR 0012 has it: `{workerId}` is its own instance id, the id `worker.list` gives it. The console therefore builds one URL on either daemon. `GET /v1/stream/leases/{id}` is removed. Nothing published depends on it.
 2. **Operators only.** An agent token gets 404 `UNKNOWN_DEVICE` for any device, so an agent cannot list a fleet's devices this way. On a gateway the gateway checks the role. The worker serves any relayed device stream: a relay arrives only on a gateway's uplink session, so it is trusted as far as that session is. The uplink message does not change.
 3. **A running device streams.** A device in state `ready` or `leased` streams. Any other state (`provisioning`, `shutdown`, `reclaiming`, `quarantined`, `absent`, `deleted`) gets 409 `DEVICE_NOT_RUNNING`, with the device's state in the message. An unknown device gets 404 `UNKNOWN_DEVICE`. An unknown worker (on a gateway, an id not in its fleet; on a worker, any id but its own) gets 404 `UNKNOWN_WORKER`, the code the other `/v1/workers/{id}` routes use. A driver that cannot capture keeps 415 `STREAM_NOT_SUPPORTED`. Every other refusal stays as it is.
-4. **A stream outlives a lease grant, not a reclaim.** A device that gets leased while it is watched keeps streaming, a physical iPhone included. A stream ends when:
+4. **A stream outlives a lease grant, not the device's running state.** A device that gets leased while it is watched keeps streaming, a physical iPhone included. A stream ends when:
    - the viewer closes it;
-   - the capture ends or goes silent past the existing bound, which is also how a warm simulator that shuts down ends its stream;
-   - the device is reclaimed after a lease ends. The lease-end participant stops every capture on the ended lease's device before the device is erased.
+   - the capture ends or errors;
+   - a lease on its device ends: the lease-end participant stops every capture on the ended lease's device before the device is reset;
+   - the device stops running with no lease end. The worker stream module subscribes to `device.shutdown`, `device.absence-detected`, `device.quarantined` and `device.deleted` and stops every capture on that device. These events come after the fact, so the capture may run a moment on a stopped device. The silence bound cannot stand in: a simulator's capture repeats its last frame, and a physical device's never notices its own end (`vendor/screen-capture/Sources/simlock-screen-capture/FrameCapture.swift:241-244`, `SimulatorSource.swift:19-21`, `simlock-device-capture/DeviceScreenSource.swift:383-385`).
 5. **One capture per viewer, as today.** Sharing one capture between viewers (#602) is left to that issue, keyed by device.
 6. **No business events.** Watching changes no lease and no device, as before. The daemon log keeps recording each stream opened and refused.
 
@@ -55,14 +56,15 @@ stateDiagram-v2
   [*] --> Streaming: device ready or leased
   Streaming --> Streaming: device leased
   Streaming --> [*]: viewer closes
-  Streaming --> [*]: capture ends or goes silent (warm shutdown)
-  Streaming --> [*]: lease ends, device reclaimed
+  Streaming --> [*]: capture ends or errors
+  Streaming --> [*]: lease ends (before reset)
+  Streaming --> [*]: device shut down, absent, quarantined or deleted
 ```
 
 ## Consequences
 
-- `src/stream/AGENTS.md`'s "a capture never outlives its lease" becomes "a capture never outlives its device's reclaim".
-- ADR 0040 names the lease route as an example of a module route. That example now names the device routes. The rule itself does not change.
+- `src/stream/AGENTS.md`'s "a capture never outlives its lease" becomes "a capture never outlives its device's running state".
+- ADR 0040 names the lease route as an example of a module route. That example goes stale; its README row notes it, and the rule itself does not change.
 - The console shows the screen in the device drawer. The lease drawer has no Screen tab.
 - The website's "Watching the screen" page describes the device routes and an operator token only.
 
