@@ -74,7 +74,9 @@ export interface SetupAgentToolsOptions {
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
   readonly workingDirectory: string;
-  readonly scope: SetupScope;
+  readonly scope?: SetupScope | undefined;
+  readonly confirm: (question: string) => Promise<boolean>;
+  readonly interactive: boolean;
   readonly runTool: RunTool;
   readonly mcp?: boolean | undefined;
   readonly codexHome?: string | undefined;
@@ -84,7 +86,8 @@ export interface SetupAgentToolsOptions {
 export const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
 
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
-  const { filesystem, scope, tool } = options;
+  const { filesystem, tool } = options;
+  const scope = options.scope ?? "user";
   const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
   const tools = tool === undefined ? AGENT_TOOL_IDS : [tool];
 

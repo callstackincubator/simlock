@@ -11,6 +11,8 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
     codexHome: environment.codexHome,
     runTool: environment.runTool,
     scope: values.project === true ? "project" : "user",
+    confirm: async () => false,
+    interactive: false,
     tool: values.tool as AgentTool | undefined,
   });
   return 0;

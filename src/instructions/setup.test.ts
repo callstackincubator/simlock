@@ -33,6 +33,25 @@ function fakeTools(outcome: ToolOutcome = { outcome: "exited", code: 0, stderr: 
   };
 }
 
+function fakeConfirm(yes: readonly string[] = []): {
+  readonly questions: string[];
+  readonly confirm: (question: string) => Promise<boolean>;
+} {
+  const questions: string[] = [];
+  return {
+    questions,
+    confirm: async (question) => {
+      questions.push(question);
+      return yes.includes(question);
+    },
+  };
+}
+
+const SCOPE_PROMPT = "Install only for this project (not every project)? [y/N] ";
+const CLAUDE_PROMPT = "Also connect Simlock's MCP server to Claude Code? [y/N] ";
+const CODEX_PROMPT =
+  "Also connect Simlock's MCP server to Codex? Codex counts it as a second agent beside the CLI. [y/N] ";
+
 function setup(
   filesystem: MemoryFilesystem,
   options: Partial<Omit<SetupAgentToolsOptions, "filesystem">> = {},
@@ -43,6 +62,8 @@ function setup(
     workingDirectory: CWD,
     scope: "user",
     runTool: fakeTools().runTool,
+    confirm: fakeConfirm().confirm,
+    interactive: false,
     ...options,
   });
 }
@@ -288,5 +309,74 @@ describe("setupAgentTools", () => {
       args: ["a"],
       options: { timeoutMs: 30_000, cwd: "/somewhere" },
     });
+  });
+
+  it("asks in a terminal and never blocks a script: the scope, then MCP per tool", async () => {
+    const both = async (): Promise<MemoryFilesystem> => {
+      const filesystem = await withBases();
+      for (const base of [HOME, CWD]) {
+        await filesystem.mkdirp(`${base}/.claude`);
+        await filesystem.mkdirp(`${base}/.codex`);
+      }
+      return filesystem;
+    };
+
+    const yesToScope = fakeConfirm([SCOPE_PROMPT]);
+    const project = await setup(await both(), { interactive: true, confirm: yesToScope.confirm });
+    expect(project.scope).toBe("project");
+    expect(yesToScope.questions).toEqual([SCOPE_PROMPT, CLAUDE_PROMPT]);
+
+    const defaults = fakeConfirm();
+    const tools = fakeTools();
+    const user = await setup(await both(), {
+      interactive: true,
+      confirm: defaults.confirm,
+      runTool: tools.runTool,
+    });
+    expect(user.scope).toBe("user");
+    expect(defaults.questions).toEqual([SCOPE_PROMPT, CLAUDE_PROMPT, CODEX_PROMPT]);
+    expect(user.tools.map((entry) => "mcp" in entry)).toEqual([false, false]);
+    expect(tools.calls).toEqual([]);
+
+    for (const scope of ["user", "project"] as const) {
+      const flagged = fakeConfirm();
+      await setup(await both(), { scope, interactive: true, confirm: flagged.confirm });
+      expect(flagged.questions, scope).not.toContain(SCOPE_PROMPT);
+    }
+
+    const mcpYes = fakeConfirm([CLAUDE_PROMPT, CODEX_PROMPT]);
+    const asked = fakeTools();
+    const connected = await setup(await both(), {
+      interactive: true,
+      confirm: mcpYes.confirm,
+      runTool: asked.runTool,
+    });
+    expect(connected.tools.map(({ mcp }) => mcp?.status)).toEqual(["connected", "connected"]);
+    expect(asked.calls.map(({ bin }) => bin)).toEqual(["claude", "codex"]);
+
+    const noMcpAsked = fakeConfirm();
+    await setup(await both(), { mcp: false, interactive: true, confirm: noMcpAsked.confirm });
+    expect(noMcpAsked.questions).toEqual([SCOPE_PROMPT]);
+
+    const script = fakeConfirm([SCOPE_PROMPT, CLAUDE_PROMPT]);
+    const scripted = fakeTools();
+    const quiet = await setup(await both(), {
+      interactive: false,
+      confirm: script.confirm,
+      runTool: scripted.runTool,
+    });
+    expect(script.questions).toEqual([]);
+    expect(quiet.scope).toBe("user");
+    expect(quiet.tools.map((entry) => "mcp" in entry)).toEqual([false, false]);
+    expect(scripted.calls).toEqual([]);
+
+    const projectAsk = fakeConfirm([CLAUDE_PROMPT, CODEX_PROMPT]);
+    const atProject = await setup(await both(), {
+      scope: "project",
+      interactive: true,
+      confirm: projectAsk.confirm,
+    });
+    expect(projectAsk.questions).toEqual([CLAUDE_PROMPT]);
+    expect(atProject.tools.map(({ mcp }) => mcp?.status)).toEqual(["connected", undefined]);
   });
 });
