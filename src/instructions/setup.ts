@@ -11,6 +11,12 @@ const AGENT_TOOLS = {
 export type AgentTool = keyof typeof AGENT_TOOLS;
 export type SetupScope = "user" | "project";
 
+const SCOPE_PROMPT = "Install only for this project (not every project)? [y/N] ";
+const MCP_PROMPTS: Readonly<Record<AgentTool, string>> = {
+  "claude-code": "Also connect Simlock's MCP server to Claude Code? [y/N] ",
+  codex:
+    "Also connect Simlock's MCP server to Codex? Codex counts it as a second agent beside the CLI. [y/N] ",
+};
 const SIMLOCK_DIRECTORY = "simlock";
 const SKILL_FILE = "SKILL.md";
 
@@ -87,7 +93,9 @@ export const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
 
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
   const { filesystem, tool } = options;
-  const scope = options.scope ?? "user";
+  const scope =
+    options.scope ??
+    (options.interactive && (await options.confirm(SCOPE_PROMPT)) ? "project" : "user");
   const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
   const tools = tool === undefined ? AGENT_TOOL_IDS : [tool];
 
@@ -103,6 +111,20 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
     report.push({ tool: id, skill: { status: install ? "wrote" : "skipped", path } });
   }
 
+  const wantsMcp = new Set<AgentTool>();
+  for (const { tool: id, skill: entry } of report) {
+    if (entry.status === "skipped") continue;
+    if (options.mcp === true) wantsMcp.add(id);
+    else if (
+      options.mcp === undefined &&
+      options.interactive &&
+      !(id === "codex" && scope === "project") &&
+      (await options.confirm(MCP_PROMPTS[id]))
+    ) {
+      wantsMcp.add(id);
+    }
+  }
+
   const skill = renderSkill();
   for (const { skill: entry } of report) {
     if (entry.status === "skipped") continue;
@@ -111,10 +133,9 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
   }
   const connected: SetupToolReport[] = [];
   for (const entry of report) {
-    const mcp =
-      options.mcp === true && entry.skill.status !== "skipped"
-        ? await connectMcp(options.runTool, entry.tool, scope, options.workingDirectory)
-        : undefined;
+    const mcp = wantsMcp.has(entry.tool)
+      ? await connectMcp(options.runTool, entry.tool, scope, options.workingDirectory)
+      : undefined;
     connected.push(mcp === undefined ? entry : { ...entry, mcp });
   }
   const result: SetupReport = { scope, tools: connected };
