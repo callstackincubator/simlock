@@ -252,7 +252,10 @@ describe("gateway event relay", () => {
 
     const wire = new SimlockWire(await new NodeIpcTransport().connect(first.env.socketPath));
     try {
-      await wire.hello({ principal: "relay-by-worker" });
+      const adminToken = (
+        await readFile(join(first.env.dataDirectory, "admin.token"), "utf8")
+      ).trim();
+      await wire.hello({ credential: adminToken, principal: "relay-by-worker" });
       const own = (await wire.call("events.replay", {})) as RecordedEvent[];
       expect(own.length).toBeGreaterThan(0);
       expect(

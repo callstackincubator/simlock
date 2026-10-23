@@ -708,8 +708,8 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   );
 
   app.openapi({ ...eventsRoute, middleware: [agentAuth] }, async (c) => {
-    const { before, limit, since } = c.req.valid("query");
-    const answer = eventsPageQuery({ before, limit, since });
+    const { before, limit, since, worker } = c.req.valid("query");
+    const answer = eventsPageQuery({ before, limit, since, worker });
     if ("refused" in answer) throw badRequest(answer.refused);
     const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);
     const events = await deps.dispatch(
