@@ -38,7 +38,7 @@ async function readProfileSecret(
   }
 }
 
-async function writeLocalProfile(
+async function prepareLocalProfile(
   definition: OptionalModuleDefinition<unknown>,
   options: ModuleHostOptions,
 ): Promise<void> {
@@ -47,6 +47,16 @@ async function writeLocalProfile(
   const { tokens } = options;
   const { filesystem } = options.context;
   const path = join(options.context.dataDirectory, localProfile.fileName);
+  if (
+    options.config.capabilities[definition.name]?.enabled !== true ||
+    !options.config.http.enabled
+  ) {
+    if (await filesystem.exists(path)) await filesystem.rm(path);
+    for (const other of await tokens.list()) {
+      if (other.label === localProfile.tokenLabel) await tokens.revoke(other.id);
+    }
+    return;
+  }
   const stored = await readProfileSecret(filesystem, path);
   const verified = stored === undefined ? undefined : await tokens.verify(stored);
   const kept = verified?.label === localProfile.tokenLabel ? verified : undefined;
@@ -313,7 +323,7 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
     async prepareLocalProfiles(): Promise<void> {
       for (const definition of definitions) {
         try {
-          await writeLocalProfile(definition, options);
+          await prepareLocalProfile(definition, options);
         } catch (error: unknown) {
           logger.warn(`Could not prepare the ${definition.name} profile: ${messageOf(error)}`);
         }
