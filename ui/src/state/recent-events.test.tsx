@@ -160,16 +160,21 @@ describe("the recent events of a tab", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     daemon.openStream()?.send(streamed("e3", 4));
     await settle();
-    console.log(
-      "DBG",
-      daemon.streams.length,
-      daemon.openStream() === undefined,
-      daemon.gets.map((g) => g.path),
-    );
+    // why: the reconnect after the quiet drop is read once, as a gap read, by the shared list.
+    const gapReads = (): number =>
+      daemon.gets.filter(
+        (get) => get.path.startsWith("/v1/events?since=") && get.path !== "/v1/events?since=1h",
+      ).length;
+    expect(gapReads()).toBe(1);
     expect(leaseRows(back.read())).toBe(4);
 
     back.unmount();
     await vi.advanceTimersByTimeAsync(61_000);
+    // why: a dropped list is stopped, so a stream that reconnects now is read by nobody.
+    const before = gapReads();
+    daemon.openStream()?.break();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(gapReads()).toBe(before);
     const late = mount(() => useLeaseEvents(LEASE));
     await settle();
     expect(recentReads()).toBe(2);
