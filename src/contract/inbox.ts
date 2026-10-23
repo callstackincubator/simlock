@@ -11,7 +11,7 @@ import type {
   workerViewSchema,
 } from "./schemas.js";
 
-export type InboxItem = z.infer<typeof inboxItemSchema>;
+type InboxItem = z.infer<typeof inboxItemSchema>;
 type InboxGroup = InboxItem["group"];
 type WorkerItem = Extract<InboxItem, { readonly worker: unknown }>;
 type WorkerView = z.infer<typeof workerViewSchema>;
@@ -20,7 +20,7 @@ type LeaseRecord = z.infer<typeof statusLeaseSchema>;
 type TokenRecord = z.infer<typeof tokenRecordSchema>;
 type WaitingRequest = z.infer<typeof waitingRequestSchema>;
 
-export interface InboxContext {
+interface InboxContext {
   readonly now: number;
   readonly requests?: readonly WaitingRequest[] | undefined;
   readonly leases?: readonly LeaseRecord[] | undefined;

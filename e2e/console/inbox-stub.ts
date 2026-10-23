@@ -19,6 +19,22 @@ export function waitingItem(id: string, waitedMs: number): StubbedItem {
   });
 }
 
+export function drainedWorkerItem(id: string): StubbedItem {
+  return (now) => ({
+    condition: "drained",
+    group: "Needs a look",
+    key: `${id}/drained`,
+    worker: {
+      connection: "connected",
+      drained: true,
+      heldLeases: 0,
+      id,
+      lastSeenAt: now,
+      leasedDevices: 0,
+    },
+  });
+}
+
 export function endingItem(
   id: string,
   leftMs: number,

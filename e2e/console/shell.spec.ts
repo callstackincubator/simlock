@@ -60,8 +60,9 @@ test.describe("the shell", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
     await expect.poll(() => asked.get("/v1/inbox")).toBe(1);
 
-    // why: the token check at start reads /v1/workers once outside the query layer, so one is allowed.
-    expect(asked.get("/v1/workers") ?? 0).toBeLessThanOrEqual(1);
+    // why: the sign-in check and the token check at start each read /v1/workers outside the query
+    // layer, so two are allowed.
+    expect(asked.get("/v1/workers") ?? 0).toBeLessThanOrEqual(2);
     for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
       expect(asked.get(path) ?? 0, path).toBe(0);
     }

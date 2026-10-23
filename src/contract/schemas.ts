@@ -1387,17 +1387,17 @@ export const statusLeaseSchema = leaseRecordSchema.extend({
   workerLeaseId: z.string().optional(),
 });
 
-export const inboxGroupSchema = z.enum(["Broken", "Needs a look", "Heads-up"]);
+const inboxGroupSchema = z.enum(["Broken", "Needs a look", "Heads-up"]);
 
 // why: an Inbox item names the worker it is about by the view's fields that the page does not read from the worker list, plus two counts the view's lists would otherwise have to be sent for.
-export const inboxWorkerSchema = workerViewSchema
+const inboxWorkerSchema = workerViewSchema
   .omit({ catalog: true, devices: true, downloads: true, leases: true })
   .extend({
     heldLeases: z.number().int().nonnegative(),
     leasedDevices: z.number().int().nonnegative(),
   });
 
-export const inboxDeviceSchema = statusDeviceSchema.and(
+const inboxDeviceSchema = statusDeviceSchema.and(
   z.object({
     stateEnteredAt: z.number().optional(),
     workerId: z.string(),
@@ -1405,7 +1405,7 @@ export const inboxDeviceSchema = statusDeviceSchema.and(
   }),
 );
 
-export const inboxLeaseSchema = statusLeaseSchema.extend({
+const inboxLeaseSchema = statusLeaseSchema.extend({
   holder: z.string(),
   model: z.string(),
 });
