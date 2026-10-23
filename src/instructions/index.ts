@@ -100,8 +100,6 @@ export type {
   AgentTool,
   SetupAgentToolsOptions,
   SetupReport,
-  SetupScope,
-  SetupToolReport,
   ToolOutcome,
   RunTool,
 } from "./setup.js";

@@ -104,18 +104,39 @@ export interface SetupAgentToolsOptions {
   readonly tool?: AgentTool | undefined;
 }
 
-export const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
+const AGENT_TOOL_IDS = Object.keys(AGENT_TOOLS) as readonly AgentTool[];
 
 export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<SetupReport> {
-  const { filesystem, tool } = options;
   const scope =
     options.scope ??
     (options.interactive && (await options.confirm(SCOPE_PROMPT)) ? "project" : "user");
-  const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
-  const tools = tool === undefined ? AGENT_TOOL_IDS : [tool];
+  const report = await inspectTools(options, scope);
+  const wantsMcp = await askMcp(options, scope, report);
 
+  const skill = renderSkill();
+  for (const { skill: entry } of report) {
+    if (entry.status !== "skipped") await installSkill(options.filesystem, entry.path, skill);
+  }
+  const tools: SetupToolReport[] = [];
+  for (const entry of report) {
+    const mcp = wantsMcp.has(entry.tool)
+      ? await connectMcp(options.runTool, entry.tool, scope, options.workingDirectory)
+      : undefined;
+    tools.push(mcp === undefined ? entry : { ...entry, mcp });
+  }
+  const result: SetupReport = { scope, tools };
+  if (tools.some(({ mcp }) => mcp?.status === "failed")) throw new SetupMcpFailedError(result);
+  return result;
+}
+
+async function inspectTools(
+  options: SetupAgentToolsOptions,
+  scope: SetupScope,
+): Promise<SetupToolReport[]> {
+  const { filesystem, tool } = options;
+  const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
   const report: SetupToolReport[] = [];
-  for (const id of tools) {
+  for (const id of tool === undefined ? AGENT_TOOL_IDS : [tool]) {
     const layout = AGENT_TOOLS[id];
     const path = join(base, layout.skills, SIMLOCK_DIRECTORY);
     const presence =
@@ -126,36 +147,29 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
     const status = install ? await installStatus(filesystem, path) : "skipped";
     report.push({ tool: id, skill: { status, path } });
   }
+  return report;
+}
 
+async function askMcp(
+  options: SetupAgentToolsOptions,
+  scope: SetupScope,
+  report: readonly SetupToolReport[],
+): Promise<Set<AgentTool>> {
   const wantsMcp = new Set<AgentTool>();
-  for (const { tool: id, skill: entry } of report) {
-    if (entry.status === "skipped") continue;
-    if (options.mcp === true) wantsMcp.add(id);
-    else if (
-      options.mcp === undefined &&
-      options.interactive &&
-      !(id === "codex" && scope === "project") &&
-      (await options.confirm(MCP_PROMPTS[id]))
+  if (options.mcp === false) return wantsMcp;
+  for (const { tool, skill } of report) {
+    if (skill.status === "skipped") continue;
+    const asks = options.mcp === undefined && options.interactive;
+    if (
+      options.mcp === true ||
+      (asks &&
+        !(tool === "codex" && scope === "project") &&
+        (await options.confirm(MCP_PROMPTS[tool])))
     ) {
-      wantsMcp.add(id);
+      wantsMcp.add(tool);
     }
   }
-
-  const skill = renderSkill();
-  for (const { skill: entry } of report) {
-    if (entry.status === "skipped") continue;
-    await installSkill(filesystem, entry.path, skill);
-  }
-  const connected: SetupToolReport[] = [];
-  for (const entry of report) {
-    const mcp = wantsMcp.has(entry.tool)
-      ? await connectMcp(options.runTool, entry.tool, scope, options.workingDirectory)
-      : undefined;
-    connected.push(mcp === undefined ? entry : { ...entry, mcp });
-  }
-  const result: SetupReport = { scope, tools: connected };
-  if (connected.some(({ mcp }) => mcp?.status === "failed")) throw new SetupMcpFailedError(result);
-  return result;
+  return wantsMcp;
 }
 
 type McpResult = NonNullable<SetupToolReport["mcp"]>;

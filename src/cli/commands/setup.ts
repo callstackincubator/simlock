@@ -36,7 +36,19 @@ function renderReport(report: SetupReport): string {
   return `${lines.join("\n")}\n`;
 }
 
-async function run(argv: readonly string[], { environment }: CommandContext): Promise<number> {
+interface SetupFlags {
+  readonly help: boolean;
+  readonly json: boolean;
+  readonly scope: "user" | "project" | undefined;
+  readonly mcp: boolean | undefined;
+  readonly tool: AgentTool | undefined;
+}
+
+function exclusive(first: unknown, second: unknown, message: string): void {
+  if (first === true && second === true) throw new UsageError(message);
+}
+
+function parseSetupFlags(argv: readonly string[]): SetupFlags {
   const values = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
@@ -46,24 +58,32 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
     mcp: { type: "boolean" },
     "no-mcp": { type: "boolean" },
   });
-  if (values.help) {
-    environment.stdout.write(USAGE);
-    return 0;
-  }
   if (values.positionals.length > 0) throw new UsageError("setup accepts no arguments");
-  if (values.user && values.project)
-    throw new UsageError("--user and --project cannot be used together");
-  if (values.mcp && values["no-mcp"])
-    throw new UsageError("--mcp and --no-mcp cannot be used together");
-  const tools = values.tool as string[] | undefined;
-  if (tools !== undefined && tools.length > 1) throw new UsageError("--tool can be given once");
-  const tool = tools?.[0];
+  exclusive(values.user, values.project, "--user and --project cannot be used together");
+  exclusive(values.mcp, values["no-mcp"], "--mcp and --no-mcp cannot be used together");
+  const tools = (values.tool ?? []) as string[];
+  if (tools.length > 1) throw new UsageError("--tool can be given once");
+  const tool = tools[0];
   if (tool !== undefined && !TOOLS.includes(tool)) {
     throw new UsageError(`--tool takes ${TOOLS.join(" or ")}`);
   }
-  const json = values.json === true;
+  return {
+    help: values.help === true,
+    json: values.json === true,
+    scope: values.project ? "project" : values.user ? "user" : undefined,
+    mcp: values.mcp ? true : values["no-mcp"] ? false : undefined,
+    tool: tool as AgentTool | undefined,
+  };
+}
+
+async function run(argv: readonly string[], { environment }: CommandContext): Promise<number> {
+  const flags = parseSetupFlags(argv);
+  if (flags.help) {
+    environment.stdout.write(USAGE);
+    return 0;
+  }
   const print = (report: SetupReport): void => {
-    environment.stdout.write(json ? `${JSON.stringify(report)}\n` : renderReport(report));
+    environment.stdout.write(flags.json ? `${JSON.stringify(report)}\n` : renderReport(report));
   };
   try {
     print(
@@ -72,12 +92,12 @@ async function run(argv: readonly string[], { environment }: CommandContext): Pr
         homeDirectory: environment.homeDirectory,
         workingDirectory: environment.workingDirectory,
         codexHome: environment.codexHome,
-        scope: values.project ? "project" : values.user ? "user" : undefined,
-        mcp: values.mcp ? true : values["no-mcp"] ? false : undefined,
-        tool: tool as AgentTool | undefined,
+        scope: flags.scope,
+        mcp: flags.mcp,
+        tool: flags.tool,
         runTool: environment.runTool,
         confirm: environment.confirm ?? (async () => false),
-        interactive: !json,
+        interactive: !flags.json,
       }),
     );
   } catch (error: unknown) {
