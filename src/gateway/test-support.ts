@@ -329,6 +329,9 @@ export class ScriptedWorkerClient {
   requestLeaseDefault: RequestLeaseOutcome = { kind: "error", error: noCapacityError() };
   readonly renewLeaseQueue: RenewLeaseOutcome[] = [];
   readonly releaseLeaseQueue: ReleaseLeaseOutcome[] = [];
+  /** why: a real worker's `lease.released` event reaches the gateway before the release reply;
+   * a test sets this to relay that event from inside the call. */
+  onReleaseLease: ((leaseId: string) => void) | undefined;
   readonly execQueue: ExecOutcome[] = [];
   /**
    * H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
@@ -475,6 +478,7 @@ export class ScriptedWorkerClient {
     this.#throwIfFailing();
     const outcome = this.releaseLeaseQueue.shift();
     if (outcome?.kind === "error") throw outcome.error;
+    this.onReleaseLease?.(input.leaseId);
     return { leaseId: input.leaseId };
   }
 

@@ -2788,6 +2788,32 @@ describe("worker routes", () => {
     expect(await response.json()).toMatchObject({ workers: [{ id: "wrk_1" }] });
   });
 
+  it("GET /v1/inbox dispatches inbox.get for the caller and answers its items", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    const item = {
+      condition: "disconnected",
+      group: "Broken",
+      key: "wrk_1/disconnected",
+      worker: {
+        connection: "disconnected",
+        drained: false,
+        heldLeases: 0,
+        id: "wrk_1",
+        lastSeenAt: 1,
+        leasedDevices: 0,
+      },
+    };
+    dispatcher.handlers["inbox.get"] = () => ({ items: [item] });
+
+    const response = await app.request("/v1/inbox", { headers: operatorAuth });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ items: [item] });
+    expect(dispatcher.calls.map((call) => [call.operation, call.session.role])).toEqual([
+      ["inbox.get", "admin"],
+    ]);
+  });
+
   it("maps drain, undrain and remove onto their operations, with the id from the path", async () => {
     const { app, dispatcher } = gatewayHarness();
     dispatcher.handlers["worker.drain"] = (input: never) => ({

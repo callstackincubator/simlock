@@ -960,6 +960,48 @@ describe("GatewayDispatcher", () => {
     expect(Object.keys(views[0] ?? {})).not.toContain("leases");
   });
 
+  it("inbox.get answers the items the fleet's views, leases, waiting requests and tokens make", async () => {
+    const holders = async (options: Parameters<typeof harness>[0]) => {
+      const { clock, dispatcher, workers } = harness(options);
+      workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+      workers.refresh("wrk_1", {
+        devices: [deviceFixture("dev_1", "leased")],
+        health: "running",
+        leases: [{ ...leaseFixture("lease_1", "dev_1"), ttlDeadline: 121_000 }],
+        waiting: [
+          {
+            createdAt: 500,
+            id: "req_1",
+            requesterId: "agent-2",
+            spec: { model: "iPhone 17", platform: "ios" },
+            stage: "starting",
+          },
+        ],
+      });
+      workers.connected("wrk_2", "mac-mini-2", "0.3.0");
+      workers.disconnected("wrk_2");
+      clock.advance(60_000);
+      const { items } = await dispatcher.dispatch("inbox.get", {}, session());
+      return items;
+    };
+
+    const named = await holders({ tokenRecords: [{ id: "agent-1", label: "ci-runner" }] });
+
+    expect(named).toEqual([
+      expect.objectContaining({ condition: "disconnected", key: "wrk_2/disconnected" }),
+      expect.objectContaining({ condition: "waiting", key: "request/req_1/waiting" }),
+      expect.objectContaining({
+        condition: "ending",
+        key: "lease/lease_1/ending",
+        lease: expect.objectContaining({ holder: "ci-runner", model: "iPhone 17" }),
+      }),
+    ]);
+    const unnamed = await holders({ withoutTokens: true });
+    expect(unnamed).toContainEqual(
+      expect.objectContaining({ lease: expect.objectContaining({ holder: "agent-1" }) }),
+    );
+  });
+
   it("lists each of an owner's gateway-issued leases under its own record, and none whose worker has no view", async () => {
     const { dispatcher, leaseIndex, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);

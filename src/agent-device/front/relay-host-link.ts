@@ -17,6 +17,7 @@ export interface FleetWorker {
   readonly id: string;
   readonly platforms: readonly AgentDevicePlatform[];
   readonly leaseMaxTtlMs: number;
+  readonly drained: boolean;
 }
 
 export interface PlacedLease {
@@ -49,7 +50,7 @@ export interface FleetPort {
   // why: when this gateway process started, which opens the window in which a lease it cannot place may still come back.
   readonly startedAt: number;
   leaseOf(leaseId: string): PlacedLease | undefined;
-  // why: connected, not drained, agent-device available, catalog read and `lease.maxTtlMs` known.
+  // why: connected, agent-device available, catalog read and `lease.maxTtlMs` known; drained workers are listed too, so an allocate with only drained ones reaches routing, which answers NO_CAPACITY.
   capableWorkers(): readonly FleetWorker[];
   // why: a drained worker keeps serving the leases it holds, so a lease's holder is judged without the drain flag.
   holder(workerId: string): FleetWorker | undefined;
@@ -226,7 +227,7 @@ export class RelayHostLink implements HostLink {
   async #forwardBare(request: Request, tenant: string): Promise<Response> {
     const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
     if (request.method !== "GET" || path !== "/health") return refuseRequest(request, TOO_OLD);
-    const worker = this.options.fleet.capableWorkers()[0];
+    const worker = this.options.fleet.capableWorkers().find((candidate) => !candidate.drained);
     if (worker === undefined) throw new Error(NO_WORKER);
     return this.options.fleet.relay(worker.id, request, tenant);
   }

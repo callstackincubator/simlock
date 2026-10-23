@@ -1387,6 +1387,65 @@ export const statusLeaseSchema = leaseRecordSchema.extend({
   workerLeaseId: z.string().optional(),
 });
 
+const inboxGroupSchema = z.enum(["Broken", "Needs a look", "Heads-up"]);
+
+// why: an Inbox item names the worker it is about by the view's fields that the page does not read from the worker list, plus two counts the view's lists would otherwise have to be sent for.
+const inboxWorkerSchema = workerViewSchema
+  .omit({ catalog: true, devices: true, downloads: true, leases: true })
+  .extend({
+    heldLeases: z.number().int().nonnegative(),
+    leasedDevices: z.number().int().nonnegative(),
+  });
+
+const inboxDeviceSchema = statusDeviceSchema.and(
+  z.object({
+    stateEnteredAt: z.number().optional(),
+    workerId: z.string(),
+    workerLabel: z.string().optional(),
+  }),
+);
+
+const inboxLeaseSchema = statusLeaseSchema.extend({
+  holder: z.string(),
+  model: z.string(),
+});
+
+const inboxItemBase = { group: inboxGroupSchema, key: z.string() };
+
+/**
+ * One thing that needs the operator (`inbox.get`): the rules in `inbox.ts` decide it. Each item
+ * carries a small copy of the one subject it is about.
+ */
+export const inboxItemSchema = z.union([
+  z.object({
+    ...inboxItemBase,
+    condition: z.enum(["disconnected", "incompatible", "drained", "update failed"]),
+    worker: inboxWorkerSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.literal("over RAM budget"),
+    limitBytes: z.number(),
+    usedBytes: z.number(),
+    worker: inboxWorkerSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.enum(["quarantined", "stalled", "absent"]),
+    device: inboxDeviceSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.literal("waiting"),
+    request: waitingRequestSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.literal("ending"),
+    lease: inboxLeaseSchema,
+  }),
+]);
+
 const USAGE_MAX_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** `usage.get`'s input: wire input, so both ends are bounded before anything is read (safety rule 10). */

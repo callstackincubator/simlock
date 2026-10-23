@@ -10,7 +10,7 @@ import {
   startFleet,
   test,
 } from "./fixtures.js";
-import { fetchFull } from "./full-fetch.js";
+import { addInboxItems, drainedWorkerItem } from "./inbox-stub.js";
 
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -669,19 +669,9 @@ test.describe("the console acts", () => {
       await expect(page.getByRole("menuitem")).toHaveText(["Release lease"]);
       await page.keyboard.press("Escape");
 
-      // why: a single host has no drained worker, so the list says one is, to give the Inbox a row
-      // that offers Undrain on a gateway.
-      await page.route(
-        (url) => url.pathname === "/v1/workers",
-        async (route) => {
-          const response = await fetchFull(route);
-          const body = (await response.json()) as { workers: Record<string, unknown>[] };
-          await route.fulfill({
-            json: { ...body, workers: body.workers.map((view) => ({ ...view, drained: true })) },
-            response,
-          });
-        },
-      );
+      // why: a single host has no drained worker, so the Inbox is given a drained worker's item, to
+      // give it a row that offers Undrain on a gateway.
+      await addInboxItems(page, () => [drainedWorkerItem("wrk_solo")]);
       await page.goto(new URL("/inbox", daemon.url).toString());
       await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
       await expect(page.locator("main .inbox-list li")).toHaveCount(1);

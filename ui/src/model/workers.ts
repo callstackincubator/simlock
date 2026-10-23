@@ -9,22 +9,16 @@ export interface WorkerList {
   readonly workers: readonly WorkerView[];
 }
 
-export function workerName(worker: WorkerView): string {
+export function workerName(worker: {
+  readonly id: string;
+  readonly label?: string | undefined;
+}): string {
   return worker.label ?? worker.id;
 }
 
 // why: ids are opaque, so the id is encoded.
 export function workerPath(id: string): `/${string}` {
   return `/fleet/${encodeURIComponent(id)}`;
-}
-
-const PLATFORM_NAMES: Readonly<Partial<Record<string, string>>> = {
-  android: "Android",
-  ios: "iOS",
-};
-
-export function platformName(platform: string): string {
-  return PLATFORM_NAMES[platform] ?? platform;
 }
 
 export function capacityByPlatform(
@@ -50,16 +44,6 @@ export function isUnread(worker: WorkerView): boolean {
 export function leasesHeld(workers: readonly WorkerView[]): number | undefined {
   if (workers.some(isUnread)) return undefined;
   return workers.reduce((sum, worker) => sum + (worker.leases?.length ?? 0), 0);
-}
-
-// why: the age is read only from a connected worker: a gateway moves `lastSeenAt` when a worker
-// disconnects, without reading its devices again.
-export function stateEnteredAt(device: WorkerDevice, worker: WorkerView): number | undefined {
-  if (device.state === "leased") {
-    return worker.leases?.find((lease) => lease.deviceId === device.id)?.grantedAt;
-  }
-  if (device.transitionAgeMs === undefined || worker.connection !== "connected") return undefined;
-  return worker.lastSeenAt - device.transitionAgeMs;
 }
 
 export type WarmTarget = NonNullable<WorkerView["warmPool"]>["targets"][number];

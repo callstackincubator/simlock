@@ -18,7 +18,7 @@ const quiet: Overview = {
   figures: { kind: "loading" },
   capacity: [],
   ending: { label: "Ending soon", value: "0" },
-  inbox: { couldNotCheck: [], needsYou: [], problems: 0 },
+  inbox: { needsYou: [], problems: 0 },
   tiles: [],
   workers: [],
 };
@@ -38,7 +38,6 @@ describe("the overview screen", () => {
         overview={{
           ...quiet,
           inbox: {
-            couldNotCheck: [],
             needsYou: [
               {
                 key: "w1/disconnected",
@@ -58,52 +57,6 @@ describe("the overview screen", () => {
     expect(shown).toContain('href="/inbox">All in Inbox (5)</a>');
     expect(text(shown)).toContain("Needs you");
     expect(text(shown)).not.toContain("Nothing needs you");
-  });
-
-  it("says Could not check, and not Nothing needs you, when a read failed and no problem is known", () => {
-    const shown = text(
-      inConsole(
-        <OverviewBody
-          overview={{
-            ...quiet,
-            inbox: { couldNotCheck: ["waiting requests", "leases"], needsYou: [], problems: 0 },
-          }}
-        />,
-      ),
-    );
-
-    expect(shown).toContain("Could not check: waiting requests, leases");
-    expect(shown).not.toContain("Nothing needs you");
-  });
-
-  it("shows the Needs you panel and the Could not check line together when a read failed and a problem is known", () => {
-    const shown = text(
-      inConsole(
-        <OverviewBody
-          overview={{
-            ...quiet,
-            inbox: {
-              couldNotCheck: ["leases"],
-              needsYou: [
-                {
-                  key: "w1/disconnected",
-                  subject: "mac-1",
-                  to: "/inbox/w1%2Fdisconnected",
-                  tone: "error",
-                  word: "disconnected",
-                },
-              ],
-              problems: 1,
-            },
-          }}
-        />,
-      ),
-    );
-
-    expect(shown).toContain("Needs you");
-    expect(shown).toContain("All in Inbox (1)");
-    expect(shown).toContain("Could not check: leases");
-    expect(shown).not.toContain("Nothing needs you");
   });
 
   it("links the workers table to Fleet and says 2 workers not read yet in the plural", () => {

@@ -13,11 +13,10 @@ import { useQuery } from "@tanstack/react-query";
 import type { ApiPath } from "../data/api";
 import { type DaemonFacts, type DaemonMode, type ModeStore, watchMode } from "../data/mode";
 import { useApi, useSession } from "./services";
-import { createQueries, type Queries } from "./queries";
+import { createQueries, type Queries, resourceOf } from "./queries";
 import { browserClock, documentVisibility } from "../data/live/browser";
 import {
   type Clock,
-  ConnectionLost,
   type ConnectionState,
   LiveConnection,
   type ResourceState,
@@ -76,16 +75,9 @@ function useLive(): Live {
   return live;
 }
 
-// why: a read lost to the network is the connection's loss, which the sidebar says; the page
-// keeps its data, or its loading, and shows no error for it.
 export function useRouteQuery<T>(path: ApiPath): ResourceState<T> {
   const { queries } = useLive();
-  const { data, error } = useQuery(queries.options<T>(path), queries.client);
-  const refusal = error instanceof ConnectionLost ? null : error;
-  return {
-    ...(data === undefined ? {} : { data }),
-    ...(refusal === null || refusal === undefined ? {} : { error: refusal }),
-  };
+  return resourceOf(useQuery(queries.options<T>(path), queries.client));
 }
 
 // why: `undefined` until a read of `GET /v1/status` has said which kind of daemon this is.

@@ -1,21 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import type { ConnectionPhase } from "../data/live/connection";
-import { inboxItems, problemCount } from "../model/inbox";
+import { problemCount } from "../../../src/contract/inbox";
+import type { InboxList } from "../model/inbox";
 import { formatDuration } from "../model/time";
 import type { Toned } from "../model/tones";
-import type { WorkerList } from "../model/workers";
-import { useInboxReads } from "./inbox";
-import { useConnection, useRouteQuery, useNow } from "./live";
+import { useConnection, useNow, useRouteQuery } from "./live";
 import { useApi, useSession } from "./services";
 
 export function useInboxCount(): number | undefined {
-  const workers = useRouteQuery<WorkerList>("/v1/workers").data?.workers;
-  const { leases, tokens, waiting } = useInboxReads();
-  const now = useNow();
-  if (workers === undefined) return undefined;
-  const requests = waiting.kind === "ready" ? waiting.data.requests : [];
-  return problemCount(inboxItems(workers, { leases, now: now.server, requests, tokens }));
+  const items = useRouteQuery<InboxList>("/v1/inbox").data?.items;
+  return items === undefined ? undefined : problemCount(items);
 }
 
 // why: a 401 at any time signs the operator out; a tab reloaded with a token since revoked finds out

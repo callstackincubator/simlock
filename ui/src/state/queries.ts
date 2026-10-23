@@ -8,13 +8,27 @@ import {
 } from "@tanstack/react-query";
 
 import type { ApiPath } from "../data/api";
-import type { Clock, LiveConnection, Visibility } from "../data/live/connection";
+import {
+  type Clock,
+  ConnectionLost,
+  type LiveConnection,
+  type ResourceState,
+  type StreamEvent,
+  type Visibility,
+} from "../data/live/connection";
 import { readEvent } from "../model/events";
 import { readRenewal, renewAnswer, type Renewal } from "../model/renewal";
+import { type StaleKey, staleKeys } from "../model/stale-keys";
 
 // why: data no page uses stays a minute, so going back to a page shows it at once.
 const DROP_MS = 60_000;
 const FRESH_MS = 2_000;
+// why: events of one change come in a run, so a read waits until the run has been quiet this long,
+// but never more than the cap after the first, and is sent once more later for a change that
+// landed after the first answer was made.
+const QUIET_MS = 300;
+const CAP_MS = 1_000;
+const AGAIN_MS = 1_500;
 const RENEWAL_KEPT_MS = 60_000;
 const RENEWED_ROUTES: readonly string[] = ["leases", "workers"];
 
@@ -24,6 +38,7 @@ interface Times {
 }
 
 const TIMES: Readonly<Record<string, Times>> = {
+  inbox: { freshMs: FRESH_MS, pollMs: 10_000 },
   lease: { freshMs: FRESH_MS, pollMs: 10_000 },
   "lease-requests": { freshMs: FRESH_MS, pollMs: 5_000 },
   leases: { freshMs: FRESH_MS, pollMs: 10_000 },
@@ -56,12 +71,25 @@ export function routeKey(path: ApiPath): readonly string[] {
   return [head];
 }
 
+// why: a read lost to the network is the connection's loss, which the sidebar says; the page keeps
+// its data, or its loading, and shows no error for it.
+export function resourceOf<T>(result: {
+  readonly data: T | undefined;
+  readonly error: unknown;
+}): ResourceState<T> {
+  const { data, error } = result;
+  const refusal = error instanceof ConnectionLost ? undefined : error;
+  return {
+    ...(data === undefined ? {} : { data }),
+    ...(refusal === undefined || refusal === null ? {} : { error: refusal }),
+  };
+}
+
 function timesOf(key: readonly unknown[]): Times {
   return TIMES[String(key[0])] ?? DEFAULT_TIMES;
 }
 
-export function createQueries(options: QueriesOptions): Queries {
-  const { clock, connection, visibility } = options;
+export function createQueries({ clock, connection, visibility }: QueriesOptions): Queries {
   const client = new QueryClient({
     defaultOptions: {
       queries: {
@@ -82,9 +110,6 @@ export function createQueries(options: QueriesOptions): Queries {
     onlineManager.setOnline(connection.state().phase !== "disconnected"),
   );
   client.mount();
-
-  // why: the ETag of each key's last answer, sent back so an unchanged answer costs no download.
-  const tags = new Map<string, string>();
 
   // why: one poll timer per key, not per page using it, so two pages on one key do not read twice.
   const polls = new Map<string, unknown>();
@@ -120,6 +145,9 @@ export function createQueries(options: QueriesOptions): Queries {
     }
   });
 
+  // why: the ETag of each key's last answer, sent back so an unchanged answer costs no download.
+  const tags = new Map<string, string>();
+
   // why: a gateway relays a worker's event before it refreshes its view of that worker, so a read
   // just after a renewal can still carry the old deadline.
   const kept: { readonly renewal: Renewal; readonly until: number }[] = [];
@@ -130,22 +158,70 @@ export function createQueries(options: QueriesOptions): Queries {
     }
     return kept.reduce((answer, { renewal }) => renewAnswer(route, answer, renewal), data);
   };
-  const stopEvents = connection.onEvent((streamEvent) => {
-    const event = readEvent(streamEvent.data);
-    const renewal = event === undefined ? undefined : readRenewal(event);
-    if (renewal === undefined) return;
-    kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
-    for (const route of RENEWED_ROUTES) {
-      client.setQueryData<unknown>([route], (old: unknown) =>
-        old === undefined ? undefined : renewAnswer(route, old, renewal),
-      );
+
+  const marked = new Map<string, StaleKey>();
+  const again = new Map<string, StaleKey>();
+  let quietTimer: unknown;
+  let capTimer: unknown;
+  let againTimer: unknown;
+  const readMarked = (keys: ReadonlyMap<string, StaleKey>): void => {
+    // why: a hidden tab or a lost connection reads nothing; coming back reads each key on screen once.
+    if (visibility.hidden() || !onlineManager.isOnline()) return;
+    for (const queryKey of keys.values()) {
+      void client.refetchQueries({ queryKey, type: "active" }, { cancelRefetch: false });
     }
+  };
+  const flush = (): void => {
+    clock.clearTimeout(quietTimer);
+    clock.clearTimeout(capTimer);
+    quietTimer = undefined;
+    capTimer = undefined;
+    const keys = new Map(marked);
+    marked.clear();
+    readMarked(keys);
+    for (const [hash, key] of keys) again.set(hash, key);
+    clock.clearTimeout(againTimer);
+    againTimer = clock.setTimeout(() => {
+      againTimer = undefined;
+      const later = new Map(again);
+      again.clear();
+      readMarked(later);
+    }, AGAIN_MS);
+  };
+  const stopEvents = connection.onEvent((event: StreamEvent) => {
+    const { data } = event;
+    const parsed = readEvent(data);
+    const renewal = parsed === undefined ? undefined : readRenewal(parsed);
+    if (renewal !== undefined) {
+      kept.push({ renewal, until: clock.now() + RENEWAL_KEPT_MS });
+      for (const route of RENEWED_ROUTES) {
+        client.setQueryData<unknown>([route], (old: unknown) =>
+          old === undefined ? undefined : renewAnswer(route, old, renewal),
+        );
+      }
+    }
+    const payload =
+      typeof data === "object" && data !== null
+        ? (data as { payload?: unknown }).payload
+        : undefined;
+    const keys = staleKeys(event.event, payload);
+    if (keys.length === 0) return;
+    for (const queryKey of keys) {
+      marked.set(queryKey.join("/"), queryKey);
+      void client.invalidateQueries({ queryKey, refetchType: "none" });
+    }
+    clock.clearTimeout(quietTimer);
+    quietTimer = clock.setTimeout(flush, QUIET_MS);
+    capTimer ??= clock.setTimeout(flush, CAP_MS);
   });
 
   return {
     client,
     dispose: () => {
       stopEvents();
+      clock.clearTimeout(quietTimer);
+      clock.clearTimeout(capTimer);
+      clock.clearTimeout(againTimer);
       stopCache();
       for (const hash of polls.keys()) stopPoll(hash);
       stopVisibility();

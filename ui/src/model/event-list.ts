@@ -1,5 +1,5 @@
 import { eventSummary, eventTone } from "./activity";
-import { inboxItems } from "./inbox";
+import { inboxItems } from "../../../src/contract/inbox";
 import {
   type ConsoleEvent,
   payloadPairs,
@@ -154,7 +154,8 @@ export function eventAction(event: ConsoleEvent, places: EventPlaces): EventActi
   }
   const deviceId = textField(payload, "deviceId");
   const item = inboxItems(places.workers).find(
-    (entry) => "device" in entry && entry.worker.id === workerId && entry.device.id === deviceId,
+    (entry) =>
+      "device" in entry && entry.device.workerId === workerId && entry.device.id === deviceId,
   );
   if (item !== undefined) {
     return { label: "Open Inbox item", to: inboxPath(item.key) };

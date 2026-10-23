@@ -39,6 +39,7 @@ import { createUsageReader, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
+  inboxItems,
   isSimlockError,
   EVENTS_PAGE_DEFAULT,
   OPERATIONS,
@@ -241,6 +242,7 @@ export class GatewayDispatcher {
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
+      "inbox.get": this.#inboxGet,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
       "worker.list": this.#workerList,
@@ -409,6 +411,25 @@ export class GatewayDispatcher {
     // in the store.
     if (revoked) await this.options.closeUplinksForToken?.(input.id);
     return { revoked };
+  };
+
+  // why: the rules read what `worker.list`, `lease.list`, `list.get` and `token.list` serve an admin, so
+  // the Inbox never disagrees with the pages that list the same things; a token store that is
+  // unavailable leaves holders named by their ids, as the console did with no tokens.
+  #inboxGet: Handler<"inbox.get"> = async () => {
+    const tokens = await Promise.resolve()
+      .then(() => this.#requireTokens().list())
+      .catch(() => []);
+    return {
+      items: [
+        ...inboxItems(this.options.workers.views(), {
+          leases: this.#fleetLeases(),
+          now: this.options.clock.now(),
+          requests: this.#fleetWaiting(),
+          tokens,
+        }),
+      ],
+    };
   };
 
   #workerList: Handler<"worker.list"> = () => ({ workers: this.options.workers.views() });

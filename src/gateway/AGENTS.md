@@ -88,7 +88,7 @@ no live link → `WORKER_UNREACHABLE`; a worker `UNKNOWN_LEASE` drops the entry.
 no TTL timer. Relayed `lease.expired`/`lease.released` remove the entry and push `lease-lost`.
 Exec forwards the namespaced requester; `gateway.execTimeoutMs` is a backstop over the worker's `exec.timeoutMs`.
 The lease index is in memory, rebuilt from each view's leases whose requester starts `gw:<id>:`;
-missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view.
+missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view. A lease the worker answered released or `UNKNOWN_LEASE` (even if its relayed event already forgot it) is not added back by a later snapshot that still lists it.
 
 **HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts` and `../stream/`):
 
@@ -99,10 +99,9 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
 
-**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) and `lease.get` (one lease, as `lease.list` would hold it for
-the caller) answer from views; a gateway lease record also carries `workerLeaseId`, the worker's own
-id (not on `status.get`). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`,
-`driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
+**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) and `lease.get`
+(one lease, as `lease.list` would hold it for the caller) answer from views; a gateway lease record
+also carries `workerLeaseId`, the worker's own id (not on `status.get`). `inbox.get` runs `inboxItems` (contract) over the worker views, `#fleetLeases()`, `#fleetWaiting()` and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
 
 **Uplink drop.** View → `disconnected`, kept; `worker.disconnected`. In-flight calls → `WORKER_UNREACHABLE`, an in-flight lease request → `worker-failed`. `token.revoke` closes its uplinks.
 

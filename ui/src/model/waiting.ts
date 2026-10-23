@@ -1,28 +1,16 @@
 import type { z } from "zod";
 
 import type { waitingRequestSchema } from "../../../src/contract/schemas";
+import { describeRequestedDevice, platformName } from "../../../src/contract/inbox";
 import { itemPath } from "./paths";
 import { formatDuration } from "./time";
 import { type Toned, waitingStageStatus } from "./tones";
-import { platformName, type WorkerView, workerName, workerPath } from "./workers";
+import { type WorkerView, workerName, workerPath } from "./workers";
 
 export type WaitingRequest = z.infer<typeof waitingRequestSchema>;
 
 export interface WaitingList {
   readonly requests: readonly WaitingRequest[];
-}
-
-export function requestedDevice(spec: WaitingRequest["spec"]): string {
-  return [
-    [platformName(spec.platform), spec.model ?? spec.class]
-      .filter((part) => part !== undefined)
-      .join(" "),
-    spec.osVersion === undefined ? undefined : `runtime ${spec.osVersion}`,
-    spec.mode === undefined ? undefined : `mode ${spec.mode}`,
-    spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
-  ]
-    .filter((part) => part !== undefined)
-    .join(", ");
 }
 
 // why: a single host names no worker on its requests, so the request is found in the host's view by
@@ -179,7 +167,7 @@ export function waitingTable(
     const why = whyOf(request);
     return {
       created: createdAtOf(request.createdAt),
-      device: requestedDevice(request.spec),
+      device: describeRequestedDevice(request.spec),
       id: request.id,
       key: `${request.workerId ?? ""}/${request.id}`,
       physicalQueue: request.spec.physical === true,

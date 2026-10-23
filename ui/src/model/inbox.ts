@@ -1,181 +1,38 @@
+import type { z } from "zod";
+
+import { describeRequestedDevice, problemCount } from "../../../src/contract/inbox";
+import type { inboxItemSchema } from "../../../src/contract/index";
 import { eventSummary, eventTone } from "./activity";
 import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
+import { eventsOfLease, leasePath } from "./leases";
 import { inboxPath, itemPath } from "./paths";
-import {
-  deviceOfLease,
-  eventsOfLease,
-  holderName,
-  isExpiring,
-  type LeaseRecord,
-  leasePath,
-  type TokenRecord,
-} from "./leases";
 import { formatDuration } from "./time";
-import { requestedDevice, type WaitingRequest } from "./waiting";
 import type { Tone } from "./tones";
-import {
-  stateEnteredAt,
-  type WorkerDevice,
-  type WorkerView,
-  workerName,
-  workerPath,
-} from "./workers";
+import { type WorkerView, workerName, workerPath } from "./workers";
 
-export type InboxItem =
-  | {
-      readonly key: string;
-      readonly condition: "disconnected" | "incompatible" | "drained" | "update failed";
-      readonly worker: WorkerView;
-    }
-  | {
-      readonly key: string;
-      readonly condition: "over RAM budget";
-      readonly worker: WorkerView;
-      readonly usedBytes: number;
-      readonly limitBytes: number;
-    }
-  | {
-      readonly key: string;
-      readonly condition: "quarantined" | "stalled" | "absent";
-      readonly worker: WorkerView;
-      readonly device: WorkerDevice;
-    }
-  | {
-      readonly key: string;
-      readonly condition: "waiting";
-      readonly request: WaitingRequest;
-      readonly waitedMs: number;
-    }
-  | {
-      readonly key: string;
-      readonly condition: "ending";
-      readonly lease: LeaseRecord;
-      readonly holder: string;
-      readonly model: string;
-      readonly leftMs: number;
-    };
+// why: the item is the daemon's (`inbox.get`): the console decides nothing about what needs the operator.
+export type InboxItem = z.infer<typeof inboxItemSchema>;
+
+export interface InboxList {
+  readonly items: readonly InboxItem[];
+}
 
 type WorkerItem = Extract<InboxItem, { readonly worker: unknown }>;
 
-const WAITING_TOO_LONG_MS = 60_000;
-
-export interface InboxContext {
-  readonly now: number;
-  readonly requests?: readonly WaitingRequest[] | undefined;
-  readonly leases?: readonly LeaseRecord[] | undefined;
-  readonly tokens?: readonly TokenRecord[] | undefined;
-}
-
-// why: a worker that is both disconnected and drained is two items, since each clears on its own.
-export function inboxItems(
-  workers: readonly WorkerView[],
-  context?: InboxContext,
-): readonly InboxItem[] {
-  return [
-    ...workers.flatMap((worker) => [...workerItems(worker), ...deviceItems(worker)]),
-    ...(context === undefined ? [] : waitingItems(context)),
-    ...(context === undefined ? [] : endingItems(workers, context)),
-  ];
-}
-
-// why: a request waits on the daemon's clock, so the wait is counted from the daemon's now; the
-// longest wait comes first.
-function waitingItems(context: InboxContext): InboxItem[] {
-  return [...(context.requests ?? [])]
-    .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
-    .flatMap((request): InboxItem[] => {
-      const waitedMs = context.now - request.createdAt;
-      return waitedMs > WAITING_TOO_LONG_MS
-        ? [{ condition: "waiting", key: `request/${request.id}/waiting`, request, waitedMs }]
-        : [];
-    });
-}
-
-// why: a lease's time left counts against the daemon's clock, and the least time left comes first.
-function endingItems(workers: readonly WorkerView[], context: InboxContext): InboxItem[] {
-  const { now, tokens = [] } = context;
-  return [...(context.leases ?? [])]
-    .sort((a, b) => a.ttlDeadline - b.ttlDeadline || (a.id < b.id ? -1 : 1))
-    .flatMap((lease): InboxItem[] => {
-      if (!isExpiring(lease.ttlDeadline, now)) return [];
-      return [
-        {
-          condition: "ending",
-          holder: holderName(lease.requesterId, tokens),
-          key: `lease/${lease.id}/ending`,
-          lease,
-          leftMs: lease.ttlDeadline - now,
-          model: deviceOfLease(lease, workers)?.spec.model ?? lease.deviceId,
-        },
-      ];
-    });
-}
-
-function workerItems(worker: WorkerView): InboxItem[] {
-  const items: InboxItem[] = [];
-  const key = (condition: string) => `${worker.id}/${condition}`;
-  if (worker.connection === "disconnected" || worker.connection === "incompatible") {
-    items.push({ condition: worker.connection, key: key(worker.connection), worker });
-  }
-  if (worker.drained) items.push({ condition: "drained", key: key("drained"), worker });
-  if (worker.lastUpdateFailure !== undefined && worker.lastUpdateFailure !== null) {
-    items.push({ condition: "update failed", key: key("update-failed"), worker });
-  }
-  const ramBudget = worker.capacity?.ramBudget;
-  if (ramBudget?.overLimit === true) {
-    items.push({
-      condition: "over RAM budget",
-      key: key("ram"),
-      limitBytes: ramBudget.limitBytes,
-      usedBytes: ramBudget.usedBytes,
-      worker,
-    });
-  }
-  return items;
-}
-
-function deviceItems(worker: WorkerView): InboxItem[] {
-  return (worker.devices ?? []).flatMap((device): InboxItem[] => {
-    const key = (condition: string) => `${worker.id}/${device.id}/${condition}`;
-    if (device.state === "quarantined") {
-      return [{ condition: "quarantined", device, key: key("quarantined"), worker }];
-    }
-    if (device.stalled === true) {
-      return [{ condition: "stalled", device, key: key("stalled"), worker }];
-    }
-    if (device.state === "absent") {
-      return [{ condition: "absent", device, key: key("absent"), worker }];
-    }
-    return [];
-  });
-}
-
 const GROUPS: readonly InboxGroup[] = ["Broken", "Needs a look", "Heads-up"];
-
-export function inboxGroup(item: InboxItem): InboxGroup {
-  if (item.condition === "ending") return "Heads-up";
-  return inboxTone(item.condition) === "error" ? "Broken" : "Needs a look";
-}
-
-// why: a heads-up is not a problem yet, so the count the sidebar and Overview show leaves it out.
-export function problemCount(items: readonly InboxItem[]): number {
-  return items.filter((item) => inboxGroup(item) !== "Heads-up").length;
-}
 
 // why: the Inbox lists its groups in a fixed order, each keeping the order its items came in.
 export function inGroupOrder(items: readonly InboxItem[]): readonly InboxItem[] {
-  return GROUPS.flatMap((group) => items.filter((item) => inboxGroup(item) === group));
+  return GROUPS.flatMap((group) => items.filter((item) => item.group === group));
 }
 
-// why: a lost worker or a quarantined device is broken; everything else on the list needs a look
-// soon, which is the warning tone, the same split the status words use.
-export function inboxTone(condition: InboxItem["condition"]): Tone {
-  return condition === "disconnected" || condition === "incompatible" || condition === "quarantined"
-    ? "error"
-    : "warn";
+// why: a broken item is the error tone; everything else on the list needs a look soon, which is the
+// warning tone, the same split the status words use.
+export function inboxTone(group: InboxGroup): Tone {
+  return group === "Broken" ? "error" : "warn";
 }
 
-export type InboxGroup = "Broken" | "Needs a look" | "Heads-up";
+export type InboxGroup = InboxItem["group"];
 
 export type InboxFilter = "all" | InboxGroup;
 
@@ -253,36 +110,54 @@ function minutesAndSeconds(ms: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function inboxSubject(item: InboxItem): string {
+// why: the daemon sends each time as the subject's own timestamp and the console counts from them
+// against the daemon's clock, so the wait and the time left tick between reads.
+function waitedMs(item: Extract<InboxItem, { readonly request: unknown }>, now: number): number {
+  return now - item.request.createdAt;
+}
+
+function leftMs(item: Extract<InboxItem, { readonly lease: unknown }>, now: number): number {
+  return item.lease.ttlDeadline - now;
+}
+
+function deviceWorkerName(device: {
+  readonly workerId: string;
+  readonly workerLabel?: string | undefined;
+}): string {
+  return device.workerLabel ?? device.workerId;
+}
+
+export function inboxSubject(item: InboxItem, now: number): string {
   if (item.condition === "waiting") {
-    return `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)}`;
+    return `${item.request.requesterId} has waited ${formatDuration(waitedMs(item, now))}`;
   }
   if (item.condition === "ending") {
-    const base = `${item.holder} · ${item.model} ends`;
-    return item.leftMs <= 0 ? `${base} now` : `${base} in ${minutesAndSeconds(item.leftMs)}`;
+    const base = `${item.lease.holder} · ${item.lease.model} ends`;
+    const left = leftMs(item, now);
+    return left <= 0 ? `${base} now` : `${base} in ${minutesAndSeconds(left)}`;
   }
   if (item.condition === "absent") {
     // why: the daemon names a reason for every absent phone; "not-present" is the plain fallback for a record that lacks one.
     return `${item.device.spec.model} is absent (${item.device.absentReason ?? "not-present"})`;
   }
   return "device" in item
-    ? `${item.device.spec.model} on ${workerName(item.worker)}`
+    ? `${item.device.spec.model} on ${deviceWorkerName(item.device)}`
     : workerName(item.worker);
 }
 
 function factsOf(item: InboxItem, now: number): readonly InboxFact[] {
   if (item.condition === "waiting") {
     return [
-      { label: "Waited", value: formatDuration(item.waitedMs) },
-      { label: "Device", value: requestedDevice(item.request.spec) },
+      { label: "Waited", value: formatDuration(waitedMs(item, now)) },
+      { label: "Device", value: describeRequestedDevice(item.request.spec) },
       { label: "Request", value: item.request.id },
     ];
   }
   if (item.condition === "ending") {
     return [
-      { label: "Time left", value: timeLeft(item.leftMs) },
-      { label: "Device", value: item.model },
-      { label: "Holder", value: item.holder },
+      { label: "Time left", value: timeLeft(leftMs(item, now)) },
+      { label: "Device", value: item.lease.model },
+      { label: "Holder", value: item.lease.holder },
       { label: "Lease", value: item.lease.id },
     ];
   }
@@ -305,15 +180,15 @@ type ItemOf<C extends InboxItem["condition"]> = InboxItem extends infer I
     : never
   : never;
 
-type Say = { readonly [C in InboxItem["condition"]]: (item: ItemOf<C>) => string };
+type Say = { readonly [C in InboxItem["condition"]]: (item: ItemOf<C>, now: number) => string };
 
 const SAY: Say = {
-  absent: (item) => `${inboxSubject(item)}: the phone cannot be reached.`,
+  absent: (item, now) => `${inboxSubject(item, now)}: the phone cannot be reached.`,
   disconnected: (item) => `${workerName(item.worker)} has lost its connection to the gateway.`,
   drained: (item) => `${workerName(item.worker)} is drained: it takes no new leases.`,
-  ending: (item) =>
-    `${item.holder}'s lease on ${item.model} ${
-      item.leftMs <= 0 ? "ends now" : `ends in ${minutesAndSeconds(item.leftMs)}`
+  ending: (item, now) =>
+    `${item.lease.holder}'s lease on ${item.lease.model} ${
+      leftMs(item, now) <= 0 ? "ends now" : `ends in ${minutesAndSeconds(leftMs(item, now))}`
     }.`,
   incompatible: (item) => `${workerName(item.worker)} runs a protocol this gateway cannot talk to.`,
   "over RAM budget": (item) =>
@@ -327,19 +202,19 @@ const SAY: Say = {
       ? ""
       : `The update of ${workerName(item.worker)} to ${failure.to} failed while ${failure.stage}: ${failure.message}. It runs ${failure.from} again.`;
   },
-  waiting: (item) =>
-    `${item.request.requesterId} has waited ${formatDuration(item.waitedMs)} for a device.`,
+  waiting: (item, now) =>
+    `${item.request.requesterId} has waited ${formatDuration(waitedMs(item, now))} for a device.`,
 };
 
-function whatHappened(item: InboxItem): string {
-  return (SAY[item.condition] as (item: InboxItem) => string)(item);
+function whatHappened(item: InboxItem, now: number): string {
+  return (SAY[item.condition] as (item: InboxItem, now: number) => string)(item, now);
 }
 
 function deviceFacts(
   item: Extract<InboxItem, { readonly device: unknown }>,
   now: number,
 ): readonly InboxFact[] {
-  const since = stateEnteredAt(item.device, item.worker);
+  const since = item.device.stateEnteredAt;
   return [
     { label: "Device", value: item.device.id },
     { label: "State", value: item.device.state },
@@ -377,7 +252,7 @@ function causeFacts(device: {
   ];
 }
 
-function updateFailureFacts(worker: WorkerView, now: number): readonly InboxFact[] {
+function updateFailureFacts(worker: WorkerItem["worker"], now: number): readonly InboxFact[] {
   const failure = worker.lastUpdateFailure;
   return failure === undefined || failure === null
     ? []
@@ -404,7 +279,7 @@ function workerFacts(
     return [{ label: "Last seen", value: `${formatDuration(now - worker.lastSeenAt)} ago` }];
   }
   if (item.condition === "drained") {
-    return [{ label: "Leases still held", value: String(worker.leases?.length ?? 0) }];
+    return [{ label: "Leases still held", value: String(worker.heldLeases) }];
   }
   if (item.condition === "update failed") return updateFailureFacts(worker, now);
   const { protocol } = worker;
@@ -430,7 +305,7 @@ function eventsOfItem(item: InboxItem, events: readonly ConsoleEvent[]): readonl
   }
   return events.filter(
     (event) =>
-      workerIdOf(event) === item.worker.id ||
+      workerIdOf(event) === ("device" in item ? item.device.workerId : item.worker.id) ||
       ("device" in item && payloadField(event, "deviceId") === item.device.id),
   );
 }
@@ -445,9 +320,16 @@ function aboutOf(item: InboxItem): InboxDetail["about"] {
   }
   if (item.condition === "ending") {
     return {
-      name: `${item.holder} · ${item.model}`,
+      name: `${item.lease.holder} · ${item.lease.model}`,
       open: "Open lease",
       to: leasePath(item.lease.id),
+    };
+  }
+  if ("device" in item) {
+    return {
+      name: deviceWorkerName(item.device),
+      open: "Open worker",
+      to: workerPath(item.device.workerId),
     };
   }
   return { name: workerName(item.worker), open: "Open worker", to: workerPath(item.worker.id) };
@@ -489,8 +371,8 @@ function detailOf(
     facts: factsOf(item, now),
     key: item.key,
     title: titleOf(item),
-    tone: inboxTone(item.condition),
-    what: whatHappened(item),
+    tone: inboxTone(item.group),
+    what: whatHappened(item, now),
     word: item.condition,
   };
 }
@@ -498,21 +380,19 @@ function detailOf(
 // why: the rows and the drawer's detail are worked out together from the same items, so they
 // never disagree.
 export function inboxPageOf(input: {
+  readonly items: readonly InboxItem[];
   readonly workers: readonly WorkerView[];
   readonly events: readonly ConsoleEvent[];
   readonly now: number;
   readonly key: string | undefined;
-  readonly requests?: readonly WaitingRequest[] | undefined;
-  readonly leases?: readonly LeaseRecord[] | undefined;
-  readonly tokens?: readonly TokenRecord[] | undefined;
 }): InboxPage {
-  const items = inboxItems(input.workers, input);
+  const { items, now } = input;
   const rows = inGroupOrder(items).map((item) => ({
-    group: inboxGroup(item),
+    group: item.group,
     key: item.key,
-    subject: inboxSubject(item),
+    subject: inboxSubject(item, now),
     to: inboxPath(item.key),
-    tone: inboxTone(item.condition),
+    tone: inboxTone(item.group),
     word: item.condition,
   }));
   const named = input.key !== undefined;
