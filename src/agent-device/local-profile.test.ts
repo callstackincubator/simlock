@@ -44,19 +44,28 @@ interface Rig {
   readonly logs: MemoryLogSink;
   readonly profilePath: string;
   readonly port: number;
+  readonly restart: (options?: { readonly port?: number }) => Promise<Rig>;
 }
 
-async function launch(
-  host = "127.0.0.1",
-  seed: Parameters<typeof seedTokensDatabase>[1] = [],
-): Promise<Rig> {
-  const directory = await mkdtemp(join(tmpdir(), "simlock-local-profile-"));
-  temporaryDirectories.push(directory);
+interface LaunchOptions {
+  readonly host?: string;
+  readonly seed?: Parameters<typeof seedTokensDatabase>[1];
+  readonly port?: number;
+  readonly resume?: { readonly directory: string; readonly filesystem: MemoryFilesystem };
+}
+
+async function launch(options: LaunchOptions = {}): Promise<Rig> {
+  const host = options.host ?? "127.0.0.1";
+  const directory =
+    options.resume?.directory ?? (await mkdtemp(join(tmpdir(), "simlock-local-profile-")));
   const clock = new FakeClock(1_000);
-  const filesystem = new MemoryFilesystem();
+  const filesystem = options.resume?.filesystem ?? new MemoryFilesystem();
   const logs = new MemoryLogSink();
-  await seedTokensDatabase(directory, seed);
-  const port = await freeLoopbackPort();
+  if (options.resume === undefined) {
+    temporaryDirectories.push(directory);
+    await seedTokensDatabase(directory, options.seed ?? []);
+  }
+  const port = options.port ?? (await freeLoopbackPort());
   const daemon = await startDaemon({
     clock,
     configOverrides: {
@@ -87,6 +96,14 @@ async function launch(
     logs,
     port,
     profilePath: join(directory, "agent-device-profile.json"),
+    restart: async (restartOptions = {}) => {
+      await daemon.stop("test");
+      return launch({
+        host,
+        port: restartOptions.port ?? port,
+        resume: { directory, filesystem },
+      });
+    },
   };
 }
 
@@ -94,9 +111,33 @@ async function tokens(rig: Rig) {
   return (await rig.daemon.dispatch("token.list", {}, adminSession)).tokens;
 }
 
+function allocateWith(rig: Rig, secret: string, n: number): Promise<Response> {
+  return fetch(`http://127.0.0.1:${rig.port}/v1/agent-device/rpc`, {
+    body: JSON.stringify({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "agent_device.lease.allocate",
+      params: {
+        clientId: "c",
+        leaseId: n.toString(16).padStart(32, "0"),
+        leaseProvider: "proxy",
+        platform: "ios",
+        runId: "r",
+        ttlMs: 120_000,
+      },
+    }),
+    headers: {
+      authorization: `Bearer ${secret}`,
+      connection: "close",
+      "content-type": "application/json",
+    },
+    method: "POST",
+  });
+}
+
 describe("the local agent-device profile", () => {
   it("is written before HTTP listens, and its token leases for a local agent", async () => {
-    const rig = await launch("127.0.0.1", [["tok_operator", "slk_operator", "operator", LABEL]]);
+    const rig = await launch({ seed: [["tok_operator", "slk_operator", "operator", LABEL]] });
 
     const text = await rig.filesystem.readFile(rig.profilePath);
     const profile = JSON.parse(text) as Record<string, string>;
@@ -124,27 +165,7 @@ describe("the local agent-device profile", () => {
     expect(labelled[0]?.role).toBe("agent");
     expect(labelled[0]?.id).not.toBe("tok_operator");
 
-    const response = await fetch(`http://127.0.0.1:${rig.port}/v1/agent-device/rpc`, {
-      body: JSON.stringify({
-        id: 1,
-        jsonrpc: "2.0",
-        method: "agent_device.lease.allocate",
-        params: {
-          clientId: "c",
-          leaseId: "1".padStart(32, "0"),
-          leaseProvider: "proxy",
-          platform: "ios",
-          runId: "r",
-          ttlMs: 120_000,
-        },
-      }),
-      headers: {
-        authorization: `Bearer ${profile.daemonAuthToken}`,
-        connection: "close",
-        "content-type": "application/json",
-      },
-      method: "POST",
-    });
+    const response = await allocateWith(rig, profile.daemonAuthToken ?? "", 1);
     expect(((await response.json()) as { result: unknown }).result).toMatchObject({ ok: true });
     const leases = (await rig.daemon.dispatch(
       "list.get",
@@ -161,11 +182,76 @@ describe("the local agent-device profile", () => {
       ["::1", "http://[::1]"],
     ] as const;
     for (const [host, origin] of bases) {
-      const other = await launch(host);
+      const other = await launch({ host });
       const written = JSON.parse(await other.filesystem.readFile(other.profilePath)) as {
         daemonBaseUrl: string;
       };
       expect(written.daemonBaseUrl, host).toBe(`${origin}:${other.port}/v1/agent-device`);
+    }
+  });
+
+  it("keeps the profile across a restart, and replaces a token that no longer verifies", async () => {
+    const readProfile = async (rig: Rig) => {
+      const text = await rig.filesystem.readFile(rig.profilePath);
+      return {
+        profile: JSON.parse(text) as { daemonAuthToken: string; daemonBaseUrl: string },
+        text,
+      };
+    };
+    const labelledIds = async (rig: Rig) =>
+      (await tokens(rig)).filter((token) => token.label === LABEL).map((token) => token.id);
+
+    const first = await launch();
+    const before = await readProfile(first);
+    const [tokenId] = await labelledIds(first);
+    await first.daemon.dispatch("token.create", { label: LABEL, role: "operator" }, adminSession);
+    expect(await labelledIds(first)).toHaveLength(2);
+
+    const same = await first.restart();
+    expect((await readProfile(same)).text).toBe(before.text);
+    expect(await labelledIds(same)).toEqual([tokenId]);
+
+    const port = await freeLoopbackPort();
+    const moved = await same.restart({ port });
+    const after = await readProfile(moved);
+    expect(after.profile.daemonBaseUrl).toBe(`http://127.0.0.1:${port}/v1/agent-device`);
+    expect(after.profile.daemonAuthToken).toBe(before.profile.daemonAuthToken);
+    expect(await labelledIds(moved)).toEqual([tokenId]);
+
+    const breakers: [string, (rig: Rig) => Promise<void>][] = [
+      [
+        "revoked",
+        async (rig) => {
+          await rig.daemon.dispatch("token.revoke", { id: tokenId ?? "" }, adminSession);
+        },
+      ],
+      ["deleted", (rig) => rig.filesystem.rm(rig.profilePath)],
+      ["not JSON", (rig) => rig.filesystem.writeFileAtomic(rig.profilePath, "not json")],
+      [
+        "unlabelled",
+        async (rig) => {
+          const made = await rig.daemon.dispatch("token.create", { role: "agent" }, adminSession);
+          await rig.filesystem.writeFileAtomic(
+            rig.profilePath,
+            JSON.stringify({ daemonAuthToken: made.secret }),
+          );
+        },
+      ],
+    ];
+    let current = moved;
+    for (const [name, breakIt] of breakers) {
+      const lastToken = (await readProfile(current)).profile.daemonAuthToken;
+      await current.daemon.dispatch("token.create", { label: LABEL, role: "agent" }, adminSession);
+      await breakIt(current);
+      current = await current.restart();
+      const replaced = await readProfile(current);
+      const ids = await labelledIds(current);
+      expect(ids, name).toHaveLength(1);
+      expect(replaced.profile.daemonAuthToken, name).not.toBe(lastToken);
+      expect(ids[0], name).not.toBe(tokenId);
+      expect((await allocateWith(current, replaced.profile.daemonAuthToken, 2)).status, name).toBe(
+        200,
+      );
     }
   });
 });
