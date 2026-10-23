@@ -167,7 +167,7 @@ put together from them and draws nothing of its own that one of them already dra
   a device's shows the device's state as a status, word and square.
 - **Menu.** A table row ends in a **⋯** `IconButton` that opens a small list; a right-click on the
   row opens the same list, and a drawer or page header shows its item's first safe action as a
-  secondary button beside its own **⋯**. An entry is 36px tall with `--text`; the highlighted one
+  secondary button beside its own **⋯**, and that list does not repeat the button's action. An entry is 36px tall with `--text`; the highlighted one
   takes `--surface` and the focus ring inside its edge. Dangerous entries come last, after a 1px
   `--border` line, in `--status-error`, never `--accent`. A disabled entry is `--text-muted`. A
   list with no entry draws no **⋯**. Arrow keys move, Escape closes. It floats above drawers and
@@ -178,7 +178,8 @@ put together from them and draws nothing of its own that one of them already dra
   its progress ("Releasing…"). A dialog that asks for a typed name keeps the action disabled until
   the text equals it.
 - **Toast.** At the bottom right, newest at the bottom, at most three (older ones wait hidden), each
-  a title, an optional line and an optional action button, and a **Close** button. A success toast
+  a title, an optional line and an optional action button, and a **Close** button beside the text,
+  never over it. A success toast
   leaves after 6 seconds, paused while hovered or focused. An error toast has a `--status-error`
   edge and title, stays until closed and is announced at once (`role="alert"`); the rest are
   announced politely. A toast moves in once, when it appears.
