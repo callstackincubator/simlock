@@ -24,8 +24,10 @@ import {
   configSchema,
   daemonHealthSchema,
   daemonModeSchema,
+  daemonUpdateFields,
   type DeviceClass,
   deviceClassSchema,
+  updateRequestedVersionSchema,
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
@@ -123,6 +125,7 @@ export const statusGet = defineOperation({
       mode: daemonModeSchema,
       // Bounded: a gateway parses every worker's answer (safety rule 10).
       consoleUrl: z.string().max(CONSOLE_URL_MAX_LENGTH).optional(),
+      ...daemonUpdateFields,
     }),
     host: hostFactsSchema,
     load: hostLoadSchema.optional(),
@@ -644,6 +647,36 @@ export const daemonStop = defineOperation({
   output: z.object({ stopping: z.literal(true) }),
 });
 
+// why: `DaemonServer` dispatches it on a connection whose protocol range does not overlap (like `daemon.stop`), so its input and answer never change shape.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const daemonUpdate = defineOperation({
+  name: "daemon.update",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      version: updateRequestedVersionSchema.optional(),
+      force: z.boolean().optional(),
+      query: z.boolean().optional(),
+    })
+    .refine(
+      (input) => input.query !== true || (input.version === undefined && input.force === undefined),
+      {
+        message: "query takes no other field",
+      },
+    ),
+  output: z.object({
+    started: z.boolean(),
+    upToDate: z.boolean(),
+    resolved: updateRequestedVersionSchema.nullable(),
+    version: daemonUpdateFields.version,
+    health: daemonHealthSchema,
+    update: daemonUpdateFields.update,
+    lastUpdateFailure: daemonUpdateFields.lastUpdateFailure,
+    latestVersion: daemonUpdateFields.latestVersion,
+  }),
+});
+
 // ---- events.replay ------------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -792,6 +825,20 @@ export const workerRemove = defineOperation({
   effect: "write",
   input: z.object({ workerId: z.string().min(1) }),
   output: z.object({ workerId: z.string(), removed: z.boolean() }),
+});
+
+// why: ADR 0042 §2: the gateway sends `daemon.update` over that worker's uplink and answers with the worker's own answer plus the id.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerUpdate = defineOperation({
+  name: "worker.update",
+  role: "admin",
+  effect: "write",
+  input: z.object({
+    workerId: z.string().min(1),
+    version: updateRequestedVersionSchema.optional(),
+    force: z.boolean().optional(),
+  }),
+  output: daemonUpdate.output.extend({ workerId: z.string() }),
 });
 
 // ---- component.install (ADR 0010 §6) --------------------------------------------------------
@@ -1086,6 +1133,7 @@ export const OPERATIONS = {
   "nuke.run": nukeRun,
   "config.get": configGet,
   "daemon.stop": daemonStop,
+  "daemon.update": daemonUpdate,
   "events.replay": eventsReplay,
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
@@ -1097,6 +1145,7 @@ export const OPERATIONS = {
   "worker.drain": workerDrain,
   "worker.undrain": workerUndrain,
   "worker.remove": workerRemove,
+  "worker.update": workerUpdate,
   "component.install": componentInstall,
   "component.list": componentList,
   "worker.install-component": workerInstallComponent,

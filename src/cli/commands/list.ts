@@ -73,6 +73,7 @@ const GATEWAY_REASON_TEXT: Readonly<
   "not-ready": () => "Not ready yet",
   "runtime-missing": () => "OS not installed",
   unhealthy: () => "Not running",
+  updating: () => "Updating",
   "unknown-model": () => "Model not offered",
 };
 

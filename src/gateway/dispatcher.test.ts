@@ -18,7 +18,7 @@ import {
   T0,
   usageRig,
 } from "../history/testing.js";
-import { OPERATIONS, type OperationName } from "../contract/index.js";
+import { OPERATIONS, SimlockError, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
 import {
   FakeClock,
@@ -29,7 +29,7 @@ import {
 } from "../ports/index.js";
 import { FakeWebhookPoster } from "../ports/testing.js";
 import type { TokenOperations } from "../auth/index.js";
-import { GatewayDispatcher } from "./dispatcher.js";
+import { GatewayDispatcher, type GatewayDispatcherOptions } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
@@ -73,6 +73,7 @@ const gatewayConfig = {
   },
   http: { enabled: true, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
+  update: { check: true },
   ios: { defaultMode: "full" as const, defaultModels: {}, slim: { bootTimeoutMs: 1 } },
   android: {
     defaultModels: {},
@@ -155,6 +156,7 @@ const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] }
  * for the fuller doc comment; this file only ever needs one worker at a time. */
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();
+  readonly refreshCalls: string[] = [];
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -163,7 +165,31 @@ class FakeDirectory implements WorkerDirectory {
   target(workerId: string): WorkerDispatchTarget | undefined {
     const client = this.clients.get(workerId);
     if (client === undefined) return undefined;
-    return { client: () => client.asClient(), reachable: true, refresh: async () => {}, workerId };
+    return {
+      client: () => client.asClient(),
+      reachable: true,
+      refresh: async () => void this.refreshCalls.push(workerId),
+      workerId,
+    };
+  }
+}
+
+// why: the gateway's own update coordinator, scripted.
+class ScriptedUpdate {
+  readonly requests: unknown[] = [];
+  progress: ReturnType<GatewayDispatcherOptions["update"]["state"]> = {
+    lastUpdateFailure: null,
+    latestVersion: null,
+    update: null,
+  };
+
+  async request(input: unknown) {
+    this.requests.push(input);
+    return { ...this.progress, resolved: "0.4.0", started: true, upToDate: false };
+  }
+
+  state() {
+    return this.progress;
   }
 }
 
@@ -234,8 +260,11 @@ function harness(
           version: "9.9.9",
           workerLabel: () => undefined,
         });
+  const update = new ScriptedUpdate();
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
+    latestVersion: () => null,
+    update,
     clock,
     closeUplinksForToken: async (tokenId) => {
       closedUplinkTokens.push(tokenId);
@@ -246,6 +275,7 @@ function harness(
     eventHistory: options.eventHistory ?? ringEventHistory(eventBus),
     ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     health: () => options.health ?? "running",
+    version: "0.0.0-test",
     host: GATEWAY_HOST,
     ...(options.load === undefined ? {} : { load: options.load }),
     leaseIndex,
@@ -268,6 +298,7 @@ function harness(
     eventBus,
     leaseIndex,
     tokens,
+    update,
     workers,
   };
 }
@@ -422,6 +453,10 @@ describe("GatewayDispatcher", () => {
       consoleUrl: "http://127.0.0.1:4700/",
       health: "starting",
       mode: "gateway",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
     expect(status.host).toEqual(GATEWAY_HOST);
   });
@@ -455,8 +490,19 @@ describe("GatewayDispatcher", () => {
       consoleUrl: "http://localhost:4711/",
       health: "running",
       mode: "gateway",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
-    expect(off.daemon).toEqual({ health: "running", mode: "gateway" });
+    expect(off.daemon).toEqual({
+      health: "running",
+      mode: "gateway",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect("consoleUrl" in off.daemon).toBe(false);
   });
 
@@ -597,6 +643,144 @@ describe("GatewayDispatcher", () => {
     await expect(
       dispatcher.dispatch("worker.remove", { workerId: "wrk_1" }, session()),
     ).resolves.toEqual({ removed: true, workerId: "wrk_1" });
+  });
+
+  it("Operator calls worker.update on the gateway: connected, disconnected and unknown workers", async () => {
+    const { dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_1", client);
+    const update = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    client.updateAnswer = { ...client.updateAnswer, latestVersion: "0.4.0", started: true, update };
+
+    const answer = await dispatcher.dispatch(
+      "worker.update",
+      { version: "0.4.0", workerId: "wrk_1" },
+      session(),
+    );
+
+    expect(client.updateInputs).toEqual([{ version: "0.4.0" }]);
+    expect(answer).toMatchObject({ started: true, update, workerId: "wrk_1" });
+    expect(workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
+    expect(directory.refreshCalls).toEqual(["wrk_1"]);
+
+    workers.connected("wrk_2", "mac-mini-2", "0.3.0");
+    workers.disconnected("wrk_2");
+    for (const { code, message, workerId } of [
+      { code: "WORKER_NOT_CONNECTED", message: "worker wrk_2 is not connected", workerId: "wrk_2" },
+      { code: "UNKNOWN_WORKER", message: "Unknown worker: wrk_ghost", workerId: "wrk_ghost" },
+    ]) {
+      await expect(
+        dispatcher.dispatch("worker.update", { workerId }, session()),
+      ).rejects.toMatchObject({ code, details: { workerId }, message });
+    }
+  });
+
+  it("worker.update gives up on a worker that does not answer within 90 s with WORKER_NOT_CONNECTED", async () => {
+    const { clock, dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    client.hangingCalls.add("daemon.update");
+    directory.add("wrk_1", client);
+
+    let outcome: unknown = "pending";
+    void dispatcher.dispatch("worker.update", { workerId: "wrk_1" }, session()).then(
+      (answer) => (outcome = answer),
+      (error: unknown) => (outcome = error),
+    );
+    await vi.waitFor(() => expect(client.updateInputs).toHaveLength(1));
+    clock.advance(89_999);
+    await Promise.resolve();
+    expect(outcome).toBe("pending");
+    clock.advance(1);
+
+    await vi.waitFor(() => expect(outcome).not.toBe("pending"));
+    expect(outcome).toMatchObject({
+      code: "WORKER_NOT_CONNECTED",
+      details: { workerId: "wrk_1" },
+      message: "worker wrk_1 did not answer within 90 s; check simlock worker list",
+    });
+  });
+
+  it("worker.update answers what the worker refused with its own code, and a link that closes mid-call with WORKER_NOT_CONNECTED", async () => {
+    const { dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_1", client);
+
+    for (const { code, kind, expected, message } of [
+      {
+        code: "UPDATE_RESOLVE_FAILED",
+        kind: "domain",
+        expected: "UPDATE_RESOLVE_FAILED",
+        message: "npm view failed",
+      },
+      {
+        code: "UPDATE_UNSUPPORTED_INSTALL",
+        kind: "domain",
+        expected: "UPDATE_UNSUPPORTED_INSTALL",
+        message: "not npm",
+      },
+      {
+        code: "UPDATE_SHARED_INSTALL",
+        kind: "domain",
+        expected: "UPDATE_SHARED_INSTALL",
+        message: "shared",
+      },
+      {
+        code: "DAEMON_CONNECTION_LOST",
+        kind: "transport",
+        expected: "WORKER_NOT_CONNECTED",
+        message: "worker wrk_1 is not connected",
+      },
+    ] as const) {
+      client.updateFailWith = new SimlockError(code, kind, "worker's words", {});
+      // why: HTTP maps a rejection through classifyError, which knows DispatchError and not a raw SimlockError.
+      const refusal = await dispatcher
+        .dispatch("worker.update", { workerId: "wrk_1" }, session())
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(refusal).toBeInstanceOf(DispatchError);
+      expect(refusal).toMatchObject({
+        code: expected,
+        message: expected === code ? "worker's words" : message,
+      });
+    }
+  });
+
+  it("an operator-drained worker stays drained through its update, and a drain during an update leaves the update alone", async () => {
+    const { dispatcher, directory, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_1", client);
+    const update = {
+      forced: false,
+      from: "0.3.0",
+      stage: "installing",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
+    client.updateAnswer = { ...client.updateAnswer, started: true, update };
+
+    await dispatcher.dispatch("worker.update", { workerId: "wrk_1" }, session());
+    expect(workers.view("wrk_1")).toMatchObject({ drained: true, update });
+    workers.refresh("wrk_1", { update: null });
+    expect(workers.view("wrk_1")).toMatchObject({ drained: true, update: null });
+
+    await dispatcher.dispatch("worker.undrain", { workerId: "wrk_1" }, session());
+    workers.refresh("wrk_1", { update });
+    await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
+    expect(workers.view("wrk_1")).toMatchObject({ drained: true, update });
   });
 
   it("refuses to remove a connected worker with WORKER_CONNECTED, naming it", async () => {
@@ -1289,6 +1473,44 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  describe("daemon.update", () => {
+    it("asks the gateway's own update coordinator and answers with its outcome, the gateway's version and its health, and status.get carries the update and its last failure", async () => {
+      const { dispatcher, update } = harness();
+      const run = {
+        forced: true,
+        from: "0.0.0-test",
+        stage: "installing",
+        startedAt: 1_000,
+        to: "0.4.0",
+      } as const;
+      const failure = {
+        at: 500,
+        from: "0.0.0-test",
+        message: "npm failed",
+        stage: "installing",
+        to: "0.3.0",
+      } as const;
+      update.progress = { lastUpdateFailure: failure, latestVersion: "0.4.0", update: run };
+
+      await expect(
+        dispatcher.dispatch("daemon.update", { force: true }, session({ role: "admin" })),
+      ).resolves.toEqual({
+        health: "running",
+        lastUpdateFailure: failure,
+        latestVersion: "0.4.0",
+        resolved: "0.4.0",
+        started: true,
+        update: run,
+        upToDate: false,
+        version: "0.0.0-test",
+      });
+      expect(update.requests).toEqual([{ force: true }]);
+
+      const status = await dispatcher.dispatch("status.get", {}, session({ role: "admin" }));
+      expect(status.daemon).toMatchObject({ lastUpdateFailure: failure, update: run });
+    });
+  });
+
   describe("device.add and device.remove", () => {
     it("answer UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying to run the command on the worker the device is plugged into", async () => {
       const { dispatcher } = harness();
@@ -1766,6 +1988,7 @@ describe("GatewayDispatcher", () => {
       "worker.drain": { workerId: "wrk_1" },
       "worker.remove": { workerId: "wrk_1" },
       "worker.undrain": { workerId: "wrk_1" },
+      "worker.update": { workerId: "wrk_1" },
     };
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);

@@ -60,6 +60,7 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "lease", load: leaseModule, children: [{ name: "renew", load: leaseModule }] },
   { name: "release", load: () => import("./commands/release.js") },
   { name: "status", load: () => import("./commands/status.js") },
+  { name: "update", load: () => import("./commands/update.js") },
   { name: "list", load: () => import("./commands/list.js") },
   { name: "catalog", load: () => import("./commands/catalog.js") },
   { name: "cleanup", load: () => import("./commands/cleanup.js") },

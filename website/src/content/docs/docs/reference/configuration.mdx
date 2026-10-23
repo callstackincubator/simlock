@@ -164,6 +164,12 @@ Any other field in a target stops the daemon from starting. A target never downl
 | `stalledTransition.thresholdMultiplier` | number, at least 1  | `3`                | A device creating or cleaning up for longer than this times the expected time counts as stalled; `simlock doctor` reports it. | Worker     |
 | `stalledTransition.minimumThresholdMs`  | non-negative number | `60000` (1 min)    | The stall threshold is never shorter than this.                                                             | Worker     |
 
+## Updates
+
+| Key                               | Type                                | Default              | Meaning                                                                                                             | Applies to |
+| --------------------------------- | ----------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `update.check`                          | boolean             | `true`             | Read npm's latest Simlock version at start and every 24 hours, so `simlock status` can say when a newer one exists. `false` makes no npm request. | Both       |
+
 ## Downloads
 
 | Key                               | Type                                | Default              | Meaning                                                                                                             | Applies to |

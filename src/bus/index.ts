@@ -76,6 +76,7 @@ export interface EventMap {
       | "lease-id-taken"
       | "boot-timeout"
       | "killed"
+      | "updating"
       | "cancelled"
       /** A request still open when the daemon stopped, settled as failed at the next start. */
       | "daemon-restarted"
@@ -260,6 +261,17 @@ export interface EventMap {
   };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
+  "daemon.update-failed": {
+    readonly stage: "installing" | "restarting";
+    readonly from: string;
+    readonly to: string;
+    readonly message: string;
+  };
+  "daemon.update-started": {
+    readonly from: string;
+    readonly to: string;
+    readonly forced: boolean;
+  };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };
   "device.foreign-provenance-detected": {
     readonly deviceId: string;

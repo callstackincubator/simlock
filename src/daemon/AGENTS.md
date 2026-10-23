@@ -2,7 +2,7 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry; gateway and alerts from `main.ts` only.
+Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry, updater (`checkInstall`, `socketHeld`); gateway and alerts from `main.ts` only.
 Never imports: gateway or alerts outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
@@ -10,20 +10,22 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Files
 
-| File                    | Role                                                                                                             |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                 |
-| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                              |
-| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                       |
-| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                              |
-| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                        |
-| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                               |
-| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                  |
-| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi` |
-| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                        |
-| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                    |
-| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                           |
-| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                 |
+| File                    | Role                                                                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                                               |
+| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                                                            |
+| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                                                     |
+| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                                                            |
+| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                                                      |
+| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                                                             |
+| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                                                |
+| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi`                               |
+| `update-coordinator.ts` | `createUpdateCoordinator`: `daemon.update`'s state (`waiting`, `installing`), the updater launch, `status.get`'s update fields                 |
+| `version-check.ts`      | `startVersionCheck`: npm's `latest` Simlock version, read at start and every 24 h (`update.check`); `status.get`'s `latestVersion`, both roles |
+| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                                                      |
+| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                                  |
+| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                                         |
+| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                               |
 
 ## Composition (`main.ts`)
 
@@ -44,28 +46,26 @@ The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through
 
 An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
 
+## Update (`update-coordinator.ts`)
+
+`daemon.update` (the worker `Dispatcher`, and `GatewayDispatcher` through its `update` option) is `createUpdateCoordinator`'s, in memory only. A gateway's coordinator holds no leases: its update never waits and goes straight to `installing` (`startGatewayDaemon` passes it a hold that does nothing and no leases), and `DaemonServer` takes it as the gateway arm's `update` for the result file below. A call during an update follows it (`force` on `waiting` installs now); `query` starts nothing.
+A new update: `NpmCli.view` resolves the version (`UPDATE_RESOLVE_FAILED`); the running version, or one newer than `latest` with no `version` named (`isNewerVersion`), is `upToDate`; then `checkInstall` (`UPDATE_UNSUPPORTED_INSTALL`) and `socketHeld` on the other role's socket (`UPDATE_SHARED_INSTALL`). Then `waiting`, leasing's update hold and `daemon.update-started`; the updater launches with no leases, with `force`, or when the last `lease.released`/`lease.expired` leaves none.
+Its stdout lines move the state; a failed line, a non-zero exit or a failed launch sets `lastUpdateFailure`, releases the hold and emits `daemon.update-failed`. `DaemonServer.start` calls `readResultFile()` after convergence and before health is `running`, so a `running` daemon already shows the failure in `lastUpdateFailure`; a rolled back update's `update-result.json` is deleted there, and `announceResultFile()` emits its `daemon.update-failed` once the daemon serves, so a parked `events.subscribe` receives it.
+
 ## Connection (`server.ts`)
 
-1. **Claim** — `DaemonEndpointHost.start`: a live peer → `DaemonAlreadyRunningError`;
-   a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
+1. **Claim** — `DaemonEndpointHost.start`: a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
-   Role: the uplink connection is `admin` by acceptance; otherwise the resolver.
-   Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
-   Both are fixed for the connection's life.
+   Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 54, max: 54 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 57, max: 57 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
 5. **`daemon.stop`** — handled by the server, before the version and stopping gates.
-   Needs `admin`. Answers `{ stopping: true }`, then stops.
+   Needs `admin`. Answers `{ stopping: true }`, then stops. `daemon.update` skips only the version gate; the dispatcher still checks `admin` and parks on readiness, except for `query`, which answers while `starting`.
 
-Pushes, keyed by the request's frame id: `progress` (`lease.request`), `started` and
-`output` (`device.exec`), `component-progress`, `relay-head`. Per connection: `event`
-(`events.subscribe`). Owner-routed: `lease-lost`, `device-unhealthy`,
-`device-recovered` go to every connection whose principal owns the lease; `lease-lost`
-skips the connection that asked for that release. A closed connection only silences
-its pushes; the request, the lease and a running command go on.
+Pushes, keyed by the request's frame id: `progress` (`lease.request`), `started` and `output` (`device.exec`), `component-progress`, `relay-head`. Per connection: `event` (`events.subscribe`). Owner-routed: `lease-lost`, `device-unhealthy`, `device-recovered` go to every connection whose principal owns the lease; `lease-lost` skips the connection that asked for that release. A closed connection only silences its pushes; the request, the lease and a running command go on.
 
 ## Dispatch (`dispatch.ts` `runDispatch`)
 
@@ -74,9 +74,8 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 1. No handler → `UNKNOWN_REQUEST`.
 2. Parse input → `BAD_REQUEST`.
 3. Role: `admin` passes all; `agent` only `agent` operations → `FORBIDDEN`.
-4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes,
-   so the handler answers `UNKNOWN_LEASE`.
-5. Park on readiness — every operation but `status.get`.
+4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes, so the handler answers `UNKNOWN_LEASE`.
+5. Park on readiness — every operation but `status.get` and `daemon.update {query}`.
 6. Handler → parse output; a mismatch is logged and answers `INTERNAL`.
 
 ## Readiness
@@ -85,7 +84,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 starts → `onSocketClaimed` (module `afterSocketClaimed`, agent-device, uplink, HTTP) → await converge → arm.
 Health: `starting` → `running`, or `failed`.
 
-- `hello` and `status.get` answer at once; `status.get` while `starting` carries
+- `hello`, `status.get` and `daemon.update` with `query` answer at once; `status.get` while `starting` carries
   `daemon`, `host` and `load` only.
 - Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops
   (`convergence-failed`).
@@ -103,10 +102,7 @@ Credential resolution (`resolveHelloRole` in `src/auth`), at `hello`:
 3. The per-start admin secret → `admin`.
 4. Anything else → `ADMIN_AUTHENTICATION_FAILED`, connection closed.
 
-Admin secret: fresh each start, hash kept in memory. Written to `admin.token`
-(0600, atomic) only after the claim; removed on stop before releasing the
-endpoint, so old shutdown cannot remove a replacement's credential. A daemon
-that lost the claim never touches it.
+Admin secret: fresh each start, hash kept in memory. Written to `admin.token` (0600, atomic) only after the claim; removed on stop before releasing the endpoint, so old shutdown cannot remove a replacement's credential. A daemon that lost the claim never touches it.
 
 Security model: cooperative identity, not a hostile-process boundary.
 
@@ -117,8 +113,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 
 ## Uplink and relays (worker side)
 
-- `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host
-  load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
+- `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
 - `relay.request` runs only on that connection; targets come from `relayTargets`
   (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
