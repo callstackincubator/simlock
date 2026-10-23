@@ -49,14 +49,14 @@ describe("NodeDaemonLauncher", () => {
     }
   });
 
-  it("creates the daemon log it hands the child owner-only", async () => {
+  it("creates the daemon log it hands the child, and the data directory it lives in, owner-only", async () => {
     // why: #685: when the CLI or MCP server auto-launches the daemon, this `open(path, "a")` is
-    // what first creates `daemon.log` -- the daemon's own sink only appends afterwards. A
-    // restrictive umask in the test environment would mask what the code asks for, so pin
-    // the one every real host starts from.
+    // what first creates `daemon.log` -- the daemon's own sink only appends afterwards -- and on
+    // a fresh machine the launch creates the data directory too. A restrictive umask in the test
+    // environment would mask what the code asks for, so pin the one every real host starts from.
     const previousUmask = process.umask(0o022);
     const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
-    const logPath = join(directory, "daemon.log");
+    const logPath = join(directory, "home", "daemon.log");
     const launcher = new NodeDaemonLauncher({
       args: ["-e", "console.log('out')"],
       command: process.execPath,
@@ -68,6 +68,7 @@ describe("NodeDaemonLauncher", () => {
       await expect.poll(async () => (await readFile(logPath, "utf8")).trim()).toBe("out");
 
       expect((await stat(logPath)).mode & 0o777).toBe(0o600);
+      expect((await stat(join(directory, "home"))).mode & 0o777).toBe(0o700);
     } finally {
       process.umask(previousUmask);
       await rm(directory, { force: true, recursive: true });
