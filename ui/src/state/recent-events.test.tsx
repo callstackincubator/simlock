@@ -131,6 +131,7 @@ describe("the recent events of a tab", () => {
     const recentReads = (): number =>
       daemon.gets.filter((get) => get.path === "/v1/events?since=1h").length;
 
+    await settle();
     const inbox = mount(() => useInbox());
     const drawer = mount(() => useLeaseEvents(LEASE));
     await settle();
