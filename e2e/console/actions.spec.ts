@@ -555,6 +555,9 @@ test.describe("the console acts", () => {
           .getByRole("menu", { name: `Actions for ${worker}` })
           .getByRole("menuitem", { name: item, exact: true })
           .click();
+        // why: a pointer left on the clicked item can sit where the toast appears, and a hovered
+        // toast never times out.
+        await page.mouse.move(0, 0);
       };
 
       await page.route("**/v1/workers/*/drain", (route) => route.abort());
@@ -563,7 +566,6 @@ test.describe("the console acts", () => {
       await expect(refused).toBeVisible();
       await page.clock.runFor(500);
       await expect(page.getByRole("menu")).toHaveCount(0);
-      await page.mouse.move(0, 0);
       await page.clock.fastForward(30_000);
       await page.clock.runFor(500);
       await expect(refused).toBeVisible();

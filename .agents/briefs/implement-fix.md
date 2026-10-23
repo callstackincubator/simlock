@@ -11,7 +11,9 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
    between two components, list every path through the same code (each caller, flag,
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
-   - behaviour: make a test fail first, then fix. Extend the test that
+   - behaviour: make a test fail first, then fix. Open
+     `docs/internal/agent-rules/testing.md` rules 2, 7, 9 and 10 before
+     writing it. Extend the test that
      proves the behaviour next to it; write a new one only when none does,
      and list it under `fixes` with the test you could not extend and why
      (testing rule 9);
