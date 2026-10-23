@@ -6,6 +6,7 @@ import {
   expect,
   type RunningDaemon,
   signIn,
+  signInWithKeyboard,
   startDaemon,
   startFleet,
   test,
@@ -667,9 +668,7 @@ test.describe("the leases page", () => {
         await page.keyboard.press("Enter");
       };
       await page.goto(host.url);
-      await page.keyboard.press(tab);
-      await page.keyboard.type(host.tokens.operator);
-      await page.keyboard.press("Enter");
+      await signInWithKeyboard(page, host.tokens.operator, tab);
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
       await follow(
