@@ -781,22 +781,13 @@ function requireOwnRequest(identity: Identity, ownerId: string): void {
   throw forbidden("Not permitted to access another requester's resource");
 }
 
-/** Read-only single-lease lookup for `GET /v1/leases/:id` and `GET /v1/leases/:id/events`.
- * There is no `lease.get` operation in the contract -- only `lease.renew`/`lease.release`
- * carry an `ownsLease` authorize hook to compare against -- so these two routes stay on
- * `lease.list`'s own filter (own leases; admin sees all): an unauthorized id simply isn't in
- * the list, and `unknownLease` covers both "doesn't exist" and "not yours" the same way
- * `lease.list` itself does not distinguish them, at 404. This is a deliberate, narrower
- * divergence than the one S6 fixed for the mutating routes below -- see the known gaps in
- * https://github.com/callstackincubator/simlock/blob/main/src/http/AGENTS.md. */
+// why: `lease.get` answers `UNKNOWN_LEASE` for a lease that does not exist and for one the session does not own alike, so the 404 does not tell them apart (the narrower, deliberate divergence from the mutating routes below that the known gaps in src/http/AGENTS.md describe).
 async function findOwnedLease(
   deps: HttpGatewayDeps,
   session: ReturnType<typeof buildHttpSession>,
   id: string,
 ) {
-  const { leases } = await deps.dispatch("lease.list", {}, session);
-  const lease = leases.find((candidate) => candidate.id === id);
-  if (lease === undefined) throw unknownLease(id);
+  const { lease } = await deps.dispatch("lease.get", { leaseId: id }, session);
   return lease;
 }
 
