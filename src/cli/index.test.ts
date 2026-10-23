@@ -227,6 +227,34 @@ describe("CLI: exit codes", () => {
     expect(gatewayOutput.stdout).toBe(output.stdout);
   });
 
+  it("simlock instructions still prints the text under --gateway or --local on a machine with no gateway, and simlock --help lists it", async () => {
+    const listing = outputCapture();
+    await expect(runCli(["--help"], listing.environmentWith())).resolves.toBe(0);
+    expect(listing.stdout).toContain("  instructions [--json]");
+
+    for (const argv of [
+      ["--gateway", "instructions"],
+      ["instructions", "--gateway"],
+      ["--local", "instructions"],
+      ["instructions"],
+    ]) {
+      const output = outputCapture();
+      await expect(
+        runCli(
+          argv,
+          output.environmentWith({
+            connectAdmin: async () => {
+              throw new Error("instructions must not connect to a daemon");
+            },
+          }),
+        ),
+        argv.join(" "),
+      ).resolves.toBe(0);
+      expect(output.stdout, argv.join(" ")).toMatch(/^# Using Simlock/);
+      expect(output.stderr, argv.join(" ")).toBe("");
+    }
+  });
+
   it("prints shell export lines instead of the JSON grant under --export-env", async () => {
     const output = outputCapture();
     const grant: LeaseGrant = {
