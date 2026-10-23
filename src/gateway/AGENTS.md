@@ -89,6 +89,7 @@ no TTL timer. Relayed `lease.expired`/`lease.released` remove the entry and push
 Exec forwards the namespaced requester; `gateway.execTimeoutMs` is a backstop over the worker's `exec.timeoutMs`.
 The lease index is in memory, rebuilt from each view's leases whose requester starts `gw:<id>:`;
 missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view.
+A lease the worker answered released or `UNKNOWN_LEASE` is not added back by a later snapshot that still lists it.
 
 **HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts` and `../stream/`):
 
