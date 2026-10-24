@@ -264,8 +264,8 @@ export class FleetLeaseCoordinator {
   }
 
   // fallow-ignore-next-line unused-class-member -- see `ownerId` above; reached via `authorizeLookups.pendingRequestOwner`.
-  pendingRequestOwner(requesterId: string): string | undefined {
-    return this.#queue.findPendingWaiter(requesterId)?.options.ownerId;
+  pendingRequestOwner(requesterId: string, platform?: Platform): string | undefined {
+    return this.#queue.findPendingWaiter(requesterId, platform)?.options.ownerId;
   }
 
   /**
@@ -353,9 +353,12 @@ export class FleetLeaseCoordinator {
     throw leaseIdTaken(leaseId);
   }
 
-  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+  async cancelPending(
+    requesterId: string,
+    platform?: Platform,
+  ): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.#decisions.run(async () => {
-      const waiter = this.#queue.findPendingWaiter(requesterId);
+      const waiter = this.#queue.findPendingWaiter(requesterId, platform);
       if (waiter === undefined) return "not-found";
       if (waiter.state !== "queued") return "not-cancellable";
       if (this.#queue.reject(waiter, new RequestCancelledError(waiter.id))) {

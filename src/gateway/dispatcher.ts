@@ -313,7 +313,8 @@ export class GatewayDispatcher {
       authorizeLookups: {
         leaseRequesterId: (id) => this.options.coordinator.leaseRequesterId(id),
         ownerId: (id) => this.options.coordinator.ownerId(id),
-        pendingRequestOwner: (id) => this.options.coordinator.pendingRequestOwner(id),
+        pendingRequestOwner: (id, platform) =>
+          this.options.coordinator.pendingRequestOwner(id, platform),
       },
       awaitReady: () => this.options.awaitReady(),
       onOutputMismatch: (operationName, issues) => {
@@ -725,7 +726,7 @@ export class GatewayDispatcher {
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
-    const result = await this.options.coordinator.cancelPending(requesterId);
+    const result = await this.options.coordinator.cancelPending(requesterId, input.platform);
     return { result };
   };
 
