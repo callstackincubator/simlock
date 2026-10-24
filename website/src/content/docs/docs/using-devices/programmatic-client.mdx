@@ -112,7 +112,7 @@ What the calls do:
 
 `requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` and `leaseId`. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
 
-`exec` arguments are passed to the tool unchanged. Name your device by its UDID (`device.driverDeviceId`) for `simctl`, or its serial (`device.address`) with `-s` for `adb`. Use absolute paths: the command runs in the daemon's process, not in your program's working directory.
+`exec` arguments are passed to the tool as written, with the lease's device filled in: leave the device out of a `simctl`, `adb` or `devicectl` command. A command that names a different device is refused with `PASSTHROUGH_REFUSED` before it runs. Use absolute paths: the command runs in the daemon's process, not in your program's working directory.
 
 ## Stop waiting
 

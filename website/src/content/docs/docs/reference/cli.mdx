@@ -165,7 +165,7 @@ simlock simctl [--lease <lease-id>] <simctl-args...>
 | `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the simctl arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
 | `<simctl-args...>` | Passed to `xcrun simctl` as written. | — |
 
-Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back, and a piped stdin is sent along. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, and a caller-supplied `--set` or `--profiles`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back.
+Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back, and a piped stdin is sent along. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back.
 
 ## simlock adb
 
@@ -180,7 +180,7 @@ simlock adb [--lease <lease-id>] <adb-args...>
 | `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the adb arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
 | `<adb-args...>` | Passed to `adb` as written. | — |
 
-The command exits with `adb`'s own exit code. Simlock refuses `adb kill-server`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand.
+The command exits with `adb`'s own exit code. Simlock refuses `adb kill-server`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
 
 ## simlock catalog
 

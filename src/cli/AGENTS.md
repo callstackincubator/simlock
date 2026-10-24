@@ -83,7 +83,8 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
      Lease lost → exit 14. Connection lost → `DAEMON_CONNECTION_LOST`; the lease runs to its deadline.
 5. **`simlock simctl` / `adb`** — reads `status.get` `daemon.mode`:
    - worker: `driver.passthrough` returns a scoped command; `spawnPassthrough` runs it here.
-   - gateway: `device.exec` on `--lease`, or the requester's only lease. A piped stdin is
+   - gateway: `device.exec` on `--lease`, or the requester's only lease; the worker's driver
+     fills the lease's device in and refuses another (ADR 0047). A piped stdin is
      read to EOF first; output chunks go to stdout and stderr.
      `PASSTHROUGH_REFUSED` and `UNKNOWN_PASSTHROUGH_TOOL` become usage errors (exit 2).
 6. **`simlock events --follow`** — subscribe, then replay, then print buffered pushes not

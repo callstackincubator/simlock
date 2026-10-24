@@ -101,7 +101,9 @@ the 5037 server's protocol must equal Simlock's `adb version`; nothing listening
 Mismatch or unreadable → no command, advisory `adb-protocol-mismatch`. Enrol reads model,
 `ro.build.version.sdk`, current user, `pm list packages -3`. Class is always `phone`.
 
-Passthrough — virtual: `adb -P <port> …`. Refused: `kill-server` anywhere, `emu kill`,
+Passthrough — virtual: `adb -P <port> …`; with a device that has an address (`device.exec`)
+`-s <serial>` goes first unless the subcommand is on the no-device list (ADR 0047), and `-s` of
+another serial, `-e`, `-d`, `-t` or `adb` on a non-Android lease is refused. Refused: `kill-server` anywhere, `emu kill`,
 `emu avd stop`, `emu avd snapshot delete`, any global but `-s`/`-t`/`-d`/`-e` (or a lone
 `--version`/`--help`), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
 refuses any leading flag, server and transport verbs, `reboot` to bootloader/recovery/sideload/fastboot.

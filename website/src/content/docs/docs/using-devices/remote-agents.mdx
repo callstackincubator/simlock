@@ -111,7 +111,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
    curl -sS -N -X POST "$SIMLOCK_URL/v1/leases/$LEASE/exec" \
      -H "Authorization: Bearer $SIMLOCK_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"tool":"simctl","args":["launch","6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","com.example.myapp"]}'
+     -d '{"tool":"simctl","args":["launch","com.example.myapp"]}'
    ```
 
    ```text
@@ -141,14 +141,12 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
 
 ## Running commands with exec
 
-- **Name your device in the arguments.** Use the lease's `udid` for `simctl`. Other agents' devices are on the same worker, so never use `booted`.
-- **On Android, use the lease's `address` as the adb serial.** The lease's `udid` is the emulator's AVD name (`simlock_…`), not its adb serial. Run `adb -s <address> …`. `address` is absent while the device has none, for example before it is ready or after it shuts down.
-- **On a physical device, Simlock names the device for you.** `devicectl` gets `--device <UDID>` added, and `adb` on a physical Android phone gets the phone's serial.
-- **Paths are on the worker.** `{"tool":"simctl","args":["install","<udid>","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API has no way to upload a file; get it there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
+- **Leave the device out.** Simlock puts the lease's device into a `simctl` command (its UDID, where the verb takes one), an `adb` command on an emulator (`-s <serial>`) and a `devicectl` command (`--device <UDID>`); `adb` on a physical Android phone gets the phone's serial. Write `["install","/builds/MyApp.app"]`, not a UDID or serial. A command that names a different device, such as `booted`, another UDID, `adb -s emulator-5556`, `-e`, `-d` or `-t`, is refused with `422 PASSTHROUGH_REFUSED` before anything runs. Naming the lease's own UDID or serial is accepted.
+- **Paths are on the worker.** `{"tool":"simctl","args":["install","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API has no way to upload a file; get it there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
 - **No terminal.** `stdin` in the body is sent to the command once. Interactive commands, such as a bare `adb shell`, are refused.
 - **Output is text.** Each chunk is decoded as UTF-8, so binary output to stdout (a screenshot written to `-`) does not survive. Write it to a file on the worker instead.
 - **Time limit.** A command that runs longer than 10 minutes is stopped, and the stream ends with an `error` event carrying `EXEC_TIMEOUT`. Disconnecting does not stop the command.
-- **Refused commands.** The commands `simlock simctl` and `simlock adb` refuse (see [Working with a device](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses)) are refused here too, with `422 PASSTHROUGH_REFUSED`, before anything runs.
+- **Refused commands.** The commands `simlock simctl` and `simlock adb` refuse (see [Working with a device](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses)) are refused here too, with `422 PASSTHROUGH_REFUSED`, before anything runs, and so is `simctl` on an Android lease or `adb` on an iOS one.
 
 ## More calls
 

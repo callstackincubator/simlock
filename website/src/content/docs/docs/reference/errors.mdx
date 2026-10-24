@@ -76,7 +76,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `PASSTHROUGH_REFUSED` | 2 | 422 | Simlock refuses this `simctl`, `adb` or `devicectl` command: a verb that creates, erases or deletes devices or touches every device at once (such as `simctl erase` or `adb kill-server`), a flag that points the tool at another device set or adb server, `simctl` on a physical device, or `adb shell` with no command where there is no terminal. | Drop the refused flag or verb, or name the command to run. The message says which. |
+| `PASSTHROUGH_REFUSED` | 2 | 422 | Simlock refuses this `simctl`, `adb` or `devicectl` command: a verb that creates, erases or deletes devices or touches every device at once (such as `simctl erase` or `adb kill-server`), a flag that points the tool at another device set or adb server, `simctl` on a physical device, `simctl` or `adb` on a lease of the other platform, a `device.exec` command that names a device other than the lease's (`booted`, another UDID, `adb -s` with another serial, `-e`, `-d`, `-t`, a different `devicectl --device`), or `adb shell` with no command where there is no terminal. | Drop the refused flag or verb, leave the device out of the command, or name the command to run. The message says which. |
 | `UNKNOWN_PASSTHROUGH_TOOL` | 2 | 422 | A tool Simlock does not wrap. | Use `simctl` or `adb`. |
 | `EXEC_TIMEOUT` | 10 | 504 | A command run on a device through a gateway ran longer than `exec.timeoutMs` (10 minutes by default) and was stopped. | Split the work, or raise `exec.timeoutMs` on the worker. |
 

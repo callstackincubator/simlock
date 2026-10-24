@@ -428,8 +428,9 @@ export const driverPassthrough = defineOperation({
  * unlike `driver.passthrough`, which only builds a string -- this one actually runs a command
  * against a machine, so it is gated on the caller being who the lease was granted to (see the
  * `authorize` hook below). `leaseId` is that proof: for `simctl` and `adb` the command's own
- * arguments still name the device (a udid, a serial) and the daemon parses none of them; for
- * `devicectl` the driver adds the lease's `--device` unless the arguments name one.
+ * arguments may leave the device out and the daemon parses none of them: the driver puts the
+ * lease's device where the tool expects it (ADR 0047 §1) and refuses a command that names
+ * another one.
  *
  * A bare `adb shell` (nothing to run) is refused by the driver on this path, because there is
  * no terminal to attach it to and it would otherwise sit until `exec.timeoutMs` -- the same
