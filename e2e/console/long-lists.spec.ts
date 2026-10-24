@@ -8,6 +8,7 @@ import {
   type RunningDaemon,
   settled,
   signIn,
+  signInWithKeyboard,
   startDaemon,
   test as base,
 } from "./fixtures.js";
@@ -674,9 +675,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const back = browserName === "webkit" ? "Alt+Shift+Tab" : "Shift+Tab";
     const { host } = seeded;
     await page.goto(host.url);
-    await page.keyboard.press(tab);
-    await page.keyboard.type(host.tokens.operator);
-    await page.keyboard.press("Enter");
+    await signInWithKeyboard(page, host.tokens.operator, tab);
     await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
     await tabTo(page, page.getByRole("link", { name: "Leases", exact: true }), tab);
     await page.keyboard.press("Enter");

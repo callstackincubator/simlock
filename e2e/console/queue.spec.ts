@@ -1,7 +1,15 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
+import {
+  expect,
+  type RunningDaemon,
+  settled,
+  signIn,
+  signInWithKeyboard,
+  startDaemon,
+  test,
+} from "./fixtures.js";
 
 interface WaitingRequest {
   readonly id: string;
@@ -265,9 +273,7 @@ test.describe("the Queue page", () => {
         await page.keyboard.press("Enter");
       };
       await page.goto(new URL("/queue", host.url).toString());
-      await page.keyboard.press(tab);
-      await page.keyboard.type(host.tokens.operator);
-      await page.keyboard.press("Enter");
+      await signInWithKeyboard(page, host.tokens.operator, tab);
       await expect(page.getByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
 
       await follow(row(page, "agent-b").getByRole("link"));
