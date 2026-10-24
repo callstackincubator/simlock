@@ -14,6 +14,7 @@ import {
   OLD_PROTOCOL,
   type RunningDaemon,
   signIn,
+  signInWithKeyboard,
   startDaemon,
   startFleet,
   test,
@@ -1334,9 +1335,7 @@ test.describe("the workers page", () => {
       await page.keyboard.press("Enter");
     };
     await page.goto("/");
-    await page.keyboard.press(tab);
-    await page.keyboard.type(daemon.tokens.operator);
-    await page.keyboard.press("Enter");
+    await signInWithKeyboard(page, daemon.tokens.operator, tab);
     await follow(page.getByRole("link", { name: "Fleet", exact: true }));
     await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 
