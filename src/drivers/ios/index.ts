@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
@@ -295,14 +296,14 @@ export class IosSimctlDriver implements Driver {
   readonly #physical: IosPhysicalHandler;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
   readonly #deviceRoot: string;
-  readonly #rootOptions: EnsureOwnedRootOptions;
+  readonly #rootOptions: EnsureOwnedRootOptions | undefined;
   readonly #slim: SlimOptions | undefined;
   readonly #slimByDefault: boolean;
 
   private constructor(
     options: IosSimctlDriverOptions,
     deviceRoot: string,
-    rootOptions: EnsureOwnedRootOptions,
+    rootOptions: EnsureOwnedRootOptions | undefined,
   ) {
     this.#clock = options.clock;
     this.componentFootprint = {
@@ -359,6 +360,9 @@ export class IosSimctlDriver implements Driver {
    * machine's default device set (safety rule 9).
    */
   static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
+    if (options.driverConfig["deviceSet"] === "default") {
+      return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
+    }
     const rootOptions: EnsureOwnedRootOptions = {
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
@@ -385,6 +389,7 @@ export class IosSimctlDriver implements Driver {
    * a `mv` can have left the user's own device set standing where this one was.
    */
   async revalidateRoot(): Promise<void> {
+    if (this.#rootOptions === undefined) return;
     await ensureOwnedRoot(this.#rootOptions);
   }
 
@@ -1576,6 +1581,8 @@ export class IosSimctlDriver implements Driver {
   }
 
   #scopedSimctlArgv(args: readonly string[]): string[] {
+    // why: Xcode's own set is simctl's default, and ADR 0048 puts no `--set` on a call there.
+    if (this.#rootOptions === undefined) return ["simctl", ...args];
     return ["simctl", "--set", this.#deviceRoot, ...args];
   }
 
@@ -1714,6 +1721,13 @@ function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string
 function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
   const configured = options.driverConfig["deviceCaptureCommand"];
   return typeof configured === "string" && configured !== "" ? configured : undefined;
+}
+
+function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
+  return join(
+    options.coreSimulatorRoot ?? join(homedir(), "Library", "Developer", "CoreSimulator"),
+    "Devices",
+  );
 }
 
 function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
