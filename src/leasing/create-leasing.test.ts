@@ -4323,6 +4323,7 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
           .toHaveLength(index + 1);
       }
 
+      await harness.engine.settle();
       await expect(harness.engine.cancelPending("agent-1", cancel)).resolves.toBe(result);
 
       expect(
