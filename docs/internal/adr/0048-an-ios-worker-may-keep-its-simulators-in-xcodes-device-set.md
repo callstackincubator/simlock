@@ -3,7 +3,7 @@
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-23
 - **Issue:** [#962](https://github.com/callstackincubator/simlock/issues/962), from request [#946](https://github.com/callstackincubator/simlock/issues/946)
-- **Narrows:** ADR 0001 §2, §3, §5 and §7, for iOS simulators under `drivers.ios.deviceSet: "default"`. Android, physical devices and the `simlock` setting keep ADR 0001 unchanged.
+- **Narrows:** ADR 0001 §1, §2, §3, §5, §6 and §7, for iOS simulators under `drivers.ios.deviceSet: "default"`. Android, physical devices and the `simlock` setting keep ADR 0001 unchanged.
 
 ## Context
 
@@ -42,10 +42,10 @@ The disk report reads the same rule: a device this instance's mark does not name
 
 At startup the iOS driver looks where the other setting keeps devices:
 
-- under `default`: any device in Simlock's own set;
+- under `default`: any device in Simlock's own default set, `${SIMLOCK_HOME}/devices/ios`. A custom `drivers.ios.deviceRoot` is not read: the key is already refused together with `default` (§1), and no registry check looks for it;
 - under `simlock`: any device in Xcode's set whose durable mark names this instance.
 
-If it finds one, iOS does not start (`driver.root-rejected`, reason `device-set-changed`). The message names the devices' UDIDs and the steps: set the key back, run `simlock nuke --delete-devices` and `simlock doctor --purge-orphans`, then switch again. A device those leave behind (nuke deletes only registry devices it could shut down, `src/core/nuke-service.ts:95-150`) is deleted by hand, and the message gives the command: `xcrun simctl --set <root> delete <udid>` under `default`, `xcrun simctl delete <udid>` under `simlock`. Simlock does not move or recreate devices: a switch is rare, and documented operator steps cost less than a migration (the same trade as ADR 0036's upgrade step).
+If it finds one, iOS does not start (`driver.root-rejected`, reason `device-set-changed`). The message names the devices' UDIDs and the steps: set the key back, run `simlock nuke --delete-devices` and `simlock doctor --purge-orphans`, then switch again. An operator who set `drivers.ios.deviceRoot` runs `simlock nuke --delete-devices` and `simlock doctor --purge-orphans` with it still set, and removes it only when switching to `default`. A device those leave behind (nuke deletes only registry devices it could shut down, `src/core/nuke-service.ts:95-150`) is deleted by hand, and the message gives the command: `xcrun simctl --set <root> delete <udid>` under `default`, `xcrun simctl delete <udid>` under `simlock`. Simlock does not move or recreate devices: a switch is rare, and documented operator steps cost less than a migration (the same trade as ADR 0036's upgrade step).
 
 ### 4. Under `default`, nothing names a set
 

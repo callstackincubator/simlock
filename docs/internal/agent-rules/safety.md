@@ -47,6 +47,10 @@ never enforce them only inside an individual rule or driver.
    has none, so an orphan proposal would bypass the entire safety net rather
    than be checked by it. Keep marker validation off every unattended
    destruction path.
+   Under iOS `drivers.ios.deviceSet: "default"` there is no Simlock root: the
+   second proof is a device's durable mark naming this instance, and only such
+   a device is an orphan ([ADR 0048](../adr/0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md)
+   §2). The same narrowness applies to it.
 2. **Never touch a leased device.** No cleanup rule, reclaim, or reconcile
    action may target a device in `leased` state. The reaper filters this
    centrally; rules must not rely on their own checks. There is exactly one
@@ -86,19 +90,25 @@ never enforce them only inside an individual rule or driver.
    registry entries whose device vanished are marked, not silently recreated
    or re-deleted. "Reality" means the contents of Simlock's own device roots,
    scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
-   default device locations. For a physical device, reality is the platform
+   default device locations. (Under iOS `deviceSet: "default"`, reality is Xcode's set read through
+   devices whose durable mark names this instance, ADR 0048 §2.) For a physical device, reality is the platform
    tool's list of USB devices, read only for enrolled IDs.
 8. **Ownership is proven, never inferred.** A device is Simlock's because it
    lives inside a validly-marked Simlock root, not because of what it is
    called. `Driver.listManaged()` must answer from root membership; the
    `simlock-` / `simlock_` naming is a cosmetic label with no authority behind
    it. Never treat a name, a prefix, or a serial-to-name attribution as
-   evidence of ownership — a user can create a device with any name. A
+   evidence of ownership — a user can create a device with any name. Under iOS
+   `deviceSet: "default"` the proof is the device's durable mark naming this
+   instance, not root membership (ADR 0048 §2). A
    physical device is Simlock's because an admin enrolled it;
    `listPresentPhysical()` answers only for enrolled IDs.
 9. **Root validation fails closed.** If a device root is missing its marker,
    carries another instance's marker, is a symlink, or has the wrong owner or
-   permissions, that platform's driver does not start and Simlock reports why.
+   permissions, that platform's driver does not start and Simlock reports why. Under iOS
+   `deviceSet: "default"` there is no root to validate; the driver instead
+   refuses to start while devices remain in the other setting's location (ADR
+   0048 §3).
    Never fall back to the default device location, and never adopt or mark a
    root Simlock did not create empty itself. The same applies to Simlock's adb
    server port: if it is occupied, the Android driver fails rather than

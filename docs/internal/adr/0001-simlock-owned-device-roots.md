@@ -2,7 +2,7 @@
 
 - **Status:** Accepted. Root membership as the only proof of ownership, and the
   Android driver's one adb server, are narrowed by [ADR
-  0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) for physical devices. Per-home isolation as a user feature is superseded by [ADR 0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md): one worker per user. §1's layout is narrowed by [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) (`state.json` becomes `state.db`).
+  0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) for physical devices. Per-home isolation as a user feature is superseded by [ADR 0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md): one worker per user. §1's layout is narrowed by [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) (`state.json` becomes `state.db`). §1 (every driver owns a root), §2, §3, §5, §6 and §7 are narrowed by [ADR 0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) for iOS simulators under `drivers.ios.deviceSet: "default"`.
 - **Date:** 2026-09-02
 - **Issue:** [#73](https://github.com/callstackincubator/simlock/issues/73),
   part of [#70](https://github.com/callstackincubator/simlock/issues/70)
