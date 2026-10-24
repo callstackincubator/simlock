@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventMap } from "../bus/index.js";
 import type { LeaseRecord } from "../admin/index.js";
+import type { MaxPerRequester } from "../core/index.js";
 import { fromWireError, SimlockError } from "../contract/index.js";
 import { QueueTimeoutError } from "../leasing/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -83,7 +84,7 @@ function harness(
     readonly execTimeoutMs?: number;
     readonly leaseRequestTimeoutMs?: number;
     readonly logger?: Logger;
-    readonly maxPerRequester?: number;
+    readonly maxPerRequester?: MaxPerRequester;
     readonly routing?: (workers: WorkerRegistry) => RoutingPolicy;
   } = {},
 ) {
@@ -134,6 +135,7 @@ function connectWorker(
     readonly platform?: "ios" | "android";
     readonly capacity?: ReturnType<typeof statusFixture>["capacity"];
     readonly devices?: ReturnType<typeof deviceFixture>[];
+    readonly leases?: LeaseRecord[];
     readonly queueDepth?: number;
   } = {},
 ): void {
@@ -150,7 +152,7 @@ function connectWorker(
     devices: overrides.devices ?? [],
     downloads: { policy: "on-request" },
     health: "running",
-    leases: [],
+    leases: overrides.leases ?? [],
     queueDepth: overrides.queueDepth ?? 0,
   });
 }
@@ -4474,6 +4476,77 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
 
     await expect(coordinator.request(REQUEST, requestOptions())).resolves.toMatchObject({
       lease: expect.anything(),
+    });
+  });
+
+  describe("per platform", () => {
+    const ANDROID_REQUEST = {
+      physical: false,
+      model: "Pixel 9",
+      osVersion: "26.0",
+      platform: "android" as const,
+    };
+    const iosHeld = (): LeaseRecord => ({
+      ...(leaseFixture("lse_1", "dev_1") as LeaseRecord),
+      requesterId: `${GATEWAY_PREFIX}agent-1`,
+    });
+    const androidGrant = () => {
+      const base = grantFixture();
+      return grantFixture({
+        device: {
+          ...base.device,
+          id: "dev_2",
+          spec: { ...base.device.spec, model: "Pixel 9", platform: "android" },
+        },
+        lease: leaseFixture("lse_2", "dev_2") as LeaseRecord,
+      });
+    };
+    const iosRefusal = (leaseId: string) =>
+      `Requester agent-1 already holds iOS lease ${leaseId}; release it (\`simlock release ${leaseId}\`) before requesting another iOS device`;
+    const twoWorkers = (built: ReturnType<typeof harness>, held: LeaseRecord[] = []) => {
+      const ios = new ScriptedWorkerClient();
+      const android = new ScriptedWorkerClient();
+      built.directory.add("wrk_a", ios);
+      built.directory.add("wrk_b", android);
+      connectWorker(built.workers, "wrk_a", {
+        devices: held.length === 0 ? [] : [deviceFixture("dev_1", "leased")],
+        leases: held,
+      });
+      connectWorker(built.workers, "wrk_b", { models: ["Pixel 9"], platform: "android" });
+      return { android, ios };
+    };
+
+    it("with lease.maxPerRequester per platform, a requester holding an iOS fleet lease is granted an Android one on another worker and refused a second iOS one, also once the index is rebuilt from worker views alone", async () => {
+      const limit = { ios: 1, android: 1 };
+      const live = harness({ maxPerRequester: limit });
+      const liveWorkers = twoWorkers(live);
+      liveWorkers.ios.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      liveWorkers.android.requestLeaseQueue.push({ grant: androidGrant(), kind: "grant" });
+      await live.coordinator.request(REQUEST, requestOptions());
+
+      const android = await live.coordinator.request(ANDROID_REQUEST, requestOptions());
+      const second = await live.coordinator
+        .request(REQUEST, requestOptions())
+        .catch((e: unknown) => e);
+
+      expect(android.lease.id).toBe("wrk_b.lse_2");
+      expect(second).toMatchObject({
+        existingLeaseId: "wrk_a.lse_1",
+        message: iosRefusal("wrk_a.lse_1"),
+        name: "RequesterAlreadyLeasedError",
+      });
+
+      const rebuilt = harness({ maxPerRequester: limit });
+      const rebuiltWorkers = twoWorkers(rebuilt, [iosHeld()]);
+      rebuiltWorkers.android.requestLeaseQueue.push({ grant: androidGrant(), kind: "grant" });
+
+      const againIos = await rebuilt.coordinator
+        .request(REQUEST, requestOptions())
+        .catch((e: unknown) => e);
+      const againAndroid = await rebuilt.coordinator.request(ANDROID_REQUEST, requestOptions());
+
+      expect(againIos).toMatchObject({ message: iosRefusal("wrk_a.lse_1") });
+      expect(againAndroid.lease.id).toBe("wrk_b.lse_2");
     });
   });
 
