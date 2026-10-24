@@ -286,8 +286,10 @@ export function createLeasing(options: LeasingOptions): Leasing {
       return acquisition.physicalQueueDepth;
     },
     waitingRequests: () => requests.waiting(queue.places()),
-    cancelPending: async (requesterId: string) => acquisition.cancelPending(requesterId),
-    pendingRequestOwner: (requesterId: string) => acquisition.pendingRequestOwner(requesterId),
+    cancelPending: async (requesterId: string, platform?: Platform) =>
+      acquisition.cancelPending(requesterId, platform),
+    pendingRequestOwner: (requesterId: string, platform?: Platform) =>
+      acquisition.pendingRequestOwner(requesterId, platform),
     servesDefaultMode: (spec: DeviceSpec) => acquisition.servesDefaultMode(spec),
   };
 }

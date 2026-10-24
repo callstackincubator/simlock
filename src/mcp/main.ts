@@ -49,7 +49,7 @@ export interface McpStdioEnvironment {
    * the non-launching default, never to `connect`, so injecting `connect` alone cannot hand
    * the timer an auto-launching path; a test that wants both usually injects both. */
   readonly connectForRenew?: () => Promise<SimlockClient>;
-  readonly createServer?: (session: McpSession) => McpServer;
+  readonly createServer?: (session: McpSession, options: { readonly clock: Clock }) => McpServer;
   readonly createTransport?: () => McpTransport;
   /** Source for `SIMLOCK_AGENT_ID` and the agent tool's session id (`resolveRequesterId`) when
    * `requesterId` is not given explicitly. */
@@ -100,7 +100,7 @@ export async function startMcpStdio(
     // non-launching default rather than a timer that could undo an operator's `daemon stop`.
     connectForRenew: environment.connectForRenew ?? defaults.connectForRenew,
   });
-  const server = (environment.createServer ?? createMcpServer)(session);
+  const server = (environment.createServer ?? createMcpServer)(session, { clock });
   const transport = (environment.createTransport ?? defaults.createTransport)();
   const signals = environment.signals ?? process;
   const stdin = environment.stdin ?? process.stdin;

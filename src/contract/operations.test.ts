@@ -435,6 +435,17 @@ describe("operation input/output round trips", () => {
     expect(() => OPERATIONS["lease.renew"].input.parse({ leaseId: "lse_1", ttlMs: -1 })).toThrow();
   });
 
+  it("lease.cancel: keeps a platform of ios or android and refuses any other", () => {
+    const input = OPERATIONS["lease.cancel"].input;
+
+    expect(input.parse({ platform: "android", requesterId: "agent" })).toEqual({
+      platform: "android",
+      requesterId: "agent",
+    });
+    expect(input.parse({ platform: "ios" })).toEqual({ platform: "ios" });
+    expect(input.safeParse({ platform: "tvos" }).success).toBe(false);
+  });
+
   it("lease.request: round-trips a representative output grant", () => {
     const grant = {
       device: {
@@ -1216,6 +1227,13 @@ describe("operation input/output round trips", () => {
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+    for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
+      const parsed = OPERATIONS["config.get"].output.parse({
+        ...config,
+        lease: { ...config.lease, maxPerRequester },
+      });
+      expect(parsed.lease.maxPerRequester).toEqual(maxPerRequester);
+    }
   });
 
   it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {

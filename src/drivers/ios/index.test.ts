@@ -1671,6 +1671,90 @@ describe("IosSimctlDriver", () => {
     });
   });
 
+  it("fills a simctl device verb's missing device with the lease's UDID", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+    const udid = "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90";
+    const simulator = { address: "", deviceId: udid, driverData: {}, physical: false } as const;
+    const scoped = ["simctl", "--set", deviceRoot];
+    const cases: readonly (readonly [readonly string[], readonly string[]])[] = [
+      [
+        ["install", "/b/App.app"],
+        ["install", udid, "/b/App.app"],
+      ],
+      [
+        ["launch", "--console", "com.x"],
+        ["launch", "--console", udid, "com.x"],
+      ],
+      [
+        ["launch", "-a", "arm64", "com.x"],
+        ["launch", "-a", "arm64", udid, "com.x"],
+      ],
+      [
+        ["spawn", "-s", "launchctl", "list"],
+        ["spawn", "-s", udid, "launchctl", "list"],
+      ],
+      [
+        ["io", "screenshot", "/tmp/s.png"],
+        ["io", udid, "screenshot", "/tmp/s.png"],
+      ],
+      [
+        ["install", udid, "/b/App.app"],
+        ["install", udid, "/b/App.app"],
+      ],
+      [
+        ["install", udid.toLowerCase(), "/b/App.app"],
+        ["install", udid.toLowerCase(), "/b/App.app"],
+      ],
+      [
+        ["list", "devices"],
+        ["list", "devices"],
+      ],
+      [
+        ["runtime", "list"],
+        ["runtime", "list"],
+      ],
+    ];
+
+    for (const [args, expected] of cases) {
+      await expect(
+        driver.passthrough("simctl", simulator, args, { hasTerminal: false, platform: "ios" }),
+      ).resolves.toEqual({ args: [...scoped, ...expected], command: "xcrun", env: {} });
+    }
+  });
+
+  it("refuses a simctl command that names another device, or that runs on another platform", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+    const udid = "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90";
+    const other = "0A1B2C3D-0000-4000-8000-123456789ABC";
+    const simulator = { address: "", deviceId: udid, driverData: {}, physical: false } as const;
+    const refusal = (command: string, named: string) =>
+      `Refusing \`simctl ${command}\`: it names device ${named}, and this lease holds ${udid}. Leave the device out; Simlock fills it in.`;
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [["install", other, "/b/App.app"], refusal(`install ${other} /b/App.app`, other)],
+      [["install", "booted", "/b/App.app"], refusal("install booted /b/App.app", "booted")],
+      [
+        ["launch", "--console", "booted", "com.x"],
+        refusal("launch --console booted com.x", "booted"),
+      ],
+    ];
+
+    for (const [args, message] of cases) {
+      await expect(
+        driver.passthrough("simctl", simulator, args, { hasTerminal: false, platform: "ios" }),
+      ).rejects.toMatchObject({ message, tool: "simctl" });
+    }
+    await expect(
+      driver.passthrough("simctl", simulator, ["install", "/b/App.app"], {
+        hasTerminal: false,
+        platform: "android",
+      }),
+    ).rejects.toMatchObject({
+      message:
+        "Refusing `simctl`: it only serves an iOS simulator, and this lease is on the android platform.",
+      tool: "simctl",
+    });
+  });
+
   it.each([["create"], ["erase"], ["delete"]])(
     "refuses to proxy %s, naming the command that reclaims a device properly",
     async (verb) => {

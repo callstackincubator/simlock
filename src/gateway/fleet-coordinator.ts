@@ -57,12 +57,14 @@ import {
   type LeaseRequestFailure,
   type DeviceRequest,
   type LeaseRequestLimits,
+  type MaxPerRequester,
   newLeaseRequestId,
   SerializedDecision,
 } from "../core/index.js";
 import {
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
+  requesterLimitDecision,
   type WaitingRequest,
 } from "../leasing/index.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -75,7 +77,6 @@ import {
   FleetQueue,
   lineOf,
   RequestCancelledError,
-  RequesterAlreadyLeasedError,
   type FleetLeaseGrant,
   type FleetLeaseRecord,
   type FleetWaiter,
@@ -164,7 +165,7 @@ export interface FleetLeaseCoordinatorOptions {
   readonly leaseRequestLimits: LeaseRequestLimits;
   /** The same failure description a worker stores, so a replay answers with the same code. */
   readonly describeFailure: (error: unknown) => LeaseRequestFailure;
-  readonly maxPerRequester?: number;
+  readonly maxPerRequester?: MaxPerRequester;
   readonly logger?: Logger;
 }
 
@@ -252,19 +253,18 @@ export class FleetLeaseCoordinator {
     });
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option (`authorizeLookups.ownerId`); the audit cannot follow a call through a structural type.
   ownerId(gatewayLeaseId: string): string | undefined {
     return this.options.leaseIndex.ownerId(gatewayLeaseId);
   }
 
-  // fallow-ignore-next-line unused-class-member -- see `ownerId` above; reached via `authorizeLookups.leaseRequesterId`.
+  // fallow-ignore-next-line unused-class-member -- reached via `authorizeLookups.leaseRequesterId`.
   leaseRequesterId(gatewayLeaseId: string): string | undefined {
     return this.options.leaseIndex.leaseRequesterId(gatewayLeaseId);
   }
 
-  // fallow-ignore-next-line unused-class-member -- see `ownerId` above; reached via `authorizeLookups.pendingRequestOwner`.
-  pendingRequestOwner(requesterId: string): string | undefined {
-    return this.#queue.findPendingWaiter(requesterId)?.options.ownerId;
+  // fallow-ignore-next-line unused-class-member -- reached via `authorizeLookups.pendingRequestOwner`.
+  pendingRequestOwner(requesterId: string, platform?: Platform): string | undefined {
+    return this.#queue.findPendingWaiter(requesterId, platform)?.options.ownerId;
   }
 
   /**
@@ -308,19 +308,22 @@ export class FleetLeaseCoordinator {
     requesterId: string,
     requestId: string,
   ): void {
-    const existingLeaseId = this.options.leaseIndex.existingLeaseId(requesterId);
-    const held = this.options.leaseIndex.leaseCount(requesterId);
-    const limit = this.options.maxPerRequester ?? 1;
-    const waiting = this.#queue.hasPendingRequester(requesterId);
-    if (held >= limit || waiting) {
-      this.#emit("lease.rejected", {
-        requestId,
-        requester: requesterId,
-        requestSpec: deviceRequest,
-        reason: "already-leased",
-      });
-      throw new RequesterAlreadyLeasedError(requesterId, existingLeaseId, { held, limit, waiting });
-    }
+    const refusal = requesterLimitDecision({
+      held: this.options.leaseIndex.held(requesterId),
+      maxPerRequester: this.options.maxPerRequester,
+      platform: deviceRequest.platform,
+      probe: false,
+      requesterId,
+      waiting: this.#queue.pendingPlatforms(requesterId),
+    });
+    if (refusal === undefined) return;
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: requesterId,
+      requestSpec: deviceRequest,
+      reason: "already-leased",
+    });
+    throw refusal;
   }
 
   /**
@@ -351,9 +354,12 @@ export class FleetLeaseCoordinator {
     throw leaseIdTaken(leaseId);
   }
 
-  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+  async cancelPending(
+    requesterId: string,
+    platform?: Platform,
+  ): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.#decisions.run(async () => {
-      const waiter = this.#queue.findPendingWaiter(requesterId);
+      const waiter = this.#queue.findPendingWaiter(requesterId, platform);
       if (waiter === undefined) return "not-found";
       if (waiter.state !== "queued") return "not-cancellable";
       if (this.#queue.reject(waiter, new RequestCancelledError(waiter.id))) {
@@ -1266,7 +1272,7 @@ export class FleetLeaseCoordinator {
       workerId,
       workerLeaseId: grant.lease.id,
     };
-    if (!this.options.leaseIndex.add(entry)) {
+    if (!this.options.leaseIndex.add(entry, waiter.request.platform)) {
       // The index already routes this bare id to another worker, which got it there first: the
       // new worker's lease is given back and the caller is told the id is taken.
       this.#releaseOnWorker(workerId, grant.lease.id);
@@ -1457,7 +1463,7 @@ export class FleetLeaseCoordinator {
       // holds for that worker until the worker answers `running`.
       if (view.leases === undefined) continue;
       if (this.#lastReconciledLeases.get(view.id) === view.leases) continue;
-      this.options.leaseIndex.rebuildFromWorker(view.id, view.leases);
+      this.options.leaseIndex.rebuildFromWorker(view.id, view.leases, view.devices);
       this.#lastReconciledLeases.set(view.id, view.leases);
     }
     for (const workerId of this.#knownWorkerIds) {

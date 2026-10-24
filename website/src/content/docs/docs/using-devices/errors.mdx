@@ -30,7 +30,7 @@ Branch on the exit code or on `code`; the message is for people and can change. 
 | --- | --- | --- | --- |
 | `QUEUE_TIMEOUT` | 10 | The request waited longer than `--timeout` and got no device. | Retry later, with a longer `--timeout`, or with a broader request, such as `--class phone` or an `--os` range. |
 | `NO_CAPACITY` | 11 | Nothing is free and you passed `--no-wait`. Through a gateway it also means no worker can take requests at all, for example every worker is drained or disconnected. | Drop `--no-wait` to queue. Over HTTP, wait for the `Retry-After` seconds. Through a gateway, ask an operator which workers are up. |
-| `REQUESTER_ALREADY_LEASED` | 13 | Your requester id already holds a lease or has a request waiting. The message names the lease. | Keep using that lease, or release it with `simlock release <lease-id>`. If two agents collide, give each its own identity (see [Who the requester is](/simlock/docs/using-devices/lease-lifecycle#who-the-requester-is)). |
+| `REQUESTER_ALREADY_LEASED` | 13 | Your requester id already holds or waits for its limit of leases, or, with a limit per platform, has a request waiting on that platform. The message names the lease. | Keep using that lease, or release it with `simlock release <lease-id>`. If two agents collide, give each its own identity (see [Who the requester is](/simlock/docs/using-devices/lease-lifecycle#who-the-requester-is)). |
 | `LEASE_ID_TAKEN` | 13 | The `--lease-id` you chose belongs to an active lease or a waiting request. | Use a new, unique id. |
 
 ## Asking for a device the machine cannot provide

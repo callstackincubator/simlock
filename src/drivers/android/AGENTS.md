@@ -101,13 +101,13 @@ the 5037 server's protocol must equal Simlock's `adb version`; nothing listening
 Mismatch or unreadable → no command, advisory `adb-protocol-mismatch`. Enrol reads model,
 `ro.build.version.sdk`, current user, `pm list packages -3`. Class is always `phone`.
 
-Passthrough — virtual: `adb -P <port> …`. Refused: `kill-server` anywhere, `emu kill`,
-`emu avd stop`, `emu avd snapshot delete`, any global but `-s`/`-t`/`-d`/`-e` (or a lone
-`--version`/`--help`), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
+Passthrough — virtual: `adb -P <port> …`; with a device that has an address (`device.exec`) `-s <serial>` goes
+first unless the subcommand is on the no-device list (ADR 0047). Refused: another `-s`, `-e`, `-d`, `-t`,
+`adb` on a non-Android lease, `kill-server`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, other
+globals (a lone `--version`/`--help` passes), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
 refuses any leading flag, server and transport verbs, `reboot` to bootloader/recovery/sideload/fastboot.
 
-Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical
-`ANDROID_ADB_SERVER_PORT=5037`, `ANDROID_SERIAL=<serial>`.
+Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical `ANDROID_ADB_SERVER_PORT=5037`, `ANDROID_SERIAL=<serial>`.
 
 No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's.
 

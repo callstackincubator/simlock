@@ -366,7 +366,8 @@ export class Dispatcher {
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId,
         leaseRequesterId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.requesterId,
-        pendingRequestOwner: (requesterId) => this.options.queue.pendingRequestOwner(requesterId),
+        pendingRequestOwner: (requesterId, platform) =>
+          this.options.queue.pendingRequestOwner(requesterId, platform),
       },
       awaitReady: () => this.options.awaitReady(),
       onOutputMismatch: (operationName, issues) => {
@@ -579,7 +580,7 @@ export class Dispatcher {
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
-    const result = await this.options.queue.cancelPending(requesterId);
+    const result = await this.options.queue.cancelPending(requesterId, input.platform);
     return { result };
   };
 
@@ -702,10 +703,10 @@ export class Dispatcher {
    * `leaseId` is checked against the registry here so an id that names no lease answers
    * `UNKNOWN_LEASE` rather than running a command (`authorize`'s `ownsLease` deliberately lets
    * an unknown id through so this handler can say that -- see `roles.ts`). Which device the
-   * command touches is the driver's answer: `simctl` and `adb` take it from the command's own
-   * arguments, which this daemon does not parse, and `devicectl` gets the lease's `--device`
-   * added when the arguments name none (`devicectl-exec.ts`). That is the same accident
-   * boundary ADR 0001 draws for the local wrappers, reached over the wire.
+   * command touches is the driver's answer: it fills the lease's device in where the tool
+   * expects it and refuses a command that names another (ADR 0047 §1-2); this daemon parses
+   * none of the arguments. That is the same accident boundary ADR 0001 draws for the local
+   * wrappers, reached over the wire.
    *
    * Nothing is buffered: each chunk goes straight to `session.onOutput` as it arrives (§19e),
    * so a command that writes a gigabyte costs this process nothing, and a client sees the

@@ -29,7 +29,9 @@ export {
   QueueTimeoutError,
   type QueuePlace,
   RequestCancelledError,
+  type HeldLease,
   RequesterAlreadyLeasedError,
+  requesterLimitDecision,
   type WaiterState,
   WaitQueue,
 } from "./wait-queue.js";

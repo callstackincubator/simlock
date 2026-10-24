@@ -61,14 +61,14 @@ the status is stale.
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — partly implemented: §5 (usage figures) is not built |
 | [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Proposed; amends 0001 §3 and §5, 0015 §3 and 0019 §1–2 for physical devices |
-| [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by 0043 |
+| [0023](0023-agent-device-is-served-by-an-optional-edge-module.md) | agent-device is served by an optional edge module, and the simlock lease is the only clock | Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by 0043; §1, §3–4 narrowed by 0046 |
 | [0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) | Leasing calls lease-end participants before it reclaims a device | Accepted |
 | [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted |
 | [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies; §3's in-process link narrowed by 0043 |
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
-| [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Accepted — not yet implemented |
+| [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Accepted — not yet implemented; §2 narrowed by 0046 |
 | [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted |
 | [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented; §1 narrowed by 0036 |
 | [0033](0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md) | A sign-in proxy is a second way to sign in, and auth is one module | Accepted — not yet implemented |
@@ -77,11 +77,13 @@ the status is stale.
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
 | [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
 | [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented |
-| [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented |
+| [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented; narrowed by 0046 |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
 | [0042](0042-simlock-updates-itself-through-a-frozen-call-and-a-detached-updater.md) | Simlock updates itself through a frozen call and a detached updater | Accepted — not yet implemented; narrows 0009's `takes-requests` stage |
-| [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part |
+| [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part; §4 narrowed by 0046 |
 | [0044](0044-the-console-reads-what-its-page-shows-and-events-mark-it-stale.md) | The console reads what its page shows, and events mark it stale | Accepted — not yet implemented; supersedes 0013 §3 |
 | [0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Accepted — not yet implemented |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted — not yet implemented; narrows 0001 §2, §3, §5 and §7 for iOS under `deviceSet: "default"` |
+| [0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) | A standalone worker serves agent-device by default and hands local agents a private profile | Accepted — not yet implemented; narrows 0023 §1, §3–4, 0030 §2, 0039 and 0043 §4 |
+| [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |

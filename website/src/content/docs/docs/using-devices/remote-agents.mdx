@@ -11,15 +11,7 @@ The `simlock` CLI talks only to the daemon on its own machine; it cannot target 
 
 On the machine you connect to:
 
-- **A standalone worker** has HTTP off by default. Turn it on, then restart the daemon. A worker that has joined a gateway cannot turn it on: its agents connect to the gateway instead.
-
-  ```sh
-  simlock config set http.enabled true
-  simlock daemon stop
-  simlock daemon start
-  ```
-
-  It listens on `127.0.0.1:4701`.
+- **A standalone worker** has HTTP on by default, on `127.0.0.1:4701`. A worker that has joined a gateway has it off and cannot turn it on: its agents connect to the gateway instead.
 
 - **A gateway** has HTTP on by default, on `127.0.0.1:4700`.
 
@@ -39,7 +31,7 @@ simlock token create --role agent --label ci-runner-3
 
 The secret is shown once. Every request sends it as `Authorization: Bearer <secret>`.
 
-The token is the requester: its leases belong to it, and it can hold one lease at a time. Agents that share a token share that one lease. A token works only on the daemon that created it; a gateway's tokens are not valid on its workers.
+The token is the requester: its leases belong to it, and by default it can hold one lease at a time (an operator can set `lease.maxPerRequester` higher, or per platform). Agents that share a token share that limit. A token works only on the daemon that created it; a gateway's tokens are not valid on its workers.
 
 <Aside type="danger">
 An agent token on a worker reaches the whole worker, not only one device. A command run through `exec` runs on the worker as the daemon's user, and its arguments can read and write files anywhere that user can (for example, `adb pull` writes a file to a path you choose on the worker). Through a gateway, the command runs on whichever worker holds the device. Give agent tokens only to agents you would let run commands on those machines.
@@ -119,7 +111,7 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
    curl -sS -N -X POST "$SIMLOCK_URL/v1/leases/$LEASE/exec" \
      -H "Authorization: Bearer $SIMLOCK_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"tool":"simctl","args":["launch","6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90","com.example.myapp"]}'
+     -d '{"tool":"simctl","args":["launch","com.example.myapp"]}'
    ```
 
    ```text
@@ -149,14 +141,12 @@ export SIMLOCK_TOKEN=slk_d2FybS1wb29sLWFnZW50LXRva2VuLWV4YW1wbGUtMDM
 
 ## Running commands with exec
 
-- **Name your device in the arguments.** Use the lease's `udid` for `simctl`. Other agents' devices are on the same worker, so never use `booted`.
-- **On Android, use the lease's `address` as the adb serial.** The lease's `udid` is the emulator's AVD name (`simlock_…`), not its adb serial. Run `adb -s <address> …`. `address` is absent while the device has none, for example before it is ready or after it shuts down.
-- **On a physical device, Simlock names the device for you.** `devicectl` gets `--device <UDID>` added, and `adb` on a physical Android phone gets the phone's serial.
-- **Paths are on the worker.** `{"tool":"simctl","args":["install","<udid>","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API has no way to upload a file; get it there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
+- **Leave the device out.** Simlock puts the lease's device into a `simctl` command (its UDID, where the verb takes one), an `adb` command on an emulator (`-s <serial>`) and a `devicectl` command (`--device <UDID>`); `adb` on a physical Android phone gets the phone's serial. Write `["install","/builds/MyApp.app"]`, not a UDID or serial. A command that names a different device, such as `booted`, another UDID, `adb -s emulator-5556`, `-e`, `-d` or `-t`, is refused with `422 PASSTHROUGH_REFUSED` before anything runs. Naming the lease's own device is accepted on a simulator (its UDID), an emulator (`-s <serial>`) and an iPhone or iPad (`--device <UDID>`); a physical Android lease refuses any leading flag, its own `-s <serial>` included.
+- **Paths are on the worker.** `{"tool":"simctl","args":["install","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API has no way to upload a file; get it there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
 - **No terminal.** `stdin` in the body is sent to the command once. Interactive commands, such as a bare `adb shell`, are refused.
 - **Output is text.** Each chunk is decoded as UTF-8, so binary output to stdout (a screenshot written to `-`) does not survive. Write it to a file on the worker instead.
 - **Time limit.** A command that runs longer than 10 minutes is stopped, and the stream ends with an `error` event carrying `EXEC_TIMEOUT`. Disconnecting does not stop the command.
-- **Refused commands.** The commands `simlock simctl` and `simlock adb` refuse (see [Working with a device](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses)) are refused here too, with `422 PASSTHROUGH_REFUSED`, before anything runs.
+- **Refused commands.** The commands `simlock simctl` and `simlock adb` refuse (see [Working with a device](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses)) are refused here too, with `422 PASSTHROUGH_REFUSED`, before anything runs, and so is `simctl` on an Android lease or `adb` on an iOS one.
 
 ## More calls
 
@@ -194,7 +184,7 @@ Errors come back as JSON with an HTTP status:
 | --- | --- | --- |
 | `401` | `UNAUTHENTICATED` | The token is missing or unknown. Check the `Authorization` header. |
 | `403` | `FORBIDDEN` | The lease or request belongs to another token, or the route needs an operator token. |
-| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds a lease or has a request waiting. Release or cancel it first. |
+| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds or waits for its limit of leases, or, with a limit per platform, has a request waiting on that platform. Release or cancel it first. |
 | `422` | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` | The device you asked for cannot be made on this machine or fleet. Check `GET /v1/catalog`. |
 | `503` | `NO_CAPACITY` | Nothing is free and you sent `noWait: true`. Try again after the `Retry-After` seconds. |
 | `404` | `UNKNOWN_LEASE` | The lease has ended or never existed. Request a new one. |

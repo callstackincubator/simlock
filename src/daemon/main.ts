@@ -32,7 +32,7 @@ import {
   DriverCatalog,
   HostFactsReader,
   createCore,
-  loadConfig,
+  loadConfigWithDefaults,
   latestPresence,
   loadInstanceId,
   OwnedRootError,
@@ -279,12 +279,13 @@ async function composeDaemon(
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
-  const config = await loadConfig({
+  const { config, defaulted } = await loadConfigWithDefaults({
     configPath,
     filesystem,
-    modules: moduleDefinitions.map(({ config: moduleConfig, name }) => ({
+    modules: moduleDefinitions.map(({ config: moduleConfig, enabledByDefault, name }) => ({
       name,
       ...moduleConfig,
+      ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
     })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     role,
@@ -493,6 +494,7 @@ async function composeDaemon(
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const moduleHost = await createModuleHost({
     config,
+    defaulted,
     context: {
       cancelPending: (requesterId) => {
         if (cancelPendingRequest === undefined) {
@@ -518,6 +520,7 @@ async function composeDaemon(
     },
     definitions: moduleDefinitions,
     logger,
+    tokens: auth.tokens,
     role: "worker",
   });
   // Builds leasing on top of core (ADR 0018 §2).
@@ -766,8 +769,9 @@ async function composeDaemon(
       if (gatewayUplink !== undefined) {
         void (hostLoad?.firstReading() ?? Promise.resolve()).then(() => gatewayUplink.start());
       }
+      const profilesPrepared = moduleHost.prepareLocalProfiles();
       if (!config.http.enabled) return;
-      void startHttpGateway().then(
+      void profilesPrepared.then(startHttpGateway).then(
         () => resolveGatewayStarted?.(),
         (error: unknown) => {
           logger.error("HTTP frontend failed to start", { message: errorMessage(error) });

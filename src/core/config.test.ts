@@ -120,7 +120,7 @@ describe("loadConfig", () => {
         maxBytes: 256 * 1024 * 1024,
       },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-      http: { enabled: false, host: "127.0.0.1", port: 4701 },
+      http: { enabled: true, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 2,
@@ -713,33 +713,65 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
-  it("reads lease.maxPerRequester, and defaults it to 1", async () => {
+  it.each([
+    [undefined, 1],
+    [2, 2],
+    [
+      { ios: 1, android: 1 },
+      { ios: 1, android: 1 },
+    ],
+    [{ ios: 2 }, { ios: 2 }],
+    [{}, {}],
+  ])("reads an operator's lease.maxPerRequester %j as %j (absent: 1)", async (written, read) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    const unset = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ lease: { maxPerRequester: 3 } }));
-
-    const set = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(unset.lease).toMatchObject({ maxPerRequester: 1 });
-    expect(set.lease).toMatchObject({ maxPerRequester: 3 });
-  });
-
-  it.each([[0], [-1], [1.5], ["2"]])(
-    "rejects lease.maxPerRequester %j, naming the key",
-    async (value) => {
-      const filesystem = new MemoryFilesystem();
-      await filesystem.mkdirp("/home/agent/.simlock");
+    if (written !== undefined) {
       await filesystem.writeFileAtomic(
         configPath,
-        JSON.stringify({ lease: { maxPerRequester: value } }),
+        JSON.stringify({ lease: { maxPerRequester: written } }),
       );
+    }
 
-      await expect(
-        loadConfig({ configPath, filesystem, systemStats: createStats() }),
-      ).rejects.toThrow("lease.maxPerRequester");
-    },
-  );
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.lease.maxPerRequester).toEqual(read);
+  });
+
+  it.each([
+    [0, "lease.maxPerRequester"],
+    [-1, "lease.maxPerRequester"],
+    [1.5, "lease.maxPerRequester"],
+    ["2", "lease.maxPerRequester"],
+    [{ ios: 0 }, "lease.maxPerRequester.ios"],
+    [{ ios: 1.5 }, "lease.maxPerRequester.ios"],
+    [{ ios: "1" }, "lease.maxPerRequester.ios"],
+  ])("rejects lease.maxPerRequester %j, naming %s", async (value, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxPerRequester: value } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("accepts a platform lease.maxPerRequester does not know, with a warning, and ignores it", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxPerRequester: { ios: 1, tvos: 1 } } }),
+    );
+    const warn = vi.fn();
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+
+    expect(config.lease.maxPerRequester).toEqual({ ios: 1 });
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "lease.maxPerRequester.tvos"');
+  });
 
   it("lease.endWaitMs defaults to 600000 and accepts a positive number and 2147483647", async () => {
     const filesystem = new MemoryFilesystem();
@@ -1656,11 +1688,11 @@ describe("loadConfig modes (ADR 0005)", () => {
     });
   }
 
-  it("defaults to worker mode, with HTTP off and a 24h disconnected-view retention", async () => {
+  it("defaults to worker mode, with HTTP on and a 24h disconnected-view retention", async () => {
     const config = await load({});
 
     expect(config.mode).toBe("worker");
-    expect(config.http.enabled).toBe(false);
+    expect(config.http.enabled).toBe(true);
     expect(config.gateway).toEqual({
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
@@ -1876,7 +1908,7 @@ describe("loadConfig modes (ADR 0005)", () => {
       { name: "wss URL, HTTP omitted", contents: { gateway: joined }, http: false },
       { name: "standalone, HTTP true", contents: { http: { enabled: true } }, http: true },
       { name: "standalone, HTTP false", contents: { http: { enabled: false } }, http: false },
-      { name: "standalone, HTTP omitted", contents: {}, http: false },
+      { name: "standalone, HTTP omitted", contents: {}, http: true },
       { name: "gateway, HTTP omitted", contents: {}, role: "gateway", http: true },
       {
         name: "gateway, HTTP true",

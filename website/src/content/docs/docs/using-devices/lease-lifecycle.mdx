@@ -109,13 +109,13 @@ Stopping `simlock lease` while it waits does not take the request out of the que
 
 ## One lease per requester
 
-Each requester can hold one lease, or have one request waiting, at a time. A second request fails with `REQUESTER_ALREADY_LEASED` (exit 13) and names the lease you hold:
+By default, each requester can hold one lease, or have one request waiting, at a time. A second request fails with `REQUESTER_ALREADY_LEASED` (exit 13) and names the lease you hold:
 
 ```json
 {"error":{"code":"REQUESTER_ALREADY_LEASED","message":"Requester claude-code:0f4c2a91-6d1e-4b8a-a3f7-92c5e8d10b46 already holds lease lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3; release it (`simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3`) before requesting another device"}}
 ```
 
-Release that lease first, or keep using it. An admin can allow more leases per requester with `lease.maxPerRequester`.
+Release that lease first, or keep using it. An admin can allow more leases per requester with `lease.maxPerRequester`: a number for all platforms together, or a limit per platform, such as one iOS and one Android lease. With a limit per platform the message names the platform, and a requester may wait for one request per platform. `lease.cancel` takes an optional `platform` to cancel the waiting request of that platform.
 
 `--lease-id <id>` sets the lease id yourself, for a caller that already has its own id for the work. Use 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. You must never reuse an id: an id that an active lease or waiting request already has fails with `LEASE_ID_TAKEN` (exit 13).
 

@@ -32,6 +32,7 @@ import {
   type LeaseGrant,
   type LeaseProgress,
   type LeaseRecord,
+  type MaxPerRequester,
   type LeaseTiming,
   newLeaseRequestId,
   type Platform,
@@ -74,7 +75,7 @@ import {
   lineOf,
   type LeaseRequestOptions,
   RequestCancelledError,
-  RequesterAlreadyLeasedError,
+  requesterLimitDecision,
   type Waiter,
   type WaitQueue,
 } from "./wait-queue.js";
@@ -130,7 +131,7 @@ export type AcquisitionQueue = Pick<
   | "depth"
   | "enqueue"
   | "findPendingWaiter"
-  | "hasPendingRequester"
+  | "pendingPlatforms"
   | "head"
   | "isQueued"
   | "markNew"
@@ -169,7 +170,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
   readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "holdsLeaseId" | "replay">;
-  readonly maxPerRequester?: number;
+  readonly maxPerRequester?: MaxPerRequester;
 }
 
 interface AcquisitionWaiter extends Waiter {
@@ -242,8 +243,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * Synchronous and not routed through `decisions.run`: `lease.cancel`'s `authorize` hook runs
    * before the handler, so it cannot go through the handler's serialized decision.
    */
-  pendingRequestOwner(requesterId: string): string | undefined {
-    return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
+  pendingRequestOwner(requesterId: string, platform?: Platform): string | undefined {
+    return this.options.queue.findPendingWaiter(requesterId, platform)?.options.ownerId;
   }
 
   /**
@@ -315,15 +316,29 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     options: LeaseRequestOptions,
     requestId: string,
   ): void {
-    const held = this.options.registry.snapshot.leases.filter(
-      (lease) => lease.requesterId === options.requesterId,
-    );
-    const limit = this.options.maxPerRequester ?? 1;
-    const waiting = this.options.queue.hasPendingRequester(options.requesterId);
+    const { devices, leases } = this.options.registry.snapshot;
+    const held = leases
+      .filter((lease) => lease.requesterId === options.requesterId)
+      .map((lease) => {
+        const platform = devices.find((device) => device.id === lease.deviceId)?.spec.platform;
+        return {
+          grantedAt: lease.grantedAt,
+          id: lease.id,
+          ...(platform === undefined ? {} : { platform }),
+        };
+      });
+    const waiting = this.options.queue.pendingPlatforms(options.requesterId);
     // why: a probe's held leases were counted by the gateway, fleet-wide; only its waiting
     // request is checked here (ADR 0023 §2).
-    const atLimit = options.fleetRequestId === undefined && held.length >= limit;
-    if (!waiting && !atLimit) return;
+    const refusal = requesterLimitDecision({
+      held,
+      maxPerRequester: this.options.maxPerRequester,
+      platform: request.platform,
+      probe: options.fleetRequestId !== undefined,
+      requesterId: options.requesterId,
+      waiting,
+    });
+    if (refusal === undefined) return;
     emitLeaseRefusal(
       this.options.eventBus,
       {
@@ -335,11 +350,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       },
       "lease-acquisition-coordinator",
     );
-    throw new RequesterAlreadyLeasedError(options.requesterId, earliestGranted(held)?.id, {
-      held: held.length,
-      limit,
-      waiting,
-    });
+    throw refusal;
   }
 
   /**
@@ -677,9 +688,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
    * read, so it is cancellable in any live state.
    */
-  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+  async cancelPending(
+    requesterId: string,
+    platform?: Platform,
+  ): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.options.decisions.run(async () => {
-      const waiter = this.options.queue.findPendingWaiter(requesterId) as
+      const waiter = this.options.queue.findPendingWaiter(requesterId, platform) as
         | AcquisitionWaiter
         | undefined;
       if (waiter === undefined) return "not-found";
@@ -1512,14 +1526,4 @@ function requestedRange(request: DeviceRequest): OsRange | undefined {
   if (request.osVersion === undefined) return undefined;
   const parsed = parseOsConstraint(request.osVersion);
   return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
-}
-
-function earliestGranted<Lease extends { readonly grantedAt: number }>(
-  leases: readonly Lease[],
-): Lease | undefined {
-  let earliest: Lease | undefined;
-  for (const lease of leases) {
-    if (earliest === undefined || lease.grantedAt < earliest.grantedAt) earliest = lease;
-  }
-  return earliest;
 }

@@ -11,7 +11,7 @@ import {
   type AgentDevicePlatform,
   type AgentDeviceRole,
 } from "./host/agent-device-supervisor.js";
-import { agentDeviceFindings } from "./host/availability-findings.js";
+import { agentDeviceFindings, isAbsentByDefault } from "./host/availability-findings.js";
 import { type AgentDeviceHealthProbe, NodeAgentDeviceHealthProbe } from "./host/health.js";
 import { AgentDeviceHost } from "./host/host.js";
 import { AgentDeviceLeaseEnd, ReleaseScopeRecord } from "./host/lease-end.js";
@@ -79,16 +79,20 @@ function agentDeviceRelayTarget(
   };
 }
 
-function agentDeviceCapabilitySource(parts: AgentDeviceEdgeParts): {
+function agentDeviceCapabilitySource(
+  parts: AgentDeviceEdgeParts,
+  absent: () => boolean,
+): {
   readonly name: string;
   readonly read: () => Promise<{
-    readonly state: "available" | "unavailable";
+    readonly state: "available" | "unavailable" | "off";
     readonly reason?: string;
   }>;
 } {
   return {
     name: "agent-device",
     read: async () => {
+      if (absent()) return { state: "off" };
       // why: a status read without a lease id is never "unreachable"; only a lease has a worker to reach.
       const status = (await parts.link.status()) as Exclude<LinkStatus, { state: "unreachable" }>;
       return status.state === "running"
@@ -139,11 +143,13 @@ export function createWorkerWith(
       ctx.registry,
     );
     return {
-      capability: agentDeviceCapabilitySource(parts),
+      capability: agentDeviceCapabilitySource(parts, () =>
+        isAbsentByDefault(supervisor.availability(), ctx.enabledByDefault),
+      ),
       findings: () =>
         [
-          ...agentDeviceFindings(supervisor.availability()),
-          ...agentDeviceFindings(phoneSupervisor.availability(), "phones"),
+          ...agentDeviceFindings(supervisor.availability(), "simulators", ctx.enabledByDefault),
+          ...agentDeviceFindings(phoneSupervisor.availability(), "phones", ctx.enabledByDefault),
         ].map(({ message, remedy }) => ({ message, remedy })),
       hooks: {
         // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost the socket race never gets here, so it reaps nothing.

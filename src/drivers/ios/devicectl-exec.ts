@@ -1,4 +1,5 @@
 import { type PassthroughCommand, PassthroughRefusedError } from "../../core/index.js";
+import { otherDeviceRefusal } from "../other-device-refusal.js";
 
 const TOOL = "devicectl";
 
@@ -139,9 +140,26 @@ function isOnList(
 }
 
 interface Scan {
-  namesDevice: boolean;
+  /** why: The `-d` / `--device` whose separate value is the next argument. */
+  deviceOption: string | undefined;
+  /** why: Each device the caller named, as written, with its value for the comparison. */
+  namedDevices: { readonly named: string; readonly value: string }[];
   positional: number;
   expectsValue: boolean;
+}
+
+function takeDeviceValue(scan: Scan, value: string): void {
+  if (scan.deviceOption === undefined) return;
+  scan.namedDevices.push({ named: `${scan.deviceOption} ${value}`, value });
+  scan.deviceOption = undefined;
+}
+
+function noteDeviceOption(scan: Scan, argument: string, name: string, inline: boolean): void {
+  if (inline) {
+    scan.namedDevices.push({ named: argument, value: argument.slice(name.length + 1) });
+  } else {
+    scan.deviceOption = name;
+  }
 }
 
 function scanArgument(
@@ -153,6 +171,7 @@ function scanArgument(
 ): void {
   if (scan.expectsValue) {
     scan.expectsValue = false;
+    takeDeviceValue(scan, argument);
     return;
   }
   if (!isOption(argument)) {
@@ -165,7 +184,7 @@ function scanArgument(
     refuse(`${command}: ${argument} is not on the reviewed list`);
   }
   if (!lists.valued.has(name)) return;
-  if (name === "-d" || name === "--device") scan.namesDevice = true;
+  if (name === "-d" || name === "--device") noteDeviceOption(scan, argument, name, inline);
   scan.expectsValue = !inline;
 }
 
@@ -173,15 +192,20 @@ function parseOptions(
   command: string,
   spec: CommandSpec,
   options: readonly string[],
-): { readonly namesDevice: boolean } {
+): Scan["namedDevices"] {
   const lists = {
     flags: new Set([...spec.flags, ...COMMON_FLAGS]),
     valued: new Set([...spec.valued, ...COMMON_VALUED].flat()),
   };
-  const scan: Scan = { expectsValue: false, namesDevice: false, positional: 0 };
+  const scan: Scan = {
+    deviceOption: undefined,
+    expectsValue: false,
+    namedDevices: [],
+    positional: 0,
+  };
   for (const argument of options) scanArgument(command, spec, lists, scan, argument);
   if (scan.expectsValue) refuse(`${command}: an option has no value`);
-  return { namesDevice: scan.namesDevice };
+  return scan.namedDevices;
 }
 
 function isOption(argument: string): boolean {
@@ -204,11 +228,16 @@ export function devicectlExecCommand(udid: string, args: readonly string[]): Pas
       `${before.length === 0 ? "no command" : before.slice(0, 3).join(" ")} is not on the reviewed list`,
     );
   }
-  const { namesDevice } = parseOptions(command, spec, before.slice(3));
+  const namedDevices = parseOptions(command, spec, before.slice(3));
+  for (const { named, value } of namedDevices) {
+    if (value.toLowerCase() !== udid.toLowerCase()) {
+      throw otherDeviceRefusal(TOOL, args, named, udid);
+    }
+  }
   const head = args.slice(0, 3);
   const rest = args.slice(3);
   return {
-    args: [TOOL, ...head, ...(namesDevice ? [] : ["--device", udid]), ...rest],
+    args: [TOOL, ...head, ...(namedDevices.length > 0 ? [] : ["--device", udid]), ...rest],
     command: "xcrun",
     env: {},
   };

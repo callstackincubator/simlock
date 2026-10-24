@@ -86,6 +86,12 @@ afterEach(async () => {
   );
 });
 
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test that asks for neither pins them off, and two daemons would clash on port 4701.
+const STANDALONE_OFF = {
+  capabilities: { "agent-device": { enabled: false } },
+  http: { enabled: false },
+} as const;
+
 /** `drivers: undefined` is spelled out by a caller that wants real (module-substituted)
  * discovery rather than the fake driver below. */
 async function start(
@@ -94,6 +100,7 @@ async function start(
     readonly drivers?: StartDaemonOptions["drivers"] | undefined;
   } = {},
 ) {
+  const { configOverrides, ...rest } = overrides;
   const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
@@ -108,7 +115,9 @@ async function start(
     hostLoadProbe: null,
     logger,
     version: "1.2.3",
-    ...overrides,
+    ...rest,
+    configOverrides:
+      overrides.role === "gateway" ? configOverrides : { ...STANDALONE_OFF, ...configOverrides },
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
   return { daemon, directory, sink };
@@ -297,6 +306,7 @@ describe("the version a daemon reports", () => {
     const clock = new FakeClock(1_000);
     const socketPath = join(directory, "daemon.sock");
     const daemon = await startDaemon({
+      configOverrides: STANDALONE_OFF,
       deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
@@ -1080,6 +1090,7 @@ describe("startDaemon wires core and leasing together", () => {
 
     const daemon = await startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       deviceDataTables: fakeDeviceDataTables,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
@@ -1103,6 +1114,7 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         clock,
+        configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
@@ -1157,6 +1169,7 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         clock,
+        configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [driver],
@@ -1343,6 +1356,7 @@ describe("startDaemon startup readiness", () => {
     const socketPath = join(directory, "daemon.sock");
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -1406,6 +1420,7 @@ describe("startDaemon stopped while starting", () => {
     const filesystem = new MemoryFilesystem();
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -2900,7 +2915,11 @@ describe("startDaemon with the agent-device edge", () => {
     await filesystem.writeFileAtomic(`${packageRoot}/package.json`, '{"name":"agent-device"}');
     await filesystem.writeFileAtomic(entry, "");
     filesystem.defineSymlink(command, realCli);
-    await filesystem.writeFileAtomic(join(directory, "config.json"), JSON.stringify(config));
+    // why: HTTP and agent-device are on by default for a standalone worker (ADR 0046); a test here asks for agent-device and never for HTTP, and two daemons would clash on 4701.
+    await filesystem.writeFileAtomic(
+      join(directory, "config.json"),
+      JSON.stringify({ http: { enabled: false }, ...(config as Record<string, unknown>) }),
+    );
     if (options.record !== undefined) {
       await filesystem.writeFileAtomic(
         join(directory, "agent-device-daemon.json"),
@@ -3363,11 +3382,62 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
+    const version = (stdout: string) => ({
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout },
+    });
+
+    // why: the simulator daemon's version answer is the row's own text when it is not the running one, and the phone daemon's follows `phones`.
+    function scriptedDaemons(
+      setup: Awaited<ReturnType<typeof setUp>>,
+      tcpProbe: FakeTcpProbe,
+      simulator: string,
+      phones: string | undefined,
+    ): ScriptedProcessRunner {
+      if (simulator === "missing") return new ScriptedProcessRunner([]);
+      return new ScriptedProcessRunner([
+        version(simulator === "running" ? "0.21.28\n" : simulator),
+        {
+          hangs: true,
+          match: { args: [entry, `--simlock-home=${setup.directory}`], command: process.execPath },
+          onSpawn: async () => {
+            await setup.filesystem.writeFileAtomic(
+              join(setup.directory, "agent-device", "daemon.json"),
+              JSON.stringify({ httpPort: 4310, pid: 2, token: "t" }),
+            );
+            tcpProbe.startListening(4310);
+          },
+        },
+        version(phones === undefined || phones === "unstartable" ? "0.21.28\n" : phones),
+      ]);
+    }
+
+    const findingLabel = (finding: { readonly module?: string; readonly message?: string }) => {
+      if (finding.module === "alpha") return "alpha";
+      return finding.message?.startsWith("phone daemon: ") === true ? "phones" : "simulator";
+    };
+
     it.each([
       {
         name: "both daemons down: agent-device is found nowhere",
         simulator: "missing",
         phones: undefined,
+        findings: ["simulator", "phones", "alpha"],
+        capability: "unavailable",
+      },
+      {
+        name: "not found, and capabilities.agent-device.enabled never set: it is on only by default",
+        simulator: "missing",
+        phones: undefined,
+        enabled: undefined,
+        findings: ["alpha"],
+        capability: "off",
+      },
+      {
+        name: "a wrong version, and capabilities.agent-device.enabled never set",
+        simulator: "0.20.3\n",
+        phones: undefined,
+        enabled: undefined,
         findings: ["simulator", "phones", "alpha"],
         capability: "unavailable",
       },
@@ -3386,48 +3456,21 @@ describe("startDaemon with the agent-device edge", () => {
         capability: "available",
       },
     ] as const)(
-      "lists a phone daemon finding that starts with `phone daemon: ` after the simulator daemon's and before another module's, while the capability follows the simulator daemon: $name",
-      async ({ capability, findings, phones, simulator }) => {
+      "lists a phone daemon finding that starts with `phone daemon: ` after the simulator daemon's and before another module's, while the capability follows the simulator daemon, and says nothing of a command never found while agent-device is on only by default: $name",
+      async ({ capability, findings, phones, simulator, ...row }) => {
         const setup = await setUp({
           capabilities: {
             "agent-device": {
               command: simulator === "missing" ? "/opt/missing/agent-device" : command,
-              enabled: true,
+              ...("enabled" in row ? {} : { enabled: true }),
             },
             alpha: { enabled: true },
           },
         });
-        const version = (stdout: string) => ({
-          match: { args: [realCli, "--version"], command: process.execPath },
-          result: { code: 0, stderr: "", stdout },
-        });
         const health = new FakeAgentDeviceHealth();
         health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
         const tcpProbe = new FakeTcpProbe();
-        const runner = new ScriptedProcessRunner(
-          simulator === "missing"
-            ? []
-            : [
-                version("0.21.28\n"),
-                {
-                  hangs: true,
-                  match: {
-                    args: [entry, `--simlock-home=${setup.directory}`],
-                    command: process.execPath,
-                  },
-                  onSpawn: async () => {
-                    await setup.filesystem.writeFileAtomic(
-                      join(setup.directory, "agent-device", "daemon.json"),
-                      JSON.stringify({ httpPort: 4310, pid: 2, token: "t" }),
-                    );
-                    tcpProbe.startListening(4310);
-                  },
-                },
-                ...(phones === "unstartable" || phones === undefined
-                  ? [version("0.21.28\n")]
-                  : [version(phones)]),
-              ],
-        );
+        const runner = scriptedDaemons(setup, tcpProbe, simulator, phones);
         const { clock, daemon } = await startEdge(setup, {
           agentDevice: agentDeviceModuleWith({ health }),
           clock: new FakeClock(1_000),
@@ -3451,14 +3494,7 @@ describe("startDaemon with the agent-device edge", () => {
               }[];
             }
           ).findings.filter((finding) => finding.kind === "module-unavailable");
-        const labelled = async () =>
-          (await unavailable()).map((finding) =>
-            finding.module === "alpha"
-              ? "alpha"
-              : finding.message?.startsWith("phone daemon: ") === true
-                ? "phones"
-                : "simulator",
-          );
+        const labelled = async () => (await unavailable()).map(findingLabel);
         // why: the simulator daemon's polls sleep on the fake clock, so the test advances it until the findings settle.
         for (let tick = 0; tick < 400; tick += 1) {
           if (JSON.stringify(await labelled()) === JSON.stringify(findings)) break;
@@ -3552,6 +3588,7 @@ describe("startDaemon host load", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const daemon = await startDaemon({
+      configOverrides: STANDALONE_OFF,
       deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
@@ -3586,6 +3623,7 @@ describe("startDaemon host load", () => {
     const socketPath = join(directory, "daemon.sock");
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -3737,6 +3775,7 @@ describe("startDaemon host load", () => {
       await expect(
         startDaemon({
           clock,
+          configOverrides: STANDALONE_OFF,
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
           deviceDataTables: fakeDeviceDataTables,
@@ -3985,7 +4024,10 @@ describe("startDaemon state.db", () => {
     const launch = (now: number) =>
       startDaemon({
         clock: new FakeClock(now),
-        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        configOverrides: {
+          ...STANDALONE_OFF,
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
         drivers: [],
@@ -4144,6 +4186,7 @@ describe("startDaemon version check", () => {
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
+      configOverrides: overrides.role === "gateway" ? {} : STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
@@ -4178,7 +4221,7 @@ describe("startDaemon version check", () => {
       await expect(
         startDaemon({
           clock,
-          configOverrides: { update: { check } },
+          configOverrides: { ...STANDALONE_OFF, update: { check } },
           dataDirectory: directory,
           drivers: [],
           filesystem: new SecretRefusingFilesystem(),

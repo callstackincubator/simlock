@@ -29,7 +29,7 @@ Agents use the same commands and the same HTTP calls as with a single worker:
 - **On the gateway machine**, run the CLI with `--gateway`, for example `simlock --gateway lease --platform ios --device "iPhone 16"`.
 - **On any other machine**, use the gateway's HTTP API with an agent token made on the gateway. See [Remote agents](/simlock/docs/using-devices/remote-agents).
 
-Through a gateway, `simlock simctl` and `simlock adb` run on the worker that holds the device. A file path in the command is a path on that worker, not on your machine, so `simlock --gateway simctl install booted ./MyApp.app` fails unless `MyApp.app` exists on the worker.
+Through a gateway, `simlock simctl` and `simlock adb` run on the worker that holds the device. A file path in the command is a path on that worker, not on your machine, so `simlock --gateway simctl install ./MyApp.app` fails unless `MyApp.app` exists on the worker.
 
 A gateway does not do these things a worker does:
 

@@ -3,6 +3,7 @@
 import type { SimlockAdminClient } from "../admin/index.js";
 import type { EventEnvelope } from "../bus/index.js";
 import type { PassthroughCommand } from "../client/index.js";
+import type { RunTool } from "../instructions/index.js";
 import type {
   Clock,
   DaemonFlag,
@@ -54,6 +55,11 @@ export interface CliEnvironment {
   readonly configPath: string;
   readonly daemonHome: DaemonHome;
   readonly requesterId: string;
+  readonly homeDirectory: string;
+  readonly workingDirectory: string;
+  readonly codexHome?: string | undefined;
+  readonly runTool: RunTool;
+  readonly filesystem: Filesystem;
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
   ) => Promise<SimlockAdminClient>;
@@ -91,6 +97,10 @@ export interface CliEnvironmentPorts {
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
   readonly daemonHome: DaemonHome;
+  readonly homeDirectory: string;
+  readonly workingDirectory: string;
+  readonly codexHome?: string | undefined;
+  readonly runTool: RunTool;
   readonly service?: ServiceSetup;
   readonly parentWatch?: ParentWatch;
   readonly signals?: Signals;

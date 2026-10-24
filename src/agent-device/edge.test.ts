@@ -4268,13 +4268,13 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
     return (await rig.daemon.dispatch("status.get", {}, adminSession)).capabilities;
   }
 
-  it("a worker with no capabilities.agent-device section answers status.get with capabilities [{name: agent-device, state: off}], and so does one with it false", async () => {
+  it("a standalone worker with no capabilities.agent-device section answers status.get with capabilities [{name: agent-device, state: available}], and one with it false answers state off", async () => {
     const unset = await setUp({ enabled: "unset" });
     const off = await setUp({ enabled: false });
     const running = await setUp();
 
     expect(await capabilities(running)).toEqual([{ name: "agent-device", state: "available" }]);
-    expect(await capabilities(unset)).toEqual([{ name: "agent-device", state: "off" }]);
+    expect(await capabilities(unset)).toEqual([{ name: "agent-device", state: "available" }]);
     expect(await capabilities(off)).toEqual([{ name: "agent-device", state: "off" }]);
   });
 

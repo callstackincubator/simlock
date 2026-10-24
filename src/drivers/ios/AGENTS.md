@@ -72,13 +72,13 @@ off, locked. Present = listed, paired, unlocked.
 
 Passthrough —
 
-- `simctl`: `xcrun simctl --set <root> …`. Refused: `create`, `erase`, `delete`, `shutdown all`,
-  `runtime delete`, any flag before the subcommand (`--set`, `--profiles` named). Refused on a physical lease.
+- `simctl`: `xcrun simctl --set <root> …`; with a device (`device.exec`) the lease's UDID goes first among
+  a device verb's operands (`simctl-device.ts`, ADR 0047). Refused: `booted`, another UUID, `create`, `erase`,
+  `delete`, `shutdown all`, `runtime delete`, a flag before the subcommand (`--set`, `--profiles`), a physical or non-iOS lease.
 - `devicectl`: physical iOS lease only; no local wrapper. `devicectlExecCommand` allows
   `device install app`, `device uninstall app`, `device process launch|terminate|signal`,
   `device info apps|lockState|details|processes`, each with its own options. Host-path options
-  (`--json-output`, `--log-output`, `--destination`, `--file`, `--filter`, `-j`, `-l`) are refused
-  before `--`. Adds `--device <udid>` unless the caller names one.
+  (`--json-output`, `--log-output`, `--destination`, `--file`, `--filter`, `-j`, `-l`) are refused before `--`. Adds `--device <udid>` unless the caller names one; another UDID is refused.
 
 Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>`; physical `SIMLOCK_DEVICE_UDID=<udid>`.
 Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture

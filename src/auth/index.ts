@@ -110,6 +110,7 @@ export function createAuthFrom(
       create: (role, label) => store.create(role, label),
       list: () => store.list(),
       revoke: (id) => store.revoke(id),
+      verify: (secret) => store.verify(secret),
     },
     adminSecret: {
       persist: () => adminSecret.persist(),

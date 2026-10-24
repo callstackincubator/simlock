@@ -31,7 +31,7 @@ Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-wa
 | `authenticateRequest` | Asks the enabled strategies in registry order; returns `Identity` or throws `AuthError`                  |
 | `resolveHelloRole`    | No credential → `agent`; operator token or admin secret → `admin`; else `AdminAuthenticationFailedError` |
 | `authenticateUplink`  | None or unknown → `unauthenticated`; not a `worker` token → `forbidden`; else accept with the token id   |
-| `tokens`              | `create`, `list`, `revoke` (both dispatchers)                                                            |
+| `tokens`              | `create`, `list`, `revoke` (both dispatchers); `verify` (the module host, for a local profile)           |
 | `adminSecret`         | `persist`, `remove` (`DaemonServer`)                                                                     |
 
 ## Strategies

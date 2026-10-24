@@ -7,6 +7,7 @@ export {
   assertPinnedAgentDevice,
   cleanupAgents,
   makeAgent,
+  makeProfileAgent,
   newAgentToken,
   waitForAgentDevice,
 } from "./agent-device.js";

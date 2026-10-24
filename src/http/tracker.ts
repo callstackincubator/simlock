@@ -129,6 +129,7 @@ export function isTerminalStage(state: RequestSnapshot): boolean {
 export interface TrackedRequestView {
   readonly id: string;
   readonly requesterId: string;
+  readonly platform: "ios" | "android";
   /** The principal that sent the request -- what reading or cancelling it is authorized on. */
   readonly ownerId: string;
   readonly createdAt: string;
@@ -227,6 +228,7 @@ export class LeaseRequestTracker {
           createdAt: new Date(this.options.clock.now()).toISOString(),
           id: requestId,
           ownerId: identity.principal,
+          platform: body.platform,
           requesterId: identity.principal,
           state,
         };
@@ -336,7 +338,7 @@ export class LeaseRequestTracker {
     const session = buildHttpSession(identity);
     const { result } = await this.options.dispatch(
       "lease.cancel",
-      { requesterId: before.requesterId },
+      { platform: before.platform, requesterId: before.requesterId },
       session,
     );
     if (result === "cancelled") return { kind: "cancelled" };
@@ -409,6 +411,7 @@ function toView(
     createdAt: new Date(record.createdAt).toISOString(),
     id: record.id,
     ownerId: record.ownerId,
+    platform: record.request.platform,
     requesterId: record.requesterId,
     state: toSnapshot(record, progress),
   };

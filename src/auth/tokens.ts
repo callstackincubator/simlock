@@ -12,4 +12,5 @@ export interface TokenOperations {
   create(role: TokenRole, label?: string): Promise<{ record: TokenRecord; secret: string }>;
   list(): Promise<TokenRecord[]>;
   revoke(id: string): Promise<boolean>;
+  verify(secret: string): Promise<TokenRecord | undefined>;
 }

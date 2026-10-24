@@ -214,17 +214,29 @@ function processEnv(
   };
 }
 
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test gets neither unless it asks, and two daemons would clash on port 4701. A gateway keeps its HTTP, which it cannot do without.
+const STANDALONE_OFF: Record<string, unknown> = {
+  capabilities: { "agent-device": { enabled: false } },
+  http: { enabled: false },
+};
+
 function seedConfig(
   options: WithDaemonOptions,
   adbServerPort: number | undefined,
 ): Record<string, unknown> | undefined {
+  const pinned = options.role === "gateway" ? {} : STANDALONE_OFF;
   if (options.driver === undefined || options.driver === "fake") {
-    return mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {});
+    return mergeDeep(mergeDeep(pinned, FAKE_LANE_BASE_CONFIG), options.configOverrides ?? {});
   }
   if (options.driver === "real") {
-    return mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {});
+    return mergeDeep(
+      mergeDeep(pinned, { drivers: { android: { adbServerPort } } }),
+      options.configOverrides ?? {},
+    );
   }
-  return options.configOverrides;
+  return options.role === "gateway"
+    ? options.configOverrides
+    : mergeDeep(pinned, options.configOverrides ?? {});
 }
 
 async function buildEnv(

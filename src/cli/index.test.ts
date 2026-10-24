@@ -67,6 +67,7 @@ import type {
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin, type WorkerView } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
+import type { ToolOutcome } from "../instructions/index.js";
 import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
 import { buildCliEnvironment } from "./environment.js";
 import { readLogFile } from "./log-file.js";
@@ -225,6 +226,201 @@ describe("CLI: exit codes", () => {
     const gatewayOutput = outputCapture();
     await runCli(["--gateway", "--help"], gatewayOutput.environmentWith());
     expect(gatewayOutput.stdout).toBe(output.stdout);
+  });
+
+  it("simlock instructions still prints the text under --gateway or --local on a machine with no gateway, and simlock --help lists it", async () => {
+    const listing = outputCapture();
+    await expect(runCli(["--help"], listing.environmentWith())).resolves.toBe(0);
+    expect(listing.stdout).toContain("  instructions [--json]");
+
+    for (const argv of [
+      ["--gateway", "instructions"],
+      ["instructions", "--gateway"],
+      ["--local", "instructions"],
+      ["instructions"],
+    ]) {
+      const output = outputCapture();
+      await expect(
+        runCli(
+          argv,
+          output.environmentWith({
+            connectAdmin: async () => {
+              throw new Error("instructions must not connect to a daemon");
+            },
+          }),
+        ),
+        argv.join(" "),
+      ).resolves.toBe(0);
+      expect(output.stdout, argv.join(" ")).toMatch(/^# Using Simlock/);
+      expect(output.stderr, argv.join(" ")).toBe("");
+    }
+  });
+
+  it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {
+    const HOME = "/home/operator";
+    const CWD = "/work/project";
+    const SCOPE_PROMPT = "Install only for this project (not every project)? [y/N] ";
+    const exited = (code: number, stderr = ""): ToolOutcome => ({
+      outcome: "exited",
+      code,
+      stderr,
+    });
+    const setupRun = async (
+      argv: readonly string[],
+      options: {
+        readonly outcome?: ToolOutcome;
+        readonly prepare?: (filesystem: MemoryFilesystem) => Promise<void>;
+      } = {},
+    ): Promise<{
+      readonly code: number;
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly questions: string[];
+      readonly filesystem: MemoryFilesystem;
+    }> => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp(HOME);
+      await filesystem.mkdirp(CWD);
+      await filesystem.mkdirp(`${HOME}/.claude`);
+      await options.prepare?.(filesystem);
+      const questions: string[] = [];
+      const output = outputCapture();
+      const code = await runCli(
+        argv,
+        output.environmentWith({
+          homeDirectory: HOME,
+          workingDirectory: CWD,
+          filesystem,
+          confirm: async (question) => {
+            questions.push(question);
+            return false;
+          },
+          runTool: async () => options.outcome ?? exited(0),
+          connectAdmin: async () => {
+            throw new Error("setup must not connect to a daemon");
+          },
+        }),
+      );
+      return { code, stdout: output.stdout, stderr: output.stderr, questions, filesystem };
+    };
+
+    const plain = await setupRun(["setup"]);
+    expect(plain.code).toBe(0);
+    expect(plain.stderr).toBe("");
+    expect(plain.stdout).toBe(
+      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n` +
+        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n`,
+    );
+    expect(plain.questions[0]).toBe(SCOPE_PROMPT);
+
+    const again = await setupRun(["setup", "--tool", "claude-code"], {
+      prepare: async (filesystem) => filesystem.mkdirp(`${HOME}/.claude/skills/simlock`),
+    });
+    expect(again.stdout).toBe(`claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n`);
+
+    for (const [outcome, line] of [
+      [exited(0), "claude-code  mcp    connected\n"],
+      [
+        exited(1, "MCP server simlock already exists in user config\n"),
+        "claude-code  mcp    already\n",
+      ],
+      [{ outcome: "not-found" }, "claude-code  mcp    skipped  (claude not found)\n"],
+    ] as const) {
+      const run = await setupRun(["setup", "--tool", "claude-code", "--mcp"], { outcome });
+      expect(run.code, line).toBe(0);
+      expect(run.stdout, line).toBe(
+        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}`,
+      );
+    }
+
+    const json = await setupRun(["setup", "--tool", "claude-code", "--mcp", "--json"]);
+    expect(json.questions).toEqual([]);
+    expect(JSON.parse(json.stdout)).toEqual({
+      scope: "user",
+      tools: [
+        {
+          tool: "claude-code",
+          skill: { status: "wrote", path: `${HOME}/.claude/skills/simlock` },
+          mcp: { status: "connected" },
+        },
+      ],
+    });
+    const projectJson = await setupRun([
+      "setup",
+      "--project",
+      "--tool",
+      "codex",
+      "--mcp",
+      "--json",
+    ]);
+    expect(JSON.parse(projectJson.stdout)).toEqual({
+      scope: "project",
+      tools: [
+        {
+          tool: "codex",
+          skill: { status: "wrote", path: `${CWD}/.agents/skills/simlock` },
+          mcp: { status: "skipped", reason: "codex mcp add has no project scope" },
+        },
+      ],
+    });
+
+    const failed = await setupRun(["setup", "--tool", "claude-code", "--mcp"], {
+      outcome: exited(1, "boom\nmore"),
+    });
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toBe(
+      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n`,
+    );
+    expect(JSON.parse(failed.stderr)).toEqual({
+      error: { code: "SETUP_MCP_FAILED", message: "MCP not connected for claude-code: boom" },
+    });
+
+    const refused = await setupRun(["setup"], {
+      prepare: async (filesystem) => {
+        await filesystem.mkdirp(`${HOME}/.claude/skills`);
+        await filesystem.writeFileAtomic(`${HOME}/.claude/skills/simlock`, "mine");
+      },
+    });
+    expect(refused.code).toBe(2);
+    expect(refused.stdout).toBe("");
+    expect(JSON.parse(refused.stderr)).toEqual({
+      error: {
+        code: "SETUP_REFUSED",
+        message: `Refusing to install: ${HOME}/.claude/skills/simlock exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
+      },
+    });
+
+    for (const argv of [
+      ["setup", "--tool", "cursor"],
+      ["setup", "--tool", "codex", "--tool", "claude-code"],
+      ["setup", "extra"],
+      ["setup", "--mcp", "--no-mcp"],
+      ["setup", "--user", "--project"],
+    ]) {
+      const refusedUsage = await setupRun(argv);
+      expect(refusedUsage.code, argv.join(" ")).toBe(2);
+      expect(refusedUsage.stdout, argv.join(" ")).toBe("");
+      expect(JSON.parse(refusedUsage.stderr).error.code, argv.join(" ")).toBe("USAGE");
+      expect(await refusedUsage.filesystem.exists(`${HOME}/.claude/skills`), argv.join(" ")).toBe(
+        false,
+      );
+    }
+
+    for (const argv of [
+      ["--gateway", "setup", "--json"],
+      ["--local", "setup", "--json"],
+    ]) {
+      const run = await setupRun(argv);
+      expect(run.code, argv.join(" ")).toBe(0);
+    }
+    const help = await setupRun(["setup", "--help"]);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toBe(
+      "Usage: simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]\n",
+    );
+    const listing = outputCapture();
+    await runCli(["--help"], listing.environmentWith());
+    expect(listing.stdout).toContain("  setup [--user | --project]");
   });
 
   it("prints shell export lines instead of the JSON grant under --export-env", async () => {
@@ -1193,6 +1389,9 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1225,6 +1424,9 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
     expect(exitCode).toBe(1);
@@ -1255,6 +1457,9 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1297,6 +1502,9 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
         });
       }),
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     };
     return { clock, ports };
   }
@@ -1413,6 +1621,9 @@ describe("CLI: auto-launch's failed start (#672)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
@@ -1459,6 +1670,9 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1498,6 +1712,9 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1558,6 +1775,9 @@ describe("CLI: auto-launch's daemon that lost the socket to another daemon (#760
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1600,6 +1820,9 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         ipc: dyingDaemon,
         launcher,
         daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+        homeDirectory: "/home/operator",
+        workingDirectory: "/work/project",
+        runTool: async () => ({ outcome: "not-found" }),
       });
       let settled = false;
       const exitCode = runCli(
@@ -7852,6 +8075,10 @@ function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {})
           configPath: "/simlock/config.json",
           daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
           requesterId: "test-requester",
+          homeDirectory: "/home/operator",
+          workingDirectory: "/work/project",
+          runTool: async () => ({ outcome: "not-found" }),
+          filesystem: new MemoryFilesystem(),
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
           daemonEndpointPresent: async () => false,
@@ -8127,6 +8354,9 @@ function realCliEnvironmentPorts(
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
     daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    homeDirectory: "/home/operator",
+    workingDirectory: "/work/project",
+    runTool: async () => ({ outcome: "not-found" }),
   };
 }
 
@@ -9274,6 +9504,9 @@ describe("CLI: daemon install (#830)", () => {
         ipc: ipcTransport,
         launcher: new FakeDaemonLauncher(),
         daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
+        homeDirectory: "/home/operator",
+        workingDirectory: "/work/project",
+        runTool: async () => ({ outcome: "not-found" }),
         service: {
           manager: serviceManager,
           platform: options.linux === true ? "linux" : "darwin",
@@ -9687,6 +9920,9 @@ describe("CLI: a start goes through the service (#830)", () => {
           spawner,
         }),
         daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+        homeDirectory: "/home/operator",
+        workingDirectory: "/work/project",
+        runTool: async () => ({ outcome: "not-found" }),
       });
 
       const exitCode = await runCli(testCase.argv, output.environmentWith());
@@ -9744,6 +9980,9 @@ describe("CLI: a start through a service that fails (#830)", () => {
             spawner: new FakeDaemonLauncher(),
           }),
           daemonHome: { role: "worker", dataDirectory: directory, gatewayPresent: false },
+          homeDirectory: "/home/operator",
+          workingDirectory: "/work/project",
+          runTool: async () => ({ outcome: "not-found" }),
         });
         let settled = false;
         const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
@@ -9833,6 +10072,9 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
         spawner: new FakeDaemonLauncher(() => undefined, { exit: { code: 1, signal: null } }),
       }),
       daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
       service: {
         manager,
         platform: options.platform ?? "darwin",

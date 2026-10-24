@@ -37,7 +37,7 @@ The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through
   `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
   `CleanupReaper`, `Nuke`, `TokenStore`, `AdminSecretManager` → `GatewayUplink`
   when `gateway.url` and `gateway.token` are both set → `DaemonServer` with `Dispatcher`.
-  HTTP starts only when `http.enabled`.
+  HTTP starts only when `http.enabled` (default on for a standalone worker, off for a joined one).
 - **Gateway** — instance id → `TokenStore`, `AdminSecretManager` → `FleetLeaseIndex`
   (requester prefix `gw:<instanceId>:`) → `GatewayService` (uplink listener, drained workers in `state.db`)
   → `FleetLeaseCoordinator` → `createAlerts` when `gateway.alerts.destinations` is not empty

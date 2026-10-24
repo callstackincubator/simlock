@@ -1,3 +1,4 @@
+import { otherDeviceRefusal } from "../other-device-refusal.js";
 import { dirname, isAbsolute, join } from "node:path";
 
 import {
@@ -286,7 +287,7 @@ const RECLAIM_INSTEAD =
  * positional scan is the only rule that catches every spelling without this module having
  * to parse adb's own option grammar.
  */
-const REFUSED_ADB_VERB = "kill-server";
+export const REFUSED_ADB_VERB = "kill-server";
 
 /**
  * why: Console commands `simlock adb` will not proxy, matched as a run of adjacent arguments
@@ -388,12 +389,66 @@ function walkGlobals(args: readonly string[]): GlobalsWalkResult {
   return { kind: "none" };
 }
 
+/**
+ * why: ADR 0047 §1. `adb help` (platform-tools 37.0.0): these subcommands act on no device, so
+ * a `-s` in front of them would be noise. `forward --list` and `reconnect offline` are the
+ * two that depend on their operand and are matched in `actsOnNoDevice`.
+ */
+const NO_DEVICE_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "devices",
+  "help",
+  "version",
+  "connect",
+  "disconnect",
+  "pair",
+  "mdns",
+  "keygen",
+  "start-server",
+  "kill-server",
+  "--version",
+  "--help",
+]);
+
+function actsOnNoDevice(args: readonly string[], index: number): boolean {
+  const subcommand = args[index] as string;
+  if (NO_DEVICE_SUBCOMMANDS.has(subcommand)) return true;
+  if (subcommand === "forward") return args[index + 1] === "--list";
+  return subcommand === "reconnect" && args[index + 1] === "offline";
+}
+
+/** why: Whether the globals before `end` already name `serial` with `-s`; `-t`, `-e`, `-d` and any other serial are refused. */
+function namesOwnSerial(args: readonly string[], end: number, serial: string): boolean {
+  let named = false;
+  for (let index = 0; index < end; index += 1) {
+    const flag = args[index] as string;
+    const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
+    if (flag !== "-s" || value !== serial) {
+      throw otherDeviceRefusal(
+        "adb",
+        args,
+        value === undefined ? flag : `${flag} ${value}`,
+        serial,
+      );
+    }
+    named = true;
+    index += 1;
+  }
+  return named;
+}
+
+/** why: Puts `-s <serial>` in front of the globals unless the subcommand needs no device or the caller already named this one. */
+function fillAdbDevice(args: readonly string[], serial: string): readonly string[] {
+  const walked = walkGlobals(args);
+  if (walked.kind !== "subcommand" || actsOnNoDevice(args, walked.index)) return args;
+  return namesOwnSerial(args, walked.index, serial) ? args : ["-s", serial, ...args];
+}
+
 function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
   const walked = walkGlobals(args);
   return walked.kind === "refused" ? walked.argument : undefined;
 }
 
-const REFUSED_ADB_SEQUENCES: readonly {
+export const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
   readonly reason: string;
 }[] = [
@@ -687,12 +742,20 @@ export class AndroidDriver implements Driver {
     args: readonly string[],
     context?: PassthroughContext,
   ): Promise<PassthroughCommand> {
+    if (context?.platform !== undefined && context.platform !== this.platform) {
+      throw new PassthroughRefusedError(
+        "adb",
+        `Refusing \`adb\`: it only serves an Android device, and this lease is on the ${context.platform} platform.`,
+      );
+    }
     if (device !== undefined && isPhysicalDriverDevice(device)) {
       return this.#physical.passthrough(device, args, context);
     }
     this.#assertProxyable(args, context);
+    const scopedArgs =
+      device === undefined || device.address === "" ? args : fillAdbDevice(args, device.address);
     return await Promise.resolve({
-      args: ["-P", String(this.#adbServerPort), ...args],
+      args: ["-P", String(this.#adbServerPort), ...scopedArgs],
       command: this.#sdk.adb,
       env: { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) },
     });

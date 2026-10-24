@@ -576,7 +576,10 @@ class SimlockClientImpl {
     );
 
     if (signal === undefined) return requestPromise;
-    return this.#requestLeaseWithAbort(requestPromise, signal, requesterId);
+    return this.#requestLeaseWithAbort(requestPromise, signal, {
+      platform: parsed.platform,
+      requesterId,
+    });
   }
 
   cancelLease(input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
@@ -791,7 +794,7 @@ class SimlockClientImpl {
   #requestLeaseWithAbort(
     requestPromise: Promise<LeaseGrant>,
     signal: AbortSignal,
-    requesterId: string,
+    cancel: LeaseCancelInput,
   ): Promise<LeaseGrant> {
     return new Promise((resolve, reject) => {
       let requestDone = false;
@@ -800,7 +803,7 @@ class SimlockClientImpl {
       const onAbort = (): void => {
         if (requestDone) return; // after the grant resolved (or it already failed) -> ignored.
         aborted = true;
-        void this.#cancelOnAbort(requestPromise, requesterId).then(resolve, reject);
+        void this.#cancelOnAbort(requestPromise, cancel).then(resolve, reject);
       };
       signal.addEventListener("abort", onAbort, { once: true });
 
@@ -821,11 +824,11 @@ class SimlockClientImpl {
 
   async #cancelOnAbort(
     requestPromise: Promise<LeaseGrant>,
-    requesterId: string,
+    cancel: LeaseCancelInput,
   ): Promise<LeaseGrant> {
     let outcome: LeaseCancelOutput["result"];
     try {
-      outcome = (await this.#call("lease.cancel", { requesterId })).result;
+      outcome = (await this.#call("lease.cancel", cancel)).result;
     } catch (error: unknown) {
       // Only a connection that actually died mid-cancel falls through to let awaiting
       // `requestPromise` below surface whatever that produces (most likely
