@@ -6,6 +6,8 @@ import {
   BootTimeoutError,
   type ComponentInstaller,
   type Config,
+  type DeviceSpec,
+  type DriverEstimate,
   DriverCrashError,
   type VirtualSpec,
   type LeaseProgress,
@@ -983,9 +985,19 @@ describe("createLeasing", () => {
     });
   });
 
-  it("reports only the selected work as it begins", async () => {
+  it("reports only the selected work as it begins, quoting a shut-down device's own prepare-boot figure", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
+    // why: A real driver quotes a persisted-baseline boot below its cold figure; the fake does so only
+    // for an estimate that names the device and the prepare purpose.
+    class DeviceQuotingDriver extends FakeDriver {
+      override estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+        if (estimate.operation === "boot" && estimate.purpose === "prepare") {
+          return estimate.device === undefined ? 99 : 4;
+        }
+        return super.estimate(estimate, spec);
+      }
+    }
+    const driver = new DeviceQuotingDriver({
       availableOsVersions: ["26.5"],
       clock,
       estimateMs: { boot: 20, provision: 10, reclaim: 15 },
@@ -1010,12 +1022,18 @@ describe("createLeasing", () => {
       payload: { deviceId: shutdown.id, initiator: "test" },
     });
     const booted: string[] = [];
-    await harness.engine.request(request, {
-      onProgress: (progress) => booted.push(progress.stage),
+    const bootEtas: (number | undefined)[] = [];
+    const bootedGrant = await harness.engine.request(request, {
+      onProgress: (progress) => {
+        booted.push(progress.stage);
+        bootEtas.push(progress.stage === "booting" ? progress.etaMs : undefined);
+      },
       requesterId: "shutdown",
       ownerId: "shutdown",
     });
     expect(booted).toEqual(["booting"]);
+    expect(bootEtas).toEqual([4]);
+    expect(bootedGrant.timing.estimatedBootMs).toBe(4);
   });
 
   it("reports queue insertion without speculative work and isolates callback failures", async () => {
