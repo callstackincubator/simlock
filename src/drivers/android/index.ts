@@ -1,3 +1,4 @@
+import { otherDeviceRefusal } from "../other-device-refusal.js";
 import { dirname, isAbsolute, join } from "node:path";
 
 import {
@@ -419,11 +420,18 @@ function actsOnNoDevice(args: readonly string[], index: number): boolean {
 function fillAdbDevice(args: readonly string[], serial: string): readonly string[] {
   const walked = walkGlobals(args);
   if (walked.kind !== "subcommand" || actsOnNoDevice(args, walked.index)) return args;
-  const globals = args.slice(0, walked.index);
-  if (globals.some((argument, index) => argument === "-s" && globals[index + 1] === serial)) {
-    return args;
+  let alreadyNamed = false;
+  for (let index = 0; index < walked.index; index += 1) {
+    const flag = args[index] as string;
+    const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
+    if (flag === "-s" && value === serial) {
+      alreadyNamed = true;
+      index += 1;
+      continue;
+    }
+    throw otherDeviceRefusal("adb", args, value === undefined ? flag : `${flag} ${value}`, serial);
   }
-  return ["-s", serial, ...args];
+  return alreadyNamed ? args : ["-s", serial, ...args];
 }
 
 function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
@@ -725,6 +733,12 @@ export class AndroidDriver implements Driver {
     args: readonly string[],
     context?: PassthroughContext,
   ): Promise<PassthroughCommand> {
+    if (context?.platform !== undefined && context.platform !== this.platform) {
+      throw new PassthroughRefusedError(
+        "adb",
+        `Refusing \`adb\`: it only serves an Android device, and this lease is on the ${context.platform} platform.`,
+      );
+    }
     if (device !== undefined && isPhysicalDriverDevice(device)) {
       return this.#physical.passthrough(device, args, context);
     }
