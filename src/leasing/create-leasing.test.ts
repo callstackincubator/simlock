@@ -1497,7 +1497,7 @@ describe("createLeasing RAM budget by mode", () => {
     });
   });
 
-  it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; a delete brings it back under", async () => {
+  it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; shutting the idle one down brings it back under", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       knownModels: ["iPhone 16", "iPhone 16 Pro"],

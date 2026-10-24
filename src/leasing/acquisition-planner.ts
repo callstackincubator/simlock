@@ -172,7 +172,7 @@ export class AcquisitionPlanner {
   }
 
   #planShutdownBoot(input: AcquisitionPlannerInput, device: VirtualDevice): AcquisitionPlan {
-    // A boot refused for RAM evicts nothing: freeing a running slot frees no RAM.
+    // why: only a running-limit refusal picks a victim (#runningVictim); a RAM-budget refusal waits.
     const running = this.capacity.tryReserveBoot(
       capacityDevice(device),
       capacityDevices(input.snapshot.virtualDevices),

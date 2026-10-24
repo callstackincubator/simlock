@@ -204,10 +204,10 @@ describe("resource strategy RAM budget by mode", () => {
       iosSlimBytesPerDevice: gibibyte,
     });
     const shutdown = device("ios", "slim", "shutdown");
-    // 7 GiB used of 8: booting adds the 1 GiB between the slim and the full size.
+    // why: 6 GiB used of 8 (the shut-down device holds none): booting adds its full 2 GiB.
     const fits = [shutdown, device("ios", "full"), device("ios", "full"), device("ios", "full")];
     expect(strategy.canBoot(shutdown, fits)).toEqual({ ok: true });
-    // 8 GiB used: the same boot would reach 9.
+    // why: 7 GiB used: the same boot would reach 9.
     expect(strategy.canBoot(shutdown, [...fits, device("ios", "slim")])).toEqual({
       ok: false,
       reason: "ram-budget",
