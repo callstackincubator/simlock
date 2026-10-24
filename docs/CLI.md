@@ -1662,11 +1662,11 @@ The RAM budget line appears only under the `resource` capacity strategy
 (see [CONFIGURATION.md](CONFIGURATION.md#capacity-strategies)); under
 `fixed` there is none. In `--json` it is `capacity.ramBudget`:
 `limitBytes` (the machine's RAM minus 4 GiB left for the OS), `usedBytes`
-(the sizes of every listed device that is not deleted, each by its mode) and
+(the sizes of every listed device that is neither deleted nor shut down, each by its mode) and
 `overLimit`. The line reads `(over limit)` when the use is past the limit,
 for example after a restart with larger per-device sizes; until a device
-is deleted, none is created, and no shut-down slim device boots if its slim
-size is smaller than the full size.
+is deleted, none is created, and no shut-down device boots if its full size
+does not fit.
 
 Against a **gateway** (`simlock --gateway status`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads

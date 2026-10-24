@@ -292,11 +292,11 @@ RAM budget; under `fixed` the field is absent:
 ```
 
 `limitBytes` is the machine's RAM minus 4 GiB left for the OS. `usedBytes` is
-the sum over every listed device that is not deleted, each at the size of the
-mode it reports, so it always matches the device list. `overLimit` is true
-when the use exceeds the limit, for example after a restart with larger
-per-device sizes; until a device is deleted, none is created, and no
-shut-down slim device boots if its slim size is smaller than the full size.
+the sum over every listed device that is neither deleted nor shut down, each
+at the size of the mode it reports. `overLimit` is true when the use exceeds
+the limit, for example after a restart with larger per-device sizes; until a
+device is deleted, none is created, and no shut-down device boots if its full
+size does not fit.
 
 Each platform's capacity entry (`capacity.ios`, `capacity.android`) also
 carries **`atRamBudget`**, always present: `true` when creating one more full
