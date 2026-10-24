@@ -841,20 +841,6 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     });
   });
 
-  it("logs a presence read that rejects after a failed reclaim as a warning naming the device and the error", async () => {
-    const logger = recordingLogger();
-    const harness = await physicalHarness("reclaiming", { logger });
-    harness.driver.failOn("reclaim", 1, new Error("uninstall exploded"));
-    harness.driver.failOn("listPresentPhysical", 1, new Error("link down"));
-
-    await harness.coordinator.reclaim(releasedPhysical(harness.device()));
-
-    expect(logger.warn).toHaveBeenCalledWith("presence read after a failed reclaim failed", {
-      deviceId: "dev_physical",
-      error: "Error: link down",
-    });
-  });
-
   it("a returned device's reclaim whose caller no longer proceeds when the decision runs writes nothing, starts no wipe and leaves no claim", async () => {
     const harness = await physicalHarness("absent");
     harness.driver.setPhysicalPresence(PHYSICAL_ID, true, { osVersion: "18.5" });

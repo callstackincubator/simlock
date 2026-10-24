@@ -36,6 +36,9 @@ import {
   proxyAuthConfig,
   openMemoryStateDatabase,
 } from "../auth/testing.js";
+import { streamModule } from "../stream/index.js";
+// why: the stream index exports only the definition, so a registry reads no module code; the real mount is reached through `testing.ts` to prove the listed route against the real handler.
+import { createStreamMount } from "../stream/testing.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
   FakeDispatcher,
@@ -93,6 +96,16 @@ function buildHarness(
     ),
   });
 
+  dispatcher.handlers["lease.get"] = (input: { leaseId: string }, session) => {
+    const lease = registry.leases.find(
+      (candidate) =>
+        candidate.id === input.leaseId &&
+        (session.role === "admin" || candidate.ownerId === session.principal),
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    return { lease };
+  };
+
   const app = createHttpApp({
     clock,
     config,
@@ -119,6 +132,11 @@ const agentAuth = { authorization: "Bearer slk_agent" };
 const otherAgentAuth = { authorization: "Bearer slk_other" };
 const operatorAuth = { authorization: "Bearer slk_operator" };
 const defaultBody = { device: "iPhone 17 Pro", platform: "ios" };
+
+// why: a route's validators add microtask hops before its handler runs, so a test cannot count ticks.
+function settle(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function postLeaseRequest(
   app: App,
@@ -272,7 +290,36 @@ describe("authentication and role/ownership (via the shared dispatcher)", () => 
     expect(response.status).toBe(403);
   });
 
-  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.list's own filter now, not a separate check", async () => {
+  it.each([
+    ["GET /v1/leases/{id}", "/v1/leases/lse_1"],
+    ["GET /v1/leases/{id}/events", "/v1/leases/lse_1/events"],
+  ])(
+    "%s finds the lease with lease.get under the caller's session, and a lease.get that answers UNKNOWN_LEASE is a 404",
+    async (_route, path) => {
+      const { app, dispatcher, registry } = buildHarness();
+      registry.devices = [makeDevice({ id: "dev_1" })];
+      registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+
+      const found = await app.request(path, { headers: agentAuth });
+      expect(found.status).toBe(200);
+      expect(dispatcher.calls).toEqual([
+        expect.objectContaining({
+          input: { leaseId: "lse_1" },
+          operation: "lease.get",
+          session: expect.objectContaining({ principal: "tok_agent", role: "agent" }),
+        }),
+      ]);
+
+      registry.leases = [];
+      const missing = await app.request(path, { headers: agentAuth });
+      expect(missing.status).toBe(404);
+      expect(((await missing.json()) as { error: { code: string } }).error.code).toBe(
+        "UNKNOWN_LEASE",
+      );
+    },
+  );
+
+  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.get's own answer, not a separate check", async () => {
     const { app, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
     registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" })];
@@ -337,6 +384,41 @@ describe("GET /v1/status, /v1/catalog", () => {
     const response = await app.request("/v1/catalog?platform=windows", { headers: agentAuth });
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+});
+
+describe("a query to a System route", () => {
+  it.each([
+    ["/v1/catalog?platform=windows", 400, "platform must be ios or android", undefined],
+    ["/v1/catalog?platform=ios&platform=android", 200, undefined, { platform: "ios" }],
+    ["/v1/stats?ledger=2", 400, "ledger must be 1", undefined],
+    [
+      "/v1/stats?since=1h&from=2026-10-15T00:00Z",
+      400,
+      "stats takes since or from, not both",
+      undefined,
+    ],
+  ])("%s gets today's answer", async (url, status, message, dispatched) => {
+    const { app, dispatcher } = buildHarness();
+    const seen: unknown[] = [];
+    dispatcher.handlers["catalog.get"] = (input) => {
+      seen.push(input);
+      return { platforms: [] };
+    };
+    dispatcher.handlers["usage.get"] = (input) => {
+      seen.push(input);
+      return {};
+    };
+
+    const response = await app.request(url, { headers: operatorAuth });
+
+    expect(response.status).toBe(status);
+    if (message === undefined) {
+      expect(seen).toEqual([dispatched]);
+    } else {
+      expect(await response.json()).toEqual({ error: { code: "BAD_REQUEST", message } });
+      expect(seen).toEqual([]);
+    }
   });
 });
 
@@ -445,6 +527,68 @@ describe("POST /v1/devices and DELETE /v1/devices/{id}", () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
   });
+
+  it.each([
+    [
+      "no content type, with a body",
+      undefined,
+      '{"id":"A","platform":"ios"}',
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "Content-Type must be application/json",
+    ],
+    [
+      "text/plain",
+      "text/plain",
+      '{"id":"A","platform":"ios"}',
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "Content-Type must be application/json",
+    ],
+    [
+      "application/json; charset=utf-8",
+      "application/json; charset=utf-8",
+      '{"id":"A","platform":"ios"}',
+      200,
+      undefined,
+      undefined,
+    ],
+    [
+      "application/json with malformed JSON",
+      "application/json",
+      '{"id":',
+      400,
+      "BAD_REQUEST",
+      "Invalid JSON body",
+    ],
+  ])(
+    "POST /v1/devices with %s answers 415 without a JSON content type, 400 for malformed JSON, else the dispatcher",
+    async (_case, contentType, body, status, code, message) => {
+      const { app, dispatcher } = buildHarness();
+      const seen: unknown[] = [];
+      dispatcher.handlers["device.add"] = (input) => {
+        seen.push(input);
+        return enrolled;
+      };
+
+      const response = await app.request("/v1/devices", {
+        body: new TextEncoder().encode(body),
+        headers: {
+          ...operatorAuth,
+          ...(contentType === undefined ? {} : { "content-type": contentType }),
+        },
+        method: "POST",
+      });
+
+      expect(response.status).toBe(status);
+      if (code === undefined) {
+        expect(seen).toEqual([{ id: "A", platform: "ios" }]);
+      } else {
+        expect(await response.json()).toEqual({ error: { code, message } });
+        expect(seen).toEqual([]);
+      }
+    },
+  );
 
   it("dispatches device.remove with the path's id, and answers its result as JSON", async () => {
     const { app, dispatcher } = buildHarness();
@@ -628,21 +772,19 @@ describe("POST /v1/lease-requests", () => {
     expect(dispatcher.calls).toHaveLength(0);
   });
 
-  it("forwards a body's imageTag to the dispatched lease.request", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, imageTag: "google_apis_playstore" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ imageTag: "google_apis_playstore" });
-  });
-
-  it("forwards a body's physical true to the dispatched lease.request", async () => {
+  it.each([
+    ["imageTag", { imageTag: "google_apis_playstore" }],
+    ["mode", { mode: "slim" }],
+    ["owner field rather than silently dropping it (ADR §27a, H7)", { owner: "someone-else" }],
+    ["physical true", { physical: true }],
+  ])("forwards a body's %s to the dispatched lease.request", async (_label, extra) => {
     const { app, dispatcher } = buildHarness();
     const first = await Promise.race([
-      postLeaseRequest(app, { ...defaultBody, physical: true }),
+      postLeaseRequest(app, { ...defaultBody, ...extra }),
       waitForDispatch(dispatcher, "lease.request").then((call) => call),
     ]);
     if (first instanceof Response) throw new Error(`the body was refused with ${first.status}`);
-    expect(first.input).toMatchObject({ physical: true });
+    expect(first.input).toMatchObject(extra);
   });
 
   it("answers 400 BAD_REQUEST naming allowDownload for a body with physical true and allowDownload true", async () => {
@@ -663,21 +805,6 @@ describe("POST /v1/lease-requests", () => {
     const body = (await response.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toContain("allowDownload");
-  });
-
-  it("forwards a body's mode to the dispatched lease.request", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, mode: "slim" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ mode: "slim" });
-  });
-
-  it("forwards a body's owner field to the dispatched lease.request rather than silently dropping it (ADR §27a, H7)", async () => {
-    const { app, dispatcher } = buildHarness();
-    void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-
-    expect((call.input as { owner?: string }).owner).toBe("someone-else");
   });
 
   it("builds an operator token's session as admin but never as the gateway's uplink, so §27a's owner gate still refuses it at the shared dispatcher (ADR §27a, H3)", async () => {
@@ -775,6 +902,28 @@ describe("POST /v1/lease-requests", () => {
     expect((await response.json()) as { error: { code: string } }).toMatchObject({
       error: { code: "BAD_REQUEST" },
     });
+  });
+
+  it("answers a lease request whose ttlMs is at the safe-integer edge: above it 400 BAD_REQUEST, at it the dispatcher's maxTtl message", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = (input) => {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `ttlMs ${String((input as { ttlMs?: number }).ttlMs)} exceeds lease.maxTtlMs (120000)`,
+      );
+    };
+
+    const beyond = await postLeaseRequest(app, { ...defaultBody, ttlMs: 1e16 });
+    expect(beyond.status).toBe(400);
+    const beyondBody = (await beyond.json()) as { error: { code: string; message: string } };
+    expect(beyondBody.error.code).toBe("BAD_REQUEST");
+    expect(beyondBody.error.message).not.toContain("exceeds lease.maxTtlMs");
+
+    const edge = await postLeaseRequest(app, { ...defaultBody, ttlMs: 9_007_199_254_740_991 });
+    expect(edge.status).toBe(400);
+    const edgeBody = (await edge.json()) as { error: { code: string; message: string } };
+    expect(edgeBody.error.code).toBe("BAD_REQUEST");
+    expect(edgeBody.error.message).toContain("exceeds lease.maxTtlMs");
   });
 
   it.each([
@@ -915,8 +1064,7 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=30`, { headers: agentAuth });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     dispatcher.calls[callIndex]?.session.onProgress?.({ etaMs: 10_000, stage: "provisioning" });
     const response = await waitPromise;
     const body = (await response.json()) as { request: { state: string } };
@@ -928,8 +1076,7 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     const { id } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=5`, { headers: agentAuth });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     clock.advance(5_000);
     const response = await waitPromise;
     const body = (await response.json()) as { request: { state: string; queuePosition: number } };
@@ -1255,14 +1402,12 @@ describe("lease routes", () => {
         snapshot: { devices: [device("wrk_a", "UDID-A"), device("wrk_b", "UDID-B")] },
       },
     });
-    dispatcher.handlers["lease.list"] = () => ({
-      leases: [
-        {
-          ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
-          worker: { id: "wrk_b", label: "mac-b" },
-          workerId: "wrk_b",
-        },
-      ],
+    dispatcher.handlers["lease.get"] = () => ({
+      lease: {
+        ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
+        worker: { id: "wrk_b", label: "mac-b" },
+        workerId: "wrk_b",
+      },
     });
 
     const response = await app.request("/v1/leases/wrk_b.lse_1", { headers: agentAuth });
@@ -1337,14 +1482,12 @@ describe("lease routes", () => {
         },
       },
     });
-    dispatcher.handlers["lease.list"] = () => ({
-      leases: [
-        {
-          ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
-          worker: { id: "wrk_a" },
-          workerId: "wrk_a",
-        },
-      ],
+    dispatcher.handlers["lease.get"] = () => ({
+      lease: {
+        ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
+        worker: { id: "wrk_a" },
+        workerId: "wrk_a",
+      },
     });
 
     const response = await app.request("/v1/leases/wrk_a.lse_p", { headers: agentAuth });
@@ -1353,6 +1496,34 @@ describe("lease routes", () => {
     const { lease } = (await response.json()) as { lease: Record<string, unknown> };
     expect(lease).toMatchObject({ deviceId: "dev_phys", udid: "00008110-001A2B3C4D5E" });
     expect(lease).not.toHaveProperty("mode");
+  });
+
+  it("names an Android emulator's adb serial as address, beside its AVD name as udid, on the lease object the POST, the request poll and GET /v1/leases/:id answer", async () => {
+    const emulator = {
+      address: "emulator-5554",
+      driverDeviceId: "simlock_3f9a2c1e",
+      id: "dev_and",
+      spec: { model: "Pixel 8", osVersion: "35", physical: false, platform: "android" },
+    } as const;
+    const { app, dispatcher, registry } = buildHarness();
+    const posted = postLeaseRequest(app, { device: "Pixel 8", platform: "android" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.resolve(makeGrant({ device: emulator, lease: { deviceId: "dev_and", id: "lse_and" } }));
+    const created = (await (await posted).json()) as { request: { id: string; lease: unknown } };
+    registry.devices = [makeDevice(emulator)];
+    registry.leases = [makeLease({ deviceId: "dev_and", id: "lse_and", ownerId: "tok_agent" })];
+
+    const polled = await app.request(`/v1/lease-requests/${created.request.id}`, {
+      headers: agentAuth,
+    });
+    const read = await app.request("/v1/leases/lse_and", { headers: agentAuth });
+
+    const named = { address: "emulator-5554", udid: "simlock_3f9a2c1e" };
+    expect({
+      get: ((await read.json()) as { lease: unknown }).lease,
+      poll: ((await polled.json()) as { request: { lease: unknown } }).request.lease,
+      post: created.request.lease,
+    }).toMatchObject({ get: named, poll: named, post: named });
   });
 
   it("404s an unknown lease id", async () => {
@@ -1420,6 +1591,139 @@ describe("lease routes", () => {
       method: "POST",
     });
     expect(response.status).toBe(200);
+  });
+
+  it.each([
+    ["renew", "/v1/leases/lse_1/renew", '{"ttlMs":60000}', "lease.renew"],
+    ["exec", "/v1/leases/lse_1/exec", '{"args":["list"],"tool":"simctl"}', "device.exec"],
+    [
+      "install",
+      "/v1/components/install",
+      '{"platform":"android","version":"35"}',
+      "component.install",
+    ],
+  ])(
+    "a caller sends the %s body without a JSON content type and gets 415 UNSUPPORTED_MEDIA_TYPE; with application/json it reaches the dispatcher",
+    async (_route, path, body, operation) => {
+      const { app, dispatcher } = buildHarness();
+      dispatcher.handlers["lease.renew"] = () => ({
+        deviceId: "dev_1",
+        grantedAt: 1_000,
+        id: "lse_1",
+        ownerId: "tok_agent",
+        requesterId: "tok_agent",
+        ttlDeadline: 2_000,
+      });
+      dispatcher.handlers["device.exec"] = () => ({ exitCode: 0 });
+      dispatcher.handlers["component.install"] = () => ({
+        component: "35",
+        outcome: "installed",
+        platform: "android",
+        version: "35",
+      });
+      const send = (contentType: string | undefined) =>
+        app.request(path, {
+          body,
+          headers: {
+            ...agentAuth,
+            ...(contentType === undefined ? {} : { "content-type": contentType }),
+          },
+          method: "POST",
+        });
+
+      for (const contentType of [undefined, "text/plain"]) {
+        const refused = await send(contentType);
+        expect(refused.status).toBe(415);
+        expect(await refused.json()).toEqual({
+          error: {
+            code: "UNSUPPORTED_MEDIA_TYPE",
+            message: "Content-Type must be application/json",
+          },
+        });
+      }
+      expect(dispatcher.calls.filter((call) => call.operation === operation)).toEqual([]);
+
+      const accepted = await send("application/json");
+      expect(accepted.status).toBe(200);
+      expect(dispatcher.calls.filter((call) => call.operation === operation)).toHaveLength(1);
+    },
+  );
+
+  it("a caller sends a bad wait or renew body and gets 400 with today's message; a renew with no body, an empty body under any content type or an extra key renews", async () => {
+    const { app, dispatcher } = buildHarness();
+    const { id } = await createLeaseRequest(app, dispatcher);
+    const renewals: unknown[] = [];
+    dispatcher.handlers["lease.renew"] = (input) => {
+      renewals.push(input);
+      return {
+        deviceId: "dev_1",
+        grantedAt: 1_000,
+        id: "lse_1",
+        ownerId: "tok_agent",
+        requesterId: "tok_agent",
+        ttlDeadline: 2_000,
+      };
+    };
+    const renew = (
+      body: string | undefined,
+      contentType: string | undefined = "application/json",
+    ) =>
+      app.request("/v1/leases/lse_1/renew", {
+        ...(body === undefined ? {} : { body }),
+        headers: {
+          ...agentAuth,
+          ...(contentType === undefined ? {} : { "content-type": contentType }),
+        },
+        method: "POST",
+      });
+    const refusedWait = "wait must be a non-negative number of seconds";
+
+    const refusals: [string, Response | Promise<Response>, string][] = [
+      [
+        "wait=-1",
+        app.request(`/v1/lease-requests/${id}?wait=-1`, { headers: agentAuth }),
+        refusedWait,
+      ],
+      [
+        "wait=abc",
+        app.request(`/v1/lease-requests/${id}?wait=abc`, { headers: agentAuth }),
+        refusedWait,
+      ],
+      [
+        "wait=-1 on an unknown request",
+        app.request("/v1/lease-requests/unknown?wait=-1", { headers: agentAuth }),
+        refusedWait,
+      ],
+      ["ttlMs a string", renew('{"ttlMs":"60s"}'), "ttlMs must be a number"],
+      ["ttlMs negative", renew('{"ttlMs":-1}'), "ttlMs must be a positive number"],
+      ["ttlMs zero", renew('{"ttlMs":0}'), "ttlMs must be a positive number"],
+      ["a number", renew("5"), "Body must be a JSON object"],
+      ["an array", renew("[]"), "Body must be a JSON object"],
+      ["malformed JSON", renew("{"), "Invalid JSON body"],
+    ];
+    for (const [name, pending, message] of refusals) {
+      const response = await pending;
+      expect(response.status, name).toBe(400);
+      expect(await response.json()).toEqual({ error: { code: "BAD_REQUEST", message } });
+    }
+    expect(renewals).toEqual([]);
+
+    for (const response of [
+      await renew(undefined, undefined),
+      await renew("", "application/json"),
+      await renew("", "text/plain"),
+      await renew("", "application/x-www-form-urlencoded"),
+      await renew('{"ttlMs":60000,"note":"x"}'),
+    ]) {
+      expect(response.status).toBe(200);
+    }
+    expect(renewals).toEqual([
+      { leaseId: "lse_1" },
+      { leaseId: "lse_1" },
+      { leaseId: "lse_1" },
+      { leaseId: "lse_1" },
+      { leaseId: "lse_1", ttlMs: 60_000 },
+    ]);
   });
 
   it("404s a renew for an unknown lease", async () => {
@@ -1555,9 +1859,8 @@ describe("lease routes", () => {
     });
 
     it("forwards requesterId unchanged for both an operator and an agent token, leaving the FORBIDDEN decision to device.exec's own authorize hook", async () => {
-      // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
-      // "Authentication"): the token is the identity, except for an operator token proxying
-      // for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
+      // why: Requester identity is never client-declared over HTTP: the token is the identity,
+      // except for an operator token proxying for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
       // that an agent token may not supply `requesterId` at all, which left that rule living
       // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
       // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised
@@ -2056,7 +2359,7 @@ describe("operator-only listing routes", () => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["list.get"] = (input) => {
       expect(input).toEqual({ kind: "devices" });
-      return [{ id: "dev_1" }, { id: "dev_2" }];
+      return [makeDevice({ id: "dev_1" }), makeDevice({ id: "dev_2" })];
     };
 
     const response = await app.request("/v1/devices", { headers: operatorAuth });
@@ -2103,6 +2406,54 @@ describe("operator-only listing routes", () => {
     const response = await app.request("/v1/events?since=nonsense", { headers: operatorAuth });
     expect(response.status).toBe(400);
     expect(JSON.stringify(await response.json())).toContain("Invalid duration: nonsense");
+  });
+
+  it("GET /v1/events with before and limit dispatches events.replay with beforeId and limit, and answers HISTORY_NOT_KEPT with 422 and oldestTs in the body and HISTORY_UNAVAILABLE with 503", async () => {
+    const { app, dispatcher } = buildHarness();
+    const asked: unknown[] = [];
+    dispatcher.handlers["events.replay"] = (input) => {
+      asked.push(input);
+      throw new DispatchError("HISTORY_NOT_KEPT", "The history does not hold that event.", {
+        oldestTs: 1_234,
+      });
+    };
+    const notKept = await app.request("/v1/events?before=evt_abc&limit=50&worker=w1", {
+      headers: operatorAuth,
+    });
+    dispatcher.handlers["events.replay"] = () => {
+      throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be read.");
+    };
+    const unavailable = await app.request("/v1/events?before=evt_abc", { headers: operatorAuth });
+
+    expect(asked).toEqual([{ beforeId: "evt_abc", limit: 50, workerId: "w1" }]);
+    expect(notKept.status).toBe(422);
+    expect(await notKept.json()).toMatchObject({
+      error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
+    });
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
+  });
+
+  it.each([
+    ["before=evt_abc&limit=0", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=501", "limit must be a whole number from 1 to 500"],
+    ["before=evt_abc&limit=x", "limit must be a whole number from 1 to 500"],
+    ["before=not-an-id", "before must be an event id"],
+    ["since=abc", "Invalid duration: abc"],
+    ["before=evt_abc&since=1h", "before and since cannot be used together"],
+    ["limit=50&since=1h", "limit and since cannot be used together"],
+    ["worker=", "worker must be a worker id of 1 to 128 characters"],
+    [`worker=${"w".repeat(129)}`, "worker must be a worker id of 1 to 128 characters"],
+  ])("GET /v1/events?%s answers 400 BAD_REQUEST before dispatching", async (query, message) => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.replay"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request(`/v1/events?${query}`, { headers: operatorAuth });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST", message } });
   });
 
   describe("GET /v1/stats", () => {
@@ -2185,27 +2536,6 @@ describe("operator-only listing routes", () => {
 
       expect(asked.map((input) => input.includeLedger === true)).toEqual([false, true]);
     });
-
-    it("answers HISTORY_NOT_KEPT with status 422 and oldestTs in the body, and HISTORY_UNAVAILABLE with 503", async () => {
-      const { dispatcher, get } = statsHarness();
-      dispatcher.handlers["usage.get"] = () => {
-        throw new DispatchError("HISTORY_NOT_KEPT", "The history does not reach back.", {
-          oldestTs: 1_234,
-        });
-      };
-      const notKept = await get("?since=1h");
-      dispatcher.handlers["usage.get"] = () => {
-        throw new DispatchError("HISTORY_UNAVAILABLE", "The history could not be opened.");
-      };
-      const unavailable = await get("?since=1h");
-
-      expect(notKept.status).toBe(422);
-      expect(await notKept.json()).toMatchObject({
-        error: { code: "HISTORY_NOT_KEPT", oldestTs: 1_234 },
-      });
-      expect(unavailable.status).toBe(503);
-      expect(await unavailable.json()).toMatchObject({ error: { code: "HISTORY_UNAVAILABLE" } });
-    });
   });
 
   it("GET /v1/events/stream dispatches events.subscribe then follows the raw event bus live", async () => {
@@ -2243,8 +2573,7 @@ describe("hardening from review", () => {
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=999999`, {
       headers: agentAuth,
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     clock.advance(60_000);
     const response = await waitPromise;
     expect(((await response.json()) as { request: { state: string } }).request.state).toBe(
@@ -2275,6 +2604,157 @@ describe("hardening from review", () => {
  * dispatcher answers for all four operations is proven in `src/daemon/dispatcher.test.ts`;
  * `e2e/single-host-fleet.test.ts` drives `GET /v1/workers` and the drain route end to end.
  */
+describe("POST /v1/update", () => {
+  const answer = (overrides: Record<string, unknown> = {}) => ({
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+    ...overrides,
+  });
+  const post = (app: App, body?: unknown, headers: Record<string, string> = operatorAuth) =>
+    Promise.resolve(
+      app.request("/v1/update", {
+        headers: {
+          ...headers,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        method: "POST",
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+
+  it("answers 202 when the call began the update and 200 when it followed one or nothing was needed, dispatches daemon.update with the body, refuses an agent and a bad body", async () => {
+    const { app, dispatcher } = buildHarness();
+    // why: `daemon.update`'s own role check runs through the contract's real pipeline; the route adds none.
+    let reply: Record<string, unknown> = answer({ started: true, resolved: "0.4.0" });
+    dispatcher.handlers["daemon.update"] = (input, session) =>
+      runDispatch("daemon.update", input, session, {
+        handlers: { "daemon.update": () => reply },
+      });
+
+    const started = await post(app, { version: "0.4.0", force: true });
+    expect({ status: started.status, body: await started.json() }).toEqual({
+      status: 202,
+      body: reply,
+    });
+    expect(dispatcher.calls.map(({ operation, input }) => ({ operation, input }))).toEqual([
+      { operation: "daemon.update", input: { version: "0.4.0", force: true } },
+    ]);
+
+    for (const [name, following] of [
+      [
+        "follows a running update",
+        answer({
+          update: { stage: "installing", from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1 },
+        }),
+      ],
+      ["nothing to do", answer({ upToDate: true, resolved: "0.3.0" })],
+    ] as const) {
+      reply = following;
+      const response = await post(app);
+      expect({ name, status: response.status }).toEqual({ name, status: 200 });
+      expect(await response.json()).toEqual(following);
+    }
+    expect(dispatcher.calls.at(-1)?.input).toEqual({});
+
+    const emptyJson = await app.request("/v1/update", {
+      headers: { ...operatorAuth, "content-type": "application/json" },
+      method: "POST",
+      body: "",
+    });
+    expect(emptyJson.status).toBe(200);
+    expect(dispatcher.calls.at(-1)?.input).toEqual({});
+
+    const asAgent = await post(app, {}, agentAuth);
+    expect(asAgent.status).toBe(403);
+    expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+
+    const callsBefore = dispatcher.calls.length;
+    for (const body of [{ version: "latest" }, { query: true }, { force: "yes" }]) {
+      const refused = await post(app, body);
+      expect({ body, status: refused.status }).toEqual({ body, status: 400 });
+    }
+    expect(dispatcher.calls).toHaveLength(callsBefore);
+  });
+});
+
+describe("POST /v1/workers/{id}/update", () => {
+  const answer = (overrides: Record<string, unknown> = {}) => ({
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+    workerId: "wrk_1",
+    ...overrides,
+  });
+
+  it("answers 202 when the call began the update and 200 when it followed one, dispatches worker.update with the id from the path and the body, refuses an agent and a bad body", async () => {
+    const { app, dispatcher } = buildHarness({ config: testConfig({}, "gateway") });
+    let reply: Record<string, unknown> = answer({ started: true, resolved: "0.4.0" });
+    dispatcher.handlers["worker.update"] = (input, session) =>
+      runDispatch("worker.update", input, session, {
+        handlers: { "worker.update": () => reply },
+      });
+    const post = (body?: unknown, headers: Record<string, string> = operatorAuth) =>
+      Promise.resolve(
+        app.request("/v1/workers/wrk_1/update", {
+          headers: {
+            ...headers,
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+          },
+          method: "POST",
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      );
+
+    const started = await post({ version: "0.4.0", force: true });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toEqual(reply);
+    expect(dispatcher.calls.map(({ operation, input }) => ({ operation, input }))).toEqual([
+      { operation: "worker.update", input: { force: true, version: "0.4.0", workerId: "wrk_1" } },
+    ]);
+
+    reply = answer({ upToDate: true, resolved: "0.3.0" });
+    const following = await post();
+    expect(following.status).toBe(200);
+    expect(dispatcher.calls.at(-1)?.input).toEqual({ workerId: "wrk_1" });
+
+    const asAgent = await post({}, agentAuth);
+    expect(asAgent.status).toBe(403);
+
+    const callsBefore = dispatcher.calls.length;
+    for (const body of [{ version: "latest" }, { query: true }, { force: "yes" }]) {
+      const refused = await post(body);
+      expect({ body, status: refused.status }).toEqual({ body, status: 400 });
+    }
+    expect(dispatcher.calls).toHaveLength(callsBefore);
+
+    for (const [code, status] of [
+      ["WORKER_NOT_CONNECTED", 409],
+      ["UPDATE_UNSUPPORTED_INSTALL", 409],
+      ["UPDATE_SHARED_INSTALL", 409],
+      ["UPDATE_RESOLVE_FAILED", 502],
+      ["UNKNOWN_WORKER", 404],
+    ] as const) {
+      dispatcher.handlers["worker.update"] = () => {
+        throw new DispatchError(code, "refused");
+      };
+      const refusal = await post();
+      expect({ code, status: refusal.status }).toEqual({ code, status });
+      expect(((await refusal.json()) as { error: { code: string } }).error.code).toBe(code);
+    }
+  });
+});
+
 describe("worker routes", () => {
   function gatewayHarness() {
     return buildHarness({ config: testConfig({}, "gateway") });
@@ -2338,6 +2818,32 @@ describe("worker routes", () => {
     expect(await response.json()).toMatchObject({ workers: [{ id: "wrk_1" }] });
   });
 
+  it("GET /v1/inbox dispatches inbox.get for the caller and answers its items", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    const item = {
+      condition: "disconnected",
+      group: "Broken",
+      key: "wrk_1/disconnected",
+      worker: {
+        connection: "disconnected",
+        drained: false,
+        heldLeases: 0,
+        id: "wrk_1",
+        lastSeenAt: 1,
+        leasedDevices: 0,
+      },
+    };
+    dispatcher.handlers["inbox.get"] = () => ({ items: [item] });
+
+    const response = await app.request("/v1/inbox", { headers: operatorAuth });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ items: [item] });
+    expect(dispatcher.calls.map((call) => [call.operation, call.session.role])).toEqual([
+      ["inbox.get", "admin"],
+    ]);
+  });
+
   it("maps drain, undrain and remove onto their operations, with the id from the path", async () => {
     const { app, dispatcher } = gatewayHarness();
     dispatcher.handlers["worker.drain"] = (input: never) => ({
@@ -2374,17 +2880,6 @@ describe("worker routes", () => {
       "worker.undrain",
       "worker.remove",
     ]);
-  });
-
-  it("leaves the role check to the shared dispatcher, which 403s an agent token", async () => {
-    const { app, dispatcher } = gatewayHarness();
-    dispatcher.handlers["worker.list"] = () => {
-      throw new DispatchError("FORBIDDEN", "Operation worker.list requires role admin");
-    };
-
-    const response = await app.request("/v1/workers", { headers: agentAuth });
-
-    expect(response.status).toBe(403);
   });
 
   it("puts a refusal's typed details in the body, so a client need not parse prose", async () => {
@@ -2789,5 +3284,101 @@ describe("a person the sign-in proxy signed in", () => {
       expect(response.status).toBe(202);
       expect(dispatcher.calls.map((call) => call.operation)).toContain("lease.release");
     });
+  });
+});
+
+describe("the stream mount's listed route", () => {
+  it("is the route its handler answers: the listed path gets a status the definition lists, and /v1/stream/x gets its listed 404", async () => {
+    const route = streamModule.http?.routes[0];
+    if (route === undefined) throw new Error("the stream definition lists no route");
+    const link = {
+      serve: () =>
+        Promise.resolve({
+          body: new ReadableStream<Uint8Array>(),
+          close: () => Promise.resolve(),
+          meta: { codec: "h264" as const, fps: 30, height: 720, width: 330 },
+        }),
+    };
+    const { app } = buildHarness({
+      mounts: [{ prefix: "stream", ...createStreamMount({ link }) }],
+    });
+    const listed = Object.keys(route.statuses).map(Number);
+    const answer = (path: string, method = "GET") =>
+      app.request(path, { headers: agentAuth, method });
+
+    const listedPath = route.path.replace("{workerId}", "w1").replace("{deviceId}", "dev_1");
+    const found = await answer(listedPath);
+    const other = await answer("/v1/stream/x");
+    const wrongMethod = await answer(listedPath, "POST");
+
+    expect(found.status).toBe(200);
+    expect(found.headers.get("content-type")).toBe("application/vnd.simlock.stream+h264");
+    expect([other.status, wrongMethod.status]).toEqual([404, 405]);
+    expect(listed).toEqual(
+      expect.arrayContaining([found.status, other.status, wrongMethod.status]),
+    );
+    expect(await other.json()).toMatchObject({ error: { code: "UNKNOWN_DEVICE" } });
+    await found.body?.cancel();
+  });
+});
+
+describe("ETag on a JSON read under /v1", () => {
+  it("answers an unchanged JSON read with 304 and no body, and anything else with 200", async () => {
+    const tokens: { id: string }[] = [{ id: "tok_1" }];
+    const { app, dispatcher, eventBus } = buildHarness({
+      mounts: [
+        {
+          prefix: "json-mount",
+          handle: () => Response.json({ ok: true }),
+        },
+      ] as never,
+    });
+    dispatcher.handlers["token.list"] = () => ({ tokens: [...tokens] });
+    dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+      subscribed: true,
+      subscriptionId: session.manageEventSubscription(true),
+    });
+    const read = (path: string, headers: Record<string, string> = {}) =>
+      app.request(path, { headers: { ...operatorAuth, ...headers } });
+
+    const first = await read("/v1/tokens");
+    const tag = first.headers.get("etag");
+    expect(first.status).toBe(200);
+    expect(tag).toMatch(/^"[^"]+"$/);
+
+    const unchanged = await read("/v1/tokens", { "If-None-Match": tag ?? "" });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe("");
+    expect(unchanged.headers.get("etag")).toBe(tag);
+
+    const stale = await read("/v1/tokens", { "If-None-Match": '"stale"' });
+    expect(stale.status).toBe(200);
+    expect(stale.headers.get("etag")).toBe(tag);
+
+    tokens.push({ id: "tok_2" });
+    const changed = await read("/v1/tokens", { "If-None-Match": tag ?? "" });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("etag")).not.toBe(tag);
+
+    const missing = await read("/v1/leases/lse_none");
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("etag")).toBeNull();
+
+    const mount = await read("/v1/json-mount/x");
+    expect(mount.status).toBe(200);
+    expect(mount.headers.get("content-type")).toContain("application/json");
+    expect(mount.headers.get("etag")).toBeNull();
+
+    const streamOrStall = await Promise.race([
+      read("/v1/events/stream"),
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 500)),
+    ]);
+    if (streamOrStall === "stalled") expect.fail("the event stream was buffered, not answered");
+    const stream = streamOrStall;
+    expect(stream.headers.get("etag")).toBeNull();
+    const framesPromise = readSseFrames(stream, 1);
+    await Promise.resolve();
+    eventBus.emit("daemon.stopping", { reason: "live" }, "test");
+    expect((await framesPromise)[0]?.event).toBe("daemon.stopping");
   });
 });

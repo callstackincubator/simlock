@@ -98,6 +98,7 @@ describe("loadConfig", () => {
         maxConcurrentRecoveries: 1,
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
@@ -119,7 +120,7 @@ describe("loadConfig", () => {
         maxBytes: 256 * 1024 * 1024,
       },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-      http: { enabled: false, host: "127.0.0.1", port: 4701 },
+      http: { enabled: true, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 2,
@@ -137,6 +138,7 @@ describe("loadConfig", () => {
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
+    expect(configSchema.shape.eventLog.parse(config.eventLog)).toEqual(config.eventLog);
   });
 
   it("defaults exec.timeoutMs to ten minutes and rejects a non-positive one", async () => {
@@ -206,19 +208,6 @@ describe("loadConfig", () => {
       maxBytes: 256 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
     });
-  });
-
-  it("reports eventLog.retention and eventLog.maxBytes at their defaults", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(config.eventLog).toEqual({
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    });
-    expect(configSchema.shape.eventLog.parse(config.eventLog)).toEqual(config.eventLog);
   });
 
   it("rejects a non-positive or fractional eventLog.retention and eventLog.maxBytes, naming the key", async () => {
@@ -456,12 +445,6 @@ describe("loadConfig", () => {
       ]);
     });
 
-    it("rejects a target with a count of 0 naming warmPool.targets[0].count", async () => {
-      await expect(
-        load({ targets: [{ count: 0, model: "iPhone 17", platform: "ios" }] }),
-      ).rejects.toThrow("warmPool.targets[0].count");
-    });
-
     it("rejects a target that names a class naming warmPool.targets[1].class", async () => {
       await expect(
         load({
@@ -471,12 +454,6 @@ describe("loadConfig", () => {
           ],
         }),
       ).rejects.toThrow("warmPool.targets[1].class");
-    });
-
-    it("rejects a target of an unknown platform naming warmPool.targets[0].platform", async () => {
-      await expect(
-        load({ targets: [{ count: 1, model: "iPhone 17", platform: "tvos" }] }),
-      ).rejects.toThrow("warmPool.targets[0].platform");
     });
 
     it.each([
@@ -493,6 +470,16 @@ describe("loadConfig", () => {
       [
         "a missing platform",
         { count: 1, model: "iPhone 17" },
+        'Invalid config value for "warmPool.targets[0].platform"',
+      ],
+      [
+        "a count of 0",
+        { count: 0, model: "iPhone 17", platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].count": expected a positive integer',
+      ],
+      [
+        "an unknown platform",
+        { count: 1, model: "iPhone 17", platform: "tvos" },
         'Invalid config value for "warmPool.targets[0].platform"',
       ],
       [
@@ -726,33 +713,65 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
-  it("reads lease.maxPerRequester, and defaults it to 1", async () => {
+  it.each([
+    [undefined, 1],
+    [2, 2],
+    [
+      { ios: 1, android: 1 },
+      { ios: 1, android: 1 },
+    ],
+    [{ ios: 2 }, { ios: 2 }],
+    [{}, {}],
+  ])("reads an operator's lease.maxPerRequester %j as %j (absent: 1)", async (written, read) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    const unset = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ lease: { maxPerRequester: 3 } }));
-
-    const set = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(unset.lease).toMatchObject({ maxPerRequester: 1 });
-    expect(set.lease).toMatchObject({ maxPerRequester: 3 });
-  });
-
-  it.each([[0], [-1], [1.5], ["2"]])(
-    "rejects lease.maxPerRequester %j, naming the key",
-    async (value) => {
-      const filesystem = new MemoryFilesystem();
-      await filesystem.mkdirp("/home/agent/.simlock");
+    if (written !== undefined) {
       await filesystem.writeFileAtomic(
         configPath,
-        JSON.stringify({ lease: { maxPerRequester: value } }),
+        JSON.stringify({ lease: { maxPerRequester: written } }),
       );
+    }
 
-      await expect(
-        loadConfig({ configPath, filesystem, systemStats: createStats() }),
-      ).rejects.toThrow("lease.maxPerRequester");
-    },
-  );
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.lease.maxPerRequester).toEqual(read);
+  });
+
+  it.each([
+    [0, "lease.maxPerRequester"],
+    [-1, "lease.maxPerRequester"],
+    [1.5, "lease.maxPerRequester"],
+    ["2", "lease.maxPerRequester"],
+    [{ ios: 0 }, "lease.maxPerRequester.ios"],
+    [{ ios: 1.5 }, "lease.maxPerRequester.ios"],
+    [{ ios: "1" }, "lease.maxPerRequester.ios"],
+  ])("rejects lease.maxPerRequester %j, naming %s", async (value, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxPerRequester: value } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("accepts a platform lease.maxPerRequester does not know, with a warning, and ignores it", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxPerRequester: { ios: 1, tvos: 1 } } }),
+    );
+    const warn = vi.fn();
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+
+    expect(config.lease.maxPerRequester).toEqual({ ios: 1 });
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "lease.maxPerRequester.tvos"');
+  });
 
   it("lease.endWaitMs defaults to 600000 and accepts a positive number and 2147483647", async () => {
     const filesystem = new MemoryFilesystem();
@@ -886,17 +905,24 @@ describe("loadConfig", () => {
     },
   );
 
-  it("warns about unknown keys without rejecting the file", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ limits: { web: {} } }));
+  it.each([
+    [{ limits: { web: {} } }, "limits.web"],
+    [{ health: { maxBoltCount: 7 } }, "health.maxBoltCount"],
+    [{ ios: { slim: { turboMode: true } } }, "ios.slim.turboMode"],
+  ])(
+    "warns about an unknown key, nested or not, without rejecting the file: %j",
+    async (contents, key) => {
+      const filesystem = new MemoryFilesystem();
+      const warn = vi.fn();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
 
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "limits.web"');
-  });
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
+      ).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith(`Unknown config key: "${key}"`);
+    },
+  );
 
   it("applies a file-level health override", async () => {
     const filesystem = new MemoryFilesystem();
@@ -951,18 +977,6 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow(path);
-  });
-
-  it("warns about an unknown key nested under health without rejecting the file", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ health: { maxBoltCount: 7 } }));
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "health.maxBoltCount"');
   });
 
   it("applies a file-level downloads override", async () => {
@@ -1192,21 +1206,6 @@ describe("loadConfig", () => {
     ).rejects.toThrow("ios.slim.categories");
   });
 
-  it("warns about an unknown key nested under ios.slim without rejecting the file", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { slim: { turboMode: true } } }),
-    );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.turboMode"');
-  });
-
   it("defaults android.emulator to a windowed launch with the emulator's GPU, audio, and boot animation", async () => {
     const config = await loadConfig({
       configPath,
@@ -1321,38 +1320,27 @@ describe("loadConfig", () => {
 
       const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
-      expect(config[platform].defaultModels[deviceClass]).toEqual(
-        typeof value === "string" ? [value] : value,
-      );
+      expect(config[platform].defaultModels).toStrictEqual({
+        [deviceClass]: typeof value === "string" ? [value] : value,
+      });
     },
   );
 
-  it("stores a string ios.defaultModels value as a one-element list", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { defaultModels: { phone: "iPhone 15" } } }),
-    );
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(config.ios.defaultModels).toStrictEqual({ phone: ["iPhone 15"] });
-  });
-
   it.each([
-    [{ phone: "" }, "ios.defaultModels.phone"],
-    [{ phone: [] }, "ios.defaultModels.phone"],
-    [{ phone: ["iPhone 15", ""] }, "ios.defaultModels.phone"],
-    [{ phone: 15 }, "ios.defaultModels.phone"],
-    [{ phone: [15] }, "ios.defaultModels.phone"],
-    [{ phone: [["iPhone 15"]] }, "ios.defaultModels.phone"],
-    [{ mobile: "iPhone 15" }, "ios.defaultModels.mobile"],
-    [{ constructor: "iPhone 15" }, "ios.defaultModels.constructor"],
-  ])("refuses ios.defaultModels %j, naming the key", async (defaultModels, path) => {
+    ["ios", { phone: "" }, "ios.defaultModels.phone"],
+    ["ios", { phone: [] }, "ios.defaultModels.phone"],
+    ["ios", { phone: ["iPhone 15", ""] }, "ios.defaultModels.phone"],
+    ["ios", { phone: 15 }, "ios.defaultModels.phone"],
+    ["ios", { phone: [15] }, "ios.defaultModels.phone"],
+    ["ios", { phone: [["iPhone 15"]] }, "ios.defaultModels.phone"],
+    ["ios", { mobile: "iPhone 15" }, "ios.defaultModels.mobile"],
+    ["ios", { constructor: "iPhone 15" }, "ios.defaultModels.constructor"],
+    ["android", { phone: [] }, "android.defaultModels.phone"],
+    ["android", { fridge: "Pixel 8" }, "android.defaultModels.fridge"],
+  ])("refuses %s.defaultModels %j, naming the key", async (platform, defaultModels, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ ios: { defaultModels } }));
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ [platform]: { defaultModels } }));
 
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
@@ -1373,26 +1361,6 @@ describe("loadConfig", () => {
     await expect(load({ phone: [] })).rejects.toThrow(
       "expected a model name or a non-empty list of model names",
     );
-  });
-
-  it("refuses an empty android.defaultModels list and a key that is not a class, naming the key", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ android: { defaultModels: { phone: [] } } }),
-    );
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('Invalid config value for "android.defaultModels.phone"');
-
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ android: { defaultModels: { fridge: "Pixel 8" } } }),
-    );
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('Invalid config value for "android.defaultModels.fridge"');
   });
 
   it("applies a file-level stalledTransition override", async () => {
@@ -1531,12 +1499,6 @@ describe("loadConfig capacity strategies", () => {
       ...(options.warn === undefined ? {} : { warn: options.warn }),
     });
   }
-
-  it("selects the resource strategy when nothing names one", async () => {
-    const config = await load({});
-
-    expect(config.capacity.strategy).toBe("resource");
-  });
 
   it("defaults the fixed strategy to a machine-independent pin", async () => {
     const config = await load({ capacity: { strategy: "fixed" } });
@@ -1726,11 +1688,11 @@ describe("loadConfig modes (ADR 0005)", () => {
     });
   }
 
-  it("defaults to worker mode, with HTTP off and a 24h disconnected-view retention", async () => {
+  it("defaults to worker mode, with HTTP on and a 24h disconnected-view retention", async () => {
     const config = await load({});
 
     expect(config.mode).toBe("worker");
-    expect(config.http.enabled).toBe(false);
+    expect(config.http.enabled).toBe(true);
     expect(config.gateway).toEqual({
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
@@ -1819,6 +1781,15 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("reads update.check in a gateway config without a warning", async () => {
+    const warn = vi.fn();
+
+    const config = await load({ update: { check: false } }, { role: "gateway", warn });
+
+    expect(config.update).toEqual({ check: false });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
     const warn = vi.fn();
     await load({ eventLog: { rotateBytes: 1024 } }, { role: "gateway", warn });
@@ -1891,18 +1862,131 @@ describe("loadConfig modes (ADR 0005)", () => {
     await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
   });
 
-  it("does not pair those keys on a gateway, which reads neither", async () => {
-    const warn = vi.fn();
-    await expect(
-      load({ gateway: { url: "ws://fleet.example" } }, { role: "gateway", warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
+  it("refuses a joined worker's own HTTP listener with the exact error, and keeps every valid and invalid neighbour as it was", async () => {
+    const refusal =
+      'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)';
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    type Case = {
+      readonly name: string;
+      readonly contents: Record<string, unknown>;
+      readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly role?: "worker" | "gateway";
+      readonly error?: string;
+      readonly http?: boolean;
+    };
+    const cases: readonly Case[] = [
+      { name: "file only", contents: { gateway: joined, http: { enabled: true } }, error: refusal },
+      {
+        name: "overrides only",
+        contents: {},
+        overrides: { gateway: joined, http: { enabled: true } },
+        error: refusal,
+      },
+      {
+        name: "membership in file, HTTP in overrides",
+        contents: { gateway: joined },
+        overrides: { http: { enabled: true } },
+        error: refusal,
+      },
+      {
+        name: "HTTP in file, membership in overrides",
+        contents: { http: { enabled: true } },
+        overrides: { gateway: joined },
+        error: refusal,
+      },
+      {
+        name: "override false repairs file true",
+        contents: { gateway: joined, http: { enabled: true } },
+        overrides: { http: { enabled: false } },
+        http: false,
+      },
+      {
+        name: "ws URL, HTTP false",
+        contents: { gateway: { ...joined, url: "ws://fleet.example/x" }, http: { enabled: false } },
+        http: false,
+      },
+      { name: "wss URL, HTTP omitted", contents: { gateway: joined }, http: false },
+      { name: "standalone, HTTP true", contents: { http: { enabled: true } }, http: true },
+      { name: "standalone, HTTP false", contents: { http: { enabled: false } }, http: false },
+      { name: "standalone, HTTP omitted", contents: {}, http: true },
+      { name: "gateway, HTTP omitted", contents: {}, role: "gateway", http: true },
+      {
+        name: "gateway, HTTP true",
+        contents: { http: { enabled: true } },
+        role: "gateway",
+        http: true,
+      },
+      {
+        name: "gateway, HTTP false",
+        contents: { http: { enabled: false } },
+        role: "gateway",
+        error: "http.enabled",
+      },
+      {
+        name: "gateway ignoring membership keys",
+        contents: { gateway: joined, http: { enabled: true } },
+        role: "gateway",
+        http: true,
+      },
+      {
+        name: "empty URL",
+        contents: { gateway: { url: "", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "malformed URL",
+        contents: { gateway: { url: "not a url", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "http URL",
+        contents: { gateway: { url: "http://fleet.example", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "https URL",
+        contents: {
+          gateway: { url: "https://fleet.example", token: "t" },
+          http: { enabled: true },
+        },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "URL without token",
+        contents: { gateway: { url: "wss://fleet.example" }, http: { enabled: true } },
+        error: "gateway.token",
+      },
+      {
+        name: "token without URL",
+        contents: { gateway: { token: "t" }, http: { enabled: true } },
+        error: "a gateway URL, since gateway.token is set",
+      },
+      {
+        name: "removed mode key",
+        contents: { mode: "worker", gateway: joined, http: { enabled: true } },
+        error: '"mode" is no longer a config key',
+      },
+    ];
+
+    for (const { name, contents, overrides, role, error, http } of cases) {
+      const outcome = load(contents, {
+        ...(overrides === undefined ? {} : { overrides }),
+        ...(role === undefined ? {} : { role }),
+      });
+      if (error === undefined) {
+        await expect(outcome, name).resolves.toMatchObject({ http: { enabled: http } });
+      } else if (error === refusal) {
+        await expect(outcome, name).rejects.toMatchObject({ message: refusal });
+      } else {
+        await expect(outcome, name).rejects.toThrow(error);
+      }
+    }
   });
 
   it.each(["http://fleet.example/v1/uplink", "fleet.example", "not a url"])(
     "rejects a gateway.url that is not a WebSocket URL: %s",
     async (url) => {
-      await expect(load({ gateway: { url } })).rejects.toThrow("gateway.url");
+      await expect(load({ gateway: { url } })).rejects.toThrow("a ws:// or wss:// URL");
     },
   );
 
@@ -2373,6 +2457,19 @@ describe("loadConfig over http.proxyAuth", () => {
     for (const signOutUrl of ["not a url", "ftp://team.dev/out"]) {
       await expect(load({ ...complete, signOutUrl }), signOutUrl).rejects.toThrow(
         'Invalid config value for "http.proxyAuth.signOutUrl": expected an http:// or https:// URL',
+      );
+    }
+  });
+
+  it("refuses a wrong-type header, jwksUrl or signOutUrl with our message", async () => {
+    const cases = [
+      ["header", "an HTTP header name"],
+      ["jwksUrl", "an https:// URL, or http:// on 127.0.0.1, ::1 or localhost"],
+      ["signOutUrl", "an http:// or https:// URL"],
+    ] as const;
+    for (const [key, message] of cases) {
+      await expect(load({ ...complete, [key]: 7 }), key).rejects.toThrow(
+        `Invalid config value for "http.proxyAuth.${key}": expected ${message}`,
       );
     }
   });

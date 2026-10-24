@@ -11,6 +11,8 @@ export {
   type DownloadPolicy,
   effectiveAllowDownload,
   loadConfig,
+  loadConfigWithDefaults,
+  type MaxPerRequester,
   type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,
@@ -118,6 +120,7 @@ export {
   Doctor,
   isStalledTransition,
   type OptionalModuleFinding,
+  type ServiceCheck,
   type StallInput,
 } from "./doctor.js";
 export { StartupRead } from "./startup-read.js";

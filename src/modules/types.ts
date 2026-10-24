@@ -130,7 +130,10 @@ export interface ModuleScreens {
 
 export interface WorkerContext<C> {
   readonly name: string;
+  readonly instanceId: string;
   readonly config: C;
+  // why: true when no layer set this module's `enabled` and the loader turned it on; the module may then stay quiet about a missing tool.
+  readonly enabledByDefault: boolean;
   readonly daemonConfig: Config;
   readonly logger: Logger;
   readonly clock: Clock;
@@ -200,9 +203,54 @@ export interface GatewayContext<C> {
   cancelPending(requesterId: string): Promise<unknown>;
 }
 
+// why: plain data in a `definition.ts`, which imports nothing from its module; the OpenAPI document is its only reader.
+export interface ModuleHttpResponse {
+  readonly description: string;
+  readonly contentTypes?: readonly string[];
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly errorCodes?: readonly string[];
+}
+
+export interface ModuleHttpRoute {
+  readonly method: "get" | "post" | "put" | "patch" | "delete";
+  readonly path: string;
+  readonly description: string;
+  readonly statuses: Readonly<Record<number, ModuleHttpResponse>>;
+}
+
+// why: a by-shape copy of the auth module's token operations, so a module host mints and checks tokens without importing auth.
+export interface ModuleTokenRecord {
+  readonly id: string;
+  readonly hash: string;
+  readonly role: "agent" | "operator" | "worker";
+  readonly label?: string;
+  readonly createdAt: number;
+}
+
+export interface ModuleTokens {
+  create(
+    role: ModuleTokenRecord["role"],
+    label?: string,
+  ): Promise<{ record: ModuleTokenRecord; secret: string }>;
+  list(): Promise<ModuleTokenRecord[]>;
+  revoke(id: string): Promise<boolean>;
+  verify(secret: string): Promise<ModuleTokenRecord | undefined>;
+}
+
+// why: plain data in a `definition.ts`: the host keeps this file for local agents, loading none of the module's code.
+export interface ModuleLocalProfile {
+  readonly fileName: string;
+  readonly tokenLabel: string;
+  render(origin: string, secret: string): string;
+}
+
 export interface OptionalModuleDefinition<C> {
   readonly name: string;
   readonly config: ModuleConfig<C>;
+  readonly localProfile?: ModuleLocalProfile;
+  // why: plain data the config loader reads without naming the module; a missing `enabled` then means on for a standalone worker (ADR 0046 §1).
+  readonly enabledByDefault?: "standalone-worker";
+  readonly http?: { readonly routes: readonly ModuleHttpRoute[] };
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
   loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
 }
@@ -219,6 +267,7 @@ export interface ModuleHost {
     readonly remedy: string;
   }[];
   afterSocketClaimed(): void;
+  prepareLocalProfiles(): Promise<void>;
   beforeDrain(): Promise<void>;
   beforeDriversDispose(): Promise<void>;
 }
@@ -262,5 +311,10 @@ export interface ModuleHostOptions {
   readonly definitions: readonly OptionalModuleDefinition<unknown>[];
   readonly config: Config;
   readonly logger: Logger;
-  readonly context: Omit<WorkerContext<unknown>, "name" | "config" | "daemonConfig" | "logger">;
+  readonly tokens: ModuleTokens;
+  readonly defaulted?: ReadonlySet<string>;
+  readonly context: Omit<
+    WorkerContext<unknown>,
+    "name" | "config" | "daemonConfig" | "logger" | "enabledByDefault"
+  >;
 }

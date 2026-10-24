@@ -1,5 +1,7 @@
+import { join } from "node:path";
+
 import { CORE_ROUTE_SEGMENTS, MAX_CAPABILITIES, capabilityNameSchema } from "../contract/index.js";
-import type { Clock, Logger } from "../ports/index.js";
+import type { Clock, Filesystem, Logger } from "../ports/index.js";
 import type {
   GatewayHostOptions,
   GatewayModule,
@@ -8,12 +10,87 @@ import type {
   ModuleHost,
   ModuleHostOptions,
   ModuleLeaseEndParticipant,
+  ModuleLocalProfile,
   ModuleMount,
   ModuleRelayTarget,
+  ModuleTokens,
   MountDeps,
   OptionalModuleDefinition,
   WorkerModule,
 } from "./types.js";
+
+function profileOrigin(host: string, port: number): string {
+  const reachable = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  return `http://${reachable.includes(":") ? `[${reachable}]` : reachable}:${String(port)}`;
+}
+
+// why: a missing, unreadable or malformed file all mean "make a new token".
+async function readStoredProfile(
+  filesystem: Filesystem,
+  path: string,
+): Promise<{ readonly text: string; readonly secret: string } | undefined> {
+  try {
+    const text = await filesystem.readFile(path);
+    const parsed: unknown = JSON.parse(text);
+    const secret =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as { daemonAuthToken?: unknown }).daemonAuthToken
+        : undefined;
+    return typeof secret === "string" ? { secret, text } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function revokeLabelled(tokens: ModuleTokens, label: string, keep?: string): Promise<void> {
+  for (const other of await tokens.list()) {
+    if (other.label === label && other.id !== keep) await tokens.revoke(other.id);
+  }
+}
+
+async function liveProfileToken(
+  tokens: ModuleTokens,
+  label: string,
+  stored: { readonly secret: string } | undefined,
+): Promise<{ readonly id: string; readonly secret: string; readonly reused: boolean }> {
+  const verified = stored === undefined ? undefined : await tokens.verify(stored.secret);
+  if (stored !== undefined && verified?.label === label) {
+    return { id: verified.id, reused: true, secret: stored.secret };
+  }
+  const made = await tokens.create("agent", label);
+  return { id: made.record.id, reused: false, secret: made.secret };
+}
+
+async function publishLocalProfile(
+  localProfile: ModuleLocalProfile,
+  path: string,
+  options: ModuleHostOptions,
+): Promise<void> {
+  const { filesystem } = options.context;
+  const stored = await readStoredProfile(filesystem, path);
+  const token = await liveProfileToken(options.tokens, localProfile.tokenLabel, stored);
+  await revokeLabelled(options.tokens, localProfile.tokenLabel, token.id);
+  const contents = localProfile.render(
+    profileOrigin(options.config.http.host, options.config.http.port),
+    token.secret,
+  );
+  if (token.reused && stored?.text === contents) return;
+  await filesystem.writeFileAtomic(path, contents, { mode: 0o600 });
+}
+
+async function prepareLocalProfile(
+  definition: OptionalModuleDefinition<unknown>,
+  options: ModuleHostOptions,
+): Promise<void> {
+  const { localProfile } = definition;
+  if (localProfile === undefined) return;
+  const path = join(options.context.dataDirectory, localProfile.fileName);
+  const applies =
+    options.config.capabilities[definition.name]?.enabled === true && options.config.http.enabled;
+  if (applies) return publishLocalProfile(localProfile, path, options);
+  if (await options.context.filesystem.exists(path)) await options.context.filesystem.rm(path);
+  await revokeLabelled(options.tokens, localProfile.tokenLabel);
+}
 
 const HOOK_DEADLINE_MS = 30_000;
 
@@ -66,6 +143,7 @@ async function createOne(
       ...options.context,
       config: section,
       daemonConfig: options.config,
+      enabledByDefault: options.defaulted?.has(name) ?? false,
       logger: options.logger.child(name),
       name,
     });
@@ -258,6 +336,15 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
       for (const { name, worker } of started) {
         const call = worker.hooks?.afterSocketClaimed;
         if (call !== undefined) void runHook(logger, name, "afterSocketClaimed", () => call());
+      }
+    },
+    async prepareLocalProfiles(): Promise<void> {
+      for (const definition of definitions) {
+        try {
+          await prepareLocalProfile(definition, options);
+        } catch (error: unknown) {
+          logger.warn(`Could not prepare the ${definition.name} profile: ${messageOf(error)}`);
+        }
       }
     },
     beforeDrain: () => runStopStep("beforeDrain"),

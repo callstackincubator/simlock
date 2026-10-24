@@ -3,8 +3,8 @@
 // <head>, which sets the reviews it gets (delivery rule 14):
 //
 //   adr-only       every path is under docs/internal/adr/
-//   docs-only      every path is a Markdown file
-//   comments-only  every line changed outside Markdown is a comment or blank
+//   docs-only      every path is a Markdown or MDX file (MDX: the website's docs pages)
+//   comments-only  every line changed outside Markdown and MDX is a comment or blank
 //   tests-only     every path is a test or a Markdown file, at least one a test
 //   large          more than 1500 changed lines, pnpm-lock.yaml left out
 //   full           anything else
@@ -29,7 +29,7 @@ const rows = execFileSync("git", ["diff", "--numstat", "--no-renames", base, hea
   });
 
 const isAdr = (path) => path.startsWith("docs/internal/adr/");
-const isDoc = (path) => path.endsWith(".md");
+const isDoc = (path) => /\.mdx?$/.test(path);
 const isTest = (path) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || path.startsWith("e2e/");
 
 const paths = rows.map((row) => row.path);

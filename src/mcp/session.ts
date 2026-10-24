@@ -1,6 +1,8 @@
 import {
   isSimlockError,
   SimlockError,
+  type DeviceOutputChunk,
+  type ExecOutput,
   type LeaseProgress,
   type LeaseRecord,
   type LeaseRequestInput,
@@ -21,6 +23,7 @@ import type {
   ListDevicesOutput,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
+  RunOnDeviceInput,
 } from "./contracts.js";
 
 /**
@@ -154,9 +157,9 @@ export class McpSession {
   /**
    * why: ADR 0004 §2, the session's half of "held is a client policy" -- one renew timer per lease
    * this session obtained, keyed by lease id. Keyed rather than single because nothing here
-   * limits a session to one lease: the daemon's per-requester lease limit is the authority
-   * (ADR 0003 §11), and when it allows more than one (`lease.maxPerRequester`), both have to be kept alive and both have to
-   * be handed back on close. An entry lives exactly as long as this session holds that lease.
+   * limits a session to one lease: the daemon's per-requester lease limit is the authority, and
+   * when it allows more than one (`lease.maxPerRequester`, a number or one per platform), every
+   * one has to be kept alive and handed back on close. An entry lives exactly as long as this session holds that lease.
    *
    * Each entry keeps the lease record its timer is renewing, refreshed from every renewal, so
    * a timer stopped for a release that then failed can be started again against the lease as
@@ -277,6 +280,24 @@ export class McpSession {
       const lease = leases.find((candidate) => candidate.id === this.#heldLeaseId);
       return lease === undefined ? { held: false } : { ...lease, held: true };
     });
+  }
+
+  // why: not on `#mutate` -- a command can run for minutes, and `lease_status` or a release
+  // must not wait behind it (ADR 0047 §6).
+  async runOnDevice(
+    input: RunOnDeviceInput,
+    onOutput: (chunk: DeviceOutputChunk) => void,
+  ): Promise<ExecOutput> {
+    this.#throwIfClosed();
+    const leaseId = this.#heldLeaseId;
+    if (leaseId === undefined) {
+      throw new McpSessionError(
+        "NO_LEASE",
+        "This MCP session holds no lease. Call lease_simulator first.",
+      );
+    }
+    const client = await this.#clientForUse();
+    return client.exec({ ...input, leaseId }, { onOutput });
   }
 
   /** Notifies when this session's held lease ends elsewhere (expiry or a force-release). */
@@ -485,7 +506,7 @@ export class McpSession {
   }
 
   /**
-   * Reconnects lazily: a dead `#client` (cleared by the client's own `onConnectionLost`, below)
+   * why: Reconnects lazily: a dead `#client` (cleared by the client's own `onConnectionLost`, below)
    * makes the next caller build a brand new `SimlockClient` -- the typed client itself never
    * reconnects (ADR 0003 §10), so constructing a fresh one here on every dead connection is
    * what keeps MCP's process-outlives-a-connection lifecycle working.
@@ -496,7 +517,7 @@ export class McpSession {
    * one connection rather than two -- but only in the direction where sharing costs nothing.
    * A renew tick joining a tool call's connect is fine: it wanted a connection, and gets one
    * (the tool call was going to launch a daemon either way, which is not the timer's doing). A
-   * tool call joining a *renew's* connect is not: `docs/CLIENT.md` and `docs/CLI.md` promise a
+   * tool call joining a *renew's* connect is not: the client guide and the CLI reference promise a
    * tool call may start a daemon that is not running, and it would instead fail with the
    * weaker attempt. So it retries once, alone, with the launching connect -- which is exactly
    * what it would have done had it arrived a moment later.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventMap } from "../bus/index.js";
 import type { LeaseRecord } from "../admin/index.js";
+import type { MaxPerRequester } from "../core/index.js";
 import { fromWireError, SimlockError } from "../contract/index.js";
 import { QueueTimeoutError } from "../leasing/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -83,7 +84,7 @@ function harness(
     readonly execTimeoutMs?: number;
     readonly leaseRequestTimeoutMs?: number;
     readonly logger?: Logger;
-    readonly maxPerRequester?: number;
+    readonly maxPerRequester?: MaxPerRequester;
     readonly routing?: (workers: WorkerRegistry) => RoutingPolicy;
   } = {},
 ) {
@@ -134,6 +135,7 @@ function connectWorker(
     readonly platform?: "ios" | "android";
     readonly capacity?: ReturnType<typeof statusFixture>["capacity"];
     readonly devices?: ReturnType<typeof deviceFixture>[];
+    readonly leases?: LeaseRecord[];
     readonly queueDepth?: number;
   } = {},
 ): void {
@@ -150,7 +152,7 @@ function connectWorker(
     devices: overrides.devices ?? [],
     downloads: { policy: "on-request" },
     health: "running",
-    leases: [],
+    leases: overrides.leases ?? [],
     queueDepth: overrides.queueDepth ?? 0,
   });
 }
@@ -1043,6 +1045,37 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
+  it("handles a worker's DAEMON_UPDATING answer as NO_CAPACITY: the view is read again, the request stays queued and is placed once the view changes", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("DAEMON_UPDATING", "domain", "The daemon is updating", {}),
+      kind: "error",
+    });
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const outcome = coordinator.request(REQUEST, requestOptions());
+    const state = promiseState(outcome);
+    await tick();
+
+    expect(state.state).toBe("pending");
+    expect(coordinator.queueDepth).toBe(1);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+
+    workers.refresh("wrk_a", {
+      update: { forced: false, from: "0.3.0", stage: "installing", startedAt: 1, to: "0.4.0" },
+    });
+    await tick();
+    expect(state.state).toBe("pending");
+
+    workers.refresh("wrk_a", { update: null });
+    await tick();
+
+    expect((await outcome).lease.worker?.id).toBe("wrk_a");
+  });
+
   it("forwards device.exec with the namespaced requesterId reaching the scripted worker client", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
@@ -1587,6 +1620,60 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(retry).toBeInstanceOf(RequesterAlreadyLeasedError);
     expect((retry as RequesterAlreadyLeasedError).existingLeaseId).toBe(grant.lease.id);
   });
+
+  it("grants a requester's next lease when a worker view read before its release lands after it (#898)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const first = await coordinator.request(REQUEST, requestOptions());
+    client.releaseLeaseQueue.push({ kind: "ok" });
+    await coordinator.release(first.lease.id);
+
+    workers.refresh("wrk_a", {
+      leases: [{ ...leaseFixture("lse_1", "dev_1"), requesterId: `${GATEWAY_PREFIX}agent-1` }],
+    });
+    workers.refresh("wrk_a", { leases: [] });
+
+    client.requestLeaseQueue.push({
+      grant: grantFixture({ lease: leaseFixture("lse_2", "dev_1") as LeaseRecord }),
+      kind: "grant",
+    });
+    const second = await coordinator
+      .request(REQUEST, requestOptions({ noWait: true }))
+      .catch((error: unknown) => error);
+    expect(second).toMatchObject({ lease: { id: "wrk_a.lse_2" } });
+  });
+
+  it.each(["release", "releaseAll"] as const)(
+    "grants the next lease when %s's relayed event came before the worker's answer and a stale view follows (#898)",
+    async (how) => {
+      const { coordinator, directory, workers, leaseIndex } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      connectWorker(workers, "wrk_a");
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const first = await coordinator.request(REQUEST, requestOptions());
+      client.onReleaseLease = (leaseId) => leaseIndex.removeByWorkerLease("wrk_a", leaseId);
+      if (how === "release") await coordinator.release(first.lease.id);
+      else await coordinator.releaseAll();
+
+      workers.refresh("wrk_a", {
+        leases: [{ ...leaseFixture("lse_1", "dev_1"), requesterId: `${GATEWAY_PREFIX}agent-1` }],
+      });
+      workers.refresh("wrk_a", { leases: [] });
+
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: leaseFixture("lse_2", "dev_1") as LeaseRecord }),
+        kind: "grant",
+      });
+      const second = await coordinator
+        .request(REQUEST, requestOptions({ noWait: true }))
+        .catch((error: unknown) => error);
+      expect(second).toMatchObject({ lease: { id: "wrk_a.lse_2" } });
+    },
+  );
 
   it("release-all attaches the leases it already released to a later failure's own details (H8)", async () => {
     const { coordinator, directory, workers, leaseIndex } = harness();
@@ -2193,6 +2280,38 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     },
   );
 
+  it("Gateway routes a lease while a worker is updating: it skips the worker with reason updating, the request waits, and the worker is picked once the update ends", async () => {
+    const fleetHarness = harness();
+    const { coordinator, directory, workers } = fleetHarness;
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", {
+      update: {
+        forced: false,
+        from: "0.3.0",
+        stage: "installing",
+        startedAt: 1,
+        to: "0.4.0",
+      },
+    });
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+
+    expect(state.state).toBe("pending");
+    expect(coordinator.waitingRequests()[0]).toMatchObject({
+      workers: [{ reason: "updating", workerId: "wrk_a" }],
+    });
+    expect(leaseRequests(client)).toEqual([]);
+
+    workers.refresh("wrk_a", { update: null });
+    await tick();
+
+    expect((await outcome).lease.worker?.id).toBe("wrk_a");
+  });
+
   it.each([
     {
       change: (workers: WorkerRegistry) => workers.disconnected("wrk_a"),
@@ -2666,6 +2785,7 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
     },
     "boot-timeout": "worker",
     killed: "worker",
+    updating: "worker",
     "daemon-restarted": "worker",
   };
 
@@ -4359,6 +4479,162 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
     });
   });
 
+  describe("per platform", () => {
+    const ANDROID_REQUEST = {
+      physical: false,
+      model: "Pixel 9",
+      osVersion: "26.0",
+      platform: "android" as const,
+    };
+    const iosHeld = (): LeaseRecord => ({
+      ...(leaseFixture("lse_1", "dev_1") as LeaseRecord),
+      requesterId: `${GATEWAY_PREFIX}agent-1`,
+    });
+    const androidGrant = () => {
+      const base = grantFixture();
+      return grantFixture({
+        device: {
+          ...base.device,
+          id: "dev_2",
+          spec: { ...base.device.spec, model: "Pixel 9", platform: "android" },
+        },
+        lease: leaseFixture("lse_2", "dev_2") as LeaseRecord,
+      });
+    };
+    const iosRefusal = (leaseId: string) =>
+      `Requester agent-1 already holds iOS lease ${leaseId}; release it (\`simlock release ${leaseId}\`) before requesting another iOS device`;
+    const twoWorkers = (built: ReturnType<typeof harness>, held: LeaseRecord[] = []) => {
+      const ios = new ScriptedWorkerClient();
+      const android = new ScriptedWorkerClient();
+      built.directory.add("wrk_a", ios);
+      built.directory.add("wrk_b", android);
+      connectWorker(built.workers, "wrk_a", {
+        devices: held.length === 0 ? [] : [deviceFixture("dev_1", "leased")],
+        leases: held,
+      });
+      connectWorker(built.workers, "wrk_b", { models: ["Pixel 9"], platform: "android" });
+      return { android, ios };
+    };
+
+    it("with lease.maxPerRequester per platform, a requester holding an iOS fleet lease is granted an Android one on another worker and refused a second iOS one, also once the index is rebuilt from worker views alone", async () => {
+      const limit = { ios: 1, android: 1 };
+      const live = harness({ maxPerRequester: limit });
+      const liveWorkers = twoWorkers(live);
+      liveWorkers.ios.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      liveWorkers.android.requestLeaseQueue.push({ grant: androidGrant(), kind: "grant" });
+      await live.coordinator.request(REQUEST, requestOptions());
+
+      const android = await live.coordinator.request(ANDROID_REQUEST, requestOptions());
+      const second = await live.coordinator
+        .request(REQUEST, requestOptions())
+        .catch((e: unknown) => e);
+
+      expect(android.lease.id).toBe("wrk_b.lse_2");
+      expect(second).toMatchObject({
+        existingLeaseId: "wrk_a.lse_1",
+        message: iosRefusal("wrk_a.lse_1"),
+        name: "RequesterAlreadyLeasedError",
+      });
+
+      const rebuilt = harness({ maxPerRequester: limit });
+      const rebuiltWorkers = twoWorkers(rebuilt, [iosHeld()]);
+      rebuiltWorkers.android.requestLeaseQueue.push({ grant: androidGrant(), kind: "grant" });
+
+      const againIos = await rebuilt.coordinator
+        .request(REQUEST, requestOptions())
+        .catch((e: unknown) => e);
+      const againAndroid = await rebuilt.coordinator.request(ANDROID_REQUEST, requestOptions());
+
+      expect(againIos).toMatchObject({ message: iosRefusal("wrk_a.lse_1") });
+      expect(againAndroid.lease.id).toBe("wrk_b.lse_2");
+    });
+  });
+
+  it("with a numeric limit of 1, a requester holding an iOS and an Android fleet lease is refused with today's message, naming the earlier one", async () => {
+    const { coordinator, leaseIndex } = harness({ maxPerRequester: 1 });
+    leaseIndex.rebuildFromWorker(
+      "wrk_a",
+      [
+        { ...held("lse_2", 20), deviceId: "dev_2" },
+        { ...held("lse_1", 10), deviceId: "dev_1" },
+      ],
+      [
+        { id: "dev_1", spec: { platform: "ios" } },
+        { id: "dev_2", spec: { platform: "android" } },
+      ],
+    );
+
+    const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      message:
+        "Requester agent-1 already holds lease wrk_a.lse_1; release it (`simlock release wrk_a.lse_1`) before requesting another device",
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  it("with lease.maxPerRequester per platform, a fleet lease whose device a worker view does not list counts against every platform", async () => {
+    const { coordinator, leaseIndex } = harness({ maxPerRequester: { ios: 1, android: 1 } });
+    leaseIndex.rebuildFromWorker("wrk_a", [{ ...held("lse_1", 10), deviceId: "dev_unlisted" }], []);
+
+    const refusal = await coordinator
+      .request({ ...REQUEST, model: "Pixel 9", platform: "android" }, requestOptions())
+      .catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      message:
+        "Requester agent-1 already holds Android lease wrk_a.lse_1; release it (`simlock release wrk_a.lse_1`) before requesting another Android device",
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  describe("per platform, waiting", () => {
+    it("with lease.maxPerRequester per platform, a requester may wait for an iOS and an Android lease at once but not two of one platform, and lease.cancel names which one to cancel", async () => {
+      const built = harness({ maxPerRequester: { ios: 1, android: 1 } });
+      const capacity = statusFixture().capacity;
+      built.directory.add("wrk_a", new ScriptedWorkerClient());
+      built.directory.add("wrk_b", new ScriptedWorkerClient());
+      connectWorker(built.workers, "wrk_a", { capacity: saturatedIos() });
+      connectWorker(built.workers, "wrk_b", {
+        capacity: { ...capacity, android: { ...capacity.android, maxRunning: 0 } },
+        models: ["Pixel 9"],
+        platform: "android",
+      });
+      const androidRequest = {
+        physical: false,
+        model: "Pixel 9",
+        osVersion: "26.0",
+        platform: "android" as const,
+      };
+      void built.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
+      await tick();
+
+      const android = built.coordinator.request(androidRequest, requestOptions());
+      void android.catch(() => undefined);
+      await tick();
+      const secondIos = await Promise.race([
+        built.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e),
+        tick().then(() => "admitted"),
+      ]);
+      const platformsWaiting = () =>
+        built.coordinator
+          .waitingRequests()
+          .map((waiting) => waiting.spec.platform)
+          .sort();
+
+      expect(platformsWaiting()).toEqual(["android", "ios"]);
+      expect(secondIos).toMatchObject({
+        message:
+          "Requester agent-1 already has a waiting iOS request; wait for it to be granted or cancel it before requesting another iOS device",
+        name: "RequesterAlreadyLeasedError",
+      });
+      await expect(built.coordinator.cancelPending("agent-1", "android")).resolves.toBe(
+        "cancelled",
+      );
+      expect(platformsWaiting()).toEqual(["ios"]);
+    });
+  });
+
   it("with limit 2, a requester with a waiting fleet request is refused with the waiting-request message", async () => {
     const { coordinator } = await withWaitingRequest(2);
 
@@ -4393,26 +4669,6 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
       message:
         "Requester agent-1 already holds lease wrk_a.lse_1; release it (`simlock release wrk_a.lse_1`) before requesting another device",
     });
-  });
-});
-
-describe("FleetLeaseCoordinator reads a lost uplink in one place (#514)", () => {
-  it("reads DAEMON_STOPPING from a worker as a lost uplink: lease.request fails WORKER_UNREACHABLE", async () => {
-    const { coordinator, directory, workers } = harness();
-    const client = new ScriptedWorkerClient();
-    directory.add("wrk_a", client);
-    connectWorker(workers, "wrk_a");
-    client.requestLeaseQueue.push({
-      error: new SimlockError("DAEMON_STOPPING", "transport", "The daemon is stopping", {}),
-      kind: "error",
-    });
-
-    const rejection = await coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
-
-    expect(rejection).toBeInstanceOf(DispatchError);
-    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
   });
 });
 
@@ -4481,9 +4737,14 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
   const saturatedExcept = (free: string) => (id: string) =>
     id === free ? {} : { capacity: saturatedIos() };
 
-  it("lists, in worker id order, drained for a drained worker and full with platform-running-limit for one with no free iOS slot", async () => {
-    const { coordinator, workers } = fleet(["wrk_b", "wrk_a"], (id) =>
-      id === "wrk_b" ? { capacity: saturatedIos() } : {},
+  it("lists, in worker id order, drained for a drained worker and full with platform-running-limit for one with no free iOS slot, also when it has no free global slot either", async () => {
+    const capacity = statusFixture().capacity;
+    const bothFull = {
+      ...saturatedIos(),
+      global: { ...capacity.global, maxRunning: 0 },
+    };
+    const { coordinator, workers } = fleet(["wrk_c", "wrk_b", "wrk_a"], (id) =>
+      id === "wrk_b" ? { capacity: saturatedIos() } : id === "wrk_c" ? { capacity: bothFull } : {},
     );
     await workers.setDrained("wrk_a", true);
 
@@ -4492,6 +4753,7 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
     expect(listed(coordinator)).toEqual([
       { reason: "drained", workerId: "wrk_a" },
       { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_b" },
+      { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_c" },
     ]);
   });
 
@@ -4798,6 +5060,22 @@ describe("FleetLeaseCoordinator lists why each worker cannot take a waiting requ
       {
         build: () => fleet(["wrk_a", "wrk_b"], (id) => (id === "wrk_b" ? { queueDepth: 1 } : {})),
         row: "busy with a queue of its own",
+      },
+      {
+        build: () => {
+          const built = fleet(["wrk_a", "wrk_b"]);
+          built.workers.refresh("wrk_b", {
+            update: {
+              forced: false,
+              from: "0.3.0",
+              stage: "installing",
+              startedAt: 1,
+              to: "0.4.0",
+            },
+          });
+          return built;
+        },
+        row: "updating",
       },
     ])("leaves the request queued when the other worker is $row", async ({ build }) => {
       const { clients, coordinator } = build();

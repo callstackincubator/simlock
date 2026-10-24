@@ -1,5 +1,11 @@
 import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
-import { type DeviceRequest, type LeaseGrant, type LeaseProgress } from "../core/index.js";
+import {
+  type DeviceRequest,
+  type LeaseGrant,
+  type LeaseProgress,
+  type MaxPerRequester,
+  type Platform,
+} from "../core/index.js";
 import { type WaitingReason } from "./acquisition-planner.js";
 
 export interface LeaseRequestOptions {
@@ -57,6 +63,7 @@ export interface RequesterLimitContext {
   readonly limit: number;
   readonly held: number;
   readonly waiting: boolean;
+  readonly platform?: Platform;
 }
 
 export class RequesterAlreadyLeasedError extends Error {
@@ -75,6 +82,9 @@ function requesterRefusalMessage(
   existingLeaseId: string | undefined,
   context: RequesterLimitContext | undefined,
 ): string {
+  if (context?.platform !== undefined) {
+    return platformRefusalMessage(requesterId, existingLeaseId, context, context.platform);
+  }
   if (context !== undefined && context.limit > 1) {
     if (context.waiting) {
       return `Requester ${requesterId} already has a waiting request; wait for it to be granted or cancel it before requesting another device`;
@@ -84,6 +94,79 @@ function requesterRefusalMessage(
   return existingLeaseId === undefined
     ? `Requester already has a lease or pending request: ${requesterId}`
     : `Requester ${requesterId} already holds lease ${existingLeaseId}; release it (\`simlock release ${existingLeaseId}\`) before requesting another device`;
+}
+
+export interface HeldLease {
+  readonly id: string;
+  readonly grantedAt: number;
+  readonly platform?: Platform;
+}
+
+export interface RequesterLimitInput {
+  readonly requesterId: string;
+  readonly platform: Platform;
+  readonly maxPerRequester: MaxPerRequester | undefined;
+  readonly held: readonly HeldLease[];
+  readonly waiting: readonly Platform[];
+  readonly probe: boolean;
+}
+
+/**
+ * why: worker and gateway admit a request by this one rule (architecture rule 10). It returns the
+ * refusal for the caller to emit and throw, or `undefined` to admit.
+ */
+export function requesterLimitDecision(
+  input: RequesterLimitInput,
+): RequesterAlreadyLeasedError | undefined {
+  const configured = input.maxPerRequester ?? 1;
+  if (typeof configured === "number") {
+    const waiting = input.waiting.length > 0;
+    const atLimit = !input.probe && input.held.length + input.waiting.length >= configured;
+    if (!input.waiting.includes(input.platform) && !atLimit) return undefined;
+    return new RequesterAlreadyLeasedError(input.requesterId, earliestGranted(input.held)?.id, {
+      held: input.held.length,
+      limit: configured,
+      waiting,
+    });
+  }
+  const limit = configured[input.platform] ?? 1;
+  const held = input.held.filter(
+    (lease) => lease.platform === undefined || lease.platform === input.platform,
+  );
+  const atLimit = !input.probe && held.length >= limit;
+  const waiting = input.waiting.includes(input.platform);
+  if (!waiting && !atLimit) return undefined;
+  return new RequesterAlreadyLeasedError(input.requesterId, earliestGranted(held)?.id, {
+    held: held.length,
+    limit,
+    platform: input.platform,
+    waiting: waiting && !atLimit,
+  });
+}
+
+function earliestGranted(leases: readonly HeldLease[]): HeldLease | undefined {
+  let earliest: HeldLease | undefined;
+  for (const lease of leases) {
+    if (earliest === undefined || lease.grantedAt < earliest.grantedAt) earliest = lease;
+  }
+  return earliest;
+}
+
+function platformRefusalMessage(
+  requesterId: string,
+  existingLeaseId: string | undefined,
+  context: RequesterLimitContext,
+  platform: Platform,
+): string {
+  const label = platform === "ios" ? "iOS" : "Android";
+  if (context.waiting) {
+    return `Requester ${requesterId} already has a waiting ${label} request; wait for it to be granted or cancel it before requesting another ${label} device`;
+  }
+  const release = `release it (\`simlock release ${String(existingLeaseId)}\`)`;
+  if (context.limit === 1) {
+    return `Requester ${requesterId} already holds ${label} lease ${String(existingLeaseId)}; ${release} before requesting another ${label} device`;
+  }
+  return `Requester ${requesterId} already holds ${String(context.held)} ${label} leases and lease.maxPerRequester.${platform} is ${String(context.limit)}; release one (\`simlock release ${String(existingLeaseId)}\`) before requesting another ${label} device`;
 }
 
 /** A request named a lease ID an active lease or a waiting request already holds (ADR 0020). */
@@ -149,7 +232,6 @@ export class WaitQueue {
   readonly #ownedWaiters = new WeakSet<MutableWaiter>();
   readonly #waiters: MutableWaiter[] = [];
   readonly #pendingWaiters = new Set<MutableWaiter>();
-  readonly #pendingRequesters = new Set<string>();
 
   constructor(private readonly options: WaitQueueOptions) {}
 
@@ -186,27 +268,38 @@ export class WaitQueue {
   }
 
   hasPendingRequester(requesterId: string): boolean {
-    return this.#pendingRequesters.has(requesterId);
+    return this.pendingPlatforms(requesterId).length > 0;
+  }
+
+  pendingPlatforms(requesterId: string): readonly Platform[] {
+    return [...this.#pendingWaiters]
+      .filter((waiter) => waiter.options.requesterId === requesterId)
+      .map((waiter) => waiter.request.platform);
   }
 
   /**
    * Includes a waiter driven straight to `processing`, which is never enqueued.
    */
-  findPendingWaiter(requesterId: string): Waiter | undefined {
+  findPendingWaiter(requesterId: string, platform?: Platform): Waiter | undefined {
     for (const waiter of this.#pendingWaiters) {
-      if (waiter.options.requesterId === requesterId) return waiter;
+      if (
+        waiter.options.requesterId === requesterId &&
+        (platform === undefined || waiter.request.platform === platform)
+      ) {
+        return waiter;
+      }
     }
     return undefined;
   }
 
   /**
-   * `id` is the stored request's id when the caller stored one first (`LeaseRequestBook`), so
+   * why: `id` is the stored request's id when the caller stored one first (`LeaseRequestBook`), so
    * the waiter and its record share one name; omitted, the queue mints its own.
    *
-   * One pending request per requester is the owner's rule, not the queue's: the owner asks
-   * `hasPendingRequester` inside its admission decision, before it stores the request and calls
-   * this, and answers a duplicate with its own refusal (`emitLeaseRefusal`). Checking again here would be a
-   * second copy of that rule, firing only after the request was already stored.
+   * The pending-request limit is the owner's rule, not the queue's: the owner asks
+   * `pendingPlatforms` inside its admission decision (`requesterLimitDecision`), before it stores
+   * the request and calls this, and answers a refusal with its own (`emitLeaseRefusal`). Checking
+   * again here would be a second copy of that rule, firing only after the request was already stored.
    */
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions, id?: string): Waiter {
     let resolvePromise!: (grant: LeaseGrant) => void;
@@ -230,7 +323,6 @@ export class WaitQueue {
     };
     this.#ownedWaiters.add(waiter);
     this.#pendingWaiters.add(waiter);
-    this.#pendingRequesters.add(requestOptions.requesterId);
     return waiter;
   }
 
@@ -313,7 +405,6 @@ export class WaitQueue {
     if (isTerminal(mutable.state)) return false;
     this.#remove(mutable);
     mutable.state = "granted";
-    this.#pendingRequesters.delete(mutable.options.requesterId);
     mutable.resolvePromise(grant);
     return true;
   }
@@ -323,7 +414,6 @@ export class WaitQueue {
     if (isTerminal(mutable.state)) return false;
     this.#remove(mutable);
     mutable.state = "rejected";
-    this.#pendingRequesters.delete(mutable.options.requesterId);
     mutable.rejectPromise(error);
     return true;
   }

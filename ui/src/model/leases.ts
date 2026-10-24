@@ -1,8 +1,17 @@
 import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
+import {
+  deviceOfLease,
+  holderName,
+  holderOf,
+  isExpiring,
+  workerOfLease,
+} from "../../../src/contract/inbox";
 import { defined } from "./defined";
+import { type ConsoleEvent, textField, workerIdOf } from "./events";
 import { formatDuration } from "./time";
+import { devicePath } from "./paths";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
 export type LeaseRecord = z.infer<typeof statusLeaseSchema>;
@@ -37,38 +46,6 @@ export interface Holder {
   readonly label?: string;
 }
 
-// why: over HTTP a requester's id is its token's id, so a token with that id names it; a requester
-// no token matches, such as an agent on the local socket, is its id alone.
-export function holderOf(requesterId: string, tokens: readonly TokenRecord[]): Holder {
-  const id = agentIdOf(requesterId);
-  const label = tokens.find((token) => token.id === id)?.label;
-  return label === undefined ? { id } : { id, label };
-}
-
-const GATEWAY_REQUESTER = /^gw:[^:]+:(.+)$/;
-
-// why: a gateway hands a worker its agents' requests under `gw:<gateway instance>:<agent id>`, so a
-// worker's own view names the agent behind that prefix; the console shows the agent, as the
-// gateway's lease list does.
-export function agentIdOf(requesterId: string): string {
-  return GATEWAY_REQUESTER.exec(requesterId)?.[1] ?? requesterId;
-}
-
-// why: a holder's title is its token's label, or its id where no label names it.
-function holderTitle(holder: Holder): string {
-  return holder.label ?? holder.id;
-}
-
-// why: a single host names no worker on its leases, and every lease there is on its one worker, the
-// host itself.
-function workerOfLease(
-  lease: { readonly workerId?: string | undefined },
-  workers: readonly WorkerView[],
-): WorkerView | undefined {
-  if (lease.workerId === undefined) return workers.length === 1 ? workers[0] : undefined;
-  return workers.find((worker) => worker.id === lease.workerId);
-}
-
 export function leasesOnWorker(
   leases: readonly LeaseRecord[],
   workerId: string,
@@ -93,14 +70,7 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-function deviceOfLease(
-  lease: LeaseRecord,
-  workers: readonly WorkerView[],
-): WorkerDevice | undefined {
-  return workerOfLease(lease, workers)?.devices?.find((device) => device.id === lease.deviceId);
-}
-
-function workerNameOfLease(
+export function workerNameOfLease(
   lease: {
     readonly workerId?: string | undefined;
     readonly worker?: { readonly label?: string | undefined } | undefined;
@@ -122,18 +92,10 @@ export type LeaseFilter = "all" | "expiring" | "ios" | "android";
 
 export const LEASE_FILTERS: readonly { readonly value: LeaseFilter; readonly label: string }[] = [
   { label: "All", value: "all" },
-  { label: "Expiring", value: "expiring" },
+  { label: "Ending < 5 min", value: "expiring" },
   { label: "iOS", value: "ios" },
   { label: "Android", value: "android" },
 ];
-
-// why: a lease with under 15 minutes left has not been renewed for a while, so the list and the
-// inspector warn by the same rule.
-const EXPIRING_UNDER_MS = 15 * 60_000;
-
-function isExpiring(deadline: number, now: number): boolean {
-  return deadline - now < EXPIRING_UNDER_MS;
-}
 
 function percentLeft(deadline: number, now: number, ttlMs: number): number {
   return ttlMs <= 0 ? 0 : Math.max(0, Math.min(100, ((deadline - now) / ttlMs) * 100));
@@ -155,8 +117,11 @@ export interface LeaseRowView {
   readonly remaining: string;
   readonly expiring: boolean;
   readonly percent: number;
+  readonly model: string;
+  readonly worker?: string;
   readonly sub: string;
   readonly platform?: string;
+  readonly deviceTo?: `/${string}`;
 }
 
 export function leaseRows(input: {
@@ -168,19 +133,23 @@ export function leaseRows(input: {
   const { leases, now, tokens, workers } = input;
   return inGrantOrder(leases).map((lease) => {
     const device = deviceOfLease(lease, workers);
-    const sub = [device?.spec.model ?? lease.deviceId, workerNameOfLease(lease, workers)]
-      .filter((part) => part !== undefined)
-      .join(" · ");
+    const model = device?.spec.model ?? lease.deviceId;
+    const worker = workerNameOfLease(lease, workers);
+    const sub = [model, worker].filter((part) => part !== undefined).join(" · ");
+    const owner = workerOfLease(lease, workers);
     return {
       expiring: isExpiring(lease.ttlDeadline, now),
-      holder: holderTitle(holderOf(lease.requesterId, tokens)),
+      holder: holderName(lease.requesterId, tokens),
       id: lease.id,
       key: `${lease.workerId ?? ""} ${lease.id}`,
+      model,
       percent: percentLeft(lease.ttlDeadline, now, lease.ttlMs),
       remaining: formatDuration(lease.ttlDeadline - now),
       sub,
       to: leasePath(lease.id),
+      ...(worker === undefined ? {} : { worker }),
       ...(device === undefined ? {} : { platform: device.spec.platform }),
+      ...(owner === undefined ? {} : { deviceTo: devicePath(owner.id, lease.deviceId) }),
     };
   });
 }
@@ -194,24 +163,17 @@ export function filterLeaseRows(
   return rows.filter((row) => row.platform === filter);
 }
 
-export interface StreamOffer {
-  readonly offered: boolean;
-  readonly reason?: string;
-}
-
-// why: a worker answers a stream request with a 404 when its `stream` capability is not on, so the
-// console says so before the click; a worker the console cannot see is left to the daemon's own
-// answer.
-export function streamOffer(worker: WorkerView | undefined): StreamOffer {
-  if (worker === undefined) return { offered: true };
-  const entry = worker.capabilities?.find((capability) => capability.name === "stream");
-  if (entry?.state === "available") return { offered: true };
-  const name = workerName(worker);
-  if (entry?.state === "unavailable") {
-    const reason = `Streaming is unavailable on ${name}. ${entry.reason ?? ""}`;
-    return { offered: false, reason: reason.trim() };
-  }
-  return { offered: false, reason: `Streaming is off on ${name}.` };
+export function searchLeaseRows(
+  rows: readonly LeaseRowView[],
+  query: string,
+): readonly LeaseRowView[] {
+  const wanted = query.toLowerCase();
+  if (wanted === "") return rows;
+  return rows.filter((row) =>
+    [row.holder, row.model, row.worker, row.id].some((field) =>
+      field?.toLowerCase().includes(wanted),
+    ),
+  );
 }
 
 export interface LeaseInspection {
@@ -236,7 +198,6 @@ export interface LeaseInspection {
   readonly holder?: Holder;
   readonly ownerId?: string;
   readonly requestId?: string;
-  readonly stream: StreamOffer;
 }
 
 // why: `record` is the lease's entry in `GET /v1/leases`, which alone says who holds it and when it
@@ -262,7 +223,6 @@ export function leaseInspection(input: {
     id: lease.id,
     model: lease.device,
     remaining: formatDuration(deadline - now),
-    stream: streamOffer(worker),
     ...recordFacts(record, tokens, deadline, now, lease.id),
     ...defined({
       requestId: lease.requestId,
@@ -302,7 +262,7 @@ function recordFacts(
     holder,
     percent: percentLeft(deadline, now, record.ttlMs),
     renewed: `${formatDuration(now - record.lastRenewedAt)} ago`,
-    title: holderTitle(holder),
+    title: holderName(record.requesterId, tokens),
     ...(record.ownerId === record.requesterId ? {} : { ownerId: record.ownerId }),
   };
 }
@@ -315,4 +275,21 @@ function leaseWorker(
   const name = workerNameOfLease(named, workers);
   if (name === undefined) return undefined;
   return worker === undefined ? { name } : { name, to: workerPath(worker.id) };
+}
+
+// why: a worker names its lease `lse_x` in its events, and a gateway lists the same lease as
+// `<workerId>.lse_x`, so a relayed event matches under both spellings; the gateway's own events
+// name the lease as listed.
+export function eventsOfLease(
+  events: readonly ConsoleEvent[],
+  leaseId: string,
+): readonly ConsoleEvent[] {
+  return events
+    .filter((event) => {
+      const named = textField(event.payload, "leaseId");
+      if (named === undefined) return false;
+      const workerId = workerIdOf(event);
+      return named === leaseId || (workerId !== undefined && `${workerId}.${named}` === leaseId);
+    })
+    .toSorted((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
 }

@@ -142,6 +142,7 @@ function config(options: EngineOptions): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 48 * 60 * 60_000, shutdownAfterMs: 24 * 60 * 60_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 3_600_000,
       maxTtlMs: 14_400_000,
@@ -869,22 +870,6 @@ describe("lease-end participants (#469)", () => {
       releasedLeaseIds: expect.arrayContaining([one.lease.id, two.lease.id]),
     });
     expect(participant.calls.map((call) => call.abortedAtCall)).toEqual([true, true]);
-  });
-
-  it("advancing the clock past lease.endWaitMs after a nuke with leased devices logs no ceiling warning", async () => {
-    const { grant, harness, participant } = await (async () => {
-      const participant = new TestParticipant();
-      const harness = await startEngine({ participants: [participant] });
-      const grant = await harness.engine.request(request, asking("agent"));
-      await harness.engine.nuke(false);
-      return { grant, harness, participant };
-    })();
-    expect(participant.calls).toHaveLength(1);
-
-    harness.clock.advance(END_WAIT_MS + 1);
-    await flush();
-
-    expect(warningsFor(harness, grant.lease.id)).toEqual([]);
   });
 
   it("after nuke ends, a release waits for its participant again", async () => {

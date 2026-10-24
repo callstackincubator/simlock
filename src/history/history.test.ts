@@ -261,6 +261,57 @@ describe("createEventHistory", () => {
     expect(replayed).toEqual([newer, newest]);
   });
 
+  it("replayPage with beforeId and limit returns the limit events just older than the named one, oldest first, and stops short at the start of the history", async () => {
+    const rigged = await rig();
+    const history = rigged.history();
+    await history.start();
+    const rows = [1, 2, 3, 4, 5].map((n) => relayed(rigged.bus, `evt_row${n}`, NOW + n));
+
+    const middle = await history.replayPage({ beforeId: "evt_row4", limit: 2 });
+    const start = await history.replayPage({ beforeId: "evt_row2", limit: 5 });
+    await history.stop();
+
+    const failing = await rig();
+    const sqlite = new ProbeSqliteOpener({
+      fault: (call) => {
+        if (call.kind === "prepare" && /rowid\) </.test(call.sql)) throw new Error("read failed");
+      },
+    });
+    const throwing = failing.history({ sqlite });
+    await throwing.start();
+    relayed(failing.bus, "evt_one", NOW + 1);
+    relayed(failing.bus, "evt_two", NOW + 2);
+    const fromThrowing = await throwing.replayPage({ beforeId: "evt_two", limit: 5 });
+    await throwing.stop();
+
+    expect(middle).toEqual({ events: [rows[1], rows[2]], kind: "events" });
+    expect(start).toEqual({ events: [rows[0]], kind: "events" });
+    expect(fromThrowing).toEqual({ kind: "unavailable" });
+    expect(levelRecords(failing, "warn")).toBe(1);
+  });
+
+  it("replayPage pages two events with the same timestamp and seq from different runs in row order, each once", async () => {
+    const earlierRun = await rig();
+    const earlierWriter = earlierRun.history();
+    await earlierWriter.start();
+    const first = relayed(earlierRun.bus, "evt_tie_z", NOW);
+    await earlierWriter.stop();
+    const laterRun = await rig({ directory: earlierRun.directory });
+    const laterWriter = laterRun.history();
+    await laterWriter.start();
+    const second = relayed(laterRun.bus, "evt_tie_a", NOW);
+    relayed(laterRun.bus, "evt_tie_last", NOW + 1);
+
+    const newest = await laterWriter.replayPage({ beforeId: "evt_tie_last", limit: 1 });
+    const older = await laterWriter.replayPage({ beforeId: "evt_tie_a", limit: 1 });
+    await laterWriter.stop();
+    expect(first.seq).toBe(second.seq);
+    expect([newest, older]).toEqual([
+      { events: [second], kind: "events" },
+      { events: [first], kind: "events" },
+    ]);
+  });
+
   it("a second insert of an event with an id already stored adds no row and runs no projection step", async () => {
     const rigged = await rig();
     const projection = recordingProjection();
@@ -401,6 +452,123 @@ describe("createEventHistory", () => {
     expect(levelRecords(rigged, "warn")).toBe(1);
     expect(history.status().writing).toBe(true);
     await history.stop();
+  });
+
+  it("replayPage with limit alone returns the newest n, oldest first, and the newest n held in memory when the history is unreadable or its read throws", async () => {
+    const served = await rig({ capacity: 3 });
+    const history = served.history();
+    await history.start();
+    const rows = [1, 2, 3, 4].map((n) => relayed(served.bus, `evt_row${n}`, NOW + n));
+    const fromFile = await history.replayPage({ limit: 3 });
+    await history.stop();
+
+    const unread = await rig({ capacity: 3 });
+    const unreadable = [1, 2, 3].map((n) => relayed(unread.bus, `evt_row${n}`, NOW + n));
+    const fromUnstarted = await unread.history().replayPage({ limit: 2 });
+
+    const failing = await rig({ capacity: 2 });
+    const sqlite = new ProbeSqliteOpener({
+      fault: (call) => {
+        if (call.kind === "prepare" && /DESC/i.test(call.sql)) throw new Error("read failed");
+      },
+    });
+    const throwing = failing.history({ sqlite });
+    await throwing.start();
+    relayed(failing.bus, "evt_one", NOW + 1);
+    const held = [2, 3].map((n) => relayed(failing.bus, `evt_held${n}`, NOW + n));
+    const fromThrowing = await throwing.replayPage({ limit: 5 });
+    await throwing.stop();
+
+    const halted = await rig();
+    const definition = plainProjection("halting", () => ({
+      apply: (envelope) => {
+        if ((envelope.payload as { reason?: string }).reason === "boom") {
+          throw new Error("projection failed");
+        }
+      },
+      prune: () => undefined,
+    }));
+    const stopped = halted.history({ projections: [definition] });
+    await stopped.start();
+    const stoppedHeld = ["fine", "boom", "after"].map((reason) => stopping(halted.bus, reason));
+    const fromStopped = await stopped.replayPage({ limit: 5 });
+    await stopped.stop();
+
+    expect(fromFile).toEqual({ events: rows.slice(1), kind: "events" });
+    expect(fromUnstarted).toEqual({ events: unreadable.slice(1), kind: "events" });
+    expect(fromThrowing).toEqual({ events: held, kind: "events" });
+    expect(levelRecords(failing, "warn")).toBe(1);
+    expect(fromStopped).toEqual({ events: stoppedHeld, kind: "events" });
+  });
+
+  it("reads a worker's events without the database or the index: from memory with limit counted after the filter, past a failed index build that sets nothing aside, and past a stored row of bad JSON", async () => {
+    const memory = await rig({ capacity: 10 });
+    const connected = (workerId: string) =>
+      memory.bus.emit("worker.connected", { workerId }, "gateway");
+    const first = connected("w1");
+    const rejected = memory.bus.emit(
+      "worker.rejected",
+      { reason: "forbidden", workerId: "w1" },
+      "gateway",
+    );
+    connected("w2");
+    connected("w2");
+    const unstarted = memory.history();
+    const newestOfW1 = await unstarted.replayPage({ limit: 2, workerId: "w1" });
+    const recent = await unstarted.replay({ workerId: "w1" });
+
+    const unindexed = await rig();
+    const noIndex = new ProbeSqliteOpener({
+      fault: (call) => {
+        if (call.kind === "exec" && /CREATE INDEX.*events_worker/is.test(call.sql)) {
+          throw new Error("disk full");
+        }
+      },
+    });
+    const scanning = unindexed.history({ sqlite: noIndex });
+    await scanning.start();
+    const written = unindexed.bus.emit("worker.connected", { workerId: "w1" }, "gateway");
+    unindexed.bus.emit("worker.connected", { workerId: "w2" }, "gateway");
+    const scanned = await scanning.replayPage({ limit: 5, workerId: "w1" });
+    const scanningStatus = scanning.status();
+    await scanning.stop();
+
+    const damaged = await rig();
+    const seeded = damaged.history();
+    await seeded.start();
+    const good = damaged.bus.emit("worker.connected", { workerId: "w1" }, "gateway");
+    await seeded.stop();
+    const file = await new NodeSqliteOpener().open(damaged.dbPath, { readOnly: false });
+    file.exec("DROP INDEX events_worker");
+    file
+      .prepare("INSERT INTO events (id, timestamp, seq, size, envelope) VALUES (?, ?, ?, ?, ?)")
+      .run("evt_bad", NOW, 99, 5, "{nope");
+    file.close();
+    const reopened = damaged.history();
+    await reopened.start();
+    const afterBadRow = await reopened.replayPage({ limit: 5, workerId: "w1" });
+    const reopenedStatus = reopened.status();
+    await reopened.stop();
+    const indexes = await new NodeSqliteOpener().open(damaged.dbPath, { readOnly: true });
+    const indexed = indexes
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'events_worker'")
+      .all();
+    indexes.close();
+
+    expect(newestOfW1).toEqual({ events: [first], kind: "events" });
+    expect(recent).toEqual([first]);
+    expect(rejected.payload).toMatchObject({ workerId: "w1" });
+    expect(levelRecords(unindexed, "warn")).toBe(1);
+    expect(unindexed.logs.records.find((record) => record.level === "warn")?.fields).toMatchObject({
+      error: "disk full",
+    });
+    expect(await damagedNames(unindexed.directory)).toEqual([]);
+    expect(scanningStatus).toMatchObject({ opened: true, writing: true });
+    expect(scanned).toEqual({ events: [written], kind: "events" });
+    expect(levelRecords(damaged, "warn")).toBe(0);
+    expect(reopenedStatus).toMatchObject({ opened: true, writing: true });
+    expect(indexed).toEqual([{ name: "events_worker" }]);
+    expect(afterBadRow).toEqual({ events: [good], kind: "events" });
   });
 
   it("opens a new file with incremental auto_vacuum, WAL, synchronous NORMAL and a 5 s busy timeout", async () => {

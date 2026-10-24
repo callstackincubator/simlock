@@ -8,8 +8,13 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { useQuery } from "@tanstack/react-query";
+
 import type { ApiPath } from "../data/api";
+import { createRecentFeed, type RecentFeed } from "../data/recent-feed";
+import { type DaemonFacts, type DaemonMode, type ModeStore, watchMode } from "../data/mode";
 import { useApi, useSession } from "./services";
+import { createQueries, type Queries, resourceOf } from "./queries";
 import { browserClock, documentVisibility } from "../data/live/browser";
 import {
   type Clock,
@@ -25,12 +30,17 @@ export interface Now {
   readonly server: number;
 }
 
-interface Live {
+export interface Live {
   readonly connection: LiveConnection;
+  readonly mode: ModeStore;
+  readonly queries: Queries;
+  // why: the last hour of events, read once for every drawer of the tab that shows them.
+  readonly recent: RecentFeed;
   readonly ticker: Ticker;
 }
 
-const LiveContext = createContext<Live | undefined>(undefined);
+// why: exported so a screen test can stand in a fixed daemon mode without a connection.
+export const LiveContext = createContext<Live | undefined>(undefined);
 
 export function LiveProvider({ children }: { readonly children: ReactNode }) {
   const api = useApi();
@@ -44,8 +54,21 @@ export function LiveProvider({ children }: { readonly children: ReactNode }) {
       whenLost: session.lost,
     });
     const ticker = createTicker(browserClock, () => connection.serverNow());
-    setLive({ connection, ticker });
+    const mode = watchMode({ api, clock: browserClock, connection });
+    const queries = createQueries({
+      clock: browserClock,
+      connection,
+      visibility: documentVisibility,
+    });
+    const recent = createRecentFeed({
+      clock: browserClock,
+      connection,
+      get: (path) => api.getJson(path),
+    });
+    setLive({ connection, mode, queries, recent, ticker });
     return () => {
+      queries.dispose();
+      mode.dispose();
       ticker.dispose();
       connection.dispose();
     };
@@ -60,14 +83,25 @@ function useLive(): Live {
   return live;
 }
 
-export function useLiveResource<T>(path: ApiPath): ResourceState<T> {
-  const { connection } = useLive();
-  const subscribe = useCallback(
-    (listener: () => void) => connection.watch(path, listener),
-    [connection, path],
-  );
-  const snapshot = useCallback(() => connection.resource<T>(path), [connection, path]);
-  return useSyncExternalStore(subscribe, snapshot);
+export function useRouteQuery<T>(path: ApiPath): ResourceState<T> {
+  const { queries } = useLive();
+  return resourceOf(useQuery(queries.options<T>(path), queries.client));
+}
+
+// why: `undefined` until a read of `GET /v1/status` has said which kind of daemon this is.
+export function useDaemonMode(): DaemonMode | undefined {
+  const { mode } = useLive();
+  return useSyncExternalStore(mode.subscribe, mode.mode, mode.mode);
+}
+
+// why: the version the daemon runs and the latest it knows, for the sidebar's notice.
+export function useDaemonFacts(): DaemonFacts {
+  const { mode } = useLive();
+  return useSyncExternalStore(mode.subscribe, mode.daemon, mode.daemon);
+}
+
+export function useRecentFeed(): RecentFeed {
+  return useLive().recent;
 }
 
 export function useConnection(): ConnectionState {

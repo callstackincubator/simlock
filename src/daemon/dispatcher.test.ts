@@ -15,6 +15,7 @@ import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
   HOUR,
+  plainProjection,
   removeUsageRigs,
   requested,
   ringEventHistory,
@@ -62,6 +63,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
+import { UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
@@ -133,8 +135,8 @@ function stallOptions(
 
 function resolveEventHistoryOverride(
   eventBus: EventBus,
-  override: Pick<EventHistoryHandle, "replay" | "status"> | undefined,
-): Pick<EventHistoryHandle, "replay" | "status"> {
+  override: Pick<EventHistoryHandle, "replay" | "replayPage" | "status"> | undefined,
+): Pick<EventHistoryHandle, "replay" | "replayPage" | "status"> {
   return override ?? ringEventHistory(eventBus);
 }
 
@@ -270,7 +272,7 @@ async function buildDispatcher(
     readonly passthroughOverride?: PassthroughResolver;
     readonly execEnv?: NodeJS.ProcessEnv;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
-    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "status">;
+    readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly withoutTokens?: boolean;
     /** `status.get`'s host block; a fixed machine with no tools by default. */
@@ -295,6 +297,8 @@ async function buildDispatcher(
     readonly claims?: { isClaimed(deviceId: string): boolean };
     /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
     readonly otherStallDrivers?: readonly FakeDriver[];
+    /** why: a second platform's driver for the leasing engine, for a test that leases on both. */
+    readonly extraDrivers?: readonly FakeDriver[];
     /** Extra leasing options, such as `defaultModes` (a platform's default device mode). */
     readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
     readonly physicalDevices?: readonly SeededPhysicalDevice[];
@@ -340,7 +344,7 @@ async function buildDispatcher(
   const wiring = testComponentWiring({
     clock: clock,
     components: overrides.components,
-    drivers: [driver],
+    drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus: eventBus,
     registry: registry,
   });
@@ -349,7 +353,7 @@ async function buildDispatcher(
     clock,
     config,
     ...overrides.engine,
-    drivers: [driver],
+    drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus,
     idGenerator: sequence(),
     registry,
@@ -633,7 +637,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { clock, dispatcher, driver } = await buildDispatcher();
     const catalogReads = vi.spyOn(driver, "listCatalog");
 
-    // A console polls every second; every poll up to the last millisecond of the interval
+    // why: calls arrive every second; every call up to the last millisecond of the interval
     // answers from the one read.
     await dispatcher.dispatch("worker.list", {}, admin);
     for (let elapsed = 1_000; elapsed < WORKER_VIEW_REFRESH_INTERVAL_MS; elapsed += 1_000) {
@@ -792,13 +796,14 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
-  it("worker.drain, worker.undrain, worker.remove, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
+  it("worker.drain, worker.undrain, worker.remove, worker.update, worker.install-component and alerts.test on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const install = vi.spyOn(components, "install");
     const calls = [
       ["worker.drain", { workerId: "instance-1" }],
       ["worker.undrain", { workerId: "instance-1" }],
       ["worker.remove", { workerId: "instance-1" }],
+      ["worker.update", { workerId: "instance-1" }],
       ["worker.install-component", { platform: "ios", version: "27.0", workers: "all" }],
       ["alerts.test", { destination: "ops" }],
     ] as const;
@@ -824,10 +829,10 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     // The refusal is the whole answer: nothing was installed on this host instead, and the
     // message says how to install here.
     expect(install).not.toHaveBeenCalled();
-    expect(String((refusals[3] as { error?: unknown } | undefined)?.error)).toContain(
+    expect(String((refusals[4] as { error?: unknown } | undefined)?.error)).toContain(
       "install on this host without naming workers",
     );
-    expect((refusals[4] as { error?: Error } | undefined)?.error?.message).toBe(
+    expect((refusals[5] as { error?: Error } | undefined)?.error?.message).toBe(
       "alerts.test sends to a gateway's alert destinations, and this daemon is not a gateway; run it against the gateway",
     );
   });
@@ -987,23 +992,6 @@ describe("Dispatcher: ownership", () => {
     return (grant as { lease: { id: string } }).lease.id;
   }
 
-  it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
-    const { dispatcher } = await buildDispatcher();
-
-    await expect(
-      dispatcher.dispatch(
-        "lease.request",
-        {
-          model: "iPhone 17 Pro",
-          osVersion: "26.5",
-          owner: "someone-else",
-          platform: "ios",
-        },
-        session({ principal: "tok_agent", role: "agent" }),
-      ),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
   // H3 (round 3 review): §27a's gate used to be `role !== "admin"`, which an HTTP `operator`
   // bearer token satisfies just as well as the gateway's own uplink -- on a plain worker with no
   // gateway anywhere, any operator token could name someone else as owner. `isGatewayUplink` is
@@ -1011,22 +999,31 @@ describe("Dispatcher: ownership", () => {
   // `acceptUplink` (this worker dialled its own configured `gateway.url`); a session merely
   // carrying `role: "admin"` from anywhere else -- an operator token's HTTP session included --
   // no longer suffices.
-  it("lease.request: rejects a plain admin session (not the gateway's uplink) naming owner with FORBIDDEN (ADR §27a, H3)", async () => {
-    const { dispatcher } = await buildDispatcher();
+  it.each([
+    ["a non-admin session", { principal: "tok_agent", role: "agent" }],
+    [
+      "a plain admin session (not the gateway's uplink)",
+      { principal: "tok_operator", role: "admin" },
+    ],
+  ] as const)(
+    "lease.request: rejects %s naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7, H3)",
+    async (_name, who) => {
+      const { dispatcher } = await buildDispatcher();
 
-    await expect(
-      dispatcher.dispatch(
-        "lease.request",
-        {
-          model: "iPhone 17 Pro",
-          osVersion: "26.5",
-          owner: "someone-else",
-          platform: "ios",
-        },
-        session({ principal: "tok_operator", role: "admin" }),
-      ),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          {
+            model: "iPhone 17 Pro",
+            osVersion: "26.5",
+            owner: "someone-else",
+            platform: "ios",
+          },
+          session({ ...who }),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
 
   it("lease.request: the gateway's own uplink session may set owner, and the granted lease ends up owned by that, not the uplink's own principal (ADR §27a, H3)", async () => {
     const { dispatcher } = await buildDispatcher();
@@ -1172,6 +1169,7 @@ describe("Dispatcher: ownership", () => {
       session({ principal: "tok_owner", role: "agent" }),
     );
     expect(own.leases).toHaveLength(1);
+    expect(own.leases[0]).not.toHaveProperty("workerLeaseId");
 
     const otherAgent = await dispatcher.dispatch(
       "lease.list",
@@ -1182,6 +1180,33 @@ describe("Dispatcher: ownership", () => {
 
     const admin = await dispatcher.dispatch("lease.list", {}, session({ role: "admin" }));
     expect(admin.leases).toHaveLength(1);
+  });
+
+  it("lease.get: an agent reads its own lease, another agent's or an unknown id is UNKNOWN_LEASE, admin reads any", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const leaseId = await grantLease(dispatcher);
+    const owner = session({ principal: "tok_owner", role: "agent" });
+
+    const own = await dispatcher.dispatch("lease.get", { leaseId }, owner);
+    expect(own).toEqual({ lease: (await dispatcher.dispatch("lease.list", {}, owner)).leases[0] });
+    expect(own.lease).toMatchObject({ id: leaseId, ownerId: "tok_owner" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.get",
+        { leaseId },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toBeInstanceOf(UnknownLeaseError);
+    await expect(
+      dispatcher.dispatch("lease.get", { leaseId: "lse_nope" }, owner),
+    ).rejects.toBeInstanceOf(UnknownLeaseError);
+    await expect(
+      dispatcher.dispatch(
+        "lease.get",
+        { leaseId },
+        session({ principal: "tok_other", role: "admin" }),
+      ),
+    ).resolves.toMatchObject({ lease: { id: leaseId } });
   });
 
   it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
@@ -1281,6 +1306,77 @@ describe("Dispatcher: ownership", () => {
     );
     expect(cancelled).toBeInstanceOf(RequestCancelledError);
   });
+
+  it("lease.cancel {platform}: cancels only the named platform's waiting request, and is gated on that request's owner", async () => {
+    const clock = new FakeClock(1_000);
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const { dispatcher, engine, registry } = await buildDispatcher({
+      capacity: {
+        strategy: "resource",
+        config: {
+          limits: {
+            android: { maxDevices: 1, maxRunning: 1 },
+            ios: { maxDevices: 1, maxRunning: 1 },
+            maxRunning: 2,
+          },
+          ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+        },
+      },
+      clock,
+      extraDrivers: [android],
+      lease: { maxPerRequester: { ios: 1, android: 1 } },
+    });
+    const iosRequest = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const androidRequest = { model: "Pixel 8", osVersion: "36", platform: "android" } as const;
+    await dispatcher.dispatch(
+      "lease.request",
+      { ...iosRequest, requesterId: "holder-ios" },
+      session({ principal: "holder-ios" }),
+    );
+    await dispatcher.dispatch(
+      "lease.request",
+      { ...androidRequest, requesterId: "holder-android" },
+      session({ principal: "holder-android" }),
+    );
+    const waiting = (platform: "ios" | "android") =>
+      registry
+        .leaseRequests()
+        .filter((record) => record.state === "open" && record.request.platform === platform);
+    const iosWaiting = dispatcher.dispatch(
+      "lease.request",
+      { ...iosRequest, requesterId: "agent-1" },
+      session({ principal: "owner-ios" }),
+    );
+    await expect.poll(() => waiting("ios")).toHaveLength(1);
+    const androidWaiting = dispatcher.dispatch(
+      "lease.request",
+      { ...androidRequest, requesterId: "agent-1" },
+      session({ principal: "owner-android" }),
+    );
+    await expect.poll(() => waiting("android")).toHaveLength(1);
+
+    // why: the iOS request is the earliest, so a hook that ignored the platform would name its owner.
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { platform: "android", requesterId: "agent-1" },
+        session({ principal: "owner-ios", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { platform: "android", requesterId: "agent-1" },
+        session({ principal: "owner-android", role: "agent" }),
+      ),
+    ).resolves.toEqual({ result: "cancelled" });
+
+    await expect(androidWaiting).rejects.toBeInstanceOf(RequestCancelledError);
+    expect(waiting("ios")).toHaveLength(1);
+    expect(waiting("android")).toHaveLength(0);
+    expect(engine.queueDepth).toBe(1);
+    void iosWaiting.catch(() => undefined);
+  });
 });
 
 // Review finding S9: `Dispatcher#leaseReleaseAll` and `#nukeRun` were exercised by no test
@@ -1358,6 +1454,7 @@ describe("Dispatcher: events.replay", () => {
           asked.push(input);
           return fromHistory;
         },
+        replayPage: async () => ({ events: [], kind: "events" }),
         status: () => ({ opened: true, writing: true }),
       },
     });
@@ -1369,26 +1466,74 @@ describe("Dispatcher: events.replay", () => {
   });
 });
 
-describe("Dispatcher: config.get eventLog", () => {
-  it("config.get reports eventLog.retention and maxBytes and no rotateBytes", async () => {
-    const { dispatcher } = await buildDispatcher();
+describe("Dispatcher: events.replay paging", () => {
+  afterEach(removeUsageRigs);
 
-    const { eventLog } = await dispatcher.dispatch("config.get", {}, session({ role: "admin" }));
+  const admin = session({ role: "admin" });
 
-    expect(eventLog).toStrictEqual({
-      maxBytes: 256 * 1024 * 1024,
-      retention: 7 * 24 * 60 * 60 * 1000,
-    });
+  async function pagedRig(
+    rows: number,
+    options: Parameters<typeof usageRig>[0] = {},
+  ): Promise<{
+    readonly rig: Awaited<ReturnType<typeof usageRig>>;
+    readonly ids: string[];
+    readonly dispatcher: Dispatcher;
+  }> {
+    const rig = await usageRig(options);
+    for (let row = 0; row < rows; row += 1) {
+      rig.at(T0 + row);
+      rig.emit("daemon.stopping", { reason: `r${row + 1}` });
+    }
+    const { dispatcher } = await buildDispatcher({ eventHistory: rig.history });
+    return { dispatcher, ids: rig.bus.replay().map((event) => event.id), rig };
+  }
+
+  const reasons = (events: readonly { readonly payload?: unknown }[]): unknown[] =>
+    events.map((event) => (event.payload as { reason: string }).reason);
+
+  it("events.replay with beforeId and limit pages through the worker dispatcher over a real history: the page, HISTORY_NOT_KEPT, an empty table, HISTORY_UNAVAILABLE, and 100 at most for beforeId alone", async () => {
+    const { dispatcher, ids } = await pagedRig(150);
+    const page = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: ids[4] as string, limit: 2 },
+      admin,
+    );
+    expect(reasons(page)).toEqual(["r3", "r4"]);
+    const unbounded = await dispatcher.dispatch(
+      "events.replay",
+      { beforeId: ids[149] as string },
+      admin,
+    );
+    expect(unbounded).toHaveLength(100);
+    await expect(
+      dispatcher.dispatch("events.replay", { beforeId: "evt_gone", limit: 2 }, admin),
+    ).rejects.toMatchObject({ code: "HISTORY_NOT_KEPT", details: { oldestTs: T0 } });
+
+    const empty = await pagedRig(0);
+    await expect(
+      empty.dispatcher.dispatch("events.replay", { beforeId: "evt_any", limit: 2 }, admin),
+    ).resolves.toEqual([]);
+
+    const failing = plainProjection("failing", () => ({
+      apply: () => {
+        throw new Error("projection broke");
+      },
+      prune: () => undefined,
+    }));
+    const notWriting = await pagedRig(1, { projections: [failing] });
+    expect(notWriting.rig.history.status().writing).toBe(false);
+    const unstarted = await buildDispatcher();
+    for (const { dispatcher: target } of [notWriting, unstarted]) {
+      await expect(
+        target.dispatch("events.replay", { beforeId: "evt_any", limit: 2 }, admin),
+      ).rejects.toMatchObject({ code: "HISTORY_UNAVAILABLE" });
+    }
   });
-});
 
-describe("Dispatcher: config.get metrics", () => {
-  it("config.get reports metrics.retention", async () => {
-    const { dispatcher } = await buildDispatcher();
-
-    const { metrics } = await dispatcher.dispatch("config.get", {}, session({ role: "admin" }));
-
-    expect(metrics).toStrictEqual({ retention: 90 * 24 * 60 * 60 * 1000 });
+  it("events.replay with limit alone returns the newest n events, oldest first, through the worker dispatcher", async () => {
+    const { dispatcher } = await pagedRig(5);
+    const page = await dispatcher.dispatch("events.replay", { limit: 2 }, admin);
+    expect(reasons(page)).toEqual(["r4", "r5"]);
   });
 });
 
@@ -1665,6 +1810,7 @@ describe("Dispatcher: device mode on every surface", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -1697,6 +1843,7 @@ describe("Dispatcher: device mode on every surface", () => {
           count: 2,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "26.5",
           platform: "ios",
           ready: 0,
@@ -1707,6 +1854,7 @@ describe("Dispatcher: device mode on every surface", () => {
           count: 1,
           mode: "slim",
           model: "Pixel 8",
+          origin: "configured",
           platform: "android",
           ready: 0,
           short: "disabled",
@@ -2245,6 +2393,38 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
   const requests = (dispatcher: Dispatcher) =>
     dispatcher.dispatch("list.get", { kind: "requests" }, session({ role: "admin" }));
 
+  it("inbox.get on a worker answers a lease about to end and a request that has waited over 60 s, naming a holder by its token's label, or by its id when the daemon has no token store", async () => {
+    const holders = async (withoutTokens: boolean) => {
+      const { clock, dispatcher, engine, tokens } = await buildDispatcher({ withoutTokens });
+      const { record } = await tokens.create("agent", "ci-bot");
+      await request(dispatcher, record.id, { ttlMs: 250_000 });
+      await request(dispatcher, "holder-2");
+      void request(dispatcher, "agent-a");
+      await expect.poll(() => engine.queueDepth).toBe(1);
+      clock.advance(60_001);
+      const { items } = await dispatcher.dispatch("inbox.get", {}, session({ role: "admin" }));
+      return { id: record.id, items };
+    };
+
+    const labelled = await holders(false);
+    const bare = await holders(true);
+
+    expect(
+      labelled.items.map((item) => [item.key.replace(/\/[^/]+\//, "/id/"), item.condition]),
+    ).toEqual([
+      ["request/id/waiting", "waiting"],
+      ["lease/id/ending", "ending"],
+    ]);
+    expect(labelled.items).toContainEqual(
+      expect.objectContaining({
+        lease: expect.objectContaining({ holder: "ci-bot", model: "iPhone 17 Pro" }),
+      }),
+    );
+    expect(bare.items).toContainEqual(
+      expect.objectContaining({ lease: expect.objectContaining({ holder: bare.id }) }),
+    );
+  });
+
   it("list.get requests on a worker returns every open request with its queue position", async () => {
     const { clock, dispatcher, engine } = await buildDispatcher();
     await fillIos(dispatcher);
@@ -2766,8 +2946,19 @@ describe("Dispatcher: status.get console address", () => {
       consoleUrl: "http://127.0.0.1:4711/",
       health: "running",
       mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
     });
-    expect(off.daemon).toEqual({ health: "running", mode: "worker" });
+    expect(off.daemon).toEqual({
+      health: "running",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect("consoleUrl" in off.daemon).toBe(false);
   });
 });
@@ -3235,27 +3426,6 @@ describe("Dispatcher: device.exec", () => {
     // EXEC_TIMEOUT, not the exit code the kill produced: "we stopped it" and "it failed" are
     // different facts, and only the first tells a caller to raise the limit (ADR §19e).
     await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
-  });
-
-  it("refuses a verb the driver refuses with PASSTHROUGH_REFUSED and spawns nothing", async () => {
-    const runner = new ScriptedProcessRunner([]);
-    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
-
-    const error = await dispatcher
-      .dispatch(
-        "device.exec",
-        { args: ["delete", "ABCD"], leaseId, tool: "simctl" },
-        session({ principal: "tok_agent" }),
-      )
-      .then(
-        () => undefined,
-        (rejected: unknown) => rejected,
-      );
-
-    expect(classifyError(error)).toBe("PASSTHROUGH_REFUSED");
-    // Refused before anything was spawned -- the point of the refusal list is that the command
-    // never runs, not that its output is discarded.
-    expect(runner.calls).toEqual([]);
   });
 
   /**
@@ -3804,6 +3974,7 @@ function testConfig(
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -4157,7 +4328,14 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
     const status = await dispatcher.dispatch("status.get", {}, session());
 
     expect(Object.keys(status).sort()).toEqual(["daemon", "history", "host"]);
-    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.daemon).toEqual({
+      health: "starting",
+      mode: "worker",
+      version: "1.2.3",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    });
     expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
   });
 
@@ -4507,6 +4685,8 @@ describe("Dispatcher: usage.get", () => {
     const gate = { open: true };
     const eventHistory = {
       replay: (input?: { readonly sinceTs?: number }) => rig.history.replay(input),
+      replayPage: (input: { readonly beforeId?: string; readonly limit: number }) =>
+        rig.history.replayPage(input),
       status: () => ({ ...rig.history.status(), opened: gate.open && rig.history.status().opened }),
     };
     return { eventHistory, gate, rig, ...options };

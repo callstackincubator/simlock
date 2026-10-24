@@ -26,7 +26,7 @@ export interface CleanupReaperOptions {
   readonly logger?: Logger;
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
-  /** The devices a warm target keeps, read at each run; none when omitted. */
+  /** why: read target, learned-kind and live queue protection on every cleanup pass. */
   readonly targetedDevices?: () => Promise<ReadonlySet<string>>;
   readonly diskPath?: string;
   readonly tickMs?: number;

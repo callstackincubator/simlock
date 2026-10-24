@@ -30,6 +30,7 @@ async function run(
     const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
     writeDriverAdvisoryWarnings(environment, response);
     writeMissingPrerequisites(environment, response);
+    writeBrokenService(environment, response);
     writeUnreachableWarmTargets(environment, response);
     writeModuleUnavailable(environment, response);
     writeResult((value) => environment.stdout.write(value), response);
@@ -57,6 +58,18 @@ function writeMissingPrerequisites(
     if (finding.kind !== "prerequisite-missing") continue;
     environment.stderr.write(
       `Missing [${finding.platform}] ${finding.prerequisite}: ${finding.message} ${finding.remedy}\n`,
+    );
+  }
+}
+
+function writeBrokenService(
+  environment: CommandContext["environment"],
+  report: DoctorReport,
+): void {
+  for (const finding of report.findings) {
+    if (finding.kind !== "service-broken") continue;
+    environment.stderr.write(
+      `Service broken: ${finding.name} (${finding.manager}) names missing ${finding.missing.join(", ")}. ${finding.remedy}\n`,
     );
   }
 }

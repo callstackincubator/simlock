@@ -145,6 +145,11 @@ export interface FakeDriverOptions {
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly physicalDevices?: readonly FakePhysicalDevice[];
+  /**
+   * why: a real iOS simulator is addressed by its device id; set it to give a virtual device that
+   * address, so a test can tell a virtual device from a phone by more than the id.
+   */
+  readonly addressIsDeviceId?: boolean;
 }
 
 export class FakeDriverUnknownDeviceError extends Error {
@@ -201,6 +206,7 @@ export class FakeDriver implements Driver {
   readonly #legacyDevices: Map<string, LegacyDevice>;
   /** Bumped on every `makeReady` boot -- mirrors a real driver reassigning a port per boot. */
   readonly #bootCounts = new Map<string, number>();
+  readonly #addressIsDeviceId: boolean;
   #managedReality: DriverReality | undefined;
   #physicalDevices: readonly FakePhysicalDevice[] | undefined;
   readonly #presentPhysical = new Set<string>();
@@ -211,6 +217,7 @@ export class FakeDriver implements Driver {
   readonly #scriptedPhysicalDevices: FakeDriverOptions["physicalDevices"];
 
   constructor(options: FakeDriverOptions) {
+    this.#addressIsDeviceId = options.addressIsDeviceId === true;
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
     this.#clock = options.clock;
     this.#estimateMs = options.estimateMs;
@@ -444,6 +451,10 @@ export class FakeDriver implements Driver {
     });
   }
 
+  #addressOf(deviceId: string, bootCount: number): string {
+    return this.#addressIsDeviceId ? deviceId : addressFor(deviceId, bootCount);
+  }
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
@@ -452,7 +463,11 @@ export class FakeDriver implements Driver {
     this.#nextDeviceNumber += 1;
     this.#devices.set(deviceId, "provisioned");
 
-    return { address: addressFor(deviceId, 0), deviceId, driverData: { fakeDeviceId: deviceId } };
+    return {
+      address: this.#addressOf(deviceId, 0),
+      deviceId,
+      driverData: { fakeDeviceId: deviceId },
+    };
   }
 
   /**
@@ -478,7 +493,7 @@ export class FakeDriver implements Driver {
     const bootCount = (this.#bootCounts.get(device.deviceId) ?? 0) + 1;
     this.#bootCounts.set(device.deviceId, bootCount);
     return {
-      address: addressFor(device.deviceId, bootCount),
+      address: this.#addressOf(device.deviceId, bootCount),
       deviceId: device.deviceId,
       driverData: device.driverData,
       ...this.#reportedMode(options),
@@ -540,7 +555,7 @@ export class FakeDriver implements Driver {
     }
     return {
       devices: [...this.#devices.entries()].map(([deviceId, status]) => ({
-        address: addressFor(deviceId, this.#bootCounts.get(deviceId) ?? 0),
+        address: this.#addressOf(deviceId, this.#bootCounts.get(deviceId) ?? 0),
         deviceId,
         driverData: { fakeDeviceId: deviceId },
         runState: runStateFor(status),

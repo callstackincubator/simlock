@@ -15,6 +15,20 @@ async function isSocketPathTooLong(error: unknown): Promise<boolean> {
   return error instanceof SocketPathTooLongError;
 }
 
+/** why: same lazy check as the socket path error above; `instanceof` proves what the name suggests. */
+async function isServiceFailed(error: unknown): Promise<boolean> {
+  if (!(error instanceof Error) || error.name !== "ServiceFailedError") return false;
+  const { ServiceFailedError } = await import("../ports/index.js");
+  return error instanceof ServiceFailedError;
+}
+
+/** why: same lazy check as above; the `instructions` module loads only when `setup` ran. */
+async function isSetupError(error: unknown, name: string): Promise<boolean> {
+  if (!(error instanceof Error) || error.name !== name) return false;
+  const { SetupMcpFailedError, SetupRefusedError } = await import("../instructions/index.js");
+  return error instanceof (name === "SetupRefusedError" ? SetupRefusedError : SetupMcpFailedError);
+}
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -31,6 +45,9 @@ export async function writeError(
 async function cliErrorCode(error: unknown): Promise<string> {
   if (error instanceof UsageError) return "USAGE";
   if (await isSocketPathTooLong(error)) return "USAGE";
+  if (await isServiceFailed(error)) return "SERVICE_FAILED";
+  if (await isSetupError(error, "SetupRefusedError")) return "SETUP_REFUSED";
+  if (await isSetupError(error, "SetupMcpFailedError")) return "SETUP_MCP_FAILED";
   const { isSimlockError } = await import("../contract/index.js");
   if (isSimlockError(error)) return error.code;
   return "INTERNAL";
@@ -39,6 +56,7 @@ async function cliErrorCode(error: unknown): Promise<string> {
 export async function errorExitCode(error: unknown): Promise<number> {
   if (error instanceof UsageError) return 2;
   if (await isSocketPathTooLong(error)) return 2;
+  if (await isSetupError(error, "SetupRefusedError")) return 2;
   const { ERROR_TABLE, isSimlockError } = await import("../contract/index.js");
   if (isSimlockError(error)) return ERROR_TABLE[error.code].cliExitCode;
   return 1;

@@ -1,7 +1,19 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
-import { expect, NAV, NAV_LABELS, openFromNav, settled, signIn, test } from "./fixtures.js";
+import {
+  expect,
+  NAV,
+  NAV_GROUPS,
+  NAV_LABELS,
+  openFromNav,
+  settled,
+  signIn,
+  startHostWithLease,
+  test,
+  withActionSurfaces,
+} from "./fixtures.js";
+import { addInboxItems, endingItem, waitingItem } from "./inbox-stub.js";
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -22,16 +34,46 @@ test.describe("the shell", () => {
 
     await signIn(page, daemon.tokens.operator);
     const nav = page.getByRole("navigation", { name: "Console" });
-    await expect(nav.getByRole("link", { name: "Workers" })).toBeHidden();
+    await expect(nav.getByRole("link", { name: "Fleet" })).toBeHidden();
     for (const label of NAV_LABELS) {
       await openFromNav(page, label);
       await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
-      await expect(nav.getByRole("link", { name: "Workers" })).toBeHidden();
+      await expect(nav.getByRole("link", { name: "Fleet" })).toBeHidden();
       expect(await hasHorizontalScroll(page)).toBe(false);
     }
     await page.goto("/no-such-page");
     await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
     expect(await hasHorizontalScroll(page)).toBe(false);
+  });
+
+  test("the sidebar's Inbox count reads only /v1/inbox on every page, and the Inbox page reads no leases, tokens or requests", async ({
+    daemon,
+    page,
+  }) => {
+    const asked = new Map<string, number>();
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      if (pathname.startsWith("/v1/")) asked.set(pathname, (asked.get(pathname) ?? 0) + 1);
+    });
+    await page.goto("/usage");
+    await signIn(page, daemon.tokens.operator);
+    await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
+    await expect.poll(() => asked.get("/v1/inbox")).toBe(1);
+
+    // why: the sign-in check and the token check at start each read /v1/workers outside the query
+    // layer, so two are allowed.
+    expect(asked.get("/v1/workers") ?? 0).toBeLessThanOrEqual(2);
+    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
+      expect(asked.get(path) ?? 0, path).toBe(0);
+    }
+
+    // why: the Inbox page reads the items and the worker list, and the page is drawn once both are in,
+    // so a read of leases, tokens or requests would have been asked by then.
+    await page.getByRole("link", { name: /^Inbox/ }).click();
+    await expect(page.getByText("Nothing needs you.")).toBeVisible();
+    for (const path of ["/v1/leases", "/v1/tokens", "/v1/lease-requests"]) {
+      expect(asked.get(path) ?? 0, path).toBe(0);
+    }
   });
 
   test("every control in the shell is reachable and usable with the keyboard alone", async ({
@@ -47,6 +89,8 @@ test.describe("the shell", () => {
     };
     await page.setViewportSize({ height: 900, width: 1440 });
     await page.goto("/");
+    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByLabel("Operator token")).toBeEnabled();
 
     await page.keyboard.press(tab);
     await expect(page.getByLabel("Operator token")).toBeFocused();
@@ -76,7 +120,13 @@ test.describe("the shell", () => {
         ),
       );
     }
-    expect(controls).toEqual(["Skip to content", ...NAV_LABELS, "Sign out", "Collapse sidebar"]);
+    expect(controls).toEqual([
+      "Skip to content",
+      "Search or jump to…",
+      ...NAV_LABELS,
+      "Sign out",
+      "Collapse sidebar",
+    ]);
     expect(visited).toEqual(controls);
 
     // why: focus is on the sidebar toggle; walk back past Sign out to the last page link, then open
@@ -90,7 +140,7 @@ test.describe("the shell", () => {
       await expect(page.getByRole("heading", { level: 1, name: entry.label })).toBeVisible();
     }
 
-    await page.keyboard.press(back);
+    await pressTimes(back, 2);
     await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toBeFocused();
@@ -98,6 +148,57 @@ test.describe("the shell", () => {
     await page.getByRole("button", { name: "Sign out" }).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByLabel("Operator token")).toBeVisible();
+  });
+
+  test("the sidebar shows Overview and Inbox, then the Operate group, then the Observe group, each with its label", async ({
+    daemon,
+    page,
+  }) => {
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await page.goto("/");
+    await signIn(page, daemon.tokens.operator);
+    const nav = page.getByRole("navigation", { name: "Console" });
+    await expect(nav.getByRole("link")).toHaveText([...NAV_LABELS]);
+    expect(NAV.map((entry) => `${entry.label} ${entry.path}`)).toEqual([
+      "Overview /",
+      "Inbox /inbox",
+      "Fleet /fleet",
+      "Leases /leases",
+      "Queue /queue",
+      "Activity /activity",
+      "Usage /usage",
+    ]);
+
+    await expect(nav.getByRole("group")).toHaveCount(NAV_GROUPS.length);
+    for (const group of NAV_GROUPS) {
+      const section = nav.getByRole("group", { name: group.label });
+      await expect(nav.getByText(group.label, { exact: true })).toBeVisible();
+      await expect(section.getByRole("link")).toHaveText([...group.links]);
+    }
+    await expect(nav.getByRole("link", { name: "Overview" })).toHaveCount(1);
+    await expect(nav.getByRole("group").getByRole("link", { name: "Inbox" })).toHaveCount(0);
+  });
+
+  test("/fleet, /queue and /activity open the pages titled Fleet, Queue and Activity; /workers, /waiting and /events show Not found", async ({
+    daemon,
+    page,
+  }) => {
+    const heading = page.getByRole("heading", { level: 1 });
+    await page.goto("/");
+    await signIn(page, daemon.tokens.operator);
+    await expect(heading).toHaveText("Overview");
+    for (const [path, title] of [
+      ["/fleet", "Fleet"],
+      ["/queue", "Queue"],
+      ["/activity", "Activity"],
+    ] as const) {
+      await page.goto(path);
+      await expect(heading).toHaveText(title);
+    }
+    for (const path of ["/workers", "/waiting", "/events"]) {
+      await page.goto(path);
+      await expect(heading).toHaveText("Page not found");
+    }
   });
 
   test("the sidebar collapses to icons on request, keeps every link's name, and stays collapsed on every page and after a reload", async ({
@@ -108,12 +209,12 @@ test.describe("the shell", () => {
     await page.goto("/");
     await signIn(page, daemon.tokens.operator);
     const nav = page.getByRole("navigation", { name: "Console" });
-    const label = nav.getByText("Workers", { exact: true });
+    const label = nav.getByText("Fleet", { exact: true });
     await expect(label).toBeVisible();
 
     await nav.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect(label).toBeHidden();
-    await expect(nav.getByRole("link", { name: "Workers" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Fleet" })).toBeVisible();
     await expect(nav.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
       "aria-expanded",
       "false",
@@ -162,7 +263,7 @@ test.describe("the shell", () => {
   });
 
   for (const colorScheme of ["light", "dark"] as const) {
-    test(`the shell passes an automated WCAG AA contrast check in both themes (${colorScheme})`, async ({
+    test(`the shell, and Overview and Inbox empty and busy, pass an automated WCAG AA contrast check (${colorScheme})`, async ({
       daemon,
       page,
     }) => {
@@ -188,6 +289,52 @@ test.describe("the shell", () => {
       await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
       expect(await audit()).toEqual([]);
+
+      await page.goto("/inbox");
+      await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+      await expect(page.getByText("Nothing needs you.")).toBeVisible();
+      expect(await audit()).toEqual([]);
+
+      // why: a request that has waited two minutes and a lease about to end fill the Inbox's groups
+      // and the Overview's panel; neither can be had quickly from a real daemon, so both are stubbed.
+      await addInboxItems(page, () => [
+        waitingItem("req_busy", 125_000),
+        endingItem("lse_busy", 60_000, { holder: "tok_busy", model: "dev_busy" }),
+      ]);
+      await page.goto("/inbox");
+      await expect(page.getByRole("region", { name: "Needs a look" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Heads-up" })).toBeVisible();
+      expect(await audit()).toEqual([]);
+
+      await page.goto("/");
+      await expect(page.getByRole("region", { name: "Needs you" })).toBeVisible();
+      expect(await audit()).toEqual([]);
+    });
+  }
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`the console passes an automated WCAG AA check with a menu, a dialog and a toast open (${colorScheme})`, async ({
+      page,
+    }) => {
+      const host = await startHostWithLease();
+      try {
+        await page.emulateMedia({ colorScheme });
+        await withActionSurfaces(page, host, async (surface) => {
+          const results = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
+          expect(
+            results.violations.map((violation) => ({
+              id: violation.id,
+              targets: violation.nodes.map((node) => node.target.join(" ")),
+            })),
+            surface,
+          ).toEqual([]);
+        });
+      } finally {
+        await host.dispose();
+      }
     });
   }
 });

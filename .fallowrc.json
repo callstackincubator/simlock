@@ -3,7 +3,7 @@
   "$schema": "./node_modules/fallow/schema.json",
   // e2e/*.test.ts files are vitest entry points (not reached by static import from any
   // other source file), and e2e/fake-driver/index.ts is loaded dynamically by the
-  // daemon via SIMLOCK_DRIVERS_MODULE (see docs/CLI.md) -- neither is visible to
+  // daemon via SIMLOCK_DRIVERS_MODULE (see the CLI reference) -- neither is visible to
   // fallow's static reachability graph without being declared explicitly.
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
   // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.
@@ -16,12 +16,17 @@
   // captured file, the way the .agents scripts are.
   // src/core/usage/read-thread.ts is the entry of the usage read thread, loaded by path from
   // src/core/usage/index.ts (a worker thread, not an import).
+  // src/updater/main.ts is the entry of the detached updater process (node runs it by path, from dist/).
+  // src/daemon/openapi.ts is read only by scripts/openapi.mjs, from the compiled dist/, so no import
+  // reaches it.
   // website/ is its own package (its own package.json, lockfile and pnpm root), built by Astro
   // and deployed to GitHub Pages; nothing in the product imports it.
   "ignorePatterns": ["website/**"],
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
+    "src/updater/main.ts",
+    "src/daemon/openapi.ts",
     "src/core/usage/read-thread.ts",
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
@@ -48,10 +53,14 @@
     "@fontsource-variable/geist",
     "@fontsource-variable/geist-mono",
     "recharts",
+    "@base-ui/react",
+    "@tanstack/react-query",
     "@tanstack/react-table",
     "@tanstack/react-virtual",
     // Recharts' peer dependency: installed for it, never imported by the console itself.
-    "react-is"
+    "react-is",
+    // The update e2e (e2e/update/update.e2e.test.ts) runs its binary as a local npm registry.
+    "verdaccio"
   ],
   "ignoreDependencyOverrides": [
     // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.

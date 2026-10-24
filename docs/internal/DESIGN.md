@@ -30,8 +30,8 @@ Simlock's accent is orange where Apex's is green.
   | `--text-xs` | 12px | labels, units, a row's second line, a link's count |
   | `--text-sm` | 14px | links in the sidebar, buttons, table cells, facts |
   | `--text-md` | 16px | body text, page subtitles, card and panel titles |
-  | `--text-lg` | 20px | a list's title, an inspector title that is an id |
-  | `--text-xl` | 28px | a page's and an inspector's title, a tile's number |
+  | `--text-lg` | 20px | a drawer's title                                 |
+  | `--text-xl` | 28px | a page's title, a tile's number                    |
   | `--text-2xl` | 32px | a lease's countdown |
 
 - Weights: 400 for text, 500 for labels and big numbers, 600 for titles, 700
@@ -95,12 +95,12 @@ one. Use the daemon's own word for the state (`leased`, `quarantined`,
 square of its colour, then the word in `--text` (`Status` in
 `ui/src/ds/status.tsx`). In a list row, where there is room for the square
 alone (`StatusDot`), the word is the square's accessible name and its tooltip,
-and the chosen row's inspector shows it in full. A worker's square shows the
+and the row's drawer shows it in full. A worker's square shows the
 worst of what is wrong with it: red for a lost or failed worker, amber for a
 drained or starting one, one over its RAM budget, or a load figure past its
 threshold, green otherwise (`workerHealth` in `ui/src/model/fleet.ts`). A word
 the console does not know, from a newer daemon, shows as itself in
-`--status-idle`. A count, such as the one on the Attention link, is a number,
+`--status-idle`. A count, such as the one on the Inbox link, is a number,
 not a status: it has neither a status colour nor the accent.
 
 Every pair of text and background colour in both themes meets WCAG AA: 4.5:1
@@ -133,11 +133,12 @@ put together from them and draws nothing of its own that one of them already dra
 
 - **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
   wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
-  Workers, Leases, Waiting, Attention, Events, Usage), then at the bottom the connection as a status,
+  Inbox, then the **Operate** group: Fleet, Leases, Queue; then the **Observe** group:
+  Activity, Usage; each group under its small label, hidden when collapsed), then at the bottom the connection as a status,
   "Signed in as <name>" (hidden when collapsed, where the Sign out tooltip reads "Sign out (<name>)"),
   **Sign out** (absent for a proxy person with no sign-out address) and the collapse button. A link is an icon and its label in `--text-muted`; the
   current one is `--text` on `--field` with a 2px `--accent` bar on its left and
-  `aria-current="page"`. Attention carries its count in a small bordered box, and none at zero.
+  `aria-current="page"`. Inbox carries its count of problems (not heads-ups) in a small bordered box, and none at zero.
   Collapsed, the sidebar is 64px wide: the labels go, every icon sits on its centre line, each
   link keeps its name (and a tooltip), the wordmark becomes "S" and the connection its square.
   Only the operator collapses or widens it, with the button at its bottom; the browser keeps the
@@ -146,15 +147,42 @@ put together from them and draws nothing of its own that one of them already dra
   opens the links and the bottom block under it.
 - **Page.** A page that is not a list, as the overview: its title (`h1`) and its actions on the
   right, then its content. No subtitle: the title and what is under it say what the page is.
-- **List and inspector.** Every page of things (workers, leases, waiting requests, attention
-  items, events) is a list on the left, 260–360px wide (wider for events), and the chosen thing in
-  an inspector filling the rest. The list has a header (the page's title as `h1`, a short count
-  in mono beside it, then its filters), its rows, and the pager under them. A row is one or two
-  short lines: a status square, a title, one figure on the right, and at most one muted line or
-  bar under them; the chosen row is `--surface` with a 2px `--accent` bar on its left and
-  `aria-current="page"`. The address names the chosen thing (`/workers/<id>`). The inspector
-  has a breadcrumb, the thing's title (`h2`), one muted line under it, actions on the right, and
-  then cards, facts, tabs and panels.
+- **Grouped list and drawer.** Inbox is a page of panels, one per group (Broken, Needs a look,
+  Heads-up, in that order; a group with no item is left out), under a toolbar of filter chips (All,
+  then each group). A row is a status square, the condition's word and a muted mono line saying what
+  it is about; the row is a link to `/inbox/<key>`, which opens a drawer. The drawer has a box
+  saying what happened, then the facts, one button to the page of what the item is about, and the
+  last hour's events about it. The address of a key holding a `.` ends in `/`, so a reload finds the
+  console's page.
+- **Table and drawer.** Leases, Fleet and Queue are each a table (Leases and Fleet under a toolbar: the filter
+  chips on the left, a search box on the right, at the page title's padding). Activity has the same toolbar over
+  an event feed that scrolls inside itself; Queue has no toolbar, only the Wait p95 tile above its table. Leases' filters are its own; Fleet's are
+  All, Issues and Busy over workers, and a row opens the worker's own page (a title, a state
+  line, a banner when the worker is disconnected or drained, cards, then tabs), on which a
+  device row opens the drawer. Choosing a lease, a device, a request or an event opens a **drawer**: a 480px
+  panel (full width under 768px) at the right edge over the page, with a dim layer over everything
+  else, the sidebar included. It has a title (a lease's holder, a device's model and runtime, a request's requester, an event's name), a 40px square close button
+  (`IconButton`) and, for a lease or a device, tabs: a device's are Details and Screen, a lease's Details and Events. Escape, the close button and the dim layer close it. It slides in once, when it opens,
+  and switching its tabs does not replay that. A lease's drawer uses no status colour of its own;
+  a device's shows the device's state as a status, word and square.
+- **Menu.** A table row ends in a **⋯** `IconButton` that opens a small list; a right-click on the
+  row opens the same list, and a drawer or page header shows its item's first safe action as a
+  secondary button beside its own **⋯**, and that list does not repeat the button's action. An entry is 36px tall with `--text`; the highlighted one
+  takes `--surface` and the focus ring inside its edge. Dangerous entries come last, after a 1px
+  `--border` line, in `--status-error`, never `--accent`. A disabled entry is `--text-muted`. A
+  list with no entry draws no **⋯**. Arrow keys move, Escape closes. It floats above drawers and
+  toasts.
+- **Dialog.** A confirmation is a modal alert dialog (`ConfirmHost`): a title that asks the
+  question, one or two sentences, and two buttons, the keeping one first ("Keep") and the action
+  second, named by its verb ("Release lease"). While it runs the action button is disabled and reads
+  its progress ("Releasing…"). A dialog that asks for a typed name keeps the action disabled until
+  the text equals it.
+- **Toast.** At the bottom right, newest at the bottom, at most three (older ones wait hidden), each
+  a title, an optional line and an optional action button, and a **Close** button beside the text,
+  never over it. A success toast
+  leaves after 6 seconds, paused while hovered or focused. An error toast has a `--status-error`
+  edge and title, stays until closed and is announced at once (`role="alert"`); the rest are
+  announced politely. A toast moves in once, when it appears.
 - **Stat tiles.** A row of tiles: a label, a big number (`--text-xl`), and a short unit in mono
   beside it ("of 48", "last hour"). A tile that leads somewhere is a link as a whole. A tile
   shows only numbers its page already has; it never makes a request of its own.
@@ -197,6 +225,14 @@ put together from them and draws nothing of its own that one of them already dra
 - **Long ids** (a lease's, a worker's, a device's) stay on one line, cut with
   an ellipsis. The whole id is in the element's `title`, in the text a copy or
   a screen reader reads, and on the details page.
+- **Search.** A dialog near the top of the page over a dim layer (`--bg`, 1px `--border-strong`),
+  36rem wide at most: a box, then the results in groups, each group an uppercase label in
+  `--text-muted` over its rows. The highlighted row is `--field` with the same 2px `--accent`
+  inset edge as the current page in the sidebar; orange marks interaction only. A group still
+  loading, or one that failed, shows one `--text-muted` line in place of rows. The box is a
+  combobox and the list a listbox, and the highlight is the active descendant; it is kept by the
+  result's id, not its place, so a group that fills in above never moves it. It sits under the
+  confirm dialog, so an action's confirm opens over it.
 - **Buttons.** Primary: filled `--accent` with `--on-accent` text. Secondary:
   outlined in `--border-strong`, `--text`. Quiet: text only. All are labels.
 - **Inputs.** A `--field` fill and a 1px `--border-strong` border. A select is
@@ -209,7 +245,7 @@ put together from them and draws nothing of its own that one of them already dra
   `--accent`, an area with a faint fill of it (8%), horizontal grid lines in
   `--border`, axis labels in Geist Mono `--text-muted`. Every colour comes from
   the stylesheet by class. Nothing moves: animation is off. Every chart has a
-  title saying what it counts, its numbers as a line of text under it, and every bucket as a table behind a disclosure named by the bucket width ("Minute by minute", "Every 5 minutes", "Hour by hour"), so
+  title saying what it counts, its numbers as a line of text under it, and every bucket in a table only a screen reader reads, so
   nothing is visible only in the picture. A chart can be focused, and the
   arrow keys step through it. Its focus ring goes round the whole chart, for
   keyboard focus only: a click on a chart draws none.
@@ -227,8 +263,7 @@ put together from them and draws nothing of its own that one of them already dra
 ## Layout
 
 - Phone first. Every page works at 360px wide with no sideways scrolling of the page. Under 768px
-  the sidebar is a bar on top with a menu, and a list page shows its list until something is
-  chosen and the inspector after (the address says which). Under 768px a table's rows stack into
+  the sidebar is a bar on top with a menu. Under 768px a table's rows stack into
   blocks, each cell a line with its column's name beside it (`data-label`). A wide table, of six
   columns or more, stacks the same way under 1100px. Otherwise a table has a fixed layout: a
   column of numbers is 8rem wide, the others share the rest, and a long cell wraps or, for an id,
@@ -236,7 +271,6 @@ put together from them and draws nothing of its own that one of them already dra
 - Stat tiles fill the row, each at least 170px wide, and wrap.
 - From 1024px a chart and the panel beside it share a row, two thirds and one third; two panels
   of the same weight share it half and half.
-- A list page with nothing in its address shows its first row in the inspector on a wide screen.
 
 ## Focus and keyboard
 
@@ -246,14 +280,15 @@ put together from them and draws nothing of its own that one of them already dra
   for keyboard focus (`:focus-visible`), not on a mouse click.
 - The first control on every signed-in page is "Skip to content", visible only
   when focused.
+- ⌘K and Ctrl+K open the search while the console has focus and no drawer or dialog is open; the
+  browser's own use of the chord is stopped. Closing the search returns focus to where it was.
 
 ## Motion
 
 Short, and only where it says where something came from. Colour changes on hover take 120ms
 (`--duration`). Moves take 220ms (`--duration-move`) on one easing (`--ease`): the sidebar
-widens and narrows; a page rises 10px as it opens; a list slides in from the left and an
-inspector from the right, again each time another thing is chosen; the chosen row's bar and a
-meter or share bar slide to their new place. Nothing loops, nothing moves on its own, and
+widens and narrows; a page rises 10px as it opens; a drawer slides in from the right, once, when it opens; a
+meter or share bar slides to its new place; a toast rises 16px as it appears. Nothing loops, nothing moves on its own, and
 charts never animate. With `prefers-reduced-motion: reduce`, there are no transitions and no
 animations at all.
 

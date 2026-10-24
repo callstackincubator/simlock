@@ -18,6 +18,7 @@ import {
   cleanupAgents,
   freeLoopbackPort,
   makeAgent,
+  makeProfileAgent,
   newAgentToken,
   waitForAgentDevice,
   waitFor,
@@ -189,6 +190,20 @@ function defineSuite(target: Target): void {
       const png = join(dir, "shot.png");
       ok(await a.run(["screenshot", png]));
       expect((await readFile(png)).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      ok(await a.run(["close"]));
+      await waitForFree(env);
+    },
+  );
+
+  it(
+    "an agent with no token in its environment connects with the worker's profile file, opens a device, installs the fixture app as an upload and closes; the lease's owner is the profile token",
+    { timeout: 600_000 },
+    async () => {
+      const a = await makeProfileAgent(env, "profile");
+      ok(await open(a));
+      const leases = await listLeases(env);
+      expect(leases.map((lease) => lease.ownerId)).toEqual([a.tokenId]);
+      ok(await a.run(["install", "Appduct", target.app]));
       ok(await a.run(["close"]));
       await waitForFree(env);
     },

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer, type Socket } from "node:net";
@@ -17,13 +17,21 @@ import {
   FakeClock,
   FakeDaemonLauncher,
   FakeParentWatch,
+  FakeServiceManager,
   IpcError,
+  launcherFor,
+  LaunchdServiceManager,
+  ScriptedProcessRunner,
   MemoryFilesystem,
   MemoryIpcTransport,
+  resolveDaemonSocketPath,
   FakeKeySetFetcher,
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  serviceDefinition,
+  type ServiceManager,
+  type ServiceState,
   type Filesystem,
   type IdGenerator,
   type IpcConnection,
@@ -57,8 +65,9 @@ import type {
   StatusGetOutput,
   TokenListOutput,
 } from "../simlock-client/client.js";
-import { connectSimlockAdmin } from "../admin/index.js";
+import { connectSimlockAdmin, type WorkerView } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
+import type { ToolOutcome } from "../instructions/index.js";
 import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
 import { buildCliEnvironment } from "./environment.js";
 import { readLogFile } from "./log-file.js";
@@ -217,6 +226,201 @@ describe("CLI: exit codes", () => {
     const gatewayOutput = outputCapture();
     await runCli(["--gateway", "--help"], gatewayOutput.environmentWith());
     expect(gatewayOutput.stdout).toBe(output.stdout);
+  });
+
+  it("simlock instructions still prints the text under --gateway or --local on a machine with no gateway, and simlock --help lists it", async () => {
+    const listing = outputCapture();
+    await expect(runCli(["--help"], listing.environmentWith())).resolves.toBe(0);
+    expect(listing.stdout).toContain("  instructions [--json]");
+
+    for (const argv of [
+      ["--gateway", "instructions"],
+      ["instructions", "--gateway"],
+      ["--local", "instructions"],
+      ["instructions"],
+    ]) {
+      const output = outputCapture();
+      await expect(
+        runCli(
+          argv,
+          output.environmentWith({
+            connectAdmin: async () => {
+              throw new Error("instructions must not connect to a daemon");
+            },
+          }),
+        ),
+        argv.join(" "),
+      ).resolves.toBe(0);
+      expect(output.stdout, argv.join(" ")).toMatch(/^# Using Simlock/);
+      expect(output.stderr, argv.join(" ")).toBe("");
+    }
+  });
+
+  it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {
+    const HOME = "/home/operator";
+    const CWD = "/work/project";
+    const SCOPE_PROMPT = "Install only for this project (not every project)? [y/N] ";
+    const exited = (code: number, stderr = ""): ToolOutcome => ({
+      outcome: "exited",
+      code,
+      stderr,
+    });
+    const setupRun = async (
+      argv: readonly string[],
+      options: {
+        readonly outcome?: ToolOutcome;
+        readonly prepare?: (filesystem: MemoryFilesystem) => Promise<void>;
+      } = {},
+    ): Promise<{
+      readonly code: number;
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly questions: string[];
+      readonly filesystem: MemoryFilesystem;
+    }> => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp(HOME);
+      await filesystem.mkdirp(CWD);
+      await filesystem.mkdirp(`${HOME}/.claude`);
+      await options.prepare?.(filesystem);
+      const questions: string[] = [];
+      const output = outputCapture();
+      const code = await runCli(
+        argv,
+        output.environmentWith({
+          homeDirectory: HOME,
+          workingDirectory: CWD,
+          filesystem,
+          confirm: async (question) => {
+            questions.push(question);
+            return false;
+          },
+          runTool: async () => options.outcome ?? exited(0),
+          connectAdmin: async () => {
+            throw new Error("setup must not connect to a daemon");
+          },
+        }),
+      );
+      return { code, stdout: output.stdout, stderr: output.stderr, questions, filesystem };
+    };
+
+    const plain = await setupRun(["setup"]);
+    expect(plain.code).toBe(0);
+    expect(plain.stderr).toBe("");
+    expect(plain.stdout).toBe(
+      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n` +
+        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n`,
+    );
+    expect(plain.questions[0]).toBe(SCOPE_PROMPT);
+
+    const again = await setupRun(["setup", "--tool", "claude-code"], {
+      prepare: async (filesystem) => filesystem.mkdirp(`${HOME}/.claude/skills/simlock`),
+    });
+    expect(again.stdout).toBe(`claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n`);
+
+    for (const [outcome, line] of [
+      [exited(0), "claude-code  mcp    connected\n"],
+      [
+        exited(1, "MCP server simlock already exists in user config\n"),
+        "claude-code  mcp    already\n",
+      ],
+      [{ outcome: "not-found" }, "claude-code  mcp    skipped  (claude not found)\n"],
+    ] as const) {
+      const run = await setupRun(["setup", "--tool", "claude-code", "--mcp"], { outcome });
+      expect(run.code, line).toBe(0);
+      expect(run.stdout, line).toBe(
+        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}`,
+      );
+    }
+
+    const json = await setupRun(["setup", "--tool", "claude-code", "--mcp", "--json"]);
+    expect(json.questions).toEqual([]);
+    expect(JSON.parse(json.stdout)).toEqual({
+      scope: "user",
+      tools: [
+        {
+          tool: "claude-code",
+          skill: { status: "wrote", path: `${HOME}/.claude/skills/simlock` },
+          mcp: { status: "connected" },
+        },
+      ],
+    });
+    const projectJson = await setupRun([
+      "setup",
+      "--project",
+      "--tool",
+      "codex",
+      "--mcp",
+      "--json",
+    ]);
+    expect(JSON.parse(projectJson.stdout)).toEqual({
+      scope: "project",
+      tools: [
+        {
+          tool: "codex",
+          skill: { status: "wrote", path: `${CWD}/.agents/skills/simlock` },
+          mcp: { status: "skipped", reason: "codex mcp add has no project scope" },
+        },
+      ],
+    });
+
+    const failed = await setupRun(["setup", "--tool", "claude-code", "--mcp"], {
+      outcome: exited(1, "boom\nmore"),
+    });
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toBe(
+      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n`,
+    );
+    expect(JSON.parse(failed.stderr)).toEqual({
+      error: { code: "SETUP_MCP_FAILED", message: "MCP not connected for claude-code: boom" },
+    });
+
+    const refused = await setupRun(["setup"], {
+      prepare: async (filesystem) => {
+        await filesystem.mkdirp(`${HOME}/.claude/skills`);
+        await filesystem.writeFileAtomic(`${HOME}/.claude/skills/simlock`, "mine");
+      },
+    });
+    expect(refused.code).toBe(2);
+    expect(refused.stdout).toBe("");
+    expect(JSON.parse(refused.stderr)).toEqual({
+      error: {
+        code: "SETUP_REFUSED",
+        message: `Refusing to install: ${HOME}/.claude/skills/simlock exists and is not a directory. Nothing was written. Move it aside and run setup again.`,
+      },
+    });
+
+    for (const argv of [
+      ["setup", "--tool", "cursor"],
+      ["setup", "--tool", "codex", "--tool", "claude-code"],
+      ["setup", "extra"],
+      ["setup", "--mcp", "--no-mcp"],
+      ["setup", "--user", "--project"],
+    ]) {
+      const refusedUsage = await setupRun(argv);
+      expect(refusedUsage.code, argv.join(" ")).toBe(2);
+      expect(refusedUsage.stdout, argv.join(" ")).toBe("");
+      expect(JSON.parse(refusedUsage.stderr).error.code, argv.join(" ")).toBe("USAGE");
+      expect(await refusedUsage.filesystem.exists(`${HOME}/.claude/skills`), argv.join(" ")).toBe(
+        false,
+      );
+    }
+
+    for (const argv of [
+      ["--gateway", "setup", "--json"],
+      ["--local", "setup", "--json"],
+    ]) {
+      const run = await setupRun(argv);
+      expect(run.code, argv.join(" ")).toBe(0);
+    }
+    const help = await setupRun(["setup", "--help"]);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toBe(
+      "Usage: simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]\n",
+    );
+    const listing = outputCapture();
+    await runCli(["--help"], listing.environmentWith());
+    expect(listing.stdout).toContain("  setup [--user | --project]");
   });
 
   it("prints shell export lines instead of the JSON grant under --export-env", async () => {
@@ -411,7 +615,14 @@ describe("CLI: exit codes", () => {
   describe("remote passthrough (ADR 0005 device.exec)", () => {
     const gatewayStatus = {
       ...EMPTY_STATUS,
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
     };
     const ownLease = {
       deviceId: "dev_1",
@@ -475,7 +686,7 @@ describe("CLI: exit codes", () => {
     });
 
     it("names the lease from the requester id rather than from a flag of its own", async () => {
-      // why: Every argument after the tool name belongs to the tool (docs/CLI.md), so identity is
+      // why: Every argument after the tool name belongs to the tool, so identity is
       // the only thing left to select a lease with -- and `--agent-id`/`SIMLOCK_AGENT_ID`
       // already is that identity. A requester holding no lease is a usage error naming it.
       const output = outputCapture();
@@ -655,7 +866,7 @@ describe("CLI: exit codes", () => {
 
     it("spawns locally against a worker, accepting and ignoring --lease", async () => {
       // why: The other half of the same switch, and the reason `--lease` is accepted on both: one
-      // command line has to work against either kind of daemon (docs/CLI.md). A worker takes
+      // command line has to work against either kind of daemon. A worker takes
       // the flag, drops it, and passes the rest to the tool untouched.
       const output = outputCapture();
       const ran: unknown[] = [];
@@ -950,7 +1161,7 @@ describe("CLI: exit codes", () => {
     expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
   });
 
-  // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
+  // why: the CLI reference promises a missing required argument ends with the `simlock --help`
   // pointer, and guards reach it two ways -- an explicit `withHelpHint` call or
   // `requiredPositional` -- either of which can be dropped silently, so a sample of both
   // paths (a command guard and the router's unknown command) is pinned here.
@@ -1178,6 +1389,9 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1210,6 +1424,9 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
     expect(exitCode).toBe(1);
@@ -1240,6 +1457,9 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1282,6 +1502,9 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
         });
       }),
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     };
     return { clock, ports };
   }
@@ -1398,6 +1621,9 @@ describe("CLI: auto-launch's failed start (#672)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
@@ -1444,6 +1670,9 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1483,6 +1712,9 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       ipc: new MemoryIpcTransport(),
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1543,6 +1775,9 @@ describe("CLI: auto-launch's daemon that lost the socket to another daemon (#760
       ipc: ipcTransport,
       launcher,
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
     const exitCode = runCli(["status"], output.environmentWith()).then((code) => {
@@ -1585,6 +1820,9 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         ipc: dyingDaemon,
         launcher,
         daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+        homeDirectory: "/home/operator",
+        workingDirectory: "/work/project",
+        runTool: async () => ({ outcome: "not-found" }),
       });
       let settled = false;
       const exitCode = runCli(
@@ -1743,10 +1981,19 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       const launcher = new FakeDaemonLauncher(() => {
         launched = true;
       });
+      let probeSent = false;
       const ipc: IpcConnector = {
         connect: async () => {
           if (!launched) throw new IpcError("endpoint-not-found", "not yet", undefined);
-          return real.connect(socketPath);
+          const connection = await real.connect(socketPath);
+          const write = connection.write.bind(connection);
+          connection.write = async (contents) => {
+            await write(contents);
+            if ((JSON.parse(contents.trim()) as { type: string }).type === "status.get") {
+              probeSent = true;
+            }
+          };
+          return connection;
         },
       };
       const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
@@ -1762,6 +2009,9 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(hellos).toBe(1);
+      // why: the server observing hello does not mean the client has read its reply and armed
+      // the probe deadline; advance the fake clock only after the client sends that probe.
+      await expect.poll(() => probeSent).toBe(true);
       clock.advance(20_000);
       await expect.poll(() => settled, { timeout: 2_000 }).toBe(true);
       expect(await run).toBe(1);
@@ -1771,6 +2021,75 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     } finally {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("exits 1 for a socket closed before hello and reports DAEMON_STARTUP_FAILED only after launch", async () => {
+    for (const scenario of [
+      { launch: false, afterExit: false, code: "DAEMON_CONNECTION_LOST", connects: 1 },
+      { launch: true, afterExit: false, code: "DAEMON_STARTUP_FAILED", connects: 2 },
+      { launch: true, afterExit: true, code: "DAEMON_STARTUP_FAILED", connects: 3 },
+    ]) {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-closed-"));
+      temporaryDirectories.push(directory);
+      const socketPath = join(directory, "daemon.sock");
+      let accepted = 0;
+      // why: the daemon that refuses its history accepts the CLI's connection, then stops and
+      // closes it; the CLI is still reading `admin.token` then, so the close lands before `hello`.
+      const server = createServer((socket) => {
+        accepted += 1;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const real = new NodeIpcTransport();
+        let launched = !scenario.launch;
+        const clock = new FakeClock(0);
+        const launcher = new FakeDaemonLauncher(
+          () => {
+            launched = true;
+          },
+          { exit: { code: 1, signal: null } },
+        );
+        let connects = 0;
+        const ipc: IpcConnector = {
+          connect: async () => {
+            connects += 1;
+            if (!launched || (scenario.afterExit && connects === 2)) {
+              throw new IpcError("endpoint-not-found", "not yet", undefined);
+            }
+            const connection = await real.connect(socketPath);
+            await expect.poll(() => connection.closed).toBe(true);
+            return connection;
+          },
+        };
+        const output = outputCapture({ ...realCliEnvironmentPorts(), ipc, clock, launcher });
+        let settled = false;
+        const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+          (code) => {
+            settled = true;
+            return code;
+          },
+        );
+        for (let tick = 0; tick < 100 && !settled; tick += 1) {
+          clock.advance(50);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(launcher.launches).toBe(scenario.launch ? 1 : 0);
+        expect(accepted).toBe(1);
+        expect(connects).toBe(scenario.connects);
+        expect(
+          settled,
+          `simlock daemon start still had not settled at ${String(clock.now())}ms`,
+        ).toBe(true);
+        expect(await run).toBe(1);
+        expect(output.stdout).toBe("");
+        expect(JSON.parse(output.stderr.trim().split("\n").at(-1)!)).toMatchObject({
+          error: { code: scenario.code },
+        });
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     }
   });
 
@@ -1891,6 +2210,46 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
   });
 });
 
+async function runDaemonStatus(
+  testCase: {
+    readonly role: "worker" | "gateway";
+    readonly running: boolean;
+    readonly state: ServiceState | undefined;
+  },
+  json: boolean,
+): Promise<{ readonly stdout: string }> {
+  const home = "/Users/me";
+  const output = outputCapture();
+  const manager =
+    testCase.state === undefined ? undefined : new FakeServiceManager({ state: testCase.state });
+  const environment = output.environmentWith({
+    daemonHome: { role: testCase.role, dataDirectory: "/simlock", gatewayPresent: false },
+    connectExistingAdmin: async () => {
+      if (!testCase.running) throw new Error("connect ECONNREFUSED");
+      return fakeClient();
+    },
+    service: {
+      manager,
+      platform: manager === undefined ? "linux" : "darwin",
+      user: () => "me",
+      definition: async () =>
+        serviceDefinition({
+          role: testCase.role,
+          root: `${home}/.simlock`,
+          dataDirectory: "/simlock",
+          home,
+          nodePath: "/Users/me/.nvm/versions/node/v22.13.0/bin/node",
+          mainPath: "/Users/me/simlock/dist/daemon/main.js",
+          env: {},
+        }),
+    },
+  });
+  await expect(
+    runCli(["daemon", "status", ...(json ? ["--json"] : [])], environment),
+  ).resolves.toBe(0);
+  return output;
+}
+
 describe("CLI: daemon status (ADR 0003 §11)", () => {
   it.each([
     { name: "the socket cannot be reached at all", error: () => new Error("connect ECONNREFUSED") },
@@ -1959,6 +2318,144 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
   });
 
+  it("daemon status prints the Service: line and the service field in --json, for a worker or a gateway, running or stopped, and none on an unsupported platform", async () => {
+    const home = "/Users/me";
+    const node = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const main = "/Users/me/simlock/dist/daemon/main.js";
+    const worker = "com.callstack.simlock.worker";
+    const gateway = "com.callstack.simlock.gateway";
+    const plist = (name: string) => `${home}/Library/LaunchAgents/${name}.plist`;
+    const cases: readonly {
+      readonly label: string;
+      readonly role: "worker" | "gateway";
+      readonly running: boolean;
+      readonly state: ServiceState | undefined;
+      readonly line: string | undefined;
+      readonly service: Record<string, unknown> | undefined;
+    }[] = [
+      {
+        label: "not installed, stopped",
+        role: "worker",
+        running: false,
+        state: { state: "not-installed" },
+        line: "Service: not installed",
+        service: { state: "not-installed", manager: "launchd", name: worker },
+      },
+      {
+        label: "installed, running",
+        role: "worker",
+        running: true,
+        state: { state: "installed", path: plist(worker) },
+        line: `Service: installed (launchd, ${worker})`,
+        service: { state: "installed", manager: "launchd", name: worker, path: plist(worker) },
+      },
+      {
+        label: "not loaded, running",
+        role: "worker",
+        running: true,
+        state: { state: "not-loaded", path: plist(worker) },
+        line: `Service: not loaded (launchd, ${worker}): commands start the daemon without it`,
+        service: { state: "not-loaded", manager: "launchd", name: worker, path: plist(worker) },
+      },
+      {
+        label: "Node path gone, stopped",
+        role: "worker",
+        running: false,
+        state: { state: "broken", path: plist(worker), missing: [node] },
+        line: `Service: broken (launchd, ${worker}): ${node} is gone; run simlock daemon install`,
+        service: {
+          state: "broken",
+          manager: "launchd",
+          name: worker,
+          path: plist(worker),
+          missing: [node],
+        },
+      },
+      {
+        label: "both paths gone, stopped",
+        role: "worker",
+        running: false,
+        state: { state: "broken", path: plist(worker), missing: [node, main] },
+        line: `Service: broken (launchd, ${worker}): ${node}, ${main} are gone; run simlock daemon install`,
+        service: {
+          state: "broken",
+          manager: "launchd",
+          name: worker,
+          path: plist(worker),
+          missing: [node, main],
+        },
+      },
+      {
+        label: "gateway, running",
+        role: "gateway",
+        running: true,
+        state: { state: "installed", path: plist(gateway) },
+        line: `Service: installed (launchd, ${gateway})`,
+        service: { state: "installed", manager: "launchd", name: gateway, path: plist(gateway) },
+      },
+      {
+        label: "unsupported platform",
+        role: "worker",
+        running: true,
+        state: undefined,
+        line: undefined,
+        service: undefined,
+      },
+    ];
+    for (const testCase of cases) {
+      const human = await runDaemonStatus(testCase, false);
+      const lines = human.stdout.trimEnd().split("\n");
+      expect(
+        [lines[0], ...lines.filter((line) => line.startsWith("Service:"))],
+        testCase.label,
+      ).toEqual([
+        testCase.running ? "Daemon: running (worker)" : "Daemon stopped",
+        ...(testCase.line === undefined ? [] : [testCase.line]),
+      ]);
+      if (testCase.line !== undefined)
+        expect(lines.at(-1), `${testCase.label} last line`).toBe(testCase.line);
+      const json = JSON.parse((await runDaemonStatus(testCase, true)).stdout) as {
+        readonly service?: unknown;
+      };
+      expect(json.service, `${testCase.label} --json`).toEqual(testCase.service);
+    }
+  });
+
+  it("daemon status fails with the service manager's error instead of printing Daemon stopped", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+      connectExistingAdmin: async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+      service: {
+        manager: {
+          manager: "launchd",
+          state: async () => {
+            throw new Error("launchctl timed out");
+          },
+        } as unknown as ServiceManager,
+        platform: "darwin",
+        user: () => "me",
+        definition: async () =>
+          serviceDefinition({
+            role: "worker",
+            root: "/Users/me/.simlock",
+            dataDirectory: "/simlock",
+            home: "/Users/me",
+            nodePath: "/n",
+            mainPath: "/m.js",
+            env: {},
+          }),
+      },
+    });
+
+    await expect(runCli(["daemon", "status"], environment)).resolves.not.toBe(0);
+
+    expect(output.stdout).not.toContain("Daemon stopped");
+    expect(output.stderr).toContain("launchctl timed out");
+  });
+
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
@@ -2018,6 +2515,47 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       "Missing [ios] xcode: Xcode is not installed. Run `xcode-select`.",
     ]);
     expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
+  it("simlock doctor prints a service-broken finding to stderr, naming each missing path, and keeps the finding in the JSON report", async () => {
+    const node = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const main = "/Users/me/simlock/dist/daemon/main.js";
+    for (const testCase of [
+      {
+        missing: [node],
+        line: `Service broken: com.callstack.simlock.worker (launchd) names missing ${node}. Run \`simlock daemon install\` again.`,
+      },
+      {
+        missing: [node, main],
+        line: `Service broken: com.callstack.simlock.worker (launchd) names missing ${node}, ${main}. Run \`simlock daemon install\` again.`,
+      },
+    ]) {
+      const output = outputCapture();
+      const findings = [
+        {
+          kind: "service-broken" as const,
+          manager: "launchd" as const,
+          name: "com.callstack.simlock.worker",
+          missing: testCase.missing,
+          remedy: "Run `simlock daemon install` again.",
+        },
+      ];
+
+      await expect(
+        runCli(
+          ["doctor"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(output.stderr.split("\n").filter((line) => line.startsWith("Service broken"))).toEqual(
+        [testCase.line],
+      );
+      expect(JSON.parse(output.stdout)).toEqual({ findings });
+    }
   });
 
   it("simlock doctor prints a driver-advisory finding to stderr as `Warning [<platform>] <code>: <message>`", async () => {
@@ -2579,22 +3117,28 @@ describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
 });
 
 describe("CLI: config set validates with the real config loader (ADR 0003 §11, B9)", () => {
-  it("rejects an unknown config key instead of silently dropping it", async () => {
-    const output = outputCapture(realCliEnvironmentPorts());
-    let wrote = false;
-    const exitCode = await runCli(
-      ["config", "set", "capacty.limits.ios.maxDevices", "2"],
-      output.environmentWith({
-        readConfigFile: async () => ({}),
-        writeConfigFile: async () => {
-          wrote = true;
-        },
-      }),
-    );
-    expect(exitCode).toBe(2);
-    expect(wrote).toBe(false);
-    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
-  });
+  it.each([
+    ["an unknown key", "capacty.limits.ios.maxDevices", "2"],
+    ["a key missing the Ms suffix", "lease.defaultTtl", "60000"],
+  ])(
+    "rejects %s instead of silently dropping it or validating clean",
+    async (_name, key, value) => {
+      const output = outputCapture(realCliEnvironmentPorts());
+      let wrote = false;
+      const exitCode = await runCli(
+        ["config", "set", key, value],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {
+            wrote = true;
+          },
+        }),
+      );
+      expect(exitCode).toBe(2);
+      expect(wrote).toBe(false);
+      expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+    },
+  );
 
   it("--gateway config set validates against the gateway's rules, not the worker's", async () => {
     const gatewayHome = {
@@ -2640,20 +3184,91 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(output.stderr).toContain("http.enabled");
   });
 
-  it("rejects a mistyped key (missing the Ms suffix) instead of validating clean", async () => {
-    const output = outputCapture(realCliEnvironmentPorts());
-    let wrote = false;
-    const exitCode = await runCli(
-      ["config", "set", "lease.defaultTtl", "60000"],
-      output.environmentWith({
-        readConfigFile: async () => ({}),
-        writeConfigFile: async () => {
-          wrote = true;
-        },
-      }),
+  describe("a joined worker's own HTTP listener (#811)", () => {
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    const homeWithGateway = {
+      role: "worker",
+      dataDirectory: "/simlock",
+      gatewayPresent: true,
+    } as const;
+
+    async function workerFiles(contents: unknown) {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/simlock");
+      await filesystem.writeFileAtomic("/simlock/config.json", JSON.stringify(contents));
+      return filesystem;
+    }
+
+    it.each([
+      [
+        "enabling HTTP on a joined worker",
+        ["http.enabled", "true"],
+        { gateway: joined },
+        'Invalid config after setting http.enabled: Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      ],
+      [
+        "adding the gateway object to a standalone worker with HTTP on",
+        ["gateway", JSON.stringify(joined)],
+        { http: { enabled: true } },
+        'Invalid config after setting gateway: Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      ],
+    ] as const)(
+      "refuses a config set that creates the conflict with exit 2, USAGE and the file untouched: %s",
+      async (_name, [key, value], contents, message) => {
+        const filesystem = await workerFiles(contents);
+        const before = await filesystem.readFile("/simlock/config.json");
+        const output = outputCapture({
+          ...realCliEnvironmentPorts(filesystem),
+          daemonHome: homeWithGateway,
+        });
+        const exitCode = await runCli(
+          ["--local", "config", "set", key, value],
+          output.environmentWith(),
+        );
+        expect(exitCode).toBe(2);
+        expect(JSON.parse(output.stderr).error).toMatchObject({ code: "USAGE", message });
+        expect(await filesystem.readFile("/simlock/config.json")).toBe(before);
+      },
     );
-    expect(exitCode).toBe(2);
-    expect(wrote).toBe(false);
+
+    it("repairs a conflicting file with config set http.enabled false and prints the restart notice", async () => {
+      const filesystem = await workerFiles({ gateway: joined, http: { enabled: true } });
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(filesystem),
+        daemonHome: homeWithGateway,
+      });
+      const exitCode = await runCli(
+        ["--local", "config", "set", "http.enabled", "false"],
+        output.environmentWith(),
+      );
+      expect(exitCode).toBe(0);
+      expect(output.stdout).toBe(
+        "Updated http.enabled in /simlock/config.json; takes effect on daemon restart.\n",
+      );
+      expect(JSON.parse(await filesystem.readFile("/simlock/config.json"))).toMatchObject({
+        http: { enabled: false },
+      });
+    });
+
+    it("--local daemon start with no daemon listening refuses a joined worker's HTTP conflict before any launch", async () => {
+      const filesystem = await workerFiles({
+        gateway: { url: "ws://127.0.0.1:1", token: "join-secret" },
+        http: { enabled: true },
+      });
+      // why: a launcher that exits at once, so a start that wrongly launches fails the launches assertion instead of waiting out the test.
+      const launcher = new FakeDaemonLauncher(undefined, { exit: { code: 1, signal: null } });
+      const output = outputCapture({
+        ...realCliEnvironmentPorts(filesystem),
+        daemonHome: homeWithGateway,
+        launcher,
+      });
+      const exitCode = await runCli(["--local", "daemon", "start"], output.environmentWith());
+      expect(exitCode).not.toBe(0);
+      expect(launcher.launches).toBe(0);
+      expect(JSON.parse(output.stderr).error.message).toBe(
+        'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      );
+    });
   });
 
   it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
@@ -2692,6 +3307,47 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(exitCode).toBe(0);
     expect(written).toEqual({ lease: { defaultTtlMs: 2400000 } });
   });
+
+  it.each(["teamId", "bundleId", "provisioningProfile", "signingIdentity"])(
+    "simlock config set capabilities.agent-device.ios.%s stores a non-empty string and refuses an empty string or a number with the usage error",
+    async (key) => {
+      const path = `capabilities.agent-device.ios.${key}`;
+      const set = async (value: string) => {
+        const output = outputCapture(realCliEnvironmentPorts());
+        let written: Record<string, unknown> | undefined;
+        const exitCode = await runCli(
+          ["config", "set", path, value],
+          output.environmentWith({
+            readConfigFile: async () => ({}),
+            writeConfigFile: async (contents) => {
+              written = contents;
+            },
+          }),
+        );
+        return { exitCode, output, written };
+      };
+
+      const stored = await set("ABCDE12345");
+      expect(stored.exitCode).toBe(0);
+      expect(stored.output.stdout).toBe(
+        `Updated ${path} in /simlock/config.json; takes effect on daemon restart.\n`,
+      );
+      expect(stored.written).toEqual({
+        capabilities: { "agent-device": { ios: { [key]: "ABCDE12345" } } },
+      });
+      for (const value of ["", "42"]) {
+        const refused = await set(value);
+        expect(refused.exitCode).toBe(2);
+        expect(JSON.parse(refused.output.stderr)).toEqual({
+          error: {
+            code: "USAGE",
+            message: `Invalid config after setting ${path}: Invalid config value for "${path}": expected a non-empty string`,
+          },
+        });
+        expect(refused.written).toBeUndefined();
+      }
+    },
+  );
 
   it("does not let a stray file at the scratch validation path change the outcome", async () => {
     // why: Guards against B9's second bug: the validation scratch path must never be able to read a
@@ -3220,85 +3876,6 @@ describe("CLI: catalog", () => {
     );
   });
 
-  it("prints (custom) after a custom model and not after a built-in one", async () => {
-    const output = outputCapture();
-    const environment = output.environmentWith({
-      connectAdmin: async () =>
-        fakeClient({
-          getCatalog: () =>
-            Promise.resolve({
-              platforms: [
-                {
-                  customModels: ["My Tablet"],
-                  defaultRuntime: "35",
-                  modelAliases: {},
-                  classDefaults: {},
-                  modelClasses: {},
-                  modelRuntimes: { "My Tablet": ["35"], "Pixel 8": ["35"] },
-                  models: ["My Tablet", "Pixel 8"],
-                  platform: "android",
-                  runtimes: ["35"],
-                },
-              ],
-            }),
-        }),
-    });
-
-    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
-
-    expect(output.stdout).toBe(
-      [
-        "Platform: android",
-        "  Runtimes: 35 (default: 35)",
-        "  Models:",
-        "    (no class):",
-        "      My Tablet (custom): 35",
-        "      Pixel 8: 35",
-        "",
-      ].join("\n"),
-    );
-  });
-});
-
-describe("CLI: component install (ADR 0010 §6)", () => {
-  it("prints each progress update on stderr and one result line on stdout, and exits 0", async () => {
-    const output = outputCapture();
-    const asked: unknown[] = [];
-    const client = fakeClient({
-      installComponent: async (input, options) => {
-        asked.push(input);
-        options?.onProgress?.({ stage: "waiting" });
-        options?.onProgress?.({ fraction: 0.41, stage: "downloading" });
-        return { component: "35", outcome: "installed", platform: "android", version: "35" };
-      },
-    });
-
-    await expect(
-      runCli(
-        ["component", "install", "android", "35"],
-        output.environmentWith({ connectAdmin: async () => client }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(asked).toEqual([{ platform: "android", version: "35" }]);
-    // why: The fake connection resolves no credential, so the agent-fallback notice comes first.
-    const stderrLines = output.stderr
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as unknown);
-    expect(stderrLines.filter((line) => !Object.hasOwn(line as object, "notice"))).toEqual([
-      { stage: "waiting" },
-      { fraction: 0.41, stage: "downloading" },
-    ]);
-    expect(output.stdout.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stdout)).toEqual({
-      component: "35",
-      outcome: "installed",
-      platform: "android",
-      version: "35",
-    });
-  });
-
   it("exits 12 when the daemon refuses with DOWNLOADS_DISABLED", async () => {
     const output = outputCapture();
     const client = fakeClient({
@@ -3781,7 +4358,14 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
       const output = outputCapture();
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
-        daemon: { health: "running", mode: "gateway" },
+        daemon: {
+          health: "running",
+          mode: "gateway",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
         load: { ageMs: 4_000, ...PARTS },
         workers: [
           {
@@ -3920,6 +4504,70 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain("incompatible");
     expect(output.stdout).toContain("protocol 4-4 vs gateway 5-5");
+  });
+
+  it("worker list shows a worker's version, the latest only when newer, and its update stage", async () => {
+    const waiting = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const cases: readonly {
+      expected: string;
+      latestVersion: string | null;
+      update: WorkerView["update"];
+      version: string | undefined;
+    }[] = [
+      {
+        expected: " -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: waiting for 2 leases",
+        latestVersion: "0.4.0",
+        update: waiting,
+        version: "0.3.0",
+      },
+      {
+        expected: " -- simlock 0.3.0 (0.4.0 available) -- updating to 0.4.0: installing",
+        latestVersion: "0.4.0",
+        update: {
+          forced: false,
+          from: "0.3.0",
+          stage: "installing",
+          startedAt: 1_000,
+          to: "0.4.0",
+        },
+        version: "0.3.0",
+      },
+      {
+        expected: " -- updating to 0.4.0: waiting for 1 lease",
+        latestVersion: null,
+        update: { ...waiting, leases: 1 },
+        version: undefined,
+      },
+      { expected: " -- simlock 0.4.0", latestVersion: "0.4.0", update: null, version: "0.4.0" },
+      { expected: " -- simlock 0.5.0", latestVersion: "0.4.0", update: null, version: "0.5.0" },
+      { expected: " -- simlock 0.4.0", latestVersion: null, update: null, version: "0.4.0" },
+    ];
+    for (const { expected, latestVersion, update, version } of cases) {
+      const output = outputCapture();
+      const worker = {
+        ...connectedWorker,
+        latestVersion,
+        update,
+        ...(version === undefined ? {} : { version }),
+      };
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ listWorkers: () => Promise.resolve({ workers: [worker] }) }),
+      });
+
+      await runCli(["worker", "list"], environment);
+
+      expect(output.stdout.trimEnd().slice(-expected.length)).toBe(expected);
+      if (!expected.includes("available")) expect(output.stdout).not.toContain("available");
+      if (update === null) expect(output.stdout).not.toContain("updating");
+    }
   });
 
   it("emits the raw contract value under --json", async () => {
@@ -4129,7 +4777,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           warm: 0,
         },
       },
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       devices: [
         {
@@ -4201,6 +4856,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           count: 2,
           mode: "full" as const,
           model: "iPhone 17",
+          origin: "configured" as const,
           osVersion: "26.0",
           platform: "ios" as const,
           ready: 1,
@@ -4210,17 +4866,29 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           count: 1,
           mode: "full" as const,
           model: "iPhone 17",
+          origin: "learned" as const,
           osVersion: "27.0",
           platform: "ios" as const,
           ready: 0,
           short: "runtime-missing" as const,
+        },
+        {
+          booting: 0,
+          count: 1,
+          imageTag: "google_apis_playstore",
+          mode: "full" as const,
+          model: "Pixel 8",
+          origin: "learned" as const,
+          osVersion: "35",
+          platform: "android" as const,
+          ready: 1,
         },
       ],
     };
     const statusWith = (block: StatusGetOutput["warmPool"]) =>
       fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, warmPool: block }) });
 
-    it("simlock status prints whether the pool is on, the reserve, and each target with how many are wanted, ready and booting, and why it is short", async () => {
+    it("simlock status prints the origin word on every warm pool line, learned lines included, the tag in the name, and a learned line's short:", async () => {
       const output = outputCapture();
 
       await runCli(
@@ -4230,8 +4898,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: enabled, reserve ios 1 android 0\n" +
-          "  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1\n" +
-          "  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 1  booting 1\n" +
+          "  iPhone 17 / 27.0 / full   learned   wanted 1  ready 0  booting 0  short: runtime-missing\n" +
+          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n",
       );
     });
 
@@ -4246,6 +4915,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
             count: 1,
             mode: "slim" as const,
             model: "iPhone 17",
+            origin: "configured" as const,
             platform: "ios" as const,
             ready: 0,
           },
@@ -4259,7 +4929,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: enabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+          "  iPhone 17 / slim   configured   wanted 1  ready 0  booting 0\n",
       );
     });
 
@@ -4283,7 +4953,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: disabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / 26.0 / full   wanted 2  ready 0  booting 0  short: disabled\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 0  booting 0  short: disabled\n",
       );
     });
 
@@ -4309,7 +4979,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
               getStatus: () =>
                 Promise.resolve({
                   ...EMPTY_STATUS,
-                  daemon: { health: "running" as const, mode },
+                  daemon: {
+                    health: "running" as const,
+                    mode,
+                    version: "0.0.0-test",
+                    update: null,
+                    lastUpdateFailure: null,
+                    latestVersion: null,
+                  },
                   warmPool,
                 }),
             }),
@@ -4318,6 +4995,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toBe(
         `Daemon: running (${mode})\n` +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4332,7 +5010,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         const output = outputCapture();
         const answer = {
           ...EMPTY_STATUS,
-          daemon: { health: "running", mode },
+          daemon: { ...EMPTY_STATUS.daemon, mode },
           physicalQueueDepth: 1,
           queueDepth: 2,
         } as unknown as StatusGetOutput;
@@ -4346,6 +5024,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
         expect(output.stdout).toBe(
           `Daemon: running (${mode})\n` +
+            "Simlock: 0.0.0-test\n" +
             "Host: macOS 15.5 arm64\n" +
             "Running global: 0 + 0 reserved/2, warm 0\n" +
             "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -4412,7 +5091,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
   describe("against a starting daemon", () => {
     const STARTING: StatusGetOutput = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
     };
 
@@ -4427,6 +5113,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toBe(
         "Daemon: starting (worker)\n" +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           "Devices, leases and capacity appear once startup finishes.\n",
       );
@@ -4508,7 +5195,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const FULL_LINE =
       "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago\n";
     const STARTING = {
-      daemon: { health: "starting" as const, mode: "worker" as const },
+      daemon: {
+        health: "starting" as const,
+        mode: "worker" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
     };
 
@@ -4530,6 +5224,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     it("simlock status prints the Load line after the Host line, on a starting daemon and a running one", async () => {
       expect(await print({ ...STARTING, load: LOAD })).toBe(
         "Daemon: starting (worker)\n" +
+          "Simlock: 0.0.0-test\n" +
           "Host: macOS 15.5 arm64\n" +
           FULL_LINE +
           "Devices, leases and capacity appear once startup finishes.\n",
@@ -4621,7 +5316,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
 
     expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
-      "Daemon: running (worker)\nConsole: http://127.0.0.1:4700/\nHost: ",
+      "Daemon: running (worker)\nSimlock: 0.0.0-test\nConsole: http://127.0.0.1:4700/\nHost: ",
     );
     expect(await print(EMPTY_STATUS)).not.toContain("Console:");
   });
@@ -4756,7 +5451,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     };
     const status: StatusGetOutput = {
       ...EMPTY_STATUS,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       installs: [{ ...install, workerId: "wrk_1" }],
       workers: [
         {
@@ -4779,15 +5481,6 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
     expect(output.stdout.match(/Install /g)).toHaveLength(1);
     expect(output.stdout).toContain("Install android 35 on wrk_1: waiting for 0s, 3 waiters\n");
-  });
-
-  it("says worker on a worker", async () => {
-    const output = outputCapture();
-    const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
-
-    await runCli(["status"], environment);
-
-    expect(output.stdout).toContain("Daemon: running (worker)");
   });
 
   it("prints each device's mode and whether it serves a request naming no mode", async () => {
@@ -5242,103 +5935,74 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     expect(capturedInput?.noWait).toBe(true);
   });
 
-  it("maps --image-tag onto the contract's imageTag input field, and sends none without it", async () => {
-    const inputs: Record<string, unknown>[] = [];
-    const client = fakeClient({
-      requestLease: (input) => {
-        inputs.push(input as unknown as Record<string, unknown>);
-        return Promise.resolve({
-          device: {
-            physical: false,
-            id: "dev_1",
-            driverDeviceId: "dev_1",
-            spec: { physical: false, platform: "android", model: "Pixel 8", osVersion: "34" },
-            mode: "full",
-          },
-          environment: {},
-          lease: {
-            id: "lse_1",
-            deviceId: "dev_1",
-            requesterId: "test-requester",
-            ownerId: "test-requester",
-            grantedAt: 0,
-            lastRenewedAt: 0,
-            idChosenByRequester: false,
-            ttlMs: 60_000,
-            ttlDeadline: 60_000,
-          },
-          timing: {
-            estimatedProvisionMs: 0,
-            estimatedBootMs: 0,
-            estimatedReclaimMs: 0,
-            estimatedReadyMs: 0,
-          },
-        });
-      },
-    });
-    const lease = ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"];
-
-    await runCli(
-      [...lease, "--image-tag", "google_apis_playstore"],
-      outputCapture().environmentWith({ connectAdmin: async () => client }),
-    );
-    await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
-
-    expect(inputs[0]?.imageTag).toBe("google_apis_playstore");
-    expect(inputs[1]).not.toHaveProperty("imageTag");
-  });
-
-  it("sends physical: true for --physical, and no physical field without it", async () => {
-    const inputs: Record<string, unknown>[] = [];
-    const client = fakeClient({
-      requestLease: (input) => {
-        inputs.push(input as unknown as Record<string, unknown>);
-        return Promise.resolve({
-          device: {
-            class: "phone",
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            id: "dev_1",
-            physical: true,
-            spec: {
+  it.each([
+    {
+      flag: "--image-tag",
+      field: "imageTag",
+      value: "google_apis_playstore",
+      lease: ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"],
+      flagArgs: ["--image-tag", "google_apis_playstore"],
+    },
+    {
+      flag: "--physical",
+      field: "physical",
+      value: true,
+      lease: ["lease", "--platform", "ios", "--detach"],
+      flagArgs: ["--physical"],
+    },
+  ])(
+    "maps $flag onto the contract's $field input field, and sends none without it",
+    async ({ field, value, lease, flagArgs }) => {
+      const inputs: Record<string, unknown>[] = [];
+      const client = fakeClient({
+        requestLease: (input) => {
+          inputs.push(input as unknown as Record<string, unknown>);
+          return Promise.resolve({
+            device: {
               class: "phone",
-              model: "iPhone 15 Pro",
-              osVersion: "18.4",
+              driverDeviceId: "00008110-001A2B3C4D5E",
+              id: "dev_1",
               physical: true,
-              platform: "ios",
+              spec: {
+                class: "phone",
+                model: "iPhone 15 Pro",
+                osVersion: "18.4",
+                physical: true,
+                platform: "ios",
+              },
             },
-          },
-          environment: {},
-          lease: {
-            id: "lse_1",
-            deviceId: "dev_1",
-            requesterId: "test-requester",
-            ownerId: "test-requester",
-            grantedAt: 0,
-            lastRenewedAt: 0,
-            idChosenByRequester: false,
-            ttlMs: 60_000,
-            ttlDeadline: 60_000,
-          },
-          timing: {
-            estimatedProvisionMs: 0,
-            estimatedBootMs: 0,
-            estimatedReclaimMs: 0,
-            estimatedReadyMs: 0,
-          },
-        });
-      },
-    });
-    const lease = ["lease", "--platform", "ios", "--detach"];
+            environment: {},
+            lease: {
+              id: "lse_1",
+              deviceId: "dev_1",
+              requesterId: "test-requester",
+              ownerId: "test-requester",
+              grantedAt: 0,
+              lastRenewedAt: 0,
+              idChosenByRequester: false,
+              ttlMs: 60_000,
+              ttlDeadline: 60_000,
+            },
+            timing: {
+              estimatedProvisionMs: 0,
+              estimatedBootMs: 0,
+              estimatedReclaimMs: 0,
+              estimatedReadyMs: 0,
+            },
+          });
+        },
+      });
 
-    await runCli(
-      [...lease, "--physical"],
-      outputCapture().environmentWith({ connectAdmin: async () => client }),
-    );
-    await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
+      await runCli(
+        [...lease, ...flagArgs],
+        outputCapture().environmentWith({ connectAdmin: async () => client }),
+      );
+      await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
 
-    expect(inputs[0]?.physical).toBe(true);
-    expect(inputs[1]).not.toHaveProperty("physical");
-  });
+      expect(inputs[0]?.[field]).toBe(value);
+      expect(inputs[1]).not.toHaveProperty(field);
+    },
+  );
 
   it("fails the removed full flag as an unknown option, before connecting", async () => {
     const output = outputCapture();
@@ -6633,7 +7297,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
 });
 
 /**
- * why: `docs/CLI.md` promises exactly one structured error line per failure, and binds `USAGE` to
+ * why: the CLI reference promises exactly one structured error line per failure, and binds `USAGE` to
  * exit 2. A `SIMLOCK_HOME` whose socket path exceeds the platform limit had neither: the path
  * was resolved while *building* the environment, and `runCli` takes its environment as a
  * default parameter -- whose initializer runs before the function body, and therefore before
@@ -6668,6 +7332,21 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
     };
     expect(reported.error.code).toBe("USAGE");
     expect(reported.error.message).toContain("SIMLOCK_HOME");
+  });
+});
+
+describe("CLI: the daemon endpoint check", () => {
+  it("buildCliEnvironment reports the daemon endpoint present only while its socket file exists", async () => {
+    const filesystem = new MemoryFilesystem();
+    const environment = buildCliEnvironment(realCliEnvironmentPorts(filesystem), {});
+    const socketPath = resolveDaemonSocketPath("/simlock");
+
+    expect(await environment.daemonEndpointPresent()).toBe(false);
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(socketPath, "");
+    expect(await environment.daemonEndpointPresent()).toBe(true);
+    await filesystem.rm(socketPath);
+    expect(await environment.daemonEndpointPresent()).toBe(false);
   });
 });
 
@@ -6837,9 +7516,408 @@ const EMPTY_STATUS = {
     },
     global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
   },
-  daemon: { health: "running", mode: "worker" },
+  daemon: {
+    health: "running",
+    mode: "worker",
+    version: "0.0.0-test",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+  },
   queueDepth: 0,
 } satisfies StatusGetOutput;
+
+describe("simlock update and simlock status", () => {
+  type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateDaemon"]>>;
+  type Step = UpdateAnswer | SimlockError;
+  const lost = () =>
+    new SimlockError("DAEMON_CONNECTION_LOST", "transport", "The daemon connection was lost", {});
+  const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+    ...overrides,
+  });
+  const state = (
+    stage: "waiting" | "installing" | "restarting",
+    leases = 0,
+  ): NonNullable<UpdateAnswer["update"]> => {
+    const base = { from: "0.3.0", to: "0.4.0", forced: false, startedAt: 1_000 };
+    return stage === "waiting" ? { stage, leases, ...base } : { stage, ...base };
+  };
+  const failure = (stage: "installing" | "restarting", message: string) => ({
+    stage,
+    from: "0.3.0",
+    to: "0.4.0",
+    message,
+    at: 2_000,
+  });
+  const started = (update = state("installing")) =>
+    answer({ started: true, resolved: "0.4.0", update });
+  const running = (version = "0.4.0", overrides: Partial<UpdateAnswer> = {}) =>
+    answer({ version, ...overrides });
+
+  async function runUpdate(
+    argv: readonly string[],
+    script: {
+      readonly first: UpdateAnswer | SimlockError;
+      readonly polls?: readonly Step[];
+      readonly after?: readonly (Step | Error)[];
+      readonly onPoll?: (index: number, interrupt: () => void) => void;
+      readonly onReconnect?: (interrupt: () => void) => void;
+    },
+  ) {
+    const output = outputCapture();
+    const clock = new FakeClock(0);
+    const calls: unknown[] = [];
+    const polls = [...(script.polls ?? [])];
+    const after = [...(script.after ?? [])];
+    let pollCount = 0;
+    const signals = new EventEmitter();
+    let opened = 0;
+    const closedClients = new Set<number>();
+    const clientOver = (steps: Step[], first?: UpdateAnswer | SimlockError) => {
+      const id = opened++;
+      return fakeClient({
+        close: async () => {
+          closedClients.add(id);
+        },
+        updateDaemon: async (input) => {
+          calls.push(input);
+          const isFirst = first !== undefined && calls.length === 1;
+          if (!isFirst) script.onPoll?.(pollCount++, () => signals.emit("SIGINT"));
+          const step = isFirst ? first : steps.length > 1 ? steps.shift() : steps[0];
+          if (step === undefined) throw new Error("no scripted answer");
+          if (step instanceof Error) throw step;
+          return step;
+        },
+      });
+    };
+    const environment = output.environmentWith({
+      clock,
+      connectAdmin: async () => clientOver(polls, script.first),
+      connectExistingAdmin: async () => {
+        script.onReconnect?.(() => signals.emit("SIGINT"));
+        const step = after.length > 1 ? after.shift() : after[0];
+        if (step === undefined || step instanceof Error) throw step ?? new Error("refused");
+        return clientOver([step]);
+      },
+      sleep: async (milliseconds) => clock.advance(milliseconds),
+      signals: signals as unknown as CliEnvironment["signals"],
+    });
+    const code = await runCli(argv, environment);
+    return {
+      code,
+      calls,
+      stdout: output.stdout,
+      stderr: output.stderr,
+      opened,
+      closed: closedClients.size,
+    };
+  }
+
+  it("follows an update to simlock <v> is running, reports a failure and a rollback, says when nothing is needed, stops following on Ctrl-C only, prints --json, refuses bad input, and shows the version, the update and the last failure in simlock status", async () => {
+    let reconnects = 0;
+    // why: the follower reconnects every second and gives up when 15 minutes have passed since the last answer, so the last attempt is at 14:59 on the fake clock.
+    const RECONNECTS_IN_15_MINUTES = 899;
+    const header = "Updating simlock 0.3.0 → 0.4.0\n";
+    const wait =
+      "Waiting for 2 leases to end. Ctrl-C stops following; simlock update --force stops waiting.\n";
+    const cases: readonly {
+      readonly name: string;
+      readonly argv: readonly string[];
+      readonly script: Parameters<typeof runUpdate>[1];
+      readonly code: number;
+      readonly stdout: string;
+      readonly calls?: readonly unknown[];
+      readonly reconnects?: number;
+    }[] = [
+      {
+        name: "follows to running",
+        argv: ["update"],
+        script: {
+          first: started(state("waiting", 2)),
+          polls: [
+            answer({ update: state("waiting", 2) }),
+            answer({ update: state("waiting", 1) }),
+            answer({ update: state("installing") }),
+            answer({ update: state("restarting") }),
+            lost(),
+          ],
+          after: [new Error("refused"), running()],
+        },
+        code: 0,
+        stdout: `${header}${wait}Waiting for 1 lease to end.\nInstalling simlock@0.4.0\nRestarting the daemon\nsimlock 0.4.0 is running\n`,
+        calls: [{}, ...Array.from({ length: 6 }, () => ({ query: true }))],
+      },
+      {
+        name: "follows an update that already runs, whatever version it names",
+        argv: ["update", "--version", "0.9.9"],
+        script: {
+          first: answer({ update: state("installing") }),
+          polls: [lost()],
+          after: [running()],
+        },
+        code: 0,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nsimlock 0.4.0 is running\n`,
+      },
+      {
+        name: "reports a failed install",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ lastUpdateFailure: failure("installing", "npm error code EACCES") })],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nUpdate failed (installing): npm error code EACCES\nsimlock 0.3.0 is still running and takes leases again.\n`,
+      },
+      {
+        name: "reports a version that did not start and the rollback",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ update: state("restarting") }), lost()],
+          after: [
+            answer({
+              lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
+            }),
+          ],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
+      },
+      {
+        name: "waits through a daemon that answers while it is still starting",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [lost()],
+          after: [
+            answer({ health: "starting" }),
+            answer({ health: "starting" }),
+            answer({ health: "starting" }),
+            answer({
+              lastUpdateFailure: failure("restarting", "0.4.0 did not start: health failed"),
+            }),
+          ],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nUpdate failed (restarting): 0.4.0 did not start: health failed. Rolled back to 0.3.0.\n`,
+      },
+      {
+        name: "gives up when the daemon does not come back in 15 minutes",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [answer({ update: state("restarting") }), lost()],
+          after: [new Error("refused")],
+          onReconnect: () => {
+            reconnects += 1;
+          },
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nThe daemon did not come back; run simlock status.\n`,
+        reconnects: RECONNECTS_IN_15_MINUTES,
+      },
+      {
+        name: "stops with the daemon's own error when a poll is refused for a reason other than a lost connection",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [new SimlockError("UPDATE_RESOLVE_FAILED", "domain", "npm is down", {})],
+        },
+        code: 1,
+        stdout: `${header}Installing simlock@0.4.0\n`,
+      },
+      {
+        name: "prints its usage for --help and asks the daemon nothing",
+        argv: ["update", "--help"],
+        script: { first: answer() },
+        code: 0,
+        stdout: "Usage: simlock update [--version <version>] [--force] [--json]\n",
+        calls: [],
+      },
+      {
+        name: "the latest version is the running one",
+        argv: ["update"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already the latest\n",
+        calls: [{}],
+      },
+      {
+        name: "the named version is the running one",
+        argv: ["update", "--version", "0.3.0"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already running\n",
+        calls: [{ version: "0.3.0" }],
+      },
+      {
+        name: "the running version is newer than the latest",
+        argv: ["update"],
+        script: { first: answer({ upToDate: true, resolved: "0.4.0", version: "0.5.0-rc.1" }) },
+        code: 0,
+        stdout:
+          "simlock 0.5.0-rc.1 is newer than the latest (0.4.0). Use --version to install another version.\n",
+      },
+      {
+        name: "sends force and the version",
+        argv: ["update", "--force", "--version", "0.4.0-rc.1"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: "simlock 0.3.0 is already running\n",
+        calls: [{ force: true, version: "0.4.0-rc.1" }],
+      },
+      {
+        name: "--json prints the final answer only",
+        argv: ["update", "--json"],
+        script: { first: started(state("waiting", 1)), polls: [lost()], after: [running()] },
+        code: 0,
+        stdout: `${JSON.stringify(running())}\n`,
+      },
+      {
+        name: "--json with nothing to do prints the answer at once",
+        argv: ["update", "--json"],
+        script: { first: answer({ upToDate: true, resolved: "0.3.0" }) },
+        code: 0,
+        stdout: `${JSON.stringify(answer({ upToDate: true, resolved: "0.3.0" }))}\n`,
+        calls: [{}],
+      },
+      {
+        name: "Ctrl-C stops following and sends nothing more",
+        argv: ["update"],
+        script: {
+          first: started(state("waiting", 2)),
+          polls: [answer({ update: state("waiting", 2) })],
+          onPoll: (_index, interrupt) => interrupt(),
+        },
+        code: 0,
+        stdout: `${header}${wait}Stopped following. The update goes on; run simlock status to see it.\n`,
+        calls: [{}, { query: true }],
+      },
+      {
+        name: "Ctrl-C while the daemon restarts stops following",
+        argv: ["update"],
+        script: {
+          first: started(),
+          polls: [lost()],
+          after: [new Error("refused")],
+          onReconnect: (interrupt) => interrupt(),
+        },
+        code: 0,
+        stdout: `${header}Installing simlock@0.4.0\nRestarting the daemon\nStopped following. The update goes on; run simlock status to see it.\n`,
+        calls: [{}, { query: true }],
+      },
+    ];
+    for (const { name, argv, script, code, stdout, calls, reconnects: expected } of cases) {
+      reconnects = 0;
+      const result = await runUpdate(argv, script);
+      if (expected !== undefined) expect(reconnects, name).toBe(expected);
+      expect({ name, code: result.code, stdout: result.stdout }, name).toEqual({
+        name,
+        code,
+        stdout,
+      });
+      if (calls !== undefined) expect(result.calls, name).toEqual(calls);
+      expect(result.closed, `${name}: every client opened is closed`).toBe(result.opened);
+    }
+
+    const refusals: readonly [readonly string[], number, string][] = [
+      [["update", "--version", "latest"], 2, "--version takes a version, e.g. 0.4.0"],
+      [["update", "--version", "../x"], 2, "--version takes a version, e.g. 0.4.0"],
+      [["update", "--version", `1.0.0-${"a".repeat(59)}`], 2, "--version takes a version"],
+    ];
+    for (const [argv, code, message] of refusals) {
+      const result = await runUpdate(argv, { first: answer() });
+      expect({ argv, code, stderr: result.stderr.includes(message), calls: result.calls }).toEqual({
+        argv,
+        code,
+        stderr: true,
+        calls: [],
+      });
+    }
+
+    const refused = [
+      ["UPDATE_RESOLVE_FAILED", 1, "could not resolve simlock@9.9.9: No match found"],
+      ["UPDATE_UNSUPPORTED_INSTALL", 2, "simlock was not installed with npm i -g"],
+    ] as const;
+    for (const [codeName, exit, message] of refused) {
+      const result = await runUpdate(["update"], {
+        first: new SimlockError(codeName, "domain", message, {}),
+      });
+      expect({ code: result.code, stdout: result.stdout }).toEqual({ code: exit, stdout: "" });
+      expect(JSON.parse(result.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: codeName, message },
+      });
+    }
+
+    const next = "Host: macOS 15.5 arm64";
+    expect(await statusLines({ version: "0.3.0" })).toEqual([
+      "Daemon: running (worker)",
+      "Simlock: 0.3.0",
+      next,
+      expect.stringMatching(/^Running global/),
+    ]);
+    for (const [update, line] of [
+      [state("waiting", 2), "Updating to 0.4.0: waiting for 2 leases"],
+      [state("waiting", 1), "Updating to 0.4.0: waiting for 1 lease"],
+      [state("installing"), "Updating to 0.4.0: installing"],
+      [state("restarting"), "Updating to 0.4.0: restarting"],
+    ] as const) {
+      expect((await statusLines({ version: "0.3.0", update })).slice(0, 3)).toEqual([
+        "Daemon: running (worker)",
+        "Simlock: 0.3.0",
+        line,
+      ]);
+    }
+    expect(
+      (
+        await statusLines({
+          version: "0.3.0",
+          lastUpdateFailure: failure("installing", "npm error code EACCES"),
+        })
+      ).slice(0, 3),
+    ).toEqual([
+      "Daemon: running (worker)",
+      "Simlock: 0.3.0",
+      "Last update failed (installing): npm error code EACCES",
+    ]);
+  });
+
+  it("simlock status says when the daemon has seen a newer Simlock version on npm", async () => {
+    for (const [version, latestVersion, line] of [
+      ["0.3.0", "0.4.0", "Simlock: 0.3.0 (0.4.0 available)"],
+      ["0.9.0", "0.10.0", "Simlock: 0.9.0 (0.10.0 available)"],
+      ["0.4.0-rc.2", "0.4.0", "Simlock: 0.4.0-rc.2 (0.4.0 available)"],
+      ["0.4.0", "0.4.0", "Simlock: 0.4.0"],
+      ["0.5.0-rc.1", "0.4.0", "Simlock: 0.5.0-rc.1"],
+      ["0.3.0", null, "Simlock: 0.3.0"],
+    ] as const) {
+      expect((await statusLines({ version, latestVersion }))[1]).toBe(line);
+    }
+  });
+});
+
+async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
+  const output = outputCapture();
+  await runCli(
+    ["status"],
+    output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getStatus: () =>
+            Promise.resolve({ ...EMPTY_STATUS, daemon: { ...EMPTY_STATUS.daemon, ...daemon } }),
+        }),
+    }),
+  );
+  return output.stdout.split("\n").slice(0, 4);
+}
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
@@ -6907,6 +7985,17 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     runNuke: () => Promise.resolve({ deletedDevices: [], releasedLeaseIds: [] }),
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
+    updateDaemon: () =>
+      Promise.resolve({
+        started: false,
+        upToDate: true,
+        resolved: null,
+        version: "test",
+        health: "running" as const,
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      }),
     replayEvents: () => Promise.resolve([]),
     usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
@@ -6922,6 +8011,18 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     undrainWorker: (input) =>
       Promise.resolve({ drained: false as const, workerId: input.workerId }),
     removeWorker: (input) => Promise.resolve({ removed: true, workerId: input.workerId }),
+    updateWorker: (input) =>
+      Promise.resolve({
+        health: "running" as const,
+        lastUpdateFailure: null,
+        latestVersion: null,
+        resolved: null,
+        started: false,
+        update: null,
+        upToDate: false,
+        version: "0.3.0",
+        workerId: input.workerId,
+      }),
     testAlertDestination: (input) =>
       Promise.resolve({ destination: input.destination, status: 200 }),
     installComponent: (input) =>
@@ -6961,7 +8062,7 @@ interface OutputCapture {
   environmentWith(overrides?: Partial<CliEnvironment>): CliEnvironment;
 }
 
-function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
+function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {}): OutputCapture {
   const capture: OutputCapture = {
     stdout: "",
     stderr: "",
@@ -6974,8 +8075,13 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           configPath: "/simlock/config.json",
           daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
           requesterId: "test-requester",
+          homeDirectory: "/home/operator",
+          workingDirectory: "/work/project",
+          runTool: async () => ({ outcome: "not-found" }),
+          filesystem: new MemoryFilesystem(),
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
+          daemonEndpointPresent: async () => false,
           readAdminTokenFile: async () => undefined,
           sleep: async () => {},
           readConfigFile: async () => ({}),
@@ -7002,7 +8108,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           stderr: stderrOut,
           stdout: stdoutOut,
         },
-        {},
+        env,
       );
       return { ...base, ...overrides };
     },
@@ -7248,6 +8354,9 @@ function realCliEnvironmentPorts(
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
     daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+    homeDirectory: "/home/operator",
+    workingDirectory: "/work/project",
+    runTool: async () => ({ outcome: "not-found" }),
   };
 }
 
@@ -7378,6 +8487,7 @@ function testConfig(): Config {
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -7602,6 +8712,7 @@ describe("simlock list --requests", () => {
       ["incompatible", "ios", undefined, "protocol mismatch"],
       ["not-ready", "ios", undefined, "not ready yet"],
       ["unhealthy", "ios", undefined, "not running"],
+      ["updating", "ios", undefined, "updating"],
       ["drained", "ios", undefined, "drained"],
       ["busy", "ios", undefined, "busy with its own queue"],
       ["no-driver", "ios", undefined, "no iOS support"],
@@ -7752,25 +8863,30 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     return sent;
   }
 
-  it("sends neither model nor class for a lease with only a platform", async () => {
-    const sent = await sentFor(["--platform", "ios"]);
+  it.each([
+    {
+      name: "neither model nor class for a lease with only a platform",
+      args: ["--platform", "ios"],
+      present: { platform: "ios" },
+      absent: ["model", "class"],
+    },
+    {
+      name: "the class for --class, and no model",
+      args: ["--platform", "ios", "--class", "phone"],
+      present: { class: "phone", platform: "ios" },
+      absent: ["model"],
+    },
+    {
+      name: "both fields for --class beside --device, leaving the refusal to the daemon",
+      args: ["--platform", "ios", "--class", "phone", "--device", "iPhone 16"],
+      present: { class: "phone", model: "iPhone 16", platform: "ios" },
+      absent: [],
+    },
+  ])("sends $name", async ({ args, present, absent }) => {
+    const sent = await sentFor(args);
 
-    expect(sent).toMatchObject({ platform: "ios" });
-    expect(sent).not.toHaveProperty("model");
-    expect(sent).not.toHaveProperty("class");
-  });
-
-  it("sends the class for --class, and no model", async () => {
-    const sent = await sentFor(["--platform", "ios", "--class", "phone"]);
-
-    expect(sent).toMatchObject({ class: "phone", platform: "ios" });
-    expect(sent).not.toHaveProperty("model");
-  });
-
-  it("sends both fields for --class beside --device, leaving the refusal to the daemon", async () => {
-    const sent = await sentFor(["--platform", "ios", "--class", "phone", "--device", "iPhone 16"]);
-
-    expect(sent).toMatchObject({ class: "phone", model: "iPhone 16", platform: "ios" });
+    expect(sent).toMatchObject(present);
+    for (const key of absent) expect(sent).not.toHaveProperty(key);
   });
 
   it("names --class in the lease usage text, with --device optional", async () => {
@@ -8011,7 +9127,14 @@ describe("CLI: a worker's capabilities", () => {
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: platform,
       },
-      daemon: { health: "running" as const, mode: "gateway" as const },
+      daemon: {
+        health: "running" as const,
+        mode: "gateway" as const,
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       leases: [],
@@ -8194,21 +9317,27 @@ describe("CLI: stats", () => {
     expect(lines).toContain("Totals");
   });
 
-  it("prints the HISTORY_NOT_KEPT message and exits with its code when the window ends before the history", async () => {
-    const { output, run } = statsRun(["--since", "30d"], async () => {
-      throw fromWireError(
-        "HISTORY_NOT_KEPT",
-        "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
-        { oldestTs: NOW - 60_000 },
-      );
-    });
+  it.each([
+    ["", ["--since", "30d"]],
+    [" with --csv", ["--since", "30d", "--csv"]],
+  ])(
+    "prints the HISTORY_NOT_KEPT message on stderr, nothing on stdout, and exits with its code when the window ends before the history%s",
+    async (_name, args) => {
+      const { output, run } = statsRun(args, async () => {
+        throw fromWireError(
+          "HISTORY_NOT_KEPT",
+          "The history does not reach back to the end of that window; its figures start at 2026-10-05T11:59:00.000Z.",
+          { oldestTs: NOW - 60_000 },
+        );
+      });
 
-    await expect(run).resolves.toBe(12);
+      await expect(run).resolves.toBe(12);
 
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
-    expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
-  });
+      expect(output.stdout).toBe("");
+      expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+      expect(output.stderr).toContain("its figures start at 2026-10-05T11:59:00.000Z");
+    },
+  );
 
   const LEDGER_HEADER =
     "requestId,requester,label,platform,model,workerId,source,requestedAt,grantedAt,rejectedAt,endedAt,waitMs,heldMs,turnaroundMs,outcome,probe,reason,endReason";
@@ -8273,19 +9402,6 @@ describe("CLI: stats", () => {
     expect(whole.output.stdout.startsWith(LEDGER_HEADER)).toBe(true);
   });
 
-  it("simlock stats --csv on an error (HISTORY_NOT_KEPT) writes the error line on stderr, nothing on stdout, and exits 12", async () => {
-    const { output, run } = statsRun(["--since", "30d", "--csv"], async () => {
-      throw fromWireError("HISTORY_NOT_KEPT", "The history does not reach back.", {
-        oldestTs: NOW - 60_000,
-      });
-    });
-
-    await expect(run).resolves.toBe(12);
-
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
-  });
-
   it("simlock stats refuses --csv with --json as a usage error, exit 2", async () => {
     const accepted = statsRun(["--csv"], async (window) => usageAnswer(window, { requests: [] }));
     const both = statsRun(["--csv", "--json"], async (window) => usageAnswer(window));
@@ -8345,5 +9461,879 @@ describe("CLI: stats", () => {
     expect(output.stdout).toBe(
       "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json | --csv]\n",
     );
+  });
+});
+
+describe("CLI: daemon install (#830)", () => {
+  const home = "/Users/me";
+  const nodePath = "/opt/node/bin/node";
+  const mainPath = "/opt/simlock/dist/daemon/main.js";
+
+  async function install(options: {
+    readonly argv: readonly string[];
+    readonly role: "worker" | "gateway";
+    readonly root: string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly linux?: boolean;
+    readonly user?: () => string;
+  }): Promise<{
+    readonly exitCode: number;
+    readonly output: ReturnType<typeof outputCapture>;
+    readonly serviceManager: FakeServiceManager;
+  }> {
+    const { root } = options;
+    const dataDirectory = options.role === "gateway" ? join(root, "gateway") : root;
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    const serviceManager = new FakeServiceManager({
+      ...(options.linux === true ? { manager: "systemd" as const } : {}),
+      onInstall: async () => {
+        await startInMemoryDaemon({
+          adminTokenPath: join(dataDirectory, "admin.token"),
+          filesystem,
+          ipcTransport,
+          socketPath: join(dataDirectory, "daemon.sock"),
+        });
+      },
+    });
+    const output = outputCapture(
+      {
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: new FakeDaemonLauncher(),
+        daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
+        homeDirectory: "/home/operator",
+        workingDirectory: "/work/project",
+        runTool: async () => ({ outcome: "not-found" }),
+        service: {
+          manager: serviceManager,
+          platform: options.linux === true ? "linux" : "darwin",
+          home: options.linux === true ? "/home/me" : home,
+          user: options.user ?? (() => "me"),
+          root,
+          nodePath,
+          mainPath,
+        },
+      },
+      options.env,
+    );
+    const exitCode = await runCli(options.argv, output.environmentWith());
+    return { exitCode, output, serviceManager };
+  }
+
+  it("an operator runs daemon install on macOS: the service is installed, the daemon answers, install prints the name, Daemon running and the hint, and --json prints the status and service", async () => {
+    const cases = [
+      {
+        label: "worker, default home",
+        argv: ["daemon", "install"],
+        role: "worker" as const,
+        root: join(home, ".simlock"),
+        name: "com.callstack.simlock.worker",
+        args: [mainPath],
+        logPath: "/Users/me/.simlock/daemon.log",
+      },
+      {
+        label: "gateway on a host with no gateway folder yet",
+        argv: ["--gateway", "daemon", "install"],
+        role: "gateway" as const,
+        root: join(home, ".simlock"),
+        name: "com.callstack.simlock.gateway",
+        args: [mainPath, "--gateway"],
+        logPath: "/Users/me/.simlock/gateway/daemon.log",
+      },
+      {
+        label: "another SIMLOCK_HOME",
+        argv: ["daemon", "install"],
+        role: "worker" as const,
+        root: "/tmp/x",
+        name: "com.callstack.simlock.worker.2e56aa",
+        args: [mainPath],
+        logPath: "/tmp/x/daemon.log",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { exitCode, output, serviceManager } = await install(testCase);
+      const label = testCase.label;
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(serviceManager.installs, label).toHaveLength(1);
+      expect(serviceManager.installs[0], label).toMatchObject({
+        name: testCase.name,
+        path: `/Users/me/Library/LaunchAgents/${testCase.name}.plist`,
+        command: nodePath,
+        args: testCase.args,
+        logPath: testCase.logPath,
+      });
+      expect(output.stdout.split("\n").slice(0, 2), label).toEqual([
+        `Service installed: ${testCase.name} (launchd)`,
+        "Daemon running",
+      ]);
+      expect(output.stdout.trimEnd().split("\n").at(-1), label).toBe(
+        "To start after a reboot, turn on automatic login for this user.",
+      );
+    }
+
+    const withShell = await install({
+      argv: ["daemon", "install"],
+      role: "worker",
+      root: join(home, ".simlock"),
+      env: { PATH: "/opt/bin:/usr/bin", JAVA_HOME: "/jdk", SIMLOCK_ADMIN_TOKEN: "secret" },
+    });
+    expect(withShell.exitCode, withShell.output.stderr).toBe(0);
+    expect(withShell.serviceManager.installs[0]?.environment).toEqual({
+      SIMLOCK_HOME: join(home, ".simlock"),
+      PATH: "/opt/bin:/usr/bin",
+      JAVA_HOME: "/jdk",
+    });
+
+    const json = await install({
+      argv: ["daemon", "install", "--json"],
+      role: "worker",
+      root: join(home, ".simlock"),
+    });
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.output.stdout)).toEqual({
+      status: "installed",
+      service: {
+        state: "installed",
+        manager: "launchd",
+        name: "com.callstack.simlock.worker",
+        path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+      },
+    });
+  });
+
+  it("an operator on Linux runs daemon install: the unit lands in the user config directory, and install prints systemd and the linger hint", async () => {
+    const cases = [
+      {
+        label: "default config directory",
+        env: {},
+        unit: "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+      },
+      {
+        label: "absolute XDG_CONFIG_HOME",
+        env: { XDG_CONFIG_HOME: "/xdg" },
+        unit: "/xdg/systemd/user/com.callstack.simlock.worker.service",
+      },
+    ];
+    for (const { label, env, unit } of cases) {
+      const { exitCode, output, serviceManager } = await install({
+        argv: ["daemon", "install"],
+        role: "worker",
+        root: "/home/me/.simlock",
+        env,
+        linux: true,
+      });
+
+      expect(output.stderr, label).toBe("");
+      expect(exitCode, label).toBe(0);
+      expect(serviceManager.installs[0]?.path, label).toBe(unit);
+      expect(output.stdout.split("\n").slice(0, 2), label).toEqual([
+        "Service installed: com.callstack.simlock.worker (systemd)",
+        "Daemon running",
+      ]);
+      expect(output.stdout.trimEnd().split("\n").at(-1), label).toBe(
+        "To start after a reboot without logging in, run: loginctl enable-linger me",
+      );
+    }
+
+    // why: a uid with no passwd entry makes the user lookup throw; install must still succeed.
+    const unknownUser = (): string => {
+      throw new Error("ENOENT: no passwd entry for uid 1234");
+    };
+    const lookupFails = await install({
+      argv: ["daemon", "install"],
+      role: "worker",
+      root: "/home/me/.simlock",
+      linux: true,
+      user: unknownUser,
+    });
+    expect(lookupFails.output.stderr).toBe("");
+    expect(lookupFails.exitCode).toBe(0);
+    expect(lookupFails.output.stdout.trimEnd().split("\n").at(-1)).toBe(
+      "To start after a reboot without logging in, run: loginctl enable-linger <user>",
+    );
+  });
+
+  async function runWithService(options: {
+    readonly argv: readonly string[];
+    readonly running: boolean;
+    readonly socketHeldPolls: number;
+    readonly state?: ServiceState;
+    readonly refuse?: boolean;
+  }): Promise<{
+    readonly exitCode: number;
+    readonly output: ReturnType<typeof outputCapture>;
+    readonly stops: number;
+    readonly serviceManager: FakeServiceManager;
+    readonly clock: FakeClock;
+  }> {
+    const root = join(home, ".simlock");
+    const clock = new FakeClock(0);
+    const serviceManager = new FakeServiceManager(
+      options.state === undefined ? {} : { state: options.state },
+    );
+    let stops = 0;
+    let polls = 0;
+    const connectExistingAdmin: CliEnvironment["connectExistingAdmin"] = async (
+      resolveCredential,
+    ) => {
+      await resolveCredential();
+      if (!options.running)
+        throw new IpcError("endpoint-not-found", "No IPC endpoint yet", undefined);
+      if (options.refuse === true) {
+        throw new SimlockError("FORBIDDEN", "protocol", "The admin token was rejected", {});
+      }
+      // why: a stopping daemon refuses new connections while it still holds its socket.
+      if (stops > 0) throw new IpcError("connection-refused", "Connection refused", undefined);
+      return fakeClient({
+        stopDaemon: async () => {
+          stops += 1;
+          return { stopping: true };
+        },
+      });
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      clock,
+      daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      connectExistingAdmin,
+      daemonEndpointPresent: async () => {
+        if (stops === 0) return options.running;
+        polls += 1;
+        return polls <= options.socketHeldPolls;
+      },
+      readAdminTokenFile: async () => "admin-token",
+      sleep: async (milliseconds) => {
+        clock.advance(milliseconds);
+      },
+      service: {
+        manager: serviceManager,
+        platform: "darwin",
+        user: () => "me",
+        definition: async () =>
+          serviceDefinition({
+            role: "worker",
+            root,
+            dataDirectory: root,
+            home,
+            nodePath,
+            mainPath,
+            env: {},
+          }),
+      },
+    });
+    const exitCode = await runCli(options.argv, environment);
+    return { exitCode, output, stops, serviceManager, clock };
+  }
+
+  it("daemon uninstall removes the service", async () => {
+    const installedState: ServiceState = {
+      state: "installed",
+      path: "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist",
+    };
+    const name = "com.callstack.simlock.worker";
+    const cases = [
+      {
+        label: "installed",
+        argv: ["daemon", "uninstall"],
+        state: installedState,
+        stdout: `Service removed: ${name} (launchd)\n`,
+        removed: 1,
+      },
+      {
+        label: "installed, --json",
+        argv: ["daemon", "uninstall", "--json"],
+        state: installedState,
+        json: { status: "removed", service: { state: "not-installed", manager: "launchd", name } },
+        removed: 1,
+      },
+      {
+        label: "installed, a daemon running, --json",
+        argv: ["daemon", "uninstall", "--json"],
+        state: installedState,
+        running: true,
+        json: {
+          status: "removed",
+          stopped: true,
+          service: { state: "not-installed", manager: "launchd", name },
+        },
+        removed: 1,
+      },
+      {
+        label: "installed, gateway flag, no gateway folder",
+        argv: ["--gateway", "daemon", "uninstall"],
+        state: installedState,
+        stdout: `Service removed: ${name} (launchd)\n`,
+        removed: 1,
+      },
+      {
+        label: "not installed",
+        argv: ["daemon", "uninstall"],
+        state: { state: "not-installed" } as ServiceState,
+        stdout: `Service not installed: ${name}\n`,
+        removed: 0,
+      },
+      {
+        label: "not installed, --json",
+        argv: ["daemon", "uninstall", "--json"],
+        state: { state: "not-installed" } as ServiceState,
+        json: {
+          status: "not-installed",
+          service: { state: "not-installed", manager: "launchd", name },
+        },
+        removed: 0,
+      },
+    ];
+    for (const testCase of cases) {
+      const result = await runWithService({
+        argv: testCase.argv,
+        running: testCase.running ?? false,
+        socketHeldPolls: 0,
+        state: testCase.state,
+      });
+      expect(result.output.stderr, testCase.label).toBe("");
+      expect(result.exitCode, testCase.label).toBe(0);
+      expect(result.serviceManager.uninstalls, testCase.label).toHaveLength(testCase.removed);
+      if (testCase.json === undefined)
+        expect(result.output.stdout, testCase.label).toBe(testCase.stdout);
+      else expect(JSON.parse(result.output.stdout), testCase.label).toEqual(testCase.json);
+    }
+  });
+
+  it("daemon install stops a running daemon first and waits until its socket is released, even while it refuses connections", async () => {
+    const none = await runWithService({
+      argv: ["daemon", "install"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(none.exitCode).toBe(0);
+    expect(none.stops).toBe(0);
+    expect(none.output.stdout).not.toContain("Stopped");
+
+    const running = await runWithService({
+      argv: ["daemon", "install"],
+      running: true,
+      socketHeldPolls: 3,
+    });
+    expect(running.exitCode).toBe(0);
+    expect(running.stops).toBe(1);
+    expect(running.output.stdout.split("\n").slice(0, 2)).toEqual([
+      "Stopped the running daemon; leases are kept.",
+      "Service installed: com.callstack.simlock.worker (launchd)",
+    ]);
+
+    const json = await runWithService({
+      argv: ["daemon", "install", "--json"],
+      running: true,
+      socketHeldPolls: 0,
+    });
+    expect(JSON.parse(json.output.stdout)).toMatchObject({ status: "installed", stopped: true });
+
+    const stubborn = await runWithService({
+      argv: ["daemon", "install"],
+      running: true,
+      socketHeldPolls: Number.POSITIVE_INFINITY,
+    });
+    expect(stubborn.exitCode).toBe(1);
+    expect(JSON.parse(stubborn.output.stderr)).toEqual({
+      error: {
+        code: "SERVICE_FAILED",
+        message: "The running daemon did not stop within 300 s; nothing was changed.",
+      },
+    });
+    expect(stubborn.serviceManager.installs).toEqual([]);
+    expect(stubborn.clock.now()).toBeGreaterThanOrEqual(300_000);
+    expect(stubborn.clock.now()).toBeLessThan(301_000);
+
+    const refused = await runWithService({
+      argv: ["daemon", "install"],
+      running: true,
+      socketHeldPolls: 0,
+      refuse: true,
+    });
+    expect(refused.exitCode).toBe(1);
+    expect(JSON.parse(refused.output.stderr)).toEqual({
+      error: { code: "FORBIDDEN", message: "The admin token was rejected" },
+    });
+    expect(refused.serviceManager.installs).toEqual([]);
+
+    const uninstall = await runWithService({
+      argv: ["daemon", "uninstall"],
+      running: true,
+      socketHeldPolls: 3,
+      state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+    });
+    expect(uninstall.exitCode).toBe(0);
+    expect(uninstall.stops).toBe(1);
+    expect(uninstall.output.stdout.split("\n").slice(0, 2)).toEqual([
+      "Daemon stopping",
+      "Service removed: com.callstack.simlock.worker (launchd)",
+    ]);
+  });
+});
+
+describe("CLI: a start goes through the service (#830)", () => {
+  it("daemon start and a command's auto-start ask a loaded service to start the daemon and spawn nothing", async () => {
+    const home = "/Users/me";
+    const root = join(home, ".simlock");
+    const cases = [
+      { label: "daemon start", argv: ["daemon", "start", "--json"] },
+      { label: "a command's auto-start", argv: ["status", "--json"] },
+    ];
+    for (const testCase of cases) {
+      const filesystem = new MemoryFilesystem();
+      const ipcTransport = new MemoryIpcTransport();
+      const serviceManager = new FakeServiceManager({
+        state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+        onStart: async () => {
+          await startInMemoryDaemon({
+            adminTokenPath: join(root, "admin.token"),
+            filesystem,
+            ipcTransport,
+            socketPath: join(root, "daemon.sock"),
+          });
+        },
+      });
+      const spawner = new FakeDaemonLauncher(() => undefined, {
+        exit: { code: 1, signal: null },
+      });
+      const notices: string[] = [];
+      const output = outputCapture({
+        filesystem,
+        clock: new FakeClock(0),
+        systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+        ipc: ipcTransport,
+        launcher: launcherFor({
+          role: "worker",
+          root,
+          dataDirectory: root,
+          mainPath: "/opt/simlock/dist/daemon/main.js",
+          nodePath: "/opt/node/bin/node",
+          home,
+          env: {},
+          serviceManager,
+          notify: (line) => notices.push(line),
+          spawner,
+        }),
+        daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+        homeDirectory: "/home/operator",
+        workingDirectory: "/work/project",
+        runTool: async () => ({ outcome: "not-found" }),
+      });
+
+      const exitCode = await runCli(testCase.argv, output.environmentWith());
+
+      expect(exitCode, testCase.label).toBe(0);
+      expect(serviceManager.starts, testCase.label).toHaveLength(1);
+      expect(serviceManager.starts[0]?.name, testCase.label).toBe("com.callstack.simlock.worker");
+      expect(spawner.launches, testCase.label).toBe(0);
+      expect(notices, testCase.label).toEqual([]);
+    }
+  });
+});
+
+describe("CLI: a start through a service that fails (#830)", () => {
+  it("fails at the 20 s deadline with DAEMON_STARTUP_FAILED and the daemon.log lines written since the start", async () => {
+    const startError =
+      '{"message":"Daemon failed to start","fields":{"message":"EADDRINUSE: socket taken"}}\n';
+    const cases = [
+      { label: "the log holds the start error", written: startError, expected: "EADDRINUSE" },
+      { label: "empty log", written: "", expected: undefined },
+      {
+        label: "25 lines: the last 20 are kept",
+        written: Array.from({ length: 25 }, (_, index) => `line ${String(index + 1)}\n`).join(""),
+        expected: "line 6\n",
+        notExpected: "line 5\n",
+      },
+    ];
+    for (const testCase of cases) {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-service-start-"));
+      try {
+        const logPath = join(directory, "daemon.log");
+        await writeFile(logPath, "older line\n");
+        const clock = new FakeClock(0);
+        const serviceManager = new FakeServiceManager({
+          state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+          onStart: async () => {
+            await appendFile(logPath, testCase.written);
+          },
+        });
+        const output = outputCapture({
+          filesystem: new MemoryFilesystem(),
+          clock,
+          systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+          ipc: new MemoryIpcTransport(),
+          launcher: launcherFor({
+            role: "worker",
+            root: directory,
+            dataDirectory: directory,
+            mainPath: "/opt/simlock/dist/daemon/main.js",
+            nodePath: "/opt/node/bin/node",
+            home: "/Users/me",
+            env: {},
+            serviceManager,
+            notify: () => undefined,
+            spawner: new FakeDaemonLauncher(),
+          }),
+          daemonHome: { role: "worker", dataDirectory: directory, gatewayPresent: false },
+          homeDirectory: "/home/operator",
+          workingDirectory: "/work/project",
+          runTool: async () => ({ outcome: "not-found" }),
+        });
+        let settled = false;
+        const exitCode = runCli(["daemon", "start", "--json"], output.environmentWith()).then(
+          (code) => {
+            settled = true;
+            return code;
+          },
+        );
+        for (let tick = 0; tick < 500 && !settled; tick += 1) {
+          clock.advance(50);
+          await settle();
+          await settle();
+        }
+        expect(settled, `${testCase.label}: not settled at ${String(clock.now())}ms`).toBe(true);
+        expect(await exitCode, testCase.label).toBe(1);
+        const error = (
+          JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "") as {
+            error: { code: string; message: string };
+          }
+        ).error;
+        expect(error.code, testCase.label).toBe("DAEMON_STARTUP_FAILED");
+        expect(error.message, testCase.label).toContain("Timed out starting simlock daemon");
+        expect(error.message, testCase.label).not.toContain("older line");
+        if (testCase.expected === undefined) {
+          expect(error.message, testCase.label).not.toContain("\n");
+        } else {
+          expect(error.message, testCase.label).toContain(testCase.expected);
+        }
+        if (testCase.notExpected !== undefined) {
+          expect(error.message, testCase.label).not.toContain(testCase.notExpected);
+        }
+      } finally {
+        await rm(directory, { force: true, recursive: true });
+      }
+    }
+  });
+});
+
+describe("CLI: a service manager call fails, or the platform has none (#830)", () => {
+  const home = "/Users/me";
+  const root = join(home, ".simlock");
+  const name = "com.callstack.simlock.worker";
+  const plist = `${home}/Library/LaunchAgents/${name}.plist`;
+  const nodePath = "/opt/node/bin/node";
+  const mainPath = "/opt/simlock/dist/daemon/main.js";
+  const done = (code: number | null, stderr = "") => ({ code, stdout: "", stderr });
+
+  async function run(options: {
+    readonly argv: readonly string[];
+    readonly platform?: NodeJS.Platform;
+    readonly script?: ConstructorParameters<typeof ScriptedProcessRunner>[0];
+    readonly present?: readonly string[];
+  }): Promise<{
+    readonly exitCode: number;
+    readonly stderr: string;
+    readonly filesystem: MemoryFilesystem;
+  }> {
+    const filesystem = new MemoryFilesystem();
+    for (const path of options.present ?? []) {
+      await filesystem.mkdirp(dirname(path));
+      await filesystem.writeFileAtomic(path, "");
+    }
+    const manager =
+      options.script === undefined
+        ? undefined
+        : new LaunchdServiceManager({
+            runner: new ScriptedProcessRunner(options.script),
+            filesystem,
+            uid: 501,
+          });
+    const ipc = new MemoryIpcTransport();
+    const ports: CliEnvironmentPorts = {
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+      ipc,
+      launcher: launcherFor({
+        role: "worker",
+        root,
+        dataDirectory: root,
+        mainPath,
+        nodePath,
+        home,
+        env: {},
+        serviceManager: manager,
+        notify: () => undefined,
+        spawner: new FakeDaemonLauncher(() => undefined, { exit: { code: 1, signal: null } }),
+      }),
+      daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
+      runTool: async () => ({ outcome: "not-found" }),
+      service: {
+        manager,
+        platform: options.platform ?? "darwin",
+        user: () => "me",
+        home,
+        root,
+        nodePath,
+        mainPath,
+      },
+    };
+    const output = outputCapture(ports);
+    const exitCode = await runCli(options.argv, output.environmentWith());
+    return { exitCode, stderr: output.stderr, filesystem };
+  }
+
+  const errorOf = (stderr: string): { code: string; message: string } =>
+    (
+      JSON.parse(stderr.trim().split("\n").at(-1) ?? "") as {
+        error: { code: string; message: string };
+      }
+    ).error;
+
+  it("a failed or stuck launchctl call is SERVICE_FAILED, a failed load removes the plist, and a platform without a service manager is a usage error", async () => {
+    for (const command of ["install", "uninstall"]) {
+      const result = await run({ argv: ["daemon", command], platform: "win32" });
+      expect(result.exitCode, `win32 ${command}`).toBe(2);
+      expect(errorOf(result.stderr), `win32 ${command}`).toEqual({
+        code: "USAGE",
+        message: `daemon ${command} is supported on macOS and Linux only`,
+      });
+    }
+
+    const bootout = {
+      match: { command: "launchctl", args: ["bootout", `gui/501/${name}`] },
+      result: done(113),
+    };
+    const bootstrap = { command: "launchctl", args: ["bootstrap", "gui/501", plist] };
+    const failedLoad = await run({
+      argv: ["daemon", "install"],
+      script: [
+        bootout,
+        {
+          match: bootstrap,
+          result: done(5, "Bootstrap failed: 5: Input/output error\nsecond line"),
+        },
+      ],
+    });
+    expect(failedLoad.exitCode).toBe(1);
+    expect(errorOf(failedLoad.stderr)).toEqual({
+      code: "SERVICE_FAILED",
+      message: `launchctl bootstrap gui/501 ${plist} failed: Bootstrap failed: 5: Input/output error`,
+    });
+    expect(await failedLoad.filesystem.exists(plist)).toBe(false);
+
+    const stuckLoad = await run({
+      argv: ["daemon", "install"],
+      script: [bootout, { match: bootstrap, result: done(null) }],
+    });
+    expect(stuckLoad.exitCode).toBe(1);
+    expect(errorOf(stuckLoad.stderr)).toEqual({
+      code: "SERVICE_FAILED",
+      message: `launchctl bootstrap gui/501 ${plist} did not finish within 10 s`,
+    });
+    expect(await stuckLoad.filesystem.exists(plist)).toBe(false);
+
+    const failedKickstart = await run({
+      argv: ["daemon", "start"],
+      present: [plist, nodePath, mainPath],
+      script: [
+        {
+          match: { command: "plutil", args: ["-convert", "json", "-o", "-", plist] },
+          result: {
+            code: 0,
+            stdout: JSON.stringify({ ProgramArguments: [nodePath, mainPath] }),
+            stderr: "",
+          },
+        },
+        { match: { command: "launchctl", args: ["print", `gui/501/${name}`] }, result: done(0) },
+        {
+          match: { command: "launchctl", args: ["kickstart", `gui/501/${name}`] },
+          result: done(1, "Could not find service"),
+        },
+      ],
+    });
+    expect(failedKickstart.exitCode).toBe(1);
+    expect(errorOf(failedKickstart.stderr)).toEqual({
+      code: "SERVICE_FAILED",
+      message: `launchctl kickstart gui/501/${name} failed: Could not find service`,
+    });
+  });
+});
+
+describe("simlock worker update", () => {
+  type UpdateAnswer = Awaited<ReturnType<SimlockAdminClient["updateWorker"]>>;
+  type View = Awaited<ReturnType<SimlockAdminClient["listWorkers"]>>["workers"][number];
+  const view = (overrides: Partial<View> = {}): View => ({
+    connection: "connected",
+    drained: false,
+    id: "3f81a2c4",
+    label: "mac-studio-2",
+    lastSeenAt: 1_000,
+    version: "0.3.0",
+    ...overrides,
+  });
+  const run = { forced: false, from: "0.3.0", startedAt: 1_000, to: "0.4.0" } as const;
+  const answer = (overrides: Partial<UpdateAnswer> = {}): UpdateAnswer => ({
+    health: "running",
+    lastUpdateFailure: null,
+    latestVersion: "0.4.0",
+    resolved: "0.4.0",
+    started: true,
+    update: { ...run, stage: "installing" },
+    upToDate: false,
+    version: "0.3.0",
+    workerId: "3f81a2c4",
+    ...overrides,
+  });
+
+  it("follows the update to is running, reports a failure with exit 1, says why the worker is up to date, detaches, and refuses on a worker daemon", async () => {
+    const failure = {
+      at: 2_000,
+      from: "0.3.0",
+      message: "npm exited 1",
+      stage: "installing",
+      to: "0.4.0",
+    } as const;
+    const cases: readonly {
+      readonly name: string;
+      readonly argv: readonly string[];
+      readonly answer: UpdateAnswer | SimlockError;
+      readonly lists?: readonly View[];
+      readonly code: number;
+      readonly stdout?: string;
+      readonly stderr?: string;
+      readonly polls?: number;
+    }[] = [
+      {
+        name: "follows to running",
+        argv: ["worker", "update", "3f81a2c4", "--version", "0.4.0", "--force"],
+        answer: answer(),
+        lists: [
+          view({ update: { ...run, leases: 2, stage: "waiting" } }),
+          view({ update: { ...run, stage: "installing" } }),
+          view({ connection: "disconnected", update: { ...run, stage: "restarting" } }),
+          view({ update: { ...run, stage: "restarting" }, version: "0.4.0" }),
+          view({ update: null, version: "0.4.0" }),
+        ],
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is running 0.4.0\n",
+        polls: 5,
+      },
+      {
+        name: "fails with the stage and message",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer(),
+        lists: [view({ lastUpdateFailure: failure, update: null })],
+        code: 1,
+        stdout: "Update failed (installing): npm exited 1\n",
+        polls: 1,
+      },
+      {
+        name: "already on the latest",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is already on the latest (0.4.0)\n",
+        polls: 1,
+      },
+      {
+        name: "already running the requested version",
+        argv: ["worker", "update", "3f81a2c4", "--version", "0.4.0"],
+        answer: answer({ started: false, update: null, upToDate: true, version: "0.4.0" }),
+        code: 0,
+        stdout: "mac-studio-2 (3f81a2c4) is already running 0.4.0\n",
+        polls: 1,
+      },
+      {
+        name: "newer than the latest",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: answer({
+          resolved: "0.3.0",
+          started: false,
+          update: null,
+          upToDate: true,
+          version: "0.4.0",
+        }),
+        code: 0,
+        stdout:
+          "mac-studio-2 (3f81a2c4) is newer than the latest (0.3.0). Use --version to install another version.\n",
+        polls: 1,
+      },
+      {
+        name: "detach",
+        argv: ["worker", "update", "3f81a2c4", "--detach"],
+        answer: answer(),
+        code: 0,
+        stdout:
+          "Updating mac-studio-2 (3f81a2c4) 0.3.0 → 0.4.0. Follow it with simlock worker list.\n",
+        polls: 1,
+      },
+      {
+        name: "worker daemon",
+        argv: ["worker", "update", "3f81a2c4"],
+        answer: new SimlockError(
+          "UNSUPPORTED_IN_WORKER_MODE",
+          "domain",
+          "worker.update is a gateway operation",
+          { operation: "worker.update" },
+        ),
+        code: 2,
+        stderr: "worker.update is a gateway operation",
+        polls: 0,
+      },
+    ];
+    for (const spec of cases) {
+      const output = outputCapture();
+      const clock = new FakeClock(0);
+      const sent: unknown[] = [];
+      const lists = [...(spec.lists ?? [view()])];
+      let polls = 0;
+      const environment = output.environmentWith({
+        clock,
+        connectAdmin: async () =>
+          fakeClient({
+            listWorkers: async () => {
+              polls += 1;
+              const next = lists.length > 1 ? lists.shift() : lists[0];
+              return { workers: next === undefined ? [] : [next] };
+            },
+            updateWorker: async (input) => {
+              sent.push(input);
+              if (spec.answer instanceof Error) throw spec.answer;
+              return spec.answer;
+            },
+          }),
+        // why: a follow that never reaches an outcome fails on this line, not by timing out.
+        sleep: async (milliseconds) => {
+          if (polls > (spec.lists ?? []).length + 2)
+            throw new Error(`${spec.name}: the follow never ended`);
+          clock.advance(milliseconds);
+        },
+      });
+
+      const code = await runCli(spec.argv, environment);
+
+      expect({ code, name: spec.name, stdout: output.stdout }).toEqual({
+        code: spec.code,
+        name: spec.name,
+        stdout: spec.stdout ?? "",
+      });
+      if (spec.stderr !== undefined) expect(output.stderr).toContain(spec.stderr);
+      expect({ name: spec.name, polls }).toEqual({ name: spec.name, polls: spec.polls ?? 0 });
+      expect(sent).toEqual([
+        {
+          workerId: "3f81a2c4",
+          ...(spec.argv.includes("--version") ? { version: "0.4.0" } : {}),
+          ...(spec.argv.includes("--force") ? { force: true } : {}),
+        },
+      ]);
+    }
   });
 });

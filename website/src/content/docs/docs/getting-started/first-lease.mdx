@@ -1,0 +1,127 @@
+---
+title: Lease your first device
+description: Lease an iOS simulator or Android emulator from the command line, install and launch an app on it, and release it.
+---
+
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+You need a machine that passes `simlock doctor` for the platform you want. See [Install and check your machine](/simlock/docs/getting-started).
+
+<Steps>
+
+1. **Lease a device.**
+
+   <Tabs syncKey="platform">
+   <TabItem label="iOS">
+
+   ```sh
+   simlock lease --platform ios --device "iPhone 16" --detach
+   ```
+
+   </TabItem>
+   <TabItem label="Android">
+
+   ```sh
+   simlock lease --platform android --device "Pixel 8" --detach
+   ```
+
+   </TabItem>
+   </Tabs>
+
+   If no free device fits, Simlock creates one. While it works, progress appears on stderr as JSON lines:
+
+   ```text
+   {"push":"progress","stage":"provisioning","etaMs":60500}
+   {"push":"progress","stage":"booting","etaMs":60000}
+   ```
+
+   When the device is ready, the lease is printed on stdout as one JSON line. This is the iOS one:
+
+   ```json
+   {"device":{"id":"dev_0f6e2b4c-8d1a-4c3e-9b7f-5a2d1e8c4b90","driverDeviceId":"6B1F3A2C-9E47-4D8B-A0C5-2F7E1D93B468","spec":{"physical":false,"platform":"ios","model":"iPhone 16","osVersion":"18.4"},"address":"6B1F3A2C-9E47-4D8B-A0C5-2F7E1D93B468","physical":false,"mode":"full"},"environment":{"SIMLOCK_IOS_DEVICE_SET":"/Users/dana/.simlock/devices/ios"},"lease":{"id":"lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35","deviceId":"dev_0f6e2b4c-8d1a-4c3e-9b7f-5a2d1e8c4b90","requesterId":"48213","ownerId":"48213","grantedAt":1792584000000,"ttlMs":900000,"ttlDeadline":1792584900000,"lastRenewedAt":1792584000000,"idChosenByRequester":false},"timing":{"estimatedProvisionMs":500,"estimatedBootMs":60000,"estimatedReclaimMs":34000,"estimatedReadyMs":60500},"role":"admin"}
+   ```
+
+   The fields you need:
+
+   | Field | What it is |
+   | --- | --- |
+   | `lease.id` | The lease ID. You use it to renew and release. |
+   | `device.address` | The device to point tools at: the simulator's UDID on iOS, the emulator's serial (such as `emulator-5554`) on Android. |
+   | `lease.ttlDeadline` | When the lease ends if nobody renews it, in milliseconds since 1970. Here, 15 minutes after the grant. |
+   | `environment` | Variables for tools you run without the `simlock` wrapper. |
+
+2. **Use the device.**
+
+   Simlock's simulators and emulators are kept apart from your own, so a plain `xcrun simctl` or `adb` cannot see them. Run the same commands through `simlock simctl` and `simlock adb`, and name your device by its `device.address`:
+
+   <Tabs syncKey="platform">
+   <TabItem label="iOS">
+
+   ```sh
+   simlock simctl install 6B1F3A2C-9E47-4D8B-A0C5-2F7E1D93B468 ./build/MyApp.app
+   simlock simctl launch 6B1F3A2C-9E47-4D8B-A0C5-2F7E1D93B468 com.example.myapp
+   ```
+
+   </TabItem>
+   <TabItem label="Android">
+
+   ```sh
+   simlock adb -s emulator-5554 install ./app/build/outputs/apk/debug/app-debug.apk
+   simlock adb -s emulator-5554 shell am start -n com.example.myapp/.MainActivity
+   ```
+
+   </TabItem>
+   </Tabs>
+
+   Always name the device. Other agents' devices are visible to these commands too, so `booted` or a missing `-s` can reach a device that is not yours.
+
+   Simlock refuses commands that would break its devices, such as `simctl erase`, `simctl delete` or `adb kill-server`. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
+
+3. **Release the device.**
+
+   ```sh
+   simlock release lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35
+   ```
+
+   ```json
+   {"leaseId":"lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35"}
+   ```
+
+   Simlock wipes the device in the background and keeps it for the next lease.
+
+</Steps>
+
+## Keep the lease longer
+
+With `--detach`, the lease lasts 15 minutes unless you renew it. Renew before `ttlDeadline` to get another full TTL:
+
+```sh
+simlock lease renew lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35
+```
+
+To ask for a longer TTL up front, add `--ttl 1h` to `simlock lease`. The longest TTL is 4 hours by default.
+
+## Let the command hold the lease
+
+Leave out `--detach` and `simlock lease` keeps running after it prints the lease. It renews the lease on a timer and releases it when you press Ctrl-C, when it gets `SIGTERM`, or when the process that started it exits. Use this when you want the lease to end with your terminal or script.
+
+## If the lease fails
+
+Errors are one JSON line on stderr, and the exit code tells you the kind of failure:
+
+```json
+{"error":{"code":"RUNTIME_MISSING","message":"Runtime missing for ios 17.5"}}
+```
+
+| Code | Exit | What to do |
+| --- | --- | --- |
+| `UNKNOWN_MODEL` | 12 | The model name is not known on this machine. Run `simlock catalog --platform ios` to see the models and OS versions you can lease. |
+| `RUNTIME_MISSING` | 12 | The OS version is not installed. Pick an installed one from `simlock catalog`, or add `--allow-download`. |
+| `NO_DRIVER` | 12 | The platform is not available on this machine. Run `simlock doctor`. |
+| `QUEUE_TIMEOUT` | 10 | You set `--timeout` and no device freed up in time. |
+
+Without `--timeout`, a request waits in the queue until a device frees up. The full list is in [Errors](/simlock/docs/using-devices/errors).
+
+<Aside>
+In a terminal, each `simlock` command gets its own identity, so the lease belongs to no particular agent. Your agents get a stable identity per session. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+</Aside>

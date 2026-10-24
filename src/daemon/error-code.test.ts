@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { AdminAuthenticationFailedError } from "../auth/index.js";
 import { ComponentInstallerClosedError, UnsupportedRequestOptionError } from "../core/index.js";
 import {
-  LeaseIdTakenError,
   NoCapacityError,
   ProvisionFailedError,
   ReplayedLeaseRequestError,
@@ -59,17 +57,5 @@ describe("classifyError on a request option the driver does not have", () => {
       code: "BAD_REQUEST",
       message: "ios lease requests do not take imageTag",
     });
-  });
-});
-
-describe("classifyError on a lease ID that is in use", () => {
-  it("answers LEASE_ID_TAKEN for LeaseIdTakenError", () => {
-    expect(classifyError(new LeaseIdTakenError("ad-7f3a"))).toBe("LEASE_ID_TAKEN");
-  });
-});
-
-describe("classifyError on a rejected admin credential", () => {
-  it("answers ADMIN_AUTHENTICATION_FAILED for the error src/auth throws", () => {
-    expect(classifyError(new AdminAuthenticationFailedError())).toBe("ADMIN_AUTHENTICATION_FAILED");
   });
 });

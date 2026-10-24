@@ -15,31 +15,27 @@ type Context = GatewayContext<AgentDeviceModuleConfig>;
 type FleetLeaseFacts = ReturnType<FleetPort["leasesOf"]>[number];
 
 // why: the context lists workers whose agent-device is available; the rest of what makes one fit for agent-device is judged here.
-function serving(view: WorkerView, withDrained: boolean): FleetWorker | undefined {
+function serving(view: WorkerView): FleetWorker | undefined {
   const maxTtlMs = view.lease?.maxTtlMs;
-  if (
-    (view.drained && !withDrained) ||
-    view.catalogReadAt === undefined ||
-    maxTtlMs === undefined
-  ) {
+  if (view.catalogReadAt === undefined || maxTtlMs === undefined) {
     return undefined;
   }
   const platforms = (view.catalog ?? []).flatMap((entry) =>
     entry.platform === "ios" || entry.platform === "android" ? [entry.platform] : [],
   );
-  return { id: view.id, leaseMaxTtlMs: maxTtlMs, platforms };
+  return { id: view.id, drained: view.drained, leaseMaxTtlMs: maxTtlMs, platforms };
 }
 
 function fleetPort(ctx: Context): FleetPort {
   return {
     capableWorkers: () =>
       ctx.serving().flatMap((view) => {
-        const worker = serving(view, false);
+        const worker = serving(view);
         return worker === undefined ? [] : [worker];
       }),
     holder: (workerId) => {
       const view = ctx.serving().find((candidate) => candidate.id === workerId);
-      return view === undefined ? undefined : serving(view, true);
+      return view === undefined ? undefined : serving(view);
     },
     instanceId: ctx.instanceId,
     leasesOf: (ownerId) =>
@@ -96,14 +92,16 @@ function describeDevice(
   device: ReturnType<Context["grantedDevices"]>[number],
 ): FleetLeaseFacts["listed"] {
   const { platform, model } = device.spec;
-  if (device.address === undefined || (platform !== "ios" && platform !== "android")) {
+  // why: a phone is reached by the id it was enrolled with, since it has no address of its own.
+  const address = device.spec.physical ? device.driverDeviceId : device.address;
+  if (address === undefined || (platform !== "ios" && platform !== "android")) {
     return undefined;
   }
   const deviceClass = view.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
     model
   ];
   return {
-    address: device.address,
+    address,
     model,
     platform,
     ttlDeadline: record.ttlDeadline,

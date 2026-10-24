@@ -1,5 +1,6 @@
 import {
   chmod,
+  copyFile,
   link,
   lstat,
   mkdir,
@@ -73,6 +74,7 @@ export interface Filesystem {
     options?: WriteFileExclusiveOptions,
   ): Promise<void>;
   mkdirp(path: string): Promise<void>;
+  copyFile(from: string, to: string): Promise<void>;
   /**
    * Moves a path in one step, so what it names becomes visible complete or not at all.
    * Fails when the destination is occupied by anything but an empty directory.
@@ -107,6 +109,11 @@ export interface Filesystem {
 export class NodeFilesystem implements Filesystem {
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
+  }
+
+  // fallow-ignore-next-line unused-class-member -- the updater reaches it through the Filesystem port.
+  async copyFile(from: string, to: string): Promise<void> {
+    await copyFile(from, to);
   }
 
   async readFileFrom(path: string, offset: number): Promise<string> {
@@ -316,6 +323,10 @@ export class MemoryFilesystem implements Filesystem {
     }
 
     return entry.contents;
+  }
+
+  async copyFile(from: string, to: string): Promise<void> {
+    await this.writeFileAtomic(to, await this.readFile(from));
   }
 
   async readFileFrom(path: string, offset: number): Promise<string> {

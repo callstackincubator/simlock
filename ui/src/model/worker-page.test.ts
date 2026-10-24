@@ -3,10 +3,14 @@ import { describe, expect, it } from "vitest";
 import { listSearch } from "./paging";
 import {
   filterWorkers,
+  readDrawerTab,
+  readFilter,
   upMeta,
-  type WorkerInspector,
-  workerInspectorOf,
+  type WorkerPage,
+  workerPageOf,
   workerRow,
+  writeDrawerTab,
+  writeFilter,
 } from "./worker-page";
 import type { WorkerDevice, WorkerView } from "./workers";
 
@@ -85,12 +89,12 @@ const LOAD = {
 function inspect(
   view: WorkerView,
   now = NOW,
-  tokens: Parameters<typeof workerInspectorOf>[0]["tokens"] = [],
+  tokens: Parameters<typeof workerPageOf>[0]["tokens"] = [],
 ) {
-  return workerInspectorOf({ now, tokens, worker: view });
+  return workerPageOf({ now, tokens, worker: view });
 }
 
-function figure(inspector: WorkerInspector, label: string) {
+function figure(inspector: WorkerPage, label: string) {
   return inspector.overview.figures.find((card) => card.label === label);
 }
 
@@ -102,7 +106,7 @@ describe("a worker's row in the list", () => {
       health: { tone: "ok", word: "connected" },
       mono: false,
       name: "worker-a",
-      to: "/workers/wrk_1",
+      to: "/fleet/wrk_1",
       use: { limit: 8, percent: 12.5, running: 1 },
     });
   });
@@ -115,7 +119,7 @@ describe("a worker's row in the list", () => {
     const row = workerRow(worker({ drained: true }));
 
     expect(row.health).toEqual({ tone: "warn", word: "drained" });
-    expect(Object.keys(row).sort()).toEqual(["health", "id", "mono", "name", "to", "use"]);
+    expect(JSON.stringify({ ...row, health: undefined })).not.toContain("drained");
   });
 
   it("has no use for a worker that is not connected or has reported no capacity", () => {
@@ -123,10 +127,131 @@ describe("a worker's row in the list", () => {
     expect(workerRow(worker({ capacity: undefined })).use).toBeUndefined();
   });
 
+  it("reads the filter from the address, All when it is absent or unknown, and a new one starts at the first page", () => {
+    expect(readFilter("?filter=busy")).toBe("busy");
+    expect(readFilter("?filter=nope")).toBe("all");
+    expect(readFilter("")).toBe("all");
+    expect(writeFilter("?page=3&q=ci", "issues")).toBe("?q=ci&filter=issues");
+    expect(writeFilter("?filter=busy&page=3", "all")).toBe("");
+  });
+
   it("keeps the list's page and size on the link, and nothing of a worker's own pagers", () => {
     expect(listSearch("?page=2&size=50&devices-page=3&warm-pool-size=50")).toBe("?page=2&size=50");
     expect(listSearch("?devices-page=3")).toBe("");
-    expect(workerRow(worker(), "?page=2").to).toBe("/workers/wrk_1?page=2");
+    expect(listSearch("?q=ci&page=2&size=50")).toBe("?page=2&size=50&q=ci");
+    expect(listSearch("?page=2&filter=busy")).toBe("?page=2&filter=busy");
+    expect(workerRow(worker(), "?page=2").to).toBe("/fleet/wrk_1?page=2");
+  });
+});
+
+describe("a worker's version line", () => {
+  it("shows the version and the latest when newer, on the row and beside the page title, and nothing without a version", () => {
+    const cases: readonly [
+      string,
+      string | undefined,
+      string | null | undefined,
+      string | undefined,
+    ][] = [
+      ["newer", "0.3.0", "0.4.0", "simlock 0.3.0 · 0.4.0 available"],
+      ["equal", "0.4.0", "0.4.0", "simlock 0.4.0"],
+      ["older", "0.5.0", "0.4.0", "simlock 0.5.0"],
+      ["no latest known", "0.3.0", null, "simlock 0.3.0"],
+      ["latest not reported", "0.3.0", undefined, "simlock 0.3.0"],
+      ["no version", undefined, "0.4.0", undefined],
+      [
+        "prerelease is behind its release",
+        "0.4.0-rc.1",
+        "0.4.0",
+        "simlock 0.4.0-rc.1 · 0.4.0 available",
+      ],
+      ["release is not behind its prerelease", "0.4.0", "0.4.0-rc.1", "simlock 0.4.0"],
+    ];
+    for (const [name, version, latestVersion, line] of cases) {
+      const view = worker({
+        ...(version === undefined ? {} : { version }),
+        ...(latestVersion === undefined ? {} : { latestVersion }),
+      });
+      expect(workerRow(view).version, `${name}, row`).toBe(line);
+      expect(inspect(view).version, `${name}, page`).toBe(line);
+    }
+  });
+});
+
+describe("a worker's row while it updates", () => {
+  it("reads amber updating with the stage under it, over drained, under a red finding, and drained again once the update ends", () => {
+    const base = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+    const waiting = (leases: number) => ({ ...base, leases, stage: "waiting" as const });
+    const cases: readonly [string, Partial<WorkerView>, string, string | undefined][] = [
+      ["waiting, two", { update: waiting(2) }, "updating", "waiting for 2 leases"],
+      ["waiting, one", { update: waiting(1) }, "updating", "waiting for 1 lease"],
+      ["installing", { update: { ...base, stage: "installing" } }, "updating", "installing"],
+      ["restarting", { update: { ...base, stage: "restarting" } }, "updating", "restarting"],
+      [
+        "drained and updating",
+        { drained: true, update: waiting(1) },
+        "updating",
+        "waiting for 1 lease",
+      ],
+      ["drained, update over", { drained: true, update: null }, "drained", undefined],
+      [
+        "disconnected",
+        { connection: "disconnected", update: waiting(1) },
+        "disconnected",
+        undefined,
+      ],
+      ["failed", { health: "failed", update: waiting(1) }, "failed", undefined],
+    ];
+    for (const [name, overrides, word, stage] of cases) {
+      const row = workerRow(worker(overrides));
+      expect([row.health.word, row.stage], name).toEqual([word, stage]);
+    }
+    expect(workerRow(worker({ update: waiting(1) })).health.tone).toBe("warn");
+  });
+});
+
+describe("a worker page's update banners", () => {
+  it("words the Updating banner per stage and the failure banner, in the order disconnected, failure, updating, drained, and shows none once both are null", () => {
+    const base = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
+    const banners = (overrides: Partial<WorkerView>) =>
+      inspect(worker(overrides)).banners.map((banner) => [
+        banner.text,
+        banner.tone,
+        banner.failure ?? false,
+      ]);
+    expect(banners({ update: { ...base, leases: 2, stage: "waiting" } })).toEqual([
+      ["Updating to 0.4.0 · waiting for 2 leases. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, leases: 1, stage: "waiting" } })).toEqual([
+      ["Updating to 0.4.0 · waiting for 1 lease. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, stage: "installing" } })).toEqual([
+      ["Updating to 0.4.0 · installing. It takes no new leases.", "warn", false],
+    ]);
+    expect(banners({ update: { ...base, stage: "restarting" } })).toEqual([
+      ["Updating to 0.4.0 · restarting. It takes no new leases.", "warn", false],
+    ]);
+    const failure = (stage: "installing" | "restarting") => ({
+      at: NOW - 60_000,
+      from: "0.3.0",
+      message: "EACCES",
+      stage,
+      to: "0.4.0",
+    });
+    expect(banners({ lastUpdateFailure: failure("installing") })).toEqual([
+      ["Update to 0.4.0 failed (installing): EACCES", "error", true],
+    ]);
+    expect(banners({ lastUpdateFailure: failure("restarting") })).toEqual([
+      ["Update to 0.4.0 failed (restarting): EACCES", "error", true],
+    ]);
+    expect(
+      banners({
+        connection: "disconnected",
+        drained: true,
+        lastUpdateFailure: failure("installing"),
+        update: { ...base, stage: "installing" },
+      }).map(([text]) => String(text).split(" ")[0]),
+    ).toEqual(["Disconnected", "Update", "Updating", "Drained"]);
+    expect(banners({ lastUpdateFailure: null, update: null })).toEqual([]);
   });
 });
 
@@ -333,7 +458,7 @@ describe("a worker's capacity and leases", () => {
     expect(inspector.overview.devices).toBeUndefined();
     expect(inspector.overview.leases).toBeUndefined();
     expect(inspector.warm).toBeUndefined();
-    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["overview", "host"]);
+    expect(inspector.tabs.map((tab) => tab.value)).toEqual(["devices", "host", "events"]);
     expect(inspector.host.capabilities).toBeUndefined();
     expect(inspector.health).toEqual({ tone: "warn", word: "starting" });
   });
@@ -371,8 +496,8 @@ describe("a worker's device rows", () => {
   it("links a holder to the lease's page under the id the daemon lists it by, a gateway's worker-qualified one included", () => {
     const view = worker({ devices: [device({ state: "leased" })], leases: [LEASE] });
     const holderOn = (leaseIds: readonly string[]) =>
-      workerInspectorOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]
-        ?.holder?.to;
+      workerPageOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]?.holder
+        ?.to;
 
     expect(holderOn([`${view.id}.l_1`])).toBe(`/leases/${encodeURIComponent(`${view.id}.l_1`)}/`);
     expect(holderOn(["l_1"])).toBe("/leases/l_1/");
@@ -418,10 +543,17 @@ describe("a worker's device rows", () => {
       id: "dev_p",
       mode: undefined,
       physical: true,
+      driverDeviceId: "00008130-AAAA",
       spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
     });
     const rows =
-      inspect(worker({ devices: [physical, device({ id: "dev_v" })] })).overview.devices ?? [];
+      inspect(worker({ devices: [physical, device({ id: "dev_v", driverDeviceId: "SIM-1" })] }))
+        .overview.devices ?? [];
+
+    expect(rows.map((row) => [row.id, row.udid])).toEqual([
+      ["dev_p", "00008130-AAAA"],
+      ["dev_v", undefined],
+    ]);
 
     expect(rows.map((row) => [row.id, row.physical, row.mode, row.imageTag])).toEqual([
       ["dev_p", true, undefined, undefined],
@@ -557,13 +689,14 @@ describe("a worker's warm pool tab", () => {
     count: 1,
     mode: "full" as const,
     model: "iPhone 17",
+    origin: "configured" as const,
     osVersion: "27.0",
     platform: "ios" as const,
     ready: 0,
     short: "runtime-missing" as const,
   };
 
-  it("lists each kind the pool keeps with its wanted, ready and booting numbers and the reason it is short, a dash where there is none", () => {
+  it("lists each kind the pool keeps with its origin, its image tag, its wanted, ready and booting numbers and the reason it is short, a dash where there is none, and gives two kinds that differ by tag two keys", () => {
     const { warm } = inspect(
       worker({
         warmPool: {
@@ -571,7 +704,14 @@ describe("a worker's warm pool tab", () => {
           reserveRunning: { android: 0, ios: 1 },
           targets: [
             { ...target, booting: 1, count: 2, osVersion: "26.0", ready: 1, short: undefined },
-            { ...target, osVersion: undefined },
+            { ...target, origin: "learned" as const, osVersion: undefined },
+            { ...target, imageTag: "google_apis", model: "Pixel 8", platform: "android" as const },
+            {
+              ...target,
+              imageTag: "google_apis_playstore",
+              model: "Pixel 8",
+              platform: "android" as const,
+            },
           ],
         },
       }),
@@ -581,6 +721,7 @@ describe("a worker's warm pool tab", () => {
     expect(
       warm?.targets.map((row) => [
         row.model,
+        row.origin,
         row.runtime,
         row.wanted,
         row.ready,
@@ -588,8 +729,16 @@ describe("a worker's warm pool tab", () => {
         row.short,
       ]),
     ).toEqual([
-      ["iPhone 17", "26.0", 2, 1, 1, "—"],
-      ["iPhone 17", "—", 1, 0, 0, "runtime-missing"],
+      ["iPhone 17", "configured", "26.0", 2, 1, 1, "—"],
+      ["iPhone 17", "learned", "—", 1, 0, 0, "runtime-missing"],
+      ["Pixel 8 / google_apis", "configured", "27.0", 1, 0, 0, "runtime-missing"],
+      ["Pixel 8 / google_apis_playstore", "configured", "27.0", 1, 0, 0, "runtime-missing"],
+    ]);
+    expect(warm?.targets.map((row) => row.key)).toEqual([
+      "ios-iPhone 17-26.0-full#0",
+      "ios-iPhone 17-undefined-full#0",
+      "android-Pixel 8-27.0-full-google_apis#0",
+      "android-Pixel 8-27.0-full-google_apis_playstore#0",
     ]);
   });
 
@@ -646,5 +795,46 @@ describe("a worker's warm pool tab", () => {
       ["iOS", "19.0", { tone: "ok", word: "downloading" }, "7 s", "1 waiter"],
       ["Android", "36", { tone: "idle", word: "waiting" }, "3 s", "3 waiters"],
     ]);
+  });
+});
+
+describe("a worker page's tab", () => {
+  const tabOf = (search: string, view: WorkerView = worker()) =>
+    workerPageOf({ now: NOW, search, tokens: [], worker: view }).tab;
+
+  it("is the one ?tab= names, and Devices for a value the page does not offer", () => {
+    expect(tabOf("?tab=host")).toBe("host");
+    expect(tabOf("?tab=events&page=2")).toBe("events");
+    expect(tabOf("")).toBe("devices");
+    expect(tabOf("?tab=overview")).toBe("devices");
+    expect(tabOf("?tab=")).toBe("devices");
+  });
+
+  it("is Devices when ?tab= names the warm pool of a starting worker, which has none", () => {
+    const starting = worker({ health: "starting" });
+
+    expect(tabOf("?tab=warm-pool")).toBe("warm-pool");
+    expect(tabOf("?tab=warm-pool", starting)).toBe("devices");
+    expect(tabOf("?tab=host", starting)).toBe("host");
+  });
+});
+
+describe("a device drawer's tab", () => {
+  it("is Screen only for ?drawer=screen, written beside the other keys, and a device row's link never carries it", () => {
+    expect(readDrawerTab("?tab=devices&drawer=screen")).toBe("screen");
+    expect(readDrawerTab("?tab=devices&drawer=events")).toBe("details");
+    expect(readDrawerTab("?tab=devices")).toBe("details");
+    expect(writeDrawerTab("?tab=devices", "screen")).toBe("?tab=devices&drawer=screen");
+    expect(writeDrawerTab("?tab=devices&drawer=screen", "details")).toBe("?tab=devices");
+    expect(writeDrawerTab("?drawer=screen", "details")).toBe("");
+
+    const view = worker({ devices: [device()] });
+    const row = workerPageOf({
+      now: NOW,
+      search: "?tab=devices&drawer=screen&page=2",
+      tokens: [],
+      worker: view,
+    }).overview.devices?.[0];
+    expect(row?.to).toBe(`/fleet/${view.id}/${device().id}?tab=devices&page=2`);
   });
 });

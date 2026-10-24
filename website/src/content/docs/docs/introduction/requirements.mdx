@@ -1,0 +1,90 @@
+---
+title: Requirements
+description: What a machine needs to run iOS simulators, Android emulators, physical devices or a gateway with Simlock, and how to check it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Simlock uses the platform tools already on your machine. It never installs Xcode, the Android SDK or a JDK for you. A platform whose tools are missing is not available on that machine; the other platform still works.
+
+## What each platform needs
+
+| You want | Host | You need |
+| --- | --- | --- |
+| The `simlock` CLI | macOS or Linux | Node.js 22.13 or later |
+| iOS simulators | macOS only | Xcode, selected, with its license accepted and its first-launch setup done |
+| Android emulators | macOS or Linux | Android SDK with the command-line tools, `emulator` and `platform-tools` packages, and a JDK with `JAVA_HOME` set |
+| A gateway | macOS or Linux | Node.js 22.13 or later. A gateway runs no devices, so it needs no Xcode or Android SDK. |
+
+### iOS simulators
+
+- Xcode, installed and selected as the developer directory:
+
+  ```sh
+  sudo xcode-select -s /Applications/Xcode.app
+  ```
+
+- The Xcode license accepted:
+
+  ```sh
+  sudo xcodebuild -license accept
+  ```
+
+- Xcode's first-launch setup done:
+
+  ```sh
+  sudo xcodebuild -runFirstLaunch
+  ```
+
+- At least one iOS runtime installed. Simlock creates simulators only on runtimes that are already there, unless you allow a download. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+
+Watching a simulator's screen from the console needs macOS 14 or later.
+
+### Android emulators
+
+- An Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and uses the first one that has every tool it needs. On Linux there is no default location, so set `ANDROID_HOME`.
+- The SDK command-line tools (`sdkmanager` and `avdmanager`), from Android Studio or the [command-line tools download](https://developer.android.com/studio#command-line-tools-only). Unpack them to `$ANDROID_HOME/cmdline-tools/latest`.
+- The `emulator` and `platform-tools` packages:
+
+  ```sh
+  sdkmanager --install emulator platform-tools
+  ```
+
+- A JDK that `sdkmanager` can run on, with `JAVA_HOME` pointing at it.
+
+To install Android system images, you must also accept the Android SDK licenses in Simlock's configuration. Until you do, an install fails with `LICENSE_NOT_ACCEPTED`. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+
+### Physical devices
+
+An iPhone or iPad needs:
+
+- iOS or iPadOS 17 or later.
+- A USB connection to the Mac. A device reachable only over the network cannot be enrolled.
+- Trust for this Mac ("Trust This Computer") and Developer Mode on.
+- To stay unlocked. A device that needs its passcode counts as not present.
+
+An Android phone needs a USB connection with USB debugging allowed for this machine.
+
+See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
+
+## Check your machine
+
+Run `simlock doctor`. It starts the daemon if it is not running, checks each platform this machine can run, and prints one line on stderr for each missing tool, with the command that fixes it:
+
+```text
+Missing [ios] xcode-license: The Xcode license is not accepted. Run `sudo xcodebuild -license accept`.
+Missing [android] android-emulator: The Android emulator package is not installed in /Users/dana/Library/Android/sdk. Run `sdkmanager --install emulator`.
+```
+
+`simlock doctor` checks iOS only on macOS. It checks Android on every host.
+
+<Aside type="caution" title="Restart the daemon after you install a tool">
+The daemon looks for each platform's tools once, when it starts. After you install a missing tool, stop the daemon so the next command starts it again with the platform available:
+
+```sh
+simlock daemon stop
+simlock doctor
+```
+</Aside>
+
+`simlock doctor --fix` does not install anything. It corrects Simlock's own records about its devices. See [Install and check your machine](/simlock/docs/getting-started).

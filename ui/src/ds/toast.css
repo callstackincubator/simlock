@@ -1,0 +1,83 @@
+/* Toasts sit in the bottom-right corner. A toast moves in once, when it appears. */
+
+.toast-viewport {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 80;
+  width: min(22rem, calc(100% - var(--space-8)));
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
+}
+
+.toast {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  animation: toast-in var(--duration-move) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+
+.toast-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-3) var(--space-4);
+}
+
+.toast-content > :not(.toast-close) {
+  grid-column: 1;
+}
+
+.toast-title {
+  align-self: center;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.toast-description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.toast-action {
+  justify-self: start;
+  margin-top: var(--space-2);
+}
+
+.toast[data-type="error"] {
+  border-color: var(--status-error);
+}
+
+.toast[data-type="error"] .toast-title {
+  color: var(--status-error);
+}
+
+/* why: the manager marks a toast past its limit; it waits hidden and comes back as newer ones close,
+ * so the newest sit at the bottom and an error toast is never lost. */
+.toast[data-limited] {
+  display: none;
+}
+
+/* why: the close keeps its 40px hit area but not its border, so it reads as part of the toast. */
+.toast .toast-close {
+  grid-column: 2;
+  grid-row: 1;
+  border-color: transparent;
+}

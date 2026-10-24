@@ -18,6 +18,7 @@ import {
   DAEMON_STARTUP_TIMEOUT_MS,
   IpcError,
   startErrorFrom,
+  startTimeoutMessage,
   type Clock,
   type DaemonExit,
   type DaemonLauncher,
@@ -65,7 +66,7 @@ export async function connectWithAutoLaunch(
   let lastError: unknown;
   while (options.clock.now() < deadline) {
     try {
-      return await connectToRunningDaemon(options);
+      return await connectStartingDaemon(options);
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
       lastError = error;
@@ -73,10 +74,11 @@ export async function connectWithAutoLaunch(
       await delay(options.clock, options.retryIntervalMs ?? 50);
     }
   }
+  const output = await launched.readOutput().catch(() => "");
   throw new SimlockError(
     "DAEMON_STARTUP_FAILED",
     "transport",
-    `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+    startTimeoutMessage(errorMessage(lastError), output),
     {},
   );
 }
@@ -88,11 +90,29 @@ async function connectAfterExit(
 ): Promise<SimlockClient> {
   const output = await launched.readOutput().catch(() => "");
   try {
-    return await connectToRunningDaemon(options);
+    return await connectStartingDaemon(options);
   } catch (error: unknown) {
     if (!isUnavailable(error)) throw error;
   }
   throw new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
+}
+
+async function connectStartingDaemon(
+  options: ConnectToRunningDaemonOptions,
+): Promise<SimlockClient> {
+  try {
+    return await connectToRunningDaemon(options);
+  } catch (error: unknown) {
+    if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
+      throw new SimlockError(
+        "DAEMON_STARTUP_FAILED",
+        "transport",
+        "The daemon closed its connection while starting, before answering hello",
+        {},
+      );
+    }
+    throw error;
+  }
 }
 
 /**

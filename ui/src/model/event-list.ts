@@ -1,17 +1,18 @@
 import { eventSummary, eventTone } from "./activity";
-import { attentionItems } from "./attention";
+import { inboxItems } from "../../../src/contract/inbox";
 import {
   type ConsoleEvent,
   payloadPairs,
   type Subject,
   subjectOf,
+  textField,
   timeOfDay,
   workerIdOf,
 } from "./events";
 import { eventsPerMinute, extremes, type MinuteCount } from "./history";
 import { type LeaseRecord, leasePath } from "./leases";
-import { formatCount } from "./paging";
-import { itemPath } from "./paths";
+import { formatCount, writeQuery } from "./paging";
+import { inboxPath, itemPath } from "./paths";
 import type { Tone } from "./tones";
 import type { WaitingRequest } from "./waiting";
 import { type WorkerView, workerPath } from "./workers";
@@ -59,7 +60,7 @@ function startOfDay(timestamp: number): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
-// why: the feed holds an hour, so an event can be from before midnight, and "today" would then be
+// why: the feed holds days of history, so an event can be from before midnight, and "today" would then be
 // false.
 export function dayWord(timestamp: number, now: number): string {
   const days = Math.round((startOfDay(now) - startOfDay(timestamp)) / DAY);
@@ -78,14 +79,16 @@ export interface EventRow {
   readonly summary: string;
 }
 
-// why: a row keeps the filter in its link, so choosing an event does not undo the filter.
+// why: a row keeps the filter and the search in its link, so choosing an event does not undo them.
 export function eventRows(
   events: readonly ConsoleEvent[],
   workers: readonly WorkerView[],
   subject: SubjectFilter,
+  search = "",
 ): readonly EventRow[] {
-  const query = writeSubject("", subject);
-  return shownEvents(events, subject).map((event) => {
+  const query = writeQuery(writeSubject("", subject), search);
+  const wanted = search.toLowerCase();
+  const rows = shownEvents(events, subject).map((event) => {
     const tone = eventTone(event.event);
     return {
       id: event.id,
@@ -93,10 +96,18 @@ export function eventRows(
       name: event.event,
       summary: eventSummary(event, workers),
       time: timeOfDay(event.timestamp),
-      to: `${itemPath("/events", event.id)}${query}`,
+      to: `${itemPath("/activity", event.id)}${query}`,
       ...(tone === undefined ? {} : { tone }),
     };
   });
+  // why: the match is over what a row shows, its name and its summary line, and over no other
+  // part of the payload.
+  return wanted === ""
+    ? rows
+    : rows.filter(
+        (row) =>
+          row.name.toLowerCase().includes(wanted) || row.summary.toLowerCase().includes(wanted),
+      );
 }
 
 export interface EventAction {
@@ -120,12 +131,6 @@ export interface EventPlaces {
   readonly requests: readonly WaitingRequest[];
 }
 
-function textField(payload: unknown, key: string): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const value = (payload as Record<string, unknown>)[key];
-  return typeof value === "string" && value !== "" ? value : undefined;
-}
-
 // why: a link goes only where the console has a page now: a released lease, an answered request or
 // an unlisted worker has none. A relayed worker event names the lease as the worker did, and a
 // gateway lists it as `<workerId>.<id>`, so both spellings are tried.
@@ -145,14 +150,15 @@ export function eventAction(event: ConsoleEvent, places: EventPlaces): EventActi
   const requestId = textField(payload, "requestId");
   const request = places.requests.find((entry) => entry.id === requestId);
   if (request !== undefined) {
-    return { label: "Open request", to: itemPath("/waiting", request.id) };
+    return { label: "Open request", to: itemPath("/queue", request.id) };
   }
   const deviceId = textField(payload, "deviceId");
-  const item = attentionItems(places.workers).find(
-    (entry) => "device" in entry && entry.worker.id === workerId && entry.device.id === deviceId,
+  const item = inboxItems(places.workers).find(
+    (entry) =>
+      "device" in entry && entry.device.workerId === workerId && entry.device.id === deviceId,
   );
   if (item !== undefined) {
-    return { label: "Open attention item", to: itemPath("/attention", item.key) };
+    return { label: "Open Inbox item", to: inboxPath(item.key) };
   }
   const worker = places.workers.find((entry) => entry.id === workerId);
   if (worker !== undefined) return { label: "Open worker", to: workerPath(worker.id) };
@@ -201,19 +207,17 @@ export type Chosen =
   | { readonly kind: "missing"; readonly id: string }
   | { readonly kind: "event"; readonly detail: EventDetail };
 
-// why: with no id in the URL the first row shows, so a wide screen is never half empty; an id the
-// feed does not hold (older than the hour, or not loaded yet) is said so, not guessed at. An id is
-// looked up among every event held, so an event the filter hides still opens.
+// why: the drawer opens only for an id in the URL; an id the console does not hold (older than
+// what has loaded) is said so, not guessed at. An id is looked up among every event held, so an
+// event the filter or the search hides still opens.
 export function chosenEvent(
   events: readonly ConsoleEvent[],
-  rows: readonly EventRow[],
   id: string | undefined,
   places: EventPlaces,
   now: number,
 ): Chosen {
-  const wanted = id ?? rows[0]?.id;
-  if (wanted === undefined) return { kind: "none" };
-  const event = events.find((entry) => entry.id === wanted);
-  if (event === undefined) return { id: wanted, kind: "missing" };
+  if (id === undefined) return { kind: "none" };
+  const event = events.find((entry) => entry.id === id);
+  if (event === undefined) return { id, kind: "missing" };
   return { detail: eventDetail(event, places, now), kind: "event" };
 }

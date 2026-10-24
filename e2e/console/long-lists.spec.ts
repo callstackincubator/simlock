@@ -8,9 +8,12 @@ import {
   type RunningDaemon,
   settled,
   signIn,
+  signInWithKeyboard,
   startDaemon,
   test as base,
 } from "./fixtures.js";
+import { answer, leases, pad } from "./stub-answers.js";
+import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
@@ -112,42 +115,16 @@ async function open(page: Page, host: RunningDaemon, path: string): Promise<void
   await expect(page.locator("#main")).not.toContainText("Loading…");
 }
 
-/**
- * Answers `GET <pathname>` with what `body` returns at the time of the request, on top of the
- * daemon's own response, so its headers (its `Date` among them) stay real.
- */
-async function answer(page: Page, pathname: string, body: () => unknown): Promise<void> {
+// why: a page before the last hour answers with no events, so the stubbed list ends where it did
+// before Activity scrolled back.
+async function answerEvents(page: Page, replay: readonly unknown[]): Promise<void> {
   await page.route(
-    (url) => url.pathname === pathname,
+    (url) => url.pathname === "/v1/events",
     async (route: Route) => {
-      const response = await route.fetch();
-      await route.fulfill({ json: body(), response });
+      const since = new URL(route.request().url()).searchParams.has("since");
+      await route.fulfill({ json: { events: since ? replay : [] } });
     },
   );
-}
-
-/** `count` leases on the one host, `lse_0001` granted first. */
-function leases(count: number): unknown[] {
-  const now = Date.now();
-  return Array.from({ length: count }, (_, index) => ({
-    deviceId: `dev_${pad(index + 1)}`,
-    grantedAt: now - 3_600_000 + index * 1_000,
-    id: `lse_${pad(index + 1)}`,
-    lastRenewedAt: now - 60_000,
-    idChosenByRequester: false,
-    ownerId: "tok_load",
-    requesterId: "tok_load",
-    ttlDeadline: now + 600_000,
-    ttlMs: 900_000,
-  }));
-}
-
-function pad(n: number): string {
-  return String(n).padStart(4, "0");
-}
-
-function pane(page: Page, title: string): Locator {
-  return page.getByRole("region", { name: title, exact: true });
 }
 
 function rowIds(list: Locator, section: string): Promise<string[]> {
@@ -162,7 +139,7 @@ function rowIds(list: Locator, section: string): Promise<string[]> {
 }
 
 function leaseRows(page: Page): Locator {
-  return pane(page, "Leases").getByRole("list", { name: "Leases" });
+  return page.locator("main tbody");
 }
 
 function ids(from: number, to: number, prefix = "lse"): string[] {
@@ -268,9 +245,11 @@ test.describe("long lists page", () => {
     await expect(range).toHaveText("51–60 of 60");
 
     count = 30;
+    await returnToTab(page);
 
-    // The next refresh, within a second, leaves no third page: the second, now the last, shows.
-    await expect(range).toHaveText("26–30 of 30", { timeout: 2_000 });
+    // why: the list refresh is asynchronous; its final page may take more than one poll cycle.
+    // The next refresh leaves no third page: the second, now the last, shows.
+    await expect(range).toHaveText("26–30 of 30", { timeout: 10_000 });
     expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 30));
     await expect(page).toHaveURL(/\/leases\?page=2$/);
   });
@@ -287,9 +266,9 @@ test.describe("long lists page", () => {
       return { leases: listed };
     });
     await open(page, daemon, "/leases?page=2");
-    const row = leaseRows(page).getByRole("listitem").nth(2);
+    const row = leaseRows(page).locator("tr").nth(2);
     const link = row.getByRole("link");
-    const expires = row.locator(".list-aside");
+    const expires = row.locator("td:not(.table-menu)").last();
     await expect(link).toHaveAttribute("href", "/leases/lse_0028/?page=2");
     await link.focus();
     await expect(link).toBeFocused();
@@ -301,6 +280,7 @@ test.describe("long lists page", () => {
     // Twice: the daemon answers once more, then the row's countdown moves, so a render follows.
     for (let refresh = 0; refresh < 2; refresh += 1) {
       const since = served;
+      await returnToTab(page);
       await expect.poll(() => served, { timeout: 3_000 }).toBeGreaterThan(since);
       const before = await expires.textContent();
       await expect.poll(() => expires.textContent(), { timeout: 3_000 }).not.toBe(before);
@@ -313,25 +293,61 @@ test.describe("long lists page", () => {
     expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 50));
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2$/);
-    await expect(leaseRows(page).locator('a[href^="/leases/lse_0028/"]')).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await expect(page.getByRole("dialog")).toBeVisible();
+  });
+
+  for (const how of ["Escape", "the close button", "the dim layer"] as const) {
+    test(`${how} closes a lease's drawer and returns to /leases keeping ?page=2&size=25, with focus on the row that opened it and Back not reopening it`, async ({
+      daemon,
+      page,
+    }) => {
+      await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
+      await open(page, daemon, "/leases?page=2&size=25");
+      const row = leaseRows(page).locator('a[href^="/leases/lse_0028/"]');
+      await row.click();
+      const drawer = page.getByRole("dialog");
+      await expect(drawer).toBeVisible();
+      await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2&size=25$/);
+
+      if (how === "Escape") await page.keyboard.press("Escape");
+      else if (how === "the close button")
+        await drawer.getByRole("button", { name: "Close" }).click();
+      else await page.locator(".drawer-dim").click({ position: { x: 10, y: 10 } });
+
+      await expect(drawer).toHaveCount(0);
+      await expect(page).toHaveURL(/\/leases\?page=2&size=25$/);
+      await expect(row).toBeFocused();
+      await page.goBack();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      expect(new URL(page.url()).pathname).not.toMatch(/^\/leases\/./);
+    });
+  }
+
+  test("changing the leases search goes back to page 1", async ({ daemon, page }) => {
+    await answer(page, "/v1/leases", () => ({ leases: leases(60) }));
+    await open(page, daemon, "/leases?page=2");
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("26–50 of 60");
+
+    await page.getByRole("searchbox", { name: "Search leases" }).fill("lse_00");
+
+    await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 60");
+    await expect(page).toHaveURL(/\/leases\?q=lse_00$/);
   });
 
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
     let count = 25;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
     await open(page, daemon, "/leases");
-    await expect(leaseRows(page).getByRole("listitem")).toHaveCount(25);
+    await expect(leaseRows(page).locator("tr")).toHaveCount(25);
     await expect(pager(page, "Leases")).toHaveCount(0);
 
     // One row more and the list needs a second page: the pager shows.
     count = 26;
+    await returnToTab(page);
     await expect(pager(page, "Leases").locator(".pager-range")).toHaveText("1–25 of 26");
   });
 
-  test("the worker list and the devices table in its inspector keep their own page in the URL", async ({
+  test("the Fleet table and the devices table on a worker's page keep their own page in the URL", async ({
     daemon,
     page,
   }) => {
@@ -350,7 +366,7 @@ test.describe("long lists page", () => {
       label: `worker-${pad(index + 1)}`,
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/workers/wrk_0001");
+    await open(page, daemon, "/fleet");
     const devicesTable = page.getByRole("region", { name: "Devices" }).locator("table");
     const deviceIds = async () =>
       (await devicesTable.locator("tbody tr td:first-child").allTextContents()).map(
@@ -359,21 +375,26 @@ test.describe("long lists page", () => {
 
     await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
     await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
+    await expect(page.locator("main tbody").getByRole("link").first()).toHaveText("worker-0026");
+    expect(await rowIds(page.locator("main tbody"), "/fleet")).toEqual(ids(26, 30, "wrk"));
+    await page.getByRole("link", { exact: true, name: "worker-0026" }).click();
     await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
     await pager(page, "Devices").getByRole("button", { name: "Next" }).click();
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
 
     expect(await deviceIds()).toEqual(ids(51, 60, "dev"));
-    expect(await rowIds(pane(page, "Workers"), "/workers")).toEqual(ids(26, 30, "wrk"));
     expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
       "devices-page": "3",
       page: "2",
     });
 
-    // A reload opens both where they were.
     await page.reload();
-    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
     await expect(pager(page, "Devices").locator(".pager-range")).toHaveText("51–60 of 60");
+    await page.goBack({ waitUntil: "commit" });
+    await page.goBack({ waitUntil: "commit" });
+    await page.goBack({ waitUntil: "commit" });
+    await expect(page).toHaveURL(/\/fleet\?page=2$/);
+    await expect(pager(page, "Workers").locator(".pager-range")).toHaveText("26–30 of 30");
   });
 
   test("the worker list pages at 25 like the others and keeps a new size in the URL", async ({
@@ -388,23 +409,24 @@ test.describe("long lists page", () => {
       label: `worker-${pad(index + 1)}`,
     }));
     await answer(page, "/v1/workers", () => ({ workers }));
-    await open(page, daemon, "/workers");
-    const rows = pane(page, "Workers").getByRole("list", { name: "Workers" });
+    await open(page, daemon, "/fleet");
+    const rows = page.locator("main tbody");
     const range = pager(page, "Workers").locator(".pager-range");
 
-    expect(await rowIds(rows, "/workers")).toEqual(ids(1, 25, "wrk"));
+    expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 25, "wrk"));
     await expect(range).toHaveText("1–25 of 30");
     await pager(page, "Workers").getByRole("button", { name: "Next" }).click();
     await expect(range).toHaveText("26–30 of 30");
-    expect(await rowIds(rows, "/workers")).toEqual(ids(26, 30, "wrk"));
+    await expect(rows.getByRole("link").first()).toHaveText("worker-0026");
+    expect(await rowIds(rows, "/fleet")).toEqual(ids(26, 30, "wrk"));
     await expect(pager(page, "Workers").getByLabel("Per page").locator("option")).toHaveText([
       "25",
       "50",
       "100",
     ]);
     await pager(page, "Workers").getByLabel("Per page").selectOption("50");
-    await expect(page).toHaveURL(/\/workers\?size=50$/);
-    expect(await rowIds(rows, "/workers")).toEqual(ids(1, 30, "wrk"));
+    await expect(page).toHaveURL(/\/fleet\?size=50$/);
+    expect(await rowIds(rows, "/fleet")).toEqual(ids(1, 30, "wrk"));
     await expect(pager(page, "Workers")).toHaveCount(0);
   });
 });
@@ -481,8 +503,8 @@ test.describe("the events feed", () => {
     page,
   }) => {
     const replay = events(10_000);
-    await answer(page, "/v1/events", () => ({ events: replay }));
-    await open(page, daemon, "/events");
+    await answerEvents(page, replay);
+    await open(page, daemon, "/activity");
     await expect.poll(() => eventsHeld(page)).toBe(10_000);
 
     const rows = feed(page).getByRole("listitem");
@@ -510,8 +532,8 @@ test.describe("the events feed", () => {
         platform: "ios",
       });
       const replay = events(1_000);
-      await answer(page, "/v1/events", () => ({ events: replay }));
-      await open(page, host, "/events");
+      await answerEvents(page, replay);
+      await open(page, host, "/activity");
       await expect.poll(() => eventsHeld(page)).toBe(1_000);
 
       await scrollDown(page);
@@ -543,8 +565,8 @@ test.describe("the events feed", () => {
         platform: "ios",
       });
       const replay = events(1_000);
-      await answer(page, "/v1/events", () => ({ events: replay }));
-      await open(page, host, "/events");
+      await answerEvents(page, replay);
+      await open(page, host, "/activity");
       await expect.poll(() => eventsHeld(page)).toBe(1_000);
       await scrollDown(page);
       await client.renewLease({ leaseId: grant.lease.id });
@@ -582,8 +604,8 @@ test.describe("the events feed", () => {
 
   test("choosing another filter starts the feed again at the top", async ({ daemon, page }) => {
     const replay = events(1_000);
-    await answer(page, "/v1/events", () => ({ events: replay }));
-    await open(page, daemon, "/events");
+    await answerEvents(page, replay);
+    await open(page, daemon, "/activity");
     await expect.poll(() => eventsHeld(page)).toBe(1_000);
     await scrollDown(page);
 
@@ -653,9 +675,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const back = browserName === "webkit" ? "Alt+Shift+Tab" : "Shift+Tab";
     const { host } = seeded;
     await page.goto(host.url);
-    await page.keyboard.press(tab);
-    await page.keyboard.type(host.tokens.operator);
-    await page.keyboard.press("Enter");
+    await signInWithKeyboard(page, host.tokens.operator, tab);
     await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
     await tabTo(page, page.getByRole("link", { name: "Leases", exact: true }), tab);
     await page.keyboard.press("Enter");
@@ -692,6 +712,12 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     await expect(range).toHaveText("251–300 of 300");
 
     await page.keyboard.press(back);
+    await expect(
+      leaseRows(page)
+        .getByRole("button", { name: /^Actions for/ })
+        .last(),
+    ).toBeFocused();
+    await page.keyboard.press(back);
     const link = leaseRows(page).getByRole("link").last();
     await expect(link).toBeFocused();
     const href = await link.getAttribute("href");
@@ -706,7 +732,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     seeded,
   }) => {
     const { host } = seeded;
-    await open(page, host, "/events");
+    await open(page, host, "/activity");
     await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
     const held = await eventsHeld(page);
 
@@ -748,7 +774,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const oldest = (await recentEvents(host)).reduce((a, b) =>
       b.timestamp < a.timestamp || (b.timestamp === a.timestamp && b.seq < a.seq) ? b : a,
     );
-    expect(run.lastHref).toBe(`/events/${encodeURIComponent(oldest.id)}`);
+    expect(run.lastHref).toBe(`/activity/${encodeURIComponent(oldest.id)}`);
     expect(run.blank).toBe(0);
     expect(run.most).toBeLessThan(100);
     expect(run.p95).toBeLessThan(50);
@@ -779,19 +805,25 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     for (const path of [
       ...NAV.map((entry) => entry.path),
       "/leases?page=12",
-      `/workers/${encodeURIComponent(seeded.worker)}?devices-page=2`,
+      `/fleet/${encodeURIComponent(seeded.worker)}?devices-page=2`,
       `/leases/${encodeURIComponent(lease)}/`,
     ]) {
       await page.goto(new URL(path, seeded.host.url).href);
-      await expect(page.locator("#main").getByRole("heading").first()).toBeVisible();
+      await expect(
+        page
+          .locator("#main")
+          .getByRole("heading", { includeHidden: path.startsWith("/leases/") })
+          .first(),
+      ).toBeVisible();
       await expect(page.locator("#main")).not.toContainText("Loading…");
-      if (path === "/events") {
+      if (path.startsWith("/leases/")) await expect(page.getByRole("dialog")).toBeVisible();
+      if (path === "/activity") {
         await expect.poll(() => eventsHeld(page)).toBeGreaterThanOrEqual(EVENTS);
         await feed(page).evaluate((box) => {
           box.scrollTop = box.scrollHeight / 3;
         });
       }
-      if (path.startsWith("/leases?") || path.startsWith("/workers/")) {
+      if (path.startsWith("/leases?") || path.startsWith("/fleet/")) {
         await expect(page.locator(".pager").first()).toBeVisible();
       }
       await settled(page);

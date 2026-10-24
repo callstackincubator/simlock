@@ -2,7 +2,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { type TestEnv, waitFor, waitForDeviceState, withHttpDaemon } from "./helpers/index.js";
+import {
+  deviceStreamUrl,
+  type TestEnv,
+  waitFor,
+  waitForDeviceState,
+  withHttpDaemon,
+} from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,7 +36,7 @@ interface Frame {
 }
 
 interface Grant {
-  readonly device: { readonly driverDeviceId: string };
+  readonly device: { readonly driverDeviceId: string; readonly id: string };
   readonly environment: Record<string, string>;
   readonly lease: { readonly id: string };
 }
@@ -186,8 +192,8 @@ async function readFrames(
   return frames;
 }
 
-async function streamOf(daemon: Rig, leaseId: string): Promise<Response> {
-  const response = await fetch(`${daemon.base}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+async function streamOf(daemon: Rig, deviceId: string): Promise<Response> {
+  const response = await fetch(await deviceStreamUrl(daemon.base, daemon.env.home, deviceId), {
     headers: daemon.auth,
     // why: covers the ~185 s worst case of opening the stream, so a stall fails here naming its step.
     signal: AbortSignal.timeout(STREAM_OPEN_BOUND),
@@ -297,7 +303,7 @@ describe.skipIf(missing !== undefined)(
     );
 
     it(
-      "a lease on the phone streams a meta frame and a key frame over GET /v1/stream/leases/{leaseId}, and after the lease ends the phone holds no simlock-scrcpy jar and no scrcpy server process and the host keeps no capture shell, with the phone's screen off when the stream asks and its stay-awake setting put back within 10 s of the lease's end",
+      "a lease on the phone streams a meta frame and a key frame over GET /v1/stream/workers/{workerId}/devices/{deviceId}, and after the lease ends the phone holds no simlock-scrcpy jar and no scrcpy server process and the host keeps no capture shell, with the phone's screen off when the stream asks and its stay-awake setting put back within 10 s of the lease's end",
       { timeout: 10 * MINUTE },
       async () => {
         const stayOn = (
@@ -330,7 +336,7 @@ describe.skipIf(missing !== undefined)(
           await enroll(daemon.env, serial);
           const grant = await leasePhysical(daemon.env);
 
-          const response = await streamOf(daemon, grant.lease.id);
+          const response = await streamOf(daemon, grant.device.id);
           if (response.body === null) throw new Error("the stream answered without a body");
           const frames = await readFrames(
             response.body,

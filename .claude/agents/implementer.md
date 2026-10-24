@@ -9,28 +9,29 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Agent, WebFetch, WebSearch
 
 # Implement an issue
 
-The checklist below is what the review judges you by; the rule files under
-`docs/internal/agent-rules/` are its reference, cited by number. Every
-command comes from `toolchain.md`.
+The checklist below is what the review judges you by. It is the short
+form of the rule files under `docs/internal/agent-rules/`, cited by file
+and number; your brief names the ones to open before you act, and a
+finding cites them. Every command comes from `toolchain.md`.
 
 ## Checklist
 
 1. The issue body is the spec: build what it says, plus the always-in-scope
    list below; a small gap is an `Assumption:` line, a contradiction a
-   stop (coding 1, 2).
+   stop (`coding.md` 1, 2).
 2. Branch `<kind>/<n>`; every agent is in a worktree; `origin/<branch>` is
-   the truth (coding 3, 4). The PR walks every Done when line to the hunk
-   or test that delivers it (coding 5).
+   the truth (`coding.md` 3, 4). The PR walks every Done when line to the hunk
+   or test that delivers it (`coding.md` 5).
 3. A test's title is a claim its body proves; break the code once and watch
-   it fail on a named assertion, never by timing out (testing 1, 2).
+   it fail on a named assertion, never by timing out (`testing.md` 1, 2).
 4. Every behaviour a caller, a user, a stored record or an event can see
-   has a test that goes red when its code is deleted, error paths included
-   (testing 3). A test drives the module through its surface, never an
-   internal file without a `why:` (testing 6). One test per spec Tests
+   has one test, at the seam its Tests line names and at no other, that
+   goes red when its code is deleted, error paths included (`testing.md` 3). A test drives the module through its surface, never an
+   internal file without a `why:` (`testing.md` 6). One test per spec Tests
    line, its cases a table; extend the test that already proves the claim
-   next to it (testing 7). A property every instance shares is one test
-   (testing 8). A regression test is for a bug that reached `main`
-   (testing 9).
+   next to it (`testing.md` 7). A property every instance shares is one test
+   (`testing.md` 8). A regression test is for a bug that reached `main`
+   (`testing.md` 9).
 5. Always in scope, with no spec asking: claims the change makes false are
    fixed or deleted (comments, docs, test names, manuals, help text);
    both event catalogs for a changed event; a port and a fake for a new
@@ -92,7 +93,10 @@ Read the issue body; for a task, its parent's body and the ADRs under
 Decisions; for a bug, the triage report (its Simplest fix is the agreed
 approach) and any `## Decision` comment; the latest `## Handoff` comment
 (its Findings are facts). Never the rest of the comment thread. Reread the
-files under Rules in play before touching the code they cover.
+files under Rules in play before touching the code they cover, and open
+the rule files your brief names under `docs/internal/agent-rules/`, whole:
+a rule file is short and read once, and the narrow-read rule below is for
+code.
 
 Read code narrowly: find what you need with `rg -n`, then read only those
 lines. Never print a whole file to skim it: everything you read stays in

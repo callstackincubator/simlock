@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { NodeIpcTransport } from "../src/ports/index.js";
+import { SimlockWire } from "../src/simlock-client/wire.js";
 import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
@@ -195,6 +197,81 @@ describe("gateway event relay", () => {
     await held.waitForExit(15_000);
   });
 
+  it("a gateway pages its events by worker through GET /v1/events, and a worker answers its own id only", async () => {
+    const { first, gateway, port, read, second, secret } = await gatewayWithTwoWorkers();
+    const holders = [
+      first.env.cliBackground(leaseArgs("by-worker-one-a")),
+      first.env.cliBackground(leaseArgs("by-worker-one-b")),
+      second.env.cliBackground(leaseArgs("by-worker-two")),
+    ];
+    for (const holder of holders) await holder.firstStdoutLine();
+    const refused = await withDaemon({
+      configOverrides: {
+        gateway: {
+          token: (
+            (await gateway.cli(["token", "create", "--role", "operator"])).json as {
+              secret: string;
+            }
+          ).secret,
+          url: `ws://127.0.0.1:${port}`,
+        },
+      },
+    });
+    expect(refused.home).toBeDefined();
+    let all: RecordedEvent[] = [];
+    await waitFor(
+      async () => {
+        all = await read("?limit=500");
+        return all.some((event) => event.event === "worker.rejected");
+      },
+      { label: "the gateway kept the refused dial's worker.rejected", timeout: 20_000 },
+    );
+    const claimed = all
+      .filter((event) => event.event === "worker.rejected")
+      .map((event) => (event.payload as { workerId: string }).workerId)[0];
+    const ofWorker = (id: string) =>
+      all.filter(
+        (event) =>
+          event.event !== "worker.rejected" &&
+          (event.payload as { workerId?: string }).workerId === id,
+      );
+    const expected = ofWorker(first.id);
+    expect(expected.length).toBeGreaterThanOrEqual(5);
+    expect(idsOf(ofWorker(second.id)).some((id) => idsOf(expected).includes(id))).toBe(false);
+
+    const newest = await read(`?worker=${first.id}&limit=100`);
+    expect(idsOf(newest)).toEqual(idsOf(expected));
+    const lastTwo = await read(`?worker=${first.id}&limit=2`);
+    expect(idsOf(lastTwo)).toEqual(idsOf(expected.slice(-2)));
+    const olderTwo = await read(`?worker=${first.id}&before=${lastTwo[0]?.id}&limit=2`);
+    expect(idsOf(olderTwo)).toEqual(idsOf(expected.slice(-4, -2)));
+    expect(idsOf(await read(`?worker=${first.id}&since=1h`))).toEqual(idsOf(expected));
+    expect(idsOf(await read(`?worker=${first.id}`))).toEqual(idsOf(expected));
+    expect(await read(`?worker=${claimed}&limit=100`)).toEqual([]);
+    expect(await read("?worker=nobody&limit=100")).toEqual([]);
+
+    const wire = new SimlockWire(await new NodeIpcTransport().connect(first.env.socketPath));
+    try {
+      const adminToken = (
+        await readFile(join(first.env.dataDirectory, "admin.token"), "utf8")
+      ).trim();
+      await wire.hello({ credential: adminToken, principal: "relay-by-worker" });
+      const own = (await wire.call("events.replay", {})) as RecordedEvent[];
+      expect(own.length).toBeGreaterThan(0);
+      expect(
+        idsOf((await wire.call("events.replay", { workerId: first.id })) as RecordedEvent[]),
+      ).toEqual(idsOf(own));
+      expect(await wire.call("events.replay", { workerId: second.id })).toEqual([]);
+    } finally {
+      await wire.close();
+    }
+    expect(secret).toBeDefined();
+    for (const holder of holders) {
+      holder.kill("SIGTERM");
+      await holder.waitForExit(15_000);
+    }
+  });
+
   it("simlock events --follow on a gateway prints an event that arrives during the replay once", async () => {
     const { gateway, worker } = await gatewayWithWorker();
     const gate = await gateReplay(gateway.socketPath);
@@ -242,6 +319,52 @@ describe("gateway event relay", () => {
     }
   });
 });
+
+interface JoinedWorker {
+  readonly id: string;
+  readonly env: Awaited<ReturnType<typeof withDaemon>>;
+}
+
+async function gatewayWithTwoWorkers() {
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
+    configOverrides: { http: { host: "127.0.0.1", port } },
+    role: "gateway",
+    driver: "none",
+  }));
+  const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+  const { secret } = minted.json as { secret: string };
+  const join = async (label: string): Promise<JoinedWorker> => {
+    const env = await withDaemon({
+      configOverrides: { gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` } },
+      driverScript: { ios: { knownModels: ["iPhone 17"], availableOsVersions: ["18.4"] } },
+    });
+    let id: string | undefined;
+    await waitFor(
+      async () => {
+        const listed = await gateway.cli(["worker", "list", "--json"]);
+        const workers = (listed.json as { workers: { id: string; label?: string }[] }).workers;
+        id = workers.find((worker) => worker.label === label)?.id;
+        return id !== undefined;
+      },
+      { label: `${label} joined the gateway`, timeout: 30_000 },
+    );
+    return { env, id: id as string };
+  };
+  const first = await join("worker-one");
+  const second = await join("worker-two");
+  const operator = await gateway.cli(["token", "create", "--role", "operator"]);
+  const authorization = `Bearer ${(operator.json as { secret: string }).secret}`;
+  const read = async (query: string): Promise<RecordedEvent[]> => {
+    const response = await fetch(`http://127.0.0.1:${String(port)}/v1/events${query}`, {
+      headers: { authorization },
+    });
+    expect(response.status, query).toBe(200);
+    return ((await response.json()) as { events: RecordedEvent[] }).events;
+  };
+  return { first, gateway, operator, port, read, second, secret };
+}
+
+const idsOf = (events: readonly RecordedEvent[]) => events.map((event) => event.id);
 
 /**
  * A unix-socket proxy in front of the gateway's daemon socket that holds the follower's

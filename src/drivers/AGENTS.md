@@ -34,6 +34,8 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
    streams, SIGTERM on abort, SIGKILL 10 s later. `runBoundedProcess` adds a deadline.
 6. **Passthrough** — the driver owns the scoping flags and the refused verbs
    (`PassthroughRefusedError`). `DriverCatalog.passthrough` routes by `passthroughTools`.
+   With a device (`device.exec`) the driver also fills the lease's device in and refuses a
+   command naming another, through `other-device-refusal.ts` (ADR 0047).
    `hasTerminal: false` means `device.exec`: refuse what needs a tty.
 7. **Lease environment** — set on the lease at grant from `leaseEnvironment`; values are per platform.
 8. **Facts reach the bus through callbacks.** A driver never imports the bus; `daemon/main.ts`

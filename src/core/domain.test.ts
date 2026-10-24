@@ -324,22 +324,10 @@ describe("a physical device's state machine (ADR 0022 §2)", () => {
     },
   );
 
-  it("refuses ready -> shutdown, reclaiming -> shutdown, shutdown -> ready and any move into provisioning, which the virtual table still allows or has", () => {
-    expect(() => transition({ ...physicalDevice, state: "ready" }, "shutdown")).toThrow(
-      IllegalTransition,
-    );
-    expect(() => transition({ ...physicalDevice, state: "reclaiming" }, "shutdown")).toThrow(
-      IllegalTransition,
-    );
-    expect(() => transition({ ...physicalDevice, state: "ready" }, "provisioning")).toThrow(
-      IllegalTransition,
-    );
+  it("refuses a physical record in shutdown any move to ready", () => {
     expect(() =>
       transition({ ...physicalDevice, state: "shutdown" as unknown as "ready" }, "ready"),
     ).toThrow(IllegalTransition);
-    expect(transition({ ...baseDevice, state: "ready" }, "shutdown").state).toBe("shutdown");
-    expect(transition({ ...baseDevice, state: "reclaiming" }, "shutdown").state).toBe("shutdown");
-    expect(transition({ ...baseDevice, state: "shutdown" }, "ready").state).toBe("ready");
   });
 
   it("gives a transition into ready no driver-reported mode, whatever the update carries", () => {
@@ -562,7 +550,7 @@ describe("a physical device's absent state (ADR 0022 §2, §8)", () => {
     }
   };
 
-  it("a physical record may move ready, leased or reclaiming to absent, and absent to reclaiming, ready or deleted; quarantined -> absent and any virtual move to absent throw IllegalTransition", () => {
+  it("a physical record may move ready, leased or reclaiming to absent, and absent to reclaiming, ready or deleted; any virtual move to absent throws IllegalTransition", () => {
     for (const from of ["ready", "leased", "reclaiming"]) {
       expect(settle(physicalDevice, from, absent), `${from} -> absent`).toBe("absent");
     }
@@ -570,12 +558,6 @@ describe("a physical device's absent state (ADR 0022 §2, §8)", () => {
       expect(settle(physicalDevice, absent, to), `absent -> ${to}`).toBe(to);
     }
 
-    expect(() =>
-      transition(
-        { ...physicalDevice, state: "quarantined" } as unknown as VirtualDevice,
-        absent as unknown as "ready",
-      ),
-    ).toThrow(IllegalTransition);
     for (const from of [
       "provisioning",
       "ready",

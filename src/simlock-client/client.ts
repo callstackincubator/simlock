@@ -41,6 +41,8 @@ import type {
   ComponentRemoveInput,
   ComponentRemoveOutput,
   DaemonStopOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   DeviceAddInput,
   DeviceAddOutput,
   DeviceRecoveredPush,
@@ -92,6 +94,8 @@ import type {
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
+  WorkerUpdateInput,
+  WorkerUpdateOutput,
 } from "./types.js";
 
 export type {
@@ -107,6 +111,8 @@ export type {
   ComponentRemoveInput,
   ComponentRemoveOutput,
   DaemonStopOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   DeviceAddInput,
   DeviceAddOutput,
   DeviceRecoveredPush,
@@ -163,6 +169,8 @@ export type {
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
+  WorkerUpdateInput,
+  WorkerUpdateOutput,
   WorkerView,
   AlertsTestInput,
   AlertsTestOutput,
@@ -256,6 +264,7 @@ export interface SimlockAdminClient extends SimlockClient {
    * purely as an API-surface choice matching the ADR's operation matrix (the daemon itself
    * does not gate this operation by role at all -- see the caveat in the PR report). */
   stopDaemon(): Promise<DaemonStopOutput>;
+  updateDaemon(input?: DaemonUpdateInput): Promise<DaemonUpdateOutput>;
   replayEvents(input?: EventsReplayInput): Promise<EventsReplayOutput>;
   usage(window: UsageGetInput): Promise<UsageGetOutput>;
   subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>>;
@@ -263,12 +272,13 @@ export interface SimlockAdminClient extends SimlockClient {
   listTokens(): Promise<TokenListOutput>;
   revokeToken(input: TokenRevokeInput): Promise<TokenRevokeOutput>;
 
-  /** ADR 0005 §23. A worker lists itself as its only worker; `drainWorker`, `undrainWorker` and
-   * `removeWorker` reject on a worker with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012). */
+  /** why: ADR 0005 §23. A worker lists itself as its only worker; `drainWorker`, `undrainWorker`, `removeWorker` and
+   * `updateWorker` (a gateway updating one of its workers, ADR 0042 §2) reject on a worker with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012). */
   listWorkers(): Promise<WorkerListOutput>;
   drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput>;
+  updateWorker(input: WorkerUpdateInput): Promise<WorkerUpdateOutput>;
 
   /**
    * why: ADR 0035 §1: asks a gateway to post one sample message to the named alert destination, once.
@@ -383,21 +393,12 @@ export async function connectSimlockClient(
 }
 
 /**
- * ADR §6's escape hatch, on the client side: everything but `stopDaemon()` and `close()`
- * rejects with the captured `PROTOCOL_VERSION_UNSUPPORTED` error (never sent to the daemon --
- * every other operation requires a completed handshake this connection never got); `close()`
- * still works so a caller that decides not to stop the daemon can tidy up. `stopDaemon()` calls
- * straight through the wire: the daemon accepts `daemon.stop` "at any protocol version it has
- * ever spoken" (ADR §6), ahead of its own mismatch gate, specifically so this is reachable.
- *
- * `role`/`principal` cannot be the connection's real resolved values -- the daemon resolves
- * them before the mismatch check but the failed `hello` never reports them back (see the PR
- * report's weak-spots list) -- so `role` reflects which entry point the caller used
- * (`connectSimlock` vs. `connectSimlockAdmin`) rather than a verified fact, and `principal` is
- * whatever the caller supplied (or `""` when it supplied none). Neither is load-bearing here:
- * the only operation this client permits (`daemon.stop`) is gated by the daemon's own role
- * check on the credential it already verified, not by anything this object reports about
- * itself.
+ * why: ADR §6's escape hatch on the client side. A mismatch leaves the connection open so an admin can still send the
+ * two frozen calls, `stopDaemon()` and `updateDaemon()` (the daemon answers them at any protocol version, ahead of its
+ * mismatch gate); everything else rejects with the captured `PROTOCOL_VERSION_UNSUPPORTED` error without being sent,
+ * and `close()` still works. `role` reflects which entry point the caller used and `principal` what it supplied,
+ * because the daemon resolves them but the failed `hello` never reports them back; the daemon's own role check on the
+ * credential it already verified is what gates the two calls.
  */
 function buildDegradedClient(
   wire: SimlockWire,
@@ -439,24 +440,8 @@ function buildDegradedClient(
     runCleanup: () => rejected(),
     runNuke: () => rejected(),
     getConfig: () => rejected(),
-    stopDaemon: () =>
-      wire.call("daemon.stop", {}).then(
-        (payload) => {
-          const result = OPERATIONS["daemon.stop"].output.safeParse(payload);
-          if (!result.success) {
-            throw new SimlockError(
-              "BAD_FRAME",
-              "protocol",
-              "Daemon's daemon.stop response did not match the contract output schema",
-              {},
-            );
-          }
-          return result.data;
-        },
-        (callError: unknown) => {
-          throw toSimlockError(callError);
-        },
-      ),
+    stopDaemon: () => frozenCall(wire, "daemon.stop", {}),
+    updateDaemon: (input = {}) => frozenCall(wire, "daemon.update", input),
     replayEvents: () => rejected(),
     usage: () => rejected(),
     subscribeEvents: () => rejected(),
@@ -467,6 +452,7 @@ function buildDegradedClient(
     drainWorker: () => rejected(),
     undrainWorker: () => rejected(),
     removeWorker: () => rejected(),
+    updateWorker: () => rejected(),
     testAlertDestination: () => rejected(),
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
@@ -478,6 +464,41 @@ function buildDegradedClient(
     relayCancel: () => rejected(),
   };
   return client;
+}
+
+// why: the two frozen calls (`daemon.stop`, `daemon.update`) are the only ones a degraded client sends, and the daemon answers them at any protocol version.
+function frozenCall(
+  wire: SimlockWire,
+  operation: "daemon.stop",
+  input: Record<string, never>,
+): Promise<DaemonStopOutput>;
+function frozenCall(
+  wire: SimlockWire,
+  operation: "daemon.update",
+  input: DaemonUpdateInput,
+): Promise<DaemonUpdateOutput>;
+function frozenCall(
+  wire: SimlockWire,
+  operation: "daemon.stop" | "daemon.update",
+  input: unknown,
+): Promise<unknown> {
+  return wire.call(operation, input).then(
+    (payload) => {
+      const result = OPERATIONS[operation].output.safeParse(payload);
+      if (!result.success) {
+        throw new SimlockError(
+          "BAD_FRAME",
+          "protocol",
+          `Daemon's ${operation} response did not match the contract output schema`,
+          {},
+        );
+      }
+      return result.data;
+    },
+    (callError: unknown) => {
+      throw toSimlockError(callError);
+    },
+  );
 }
 
 function isLinkConnection(connection: IpcConnection): connection is LinkConnection {
@@ -555,7 +576,10 @@ class SimlockClientImpl {
     );
 
     if (signal === undefined) return requestPromise;
-    return this.#requestLeaseWithAbort(requestPromise, signal, requesterId);
+    return this.#requestLeaseWithAbort(requestPromise, signal, {
+      platform: parsed.platform,
+      requesterId,
+    });
   }
 
   cancelLease(input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
@@ -661,6 +685,10 @@ class SimlockClientImpl {
     return this.#call("daemon.stop", {});
   }
 
+  updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
+    return this.#call("daemon.update", input);
+  }
+
   replayEvents(input: EventsReplayInput = {}): Promise<EventsReplayOutput> {
     return this.#call("events.replay", input);
   }
@@ -703,6 +731,10 @@ class SimlockClientImpl {
 
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput> {
     return this.#call("worker.undrain", input);
+  }
+
+  updateWorker(input: WorkerUpdateInput): Promise<WorkerUpdateOutput> {
+    return this.#call("worker.update", input);
   }
 
   testAlertDestination(input: AlertsTestInput): Promise<AlertsTestOutput> {
@@ -762,7 +794,7 @@ class SimlockClientImpl {
   #requestLeaseWithAbort(
     requestPromise: Promise<LeaseGrant>,
     signal: AbortSignal,
-    requesterId: string,
+    cancel: LeaseCancelInput,
   ): Promise<LeaseGrant> {
     return new Promise((resolve, reject) => {
       let requestDone = false;
@@ -771,7 +803,7 @@ class SimlockClientImpl {
       const onAbort = (): void => {
         if (requestDone) return; // after the grant resolved (or it already failed) -> ignored.
         aborted = true;
-        void this.#cancelOnAbort(requestPromise, requesterId).then(resolve, reject);
+        void this.#cancelOnAbort(requestPromise, cancel).then(resolve, reject);
       };
       signal.addEventListener("abort", onAbort, { once: true });
 
@@ -792,11 +824,11 @@ class SimlockClientImpl {
 
   async #cancelOnAbort(
     requestPromise: Promise<LeaseGrant>,
-    requesterId: string,
+    cancel: LeaseCancelInput,
   ): Promise<LeaseGrant> {
     let outcome: LeaseCancelOutput["result"];
     try {
-      outcome = (await this.#call("lease.cancel", { requesterId })).result;
+      outcome = (await this.#call("lease.cancel", cancel)).result;
     } catch (error: unknown) {
       // Only a connection that actually died mid-cancel falls through to let awaiting
       // `requestPromise` below surface whatever that produces (most likely
@@ -886,7 +918,7 @@ class SimlockClientImpl {
     input: unknown,
   ): z.infer<(typeof OPERATIONS)[Name]["input"]> {
     const result = OPERATIONS[name].input.safeParse(input);
-    if (result.success) return result.data;
+    if (result.success) return result.data as z.infer<(typeof OPERATIONS)[Name]["input"]>;
     throw new SimlockError(
       "BAD_REQUEST",
       "protocol",
@@ -900,7 +932,7 @@ class SimlockClientImpl {
     payload: unknown,
   ): z.infer<(typeof OPERATIONS)[Name]["output"]> {
     const result = OPERATIONS[name].output.safeParse(payload);
-    if (result.success) return result.data;
+    if (result.success) return result.data as z.infer<(typeof OPERATIONS)[Name]["output"]>;
     throw new SimlockError(
       "BAD_FRAME",
       "protocol",

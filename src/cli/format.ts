@@ -1,6 +1,8 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
+import { isNewerVersion } from "../contract/index.js";
 import type { StatusGetOutput, WorkerView } from "../admin/index.js";
+import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 
 export function formatWorkers(
   workers: WorkerView[],
@@ -35,7 +37,7 @@ export function formatWorkers(
             : ` -- ${entry.name} ${entry.state}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${capabilities}${load}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${installs}`;
     })
     .join("\n");
 }
@@ -53,6 +55,21 @@ function workerState(worker: WorkerView): string {
     ...(worker.health === "starting" ? ["starting"] : []),
     ...(worker.drained ? ["drained"] : []),
   ].join(", ");
+}
+
+function workerVersion(worker: WorkerView): string {
+  const { latestVersion, update, version } = worker;
+  const available =
+    version !== undefined && latestVersion != null && isNewerVersion(latestVersion, version)
+      ? ` (${latestVersion} available)`
+      : "";
+  const running = version === undefined ? "" : ` -- simlock ${version}${available}`;
+  return `${running}${update == null ? "" : ` -- updating to ${update.to}: ${updateStage(update)}`}`;
+}
+
+function updateStage(update: NonNullable<WorkerView["update"]>): string {
+  if (update.stage !== "waiting") return update.stage;
+  return `waiting for ${update.leases} ${update.leases === 1 ? "lease" : "leases"}`;
 }
 
 function leaseCount(worker: WorkerView): string {
@@ -167,6 +184,48 @@ export function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
   return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
 }
 
+/** why: the role's service as `daemon status --json` prints it, and `serviceLine` renders it. */
+export type ServiceReport = ServiceState & {
+  readonly manager: ServiceManagerName;
+  readonly name: string;
+};
+
+export function serviceLine(service: ServiceReport): string {
+  if (service.state === "not-installed") return "Service: not installed";
+  const who = `(${service.manager}, ${service.name})`;
+  if (service.state === "broken") {
+    const verb = service.missing.length === 1 ? "is" : "are";
+    return `Service: broken ${who}: ${service.missing.join(", ")} ${verb} gone; run simlock daemon install`;
+  }
+  if (service.state === "installed") return `Service: installed ${who}`;
+  return `Service: not loaded ${who}: commands start the daemon without it`;
+}
+
+function daemonLines(daemon: StatusGetOutput["daemon"]): string[] {
+  const { update, lastUpdateFailure, latestVersion } = daemon;
+  const available =
+    latestVersion !== null && isNewerVersion(latestVersion, daemon.version)
+      ? ` (${latestVersion} available)`
+      : "";
+  return [
+    `Daemon: ${daemon.health} (${daemon.mode})`,
+    `Simlock: ${daemon.version}${available}`,
+    ...(update === null
+      ? []
+      : [
+          `Updating to ${update.to}: ${
+            update.stage === "waiting"
+              ? `waiting for ${update.leases} ${update.leases === 1 ? "lease" : "leases"}`
+              : update.stage
+          }`,
+        ]),
+    ...(lastUpdateFailure === null
+      ? []
+      : [`Last update failed (${lastUpdateFailure.stage}): ${lastUpdateFailure.message}`]),
+    ...consoleLines(daemon),
+  ];
+}
+
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 export function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
@@ -177,8 +236,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
     queueDepth === undefined
   ) {
     return [
-      `Daemon: ${daemon.health} (${daemon.mode})`,
-      ...consoleLines(daemon),
+      ...daemonLines(daemon),
       `Host: ${formatHost(host)}`,
       ...loadLines(status),
       "Devices, leases and capacity appear once startup finishes.",
@@ -223,8 +281,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
       `Lease ${lease.id}: ${lease.requesterId}${lease.workerId === undefined ? "" : ` on ${lease.workerId}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
-    `Daemon: ${daemon.health} (${daemon.mode})`,
-    ...consoleLines(daemon),
+    ...daemonLines(daemon),
     `Host: ${formatHost(host)}`,
     ...loadLines(status),
     ...historyLines(status.history),
@@ -256,11 +313,11 @@ function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): str
   return [
     `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
     ...targets.map((target) => {
-      const name = [target.model, target.osVersion, target.mode]
+      const name = [target.model, target.osVersion, target.mode, target.imageTag]
         .filter((part) => part !== undefined)
         .join(" / ");
       const short = target.short === undefined ? "" : `  short: ${target.short}`;
-      return `  ${name}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
+      return `  ${name}   ${target.origin}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
     }),
   ];
 }

@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-16
+- **Amended:** §4 on 2026-10-23, on the maintainer's decision: a later
+  CoreDevice major goes on instead of being refused.
 - **Issue:** [#617](https://github.com/callstackincubator/simlock/issues/617), task [#619](https://github.com/callstackincubator/simlock/issues/619)
 - **Supersedes:** nothing. Builds on the stream module as it is, and on
   [ADR 0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)'s
@@ -72,7 +74,7 @@ sequenceDiagram
   participant C as CoreDevice (coredeviced)
   participant I as iPhone
   D->>P: start <udid>
-  P->>P: CoreDevice major is not 642: exit with the reason
+  P->>P: CoreDevice major is below 642: exit with the reason
   P->>C: usage assertion, then startMediaStream(offer)
   C->>I: start the screen stream
   C-->>P: answer, shared socket
@@ -105,7 +107,7 @@ flowchart LR
     P["simlock-device-capture"] --> L
   end
   S --> SIM["simulator framebuffer"]
-  P --> CD["CoreDevice 642.x (private)"]
+  P --> CD["CoreDevice 642+ (private)"]
   P -.later.-> QT["CoreMediaIO (public)"]
 ```
 
@@ -124,23 +126,27 @@ CoreDevice inside `simlock-device-capture` if CoreDevice's private API
 stops being usable. That change touches no TypeScript: the driver runs the
 same program with the same arguments.
 
-### 4. CoreDevice major 642 only, and a mismatch is a reason, not a crash
+### 4. CoreDevice major 642 or later, and an older one is a reason, not a crash
 
 `simlock-device-capture` weak-links the private frameworks. Before it
 calls into them, it reads CoreDevice's `CFBundleShortVersionString`.
 
-- Major `642`: it goes on.
-- Anything else, or no CoreDevice: it writes one log line and exits with a
-  non-zero code, before it touches the iPhone. The line says that physical
-  iPhone streams need Xcode 27 (CoreDevice 642.x) and names the version it
-  found. The viewer gets that line in a 503.
+- Major `642` or later: it goes on.
+- An older major, a major that is not a number, or no CoreDevice: it
+  writes one log line and exits with a non-zero code, before it touches
+  the iPhone. The line says that physical iPhone streams need Xcode 27 or
+  later (CoreDevice 642 or later) and names the version it found. The
+  viewer gets that line in a 503.
 
-The program is the one place that enforces the pin. `pnpm build` tries to
-build `simlock-device-capture` on every Mac and copies it when it builds.
-When it does not build, the build warns and goes on, and a physical
-iPhone's stream answers 503 saying the program is missing. A program built
-on a Mac with another major refuses at run time, as above. Moving to a new
-major means checking the stubs on it and changing the pin, in one change.
+The program is the one place that enforces the floor. `pnpm build` tries
+to build `simlock-device-capture` on every Mac and copies it when it
+builds. When it does not build, the build warns and goes on, and a
+physical iPhone's stream answers 503 saying the program is missing. A
+program built on a Mac with an older major refuses at run time, as above.
+A later major is let through unchecked: Apple builds these frameworks with
+library evolution, so the stubs' calls keep working unless that major
+drops or renames one. When it does, the stream fails and the stubs are
+checked against that release.
 
 ### 5. HEVC is decoded and re-encoded as H.264
 
@@ -192,3 +198,8 @@ encode per picture on the worker, both in VideoToolbox.
   turn iPhone streams off until someone re-checks the stubs. Apple builds
   these frameworks with library evolution, so a minor version keeps their
   calls.
+- **Major 642 only.** Rejected after it shipped, on the maintainer's
+  decision: CoreDevice 651 turned iPhone streams off on a Mac where
+  nothing else had changed. Refusing every later major costs a working
+  stream on each Xcode major; letting one through costs a failed stream
+  only when that major breaks the stubs.

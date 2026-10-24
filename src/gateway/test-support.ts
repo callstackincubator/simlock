@@ -11,6 +11,8 @@ import type { z } from "zod";
 import type {
   ComponentInstallInput,
   ComponentInstallOutput,
+  DaemonUpdateInput,
+  DaemonUpdateOutput,
   ExecInput,
   ExecOptions,
   ExecOutput,
@@ -73,7 +75,14 @@ export function statusFixture(overrides: Partial<RunningStatus> = {}): RunningSt
       global: { maxRunning: 4, overLimit: false, reserved: 0, running: 0, warm: 0 },
       ios: { ...emptyPlatformCapacity },
     },
-    daemon: { health: "running", mode: "worker" },
+    daemon: {
+      health: "running",
+      mode: "worker",
+      version: "0.0.0-test",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    },
     devices: [],
     host: hostFixture(),
     leases: [],
@@ -320,6 +329,9 @@ export class ScriptedWorkerClient {
   requestLeaseDefault: RequestLeaseOutcome = { kind: "error", error: noCapacityError() };
   readonly renewLeaseQueue: RenewLeaseOutcome[] = [];
   readonly releaseLeaseQueue: ReleaseLeaseOutcome[] = [];
+  /** why: a real worker's `lease.released` event reaches the gateway before the release reply;
+   * a test sets this to relay that event from inside the call. */
+  onReleaseLease: ((leaseId: string) => void) | undefined;
   readonly execQueue: ExecOutcome[] = [];
   /**
    * H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
@@ -393,6 +405,29 @@ export class ScriptedWorkerClient {
     };
   }
 
+  readonly updateInputs: DaemonUpdateInput[] = [];
+  updateAnswer: DaemonUpdateOutput = {
+    started: false,
+    upToDate: false,
+    resolved: null,
+    version: "0.3.0",
+    health: "running",
+    update: null,
+    lastUpdateFailure: null,
+    latestVersion: null,
+  };
+
+  // why: the degraded client lets `daemon.update` through (ADR 0042 §1), so this answers even when `failWith` is set.
+  updateFailWith: unknown;
+
+  async updateDaemon(input: DaemonUpdateInput = {}): Promise<DaemonUpdateOutput> {
+    this.calls.push("daemon.update");
+    this.updateInputs.push(input);
+    if (this.hangingCalls.has("daemon.update")) return new Promise<never>(() => {});
+    if (this.updateFailWith !== undefined) throw this.updateFailWith;
+    return this.updateAnswer;
+  }
+
   async getStatus(): Promise<StatusGetOutput> {
     this.calls.push("status.get");
     if (this.hangingCalls.has("status.get")) return new Promise<never>(() => {});
@@ -443,6 +478,7 @@ export class ScriptedWorkerClient {
     this.#throwIfFailing();
     const outcome = this.releaseLeaseQueue.shift();
     if (outcome?.kind === "error") throw outcome.error;
+    this.onReleaseLease?.(input.leaseId);
     return { leaseId: input.leaseId };
   }
 

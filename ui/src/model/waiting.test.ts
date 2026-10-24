@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { waitingRequestSchema } from "../../../src/contract/index";
-import {
-  chooseWaiting,
-  requestedDevice,
-  type WaitingRequest,
-  type WaitingRow,
-  waitingTable,
-} from "./waiting";
+import { describeRequestedDevice as requestedDevice } from "../../../src/contract/inbox";
+import { chooseWaiting, type WaitingRequest, type WaitingRow, waitingTable } from "./waiting";
 import type { WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -80,8 +75,8 @@ describe("the waiting table", () => {
     const rows = waitingTable([onGateway, onHost, inFleetQueue], workers, NOW).rows;
 
     expect(rows.map((row) => row.queue)).toEqual([
-      { kind: "worker", name: "worker-b", to: "/workers/wrk_2" },
-      { kind: "worker", name: "host", to: "/workers/wrk_1" },
+      { kind: "worker", name: "worker-b", to: "/fleet/wrk_2" },
+      { kind: "worker", name: "host", to: "/fleet/wrk_1" },
       { kind: "gateway" },
     ]);
   });
@@ -134,7 +129,7 @@ describe("the waiting table", () => {
   it("shows how long a request has waited, when it was created, and the path that opens it", () => {
     expect(rowOf({ id: "req a/b" })).toMatchObject({
       created: "2026-10-02 11:58:45 UTC",
-      to: "/waiting/req%20a%2Fb",
+      to: "/queue/req%20a%2Fb",
       waited: "1 min 15 s",
     });
   });
@@ -161,16 +156,16 @@ describe("the waiting table", () => {
 describe("choosing a waiting request", () => {
   const rows = waitingTable([request({ id: "a" }), request({ id: "b" })], [], NOW).rows;
 
-  it("chooses the first row of the page when the URL names none", () => {
-    expect(chooseWaiting(rows, undefined, rows.slice(1))).toEqual({ chosen: rows[1], gone: false });
+  it("chooses nothing when the URL names none, so the drawer stays shut", () => {
+    expect(chooseWaiting(rows, undefined)).toEqual({ chosen: undefined, gone: false });
   });
 
-  it("chooses the request the URL names, even from another page", () => {
-    expect(chooseWaiting(rows, "a", rows.slice(1))).toEqual({ chosen: rows[0], gone: false });
+  it("chooses the request the URL names, whatever page it is on", () => {
+    expect(chooseWaiting(rows, "a")).toEqual({ chosen: rows[0], gone: false });
   });
 
   it("calls a named request that is no longer waiting gone, and chooses nothing", () => {
-    expect(chooseWaiting(rows, "granted", rows)).toEqual({ chosen: undefined, gone: true });
+    expect(chooseWaiting(rows, "granted")).toEqual({ chosen: undefined, gone: true });
   });
 });
 
@@ -253,6 +248,7 @@ describe("the waiting table on a gateway", () => {
     ["incompatible", undefined, "Protocol mismatch"],
     ["not-ready", undefined, "Not ready yet"],
     ["unhealthy", undefined, "Not running"],
+    ["updating", undefined, "Updating"],
     ["drained", undefined, "Drained"],
     ["busy", undefined, "Busy with its own queue"],
     ["no-driver", undefined, "No iOS support"],
@@ -280,7 +276,7 @@ describe("the waiting table on a gateway", () => {
       field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
     ).unwrap().element.shape.reason.options;
 
-    expect(listed).toHaveLength(13);
+    expect(listed).toHaveLength(14);
     for (const reason of listed) {
       const text = rowOf({ workers: [{ reason, workerId: "wrk_1" } as never] }).workers?.[0]?.text;
       expect(text).toMatch(/^[A-Z]/);

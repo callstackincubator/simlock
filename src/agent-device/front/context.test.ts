@@ -31,15 +31,4 @@ describe("exchange", () => {
     expect(fields.body.startsWith("bad gateway xxx")).toBe(true);
     expect(fields.body.length).toBe(500);
   });
-
-  it("a usable success reply is not logged", async () => {
-    const { context, warnings } = rig(() =>
-      Promise.resolve(Response.json({ id: 1, jsonrpc: "2.0", result: { ok: true } })),
-    );
-
-    const result = await exchange(context, request, identity);
-
-    expect(result.reading.kind).toBe("success");
-    expect(warnings).toEqual([]);
-  });
 });

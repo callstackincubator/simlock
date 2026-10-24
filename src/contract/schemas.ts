@@ -65,14 +65,14 @@ function checkDeviceType(
   if (device.physical) {
     if (device.mode !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A physical device has no mode",
         path: ["mode"],
       });
     }
     if (requireClass && device.class === undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A physical device has a class",
         path: ["class"],
       });
@@ -81,14 +81,14 @@ function checkDeviceType(
   }
   if (device.mode === undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "A virtual device has a mode",
       path: ["mode"],
     });
   }
   if (device.class !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "A virtual device has no class",
       path: ["class"],
     });
@@ -197,7 +197,7 @@ export const deviceRecordSchema = z
     driverDeviceId: z.string(),
     spec: deviceSpecSchema,
     state: deviceStateSchema,
-    driverData: z.unknown(),
+    driverData: z.unknown().optional(),
     createdAt: z.number(),
     lastLeaseEndedAt: z.number().optional(),
     foreignStateDetectedAt: z.number().optional(),
@@ -393,6 +393,7 @@ const gatewayWaitingReasonSchema = z.enum([
   "not-ready",
   "unhealthy",
   "drained",
+  "updating",
   "busy",
   "no-driver",
   "unknown-model",
@@ -517,9 +518,11 @@ export const statusCapacitySchema = z.object({
 });
 
 /** Bounds on the warm pool block: a gateway parses it off the wire from every worker. */
-/** The most targets the block carries, and the longest model or OS version it names. The config load enforces the same. */
+/** why: the most configured targets the config load accepts (the block itself takes `WARM_POOL_ENTRIES_MAX`), and the longest model or OS version the block names. */
 export const WARM_POOL_TARGETS_MAX = 256;
 export const WARM_POOL_NAME_MAX = 256;
+/** why: the configured targets plus the learned kinds, 32 per platform, the pool keeps. */
+const WARM_POOL_ENTRIES_MAX = WARM_POOL_TARGETS_MAX + 64;
 
 /** Why a warm target is short, in the order the first that applies is the one reported. */
 const warmPoolShortSchema = z.enum([
@@ -540,6 +543,8 @@ const warmPoolTargetSchema = z.object({
   model: z.string().max(WARM_POOL_NAME_MAX),
   osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
   mode: z.enum(["slim", "full"]),
+  imageTag: imageTagSchema.optional(),
+  origin: z.enum(["configured", "learned"]),
   count: z.number().int().nonnegative(),
   ready: z.number().int().nonnegative(),
   booting: z.number().int().nonnegative(),
@@ -553,10 +558,48 @@ export const statusWarmPoolSchema = z.object({
     ios: z.number().int().nonnegative(),
     android: z.number().int().nonnegative(),
   }),
-  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_TARGETS_MAX),
+  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_ENTRIES_MAX),
 });
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
+
+const UPDATE_VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+const UPDATE_VERSION_MAX = 64;
+const UPDATE_MESSAGE_MAX = 2000;
+const updateVersionSchema = z.string().max(UPDATE_VERSION_MAX);
+
+export const updateRequestedVersionSchema = updateVersionSchema.regex(UPDATE_VERSION_PATTERN);
+
+const updateStateBase = {
+  from: updateVersionSchema,
+  to: updateVersionSchema,
+  forced: z.boolean(),
+  startedAt: z.number().int().min(0),
+};
+
+const updateStateSchema = z.discriminatedUnion("stage", [
+  z.object({ stage: z.literal("waiting"), leases: z.number().int().min(0), ...updateStateBase }),
+  z.object({ stage: z.literal("installing"), ...updateStateBase }),
+  z.object({ stage: z.literal("restarting"), ...updateStateBase }),
+]);
+
+export const updateFailureSchema = z.object({
+  stage: z.enum(["installing", "restarting"]),
+  from: updateVersionSchema,
+  to: updateVersionSchema,
+  message: z.string().max(UPDATE_MESSAGE_MAX),
+  at: z.number().int().min(0),
+});
+
+export type UpdateState = z.infer<typeof updateStateSchema>;
+export type UpdateFailure = z.infer<typeof updateFailureSchema>;
+
+export const daemonUpdateFields = {
+  version: updateVersionSchema,
+  update: updateStateSchema.nullable(),
+  lastUpdateFailure: updateFailureSchema.nullable(),
+  latestVersion: updateVersionSchema.nullable(),
+};
 
 /**
  * Limits on the catalog's other names and images. A worker's catalog is a claim the gateway
@@ -738,7 +781,7 @@ export const platformCatalogSchema = z.object({
    * listed model counts has no entry. On a gateway a class's entry is kept only when every
    * connected worker reports the same model for it, and that worker lists it itself.
    */
-  classDefaults: z.record(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
+  classDefaults: z.partialRecord(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
   /**
    * ADR 0008 §1: every installed image, present only for a platform whose driver has images
    * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
@@ -814,7 +857,7 @@ export const cleanupRuleSummarySchema = z.object({ name: z.string() });
  * purpose, exactly as the core treats it. */
 const driverDeviceSchema = z.object({
   deviceId: z.string(),
-  driverData: z.unknown(),
+  driverData: z.unknown().optional(),
   address: z.string(),
   mode: deviceModeSchema.optional(),
 });
@@ -866,6 +909,13 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     platform: platformSchema,
     code: z.string(),
     message: z.string(),
+  }),
+  z.object({
+    kind: z.literal("service-broken"),
+    manager: z.enum(["launchd", "systemd"]),
+    name: z.string(),
+    missing: z.array(z.string()).min(1),
+    remedy: z.string(),
   }),
   z.object({
     kind: z.literal("prerequisite-missing"),
@@ -926,7 +976,7 @@ export const eventEnvelopeSchema = z.object({
   /** A claim, bounded to the range a JavaScript date holds so the console can render it. */
   timestamp: z.number().min(-MAX_DATE_MS).max(MAX_DATE_MS),
   event: z.string(),
-  payload: z.unknown(),
+  payload: z.unknown().optional(),
   module: z.string(),
 });
 
@@ -978,7 +1028,7 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 
 /** Mirrors `Config` (src/core/config.ts) field for field. */
 /** ADR 0015 §4: `ios.defaultModels` and `android.defaultModels`, a list of model names per class. */
-const defaultModelsSchema = z.record(deviceClassSchema, z.array(z.string().min(1)).min(1));
+const defaultModelsSchema = z.partialRecord(deviceClassSchema, z.array(z.string().min(1)).min(1));
 
 const proxyAuthSchema = z.object({
   header: z.string(),
@@ -1007,6 +1057,7 @@ export const configSchema = z.object({
     shutdownAfterMs: z.number(),
     deleteAfterMs: z.number(),
   }),
+  update: z.object({ check: z.boolean() }),
   warmPool: z.object({
     enabled: z.boolean(),
     reserveRunning: z.object({ ios: z.number(), android: z.number() }),
@@ -1036,7 +1087,10 @@ export const configSchema = z.object({
     }),
     requestRetentionMs: z.number(),
     maxRequestRecords: z.number(),
-    maxPerRequester: z.number(),
+    maxPerRequester: z.union([
+      z.number(),
+      z.object({ ios: z.number().optional(), android: z.number().optional() }),
+    ]),
     endWaitMs: z.number(),
   }),
   exec: z.object({ timeoutMs: z.number() }),
@@ -1203,7 +1257,7 @@ const installInProgressSchema = z.object({
 });
 
 /** A list of at most `MAX_LISTED_INSTALLS` entries; a longer one is cut to its first ones. */
-function boundedInstalls<Entry extends z.ZodTypeAny>(entry: Entry) {
+function boundedInstalls<Entry extends z.ZodType>(entry: Entry) {
   return z.array(entry).transform((installs) => installs.slice(0, MAX_LISTED_INSTALLS));
 }
 
@@ -1324,12 +1378,76 @@ export const workerViewSchema = z.object({
   host: hostFactsSchema.optional(),
   installs: workerInstallsSchema.optional(),
   waiting: z.array(waitingRequestSchema).optional(),
+  update: daemonUpdateFields.update.optional(),
+  lastUpdateFailure: daemonUpdateFields.lastUpdateFailure.optional(),
+  latestVersion: daemonUpdateFields.latestVersion.optional(),
 });
 
 export const statusLeaseSchema = leaseRecordSchema.extend({
   /** Which worker holds this lease; absent on a worker's own answer, set by a gateway. */
   workerId: z.string().optional(),
+  // why: the part of a gateway lease id after `<workerId>.`, so a relayed event naming the worker's lease can be matched; set only by a gateway's `lease.list`, `lease.get` and `list.get kind=leases`.
+  workerLeaseId: z.string().optional(),
 });
+
+const inboxGroupSchema = z.enum(["Broken", "Needs a look", "Heads-up"]);
+
+// why: an Inbox item names the worker it is about by the view's fields that the page does not read from the worker list, plus two counts the view's lists would otherwise have to be sent for.
+const inboxWorkerSchema = workerViewSchema
+  .omit({ catalog: true, devices: true, downloads: true, leases: true })
+  .extend({
+    heldLeases: z.number().int().nonnegative(),
+    leasedDevices: z.number().int().nonnegative(),
+  });
+
+const inboxDeviceSchema = statusDeviceSchema.and(
+  z.object({
+    stateEnteredAt: z.number().optional(),
+    workerId: z.string(),
+    workerLabel: z.string().optional(),
+  }),
+);
+
+const inboxLeaseSchema = statusLeaseSchema.extend({
+  holder: z.string(),
+  model: z.string(),
+});
+
+const inboxItemBase = { group: inboxGroupSchema, key: z.string() };
+
+/**
+ * One thing that needs the operator (`inbox.get`): the rules in `inbox.ts` decide it. Each item
+ * carries a small copy of the one subject it is about.
+ */
+export const inboxItemSchema = z.union([
+  z.object({
+    ...inboxItemBase,
+    condition: z.enum(["disconnected", "incompatible", "drained", "update failed"]),
+    worker: inboxWorkerSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.literal("over RAM budget"),
+    limitBytes: z.number(),
+    usedBytes: z.number(),
+    worker: inboxWorkerSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.enum(["quarantined", "stalled", "absent"]),
+    device: inboxDeviceSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.literal("waiting"),
+    request: waitingRequestSchema,
+  }),
+  z.object({
+    ...inboxItemBase,
+    condition: z.literal("ending"),
+    lease: inboxLeaseSchema,
+  }),
+]);
 
 const USAGE_MAX_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 

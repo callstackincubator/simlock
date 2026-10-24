@@ -5,7 +5,9 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
+import { FakeDaemonLauncher, NodeDaemonLauncher, startErrorFrom } from "./daemon-launcher.js";
+import { launcherFor } from "./service-launcher.js";
+import { FakeServiceManager, type ServiceState } from "./service-manager.js";
 
 describe("NodeDaemonLauncher", () => {
   it("rejects asynchronous spawn failures", async () => {
@@ -238,5 +240,104 @@ describe("startErrorFrom", () => {
     expect(cases.map((c) => ({ label: c.label, error: startErrorFrom(c.exit, c.output) }))).toEqual(
       cases.map((c) => ({ label: c.label, error: c.error })),
     );
+  });
+});
+
+describe("launcherFor's fallback to spawning", () => {
+  const plist = "/Users/me/Library/LaunchAgents/com.callstack.simlock.worker.plist";
+  const name = "com.callstack.simlock.worker";
+
+  it("spawns the daemon as today, with a notice when the service is not loaded or broken", async () => {
+    const cases: readonly {
+      readonly label: string;
+      readonly state: ServiceState | undefined;
+      readonly notices: readonly string[];
+    }[] = [
+      { label: "no service manager on this platform", state: undefined, notices: [] },
+      { label: "no service", state: { state: "not-installed" }, notices: [] },
+      {
+        label: "not loaded",
+        state: { state: "not-loaded", path: plist },
+        notices: [`Service ${name} is not loaded; started the daemon without it.`],
+      },
+      {
+        label: "broken, one path gone",
+        state: { state: "broken", path: plist, missing: ["/old/node"] },
+        notices: [
+          `Service ${name} is broken (/old/node is gone); started the daemon without it. Run simlock daemon install again.`,
+        ],
+      },
+      {
+        label: "broken, both paths gone",
+        state: { state: "broken", path: plist, missing: ["/old/node", "/old/main.js"] },
+        notices: [
+          `Service ${name} is broken (/old/node, /old/main.js are gone); started the daemon without it. Run simlock daemon install again.`,
+        ],
+      },
+    ];
+    for (const testCase of cases) {
+      const serviceManager =
+        testCase.state === undefined
+          ? undefined
+          : new FakeServiceManager({ state: testCase.state });
+      const spawner = new FakeDaemonLauncher();
+      const notices: string[] = [];
+      const launcher = launcherFor({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: "/Users/me/.simlock",
+        mainPath: "/opt/simlock/dist/daemon/main.js",
+        nodePath: "/opt/node/bin/node",
+        home: "/Users/me",
+        env: {},
+        serviceManager,
+        notify: (line) => notices.push(line),
+        spawner,
+      });
+
+      await launcher.launch();
+
+      expect(spawner.launches, testCase.label).toBe(1);
+      expect(serviceManager?.starts ?? [], testCase.label).toEqual([]);
+      expect(notices, testCase.label).toEqual(testCase.notices);
+    }
+  });
+});
+
+describe("launcherFor with an installed service", () => {
+  it("starts an installed service through the manager that owns it, with that manager's definition", async () => {
+    const cases = [
+      { manager: "systemd" as const, path: "/home/me/.config/systemd/user/" },
+      { manager: "launchd" as const, path: "/home/me/Library/LaunchAgents/" },
+    ];
+    for (const testCase of cases) {
+      const serviceManager = new FakeServiceManager({
+        manager: testCase.manager,
+        state: { state: "installed", path: testCase.path },
+      });
+      const spawner = new FakeDaemonLauncher();
+      const launcher = launcherFor({
+        role: "worker",
+        root: "/home/me/.simlock",
+        dataDirectory: "/home/me/.simlock",
+        mainPath: "/opt/simlock/dist/daemon/main.js",
+        nodePath: "/opt/node/bin/node",
+        home: "/home/me",
+        env: {},
+        serviceManager,
+        notify: () => undefined,
+        spawner,
+      });
+
+      await launcher.launch();
+
+      expect(spawner.launches, testCase.manager).toBe(0);
+      expect(
+        serviceManager.starts.map((definition) => definition.path),
+        testCase.manager,
+      ).toEqual([
+        `${testCase.path}com.callstack.simlock.worker.${testCase.manager === "systemd" ? "service" : "plist"}`,
+      ]);
+    }
   });
 });

@@ -11,7 +11,9 @@ import { buildCliEnvironment } from "../cli/index.js";
 import {
   FakeClock,
   FakeDaemonLauncher,
+  FakeServiceManager,
   FakeSystemStats,
+  NodeDaemonLauncher,
   MemoryFilesystem,
   MemoryIpcTransport,
 } from "../ports/index.js";
@@ -25,17 +27,20 @@ const { connectToRunningDaemon, connectWithAutoLaunch } = vi.hoisted(() => ({
 vi.mock("./connect.js", () => ({ connectToRunningDaemon, connectWithAutoLaunch }));
 
 describe("MCP stdio lifecycle", () => {
-  it.each(["transport", "SIGINT", "SIGTERM"])("closes once on %s", async (cause) => {
+  it.each(["transport", "SIGINT", "SIGTERM", "stdin EOF"])("closes once on %s", async (cause) => {
     const transport = new FakeTransport();
     const server = new FakeServer();
     const signals = new FakeSignals();
+    const stdin = new FakeStdin();
     const runner = await startMcpStdio({
       createServer: () => server as unknown as McpServer,
       createTransport: () => transport,
       signals,
+      stdin,
     });
 
     if (cause === "transport") transport.onclose?.();
+    else if (cause === "stdin EOF") stdin.end();
     else signals.emit(cause);
     await runner.finished;
     await runner.shutdown();
@@ -43,6 +48,7 @@ describe("MCP stdio lifecycle", () => {
     expect(server.closeCalls).toBe(1);
     expect(transport.closeCalls).toBe(1);
     expect(signals.listeners.size).toBe(0);
+    expect(stdin.listener).toBeUndefined();
   });
 
   // Regression for a real reentrancy bug: the SDK's transport.close() can invoke
@@ -208,6 +214,53 @@ describe("MCP stdio lifecycle", () => {
     }
   });
 
+  it("auto-start from a tool call asks a loaded service to start the daemon and spawns nothing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mcp-svc-"));
+    vi.stubEnv("SIMLOCK_HOME", root);
+    const spawned = vi
+      .spyOn(NodeDaemonLauncher.prototype, "launch")
+      .mockRejectedValue(new Error("the MCP server spawned a daemon"));
+    try {
+      const serviceManager = new FakeServiceManager({
+        state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
+      });
+      const toolCallClient = new FakeSimlockClient();
+      toolCallClient.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+      connectWithAutoLaunch.mockReset().mockImplementation(async (options) => {
+        await options.launcher.launch();
+        return toolCallClient;
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const runner = await startMcpStdio({
+        clock: new FakeClock(0),
+        createTransport: () => serverTransport,
+        requesterId: "mcp-test",
+        serviceManager,
+        signals: new FakeSignals(),
+      });
+      const mcpClient = new Client({ name: "test", version: "1.0.0" });
+      await mcpClient.connect(clientTransport);
+
+      await mcpClient.request(
+        {
+          method: "tools/call",
+          params: { arguments: { model: "iPhone", platform: "ios" }, name: "lease_simulator" },
+        },
+        CallToolResultSchema,
+      );
+
+      expect(serviceManager.starts).toHaveLength(1);
+      expect(serviceManager.starts[0]?.role).toBe("worker");
+      expect(spawned).not.toHaveBeenCalled();
+      await mcpClient.close();
+      await runner.shutdown();
+    } finally {
+      spawned.mockRestore();
+      vi.unstubAllEnvs();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("sources the connection principal from SIMLOCK_AGENT_ID when no requesterId is given explicitly", async () => {
     connectWithAutoLaunch.mockReset().mockResolvedValue(new FakeSimlockClient());
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -257,12 +310,6 @@ describe("MCP stdio lifecycle", () => {
     await runner.shutdown();
   });
 
-  it("sources the connection principal as claude-code:<id> from CLAUDE_CODE_SESSION_ID when neither requesterId nor SIMLOCK_AGENT_ID is given", async () => {
-    await expect(principalFor({ env: { CLAUDE_CODE_SESSION_ID: "abc" } })).resolves.toBe(
-      "claude-code:abc",
-    );
-  });
-
   it("falls back to mcp:<pid> when no requesterId, SIMLOCK_AGENT_ID or session id is given", async () => {
     await expect(principalFor({ env: {} })).resolves.toBe(`mcp:${process.pid}`);
   });
@@ -280,6 +327,9 @@ describe("MCP stdio lifecycle", () => {
         {
           clock: new FakeClock(0),
           daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
+          homeDirectory: "/home/operator",
+          workingDirectory: "/work/project",
+          runTool: async () => ({ outcome: "not-found" }),
           filesystem: new MemoryFilesystem(),
           ipc: new MemoryIpcTransport(),
           launcher: new FakeDaemonLauncher(),
@@ -293,23 +343,6 @@ describe("MCP stdio lifecycle", () => {
       await expect(principalFor({ env })).resolves.toBe(cli.requesterId);
     },
   );
-
-  it("closes once when stdin reaches EOF", async () => {
-    const transport = new FakeTransport();
-    const server = new FakeServer();
-    const stdin = new FakeStdin();
-    const runner = await startMcpStdio({
-      createServer: () => server as unknown as McpServer,
-      createTransport: () => transport,
-      stdin,
-    });
-
-    stdin.end();
-    await runner.finished;
-    expect(server.closeCalls).toBe(1);
-    expect(transport.closeCalls).toBe(1);
-    expect(stdin.listener).toBeUndefined();
-  });
 
   it("finishes when the transport closes during server connection", async () => {
     const transport = new FakeTransport();

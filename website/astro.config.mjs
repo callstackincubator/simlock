@@ -3,6 +3,7 @@ import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 import starlightLlmsTxt from "starlight-llms-txt";
+import starlightOpenAPI, { createOpenAPISidebarGroup } from "starlight-openapi";
 
 import { brandCss } from "./src/site/brand.ts";
 import { at, BASE, site as meta, noindexPaths } from "./src/site/content.ts";
@@ -13,6 +14,8 @@ const origin = `${site}${BASE}`;
 const repo = meta.repo;
 const description = meta.description;
 const siteDir = "website";
+
+const openAPISidebarGroup = createOpenAPISidebarGroup();
 
 const doc = (name, label) => ({ label, slug: `docs/${name}` });
 
@@ -72,21 +75,86 @@ export default defineConfig({
         },
       ],
       sidebar: [
-        doc("introduction", "Introduction"),
-        doc("getting-started", "Getting started"),
+        {
+          label: "Introduction",
+          items: [
+            doc("introduction", "What is Simlock"),
+            doc("introduction/how-it-works", "How it works"),
+            doc("introduction/requirements", "Requirements"),
+          ],
+        },
+        {
+          label: "Getting started",
+          items: [
+            doc("getting-started", "Install and check your machine"),
+            doc("getting-started/first-lease", "Lease your first device"),
+            doc("getting-started/connect-your-agent", "Connect your agent"),
+            doc("getting-started/next-steps", "Next steps"),
+          ],
+        },
+        {
+          label: "Using devices",
+          items: [
+            doc("using-devices/choosing-a-device", "Choose a device"),
+            doc("using-devices/lease-lifecycle", "Lease lifecycle"),
+            doc("using-devices/working-with-a-device", "Work with a leased device"),
+            doc("using-devices/physical-devices", "Physical devices"),
+            doc("using-devices/watching-the-screen", "Watch the screen"),
+            doc("using-devices/agent-device", "agent-device"),
+            doc("using-devices/remote-agents", "Remote agents over HTTP"),
+            doc("using-devices/programmatic-client", "Programmatic client"),
+            doc("using-devices/errors", "When a lease fails"),
+          ],
+        },
+        {
+          label: "Worker",
+          items: [
+            doc("worker/running-the-daemon", "Run the daemon"),
+            doc("worker/configuration", "Configuration"),
+            doc("worker/capacity", "Capacity and warm pool"),
+            doc("worker/runtimes-and-images", "Runtimes and system images"),
+            doc("worker/cleanup", "Cleanup and disk"),
+            doc("worker/enrolling-physical-devices", "Enrol physical devices"),
+            doc("worker/console", "Web console"),
+            doc("worker/monitoring", "Monitoring"),
+            doc("worker/troubleshooting", "Troubleshooting"),
+          ],
+        },
+        {
+          label: "Gateway",
+          items: [
+            doc("gateway", "When you need a gateway"),
+            doc("gateway/setup", "Set up a gateway"),
+            doc("gateway/joining-workers", "Join workers"),
+            doc("gateway/routing", "How requests are routed"),
+            doc("gateway/managing-workers", "Manage workers"),
+            doc("gateway/access-control", "Access control"),
+            doc("gateway/alerts", "Alerts"),
+            doc("gateway/fleet-console", "Fleet console"),
+          ],
+        },
         {
           label: "Reference",
           items: [
-            doc("cli", "CLI"),
-            doc("configuration", "Configuration"),
-            doc("http-api", "HTTP API"),
-            doc("client", "Programmatic client"),
-            doc("console", "Web console"),
-            doc("events", "Events"),
+            doc("reference/cli", "CLI"),
+            doc("reference/configuration", "Configuration keys"),
+            doc("reference/events", "Events"),
+            doc("reference/errors", "Errors and exit codes"),
+            openAPISidebarGroup,
           ],
         },
+        doc("prior-art", "Prior art"),
       ],
-      plugins: [starlightLlmsTxt({ projectName: meta.name, description })],
+      plugins: [
+        starlightLlmsTxt({ projectName: meta.name, description }),
+        starlightOpenAPI([
+          {
+            base: "docs/reference/http-api",
+            schema: "public/openapi.json",
+            sidebar: { label: "HTTP API reference", group: openAPISidebarGroup },
+          },
+        ]),
+      ],
     }),
   ],
 });

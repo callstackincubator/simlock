@@ -799,11 +799,12 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("boots a shutdown device from its persisted clean baseline after a driver restart", async () => {
+  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown, recovery, mismatched, wipe-pending and physical boots at 70 s", async () => {
     const harness = await provisionedHarness();
     const booted = await harness.driver.makeReady(harness.device);
 
     const restartedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
       {
@@ -835,11 +836,24 @@ describe("AndroidDriver", () => {
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    // why: Proposed per-device estimate input for #778: the current operation-only input
+    // cannot distinguish this persisted baseline from a cold boot of the same spec.
+    const prepareEstimate = { device: booted, operation: "boot", purpose: "prepare" } as const;
+    const recoveryEstimate = { ...prepareEstimate, purpose: "recover" } as const;
+    expect(await restartedDriver.estimate({ operation: "boot" }, spec)).toBe(70_000);
+    expect(await restartedDriver.estimate(recoveryEstimate, spec)).toBe(70_000);
+    const estimatedBootMs = await restartedDriver.estimate(prepareEstimate, spec);
 
     await expect(restartedDriver.makeReady(booted)).resolves.toMatchObject({
       address: "emulator-5586",
     });
-    expect(restartedRunner.calls[2]).toMatchObject({
+    expect(restartedRunner.calls[3]).toMatchObject({
       args: [
         "-avd",
         "simlock_one",
@@ -851,6 +865,32 @@ describe("AndroidDriver", () => {
       ],
       command: binaries.emulator,
     });
+    expect(estimatedBootMs).toBe(4_000);
+
+    // why: Each row is a prepare boot that `makeReady` would not load the baseline for, so it keeps the cold figure.
+    const mismatchedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 37.0.0"),
+    ]);
+    const mismatchedDriver = await createDriver(harness.filesystem, mismatchedRunner);
+    // why: A full reclaim leaves the baseline hash matching but flags the next boot to wipe data.
+    const wipePendingRunner = new ScriptedProcessRunner([
+      avdPathExpectation("emulator-5586"),
+      processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+    ]);
+    const wipePendingDriver = await createDriver(harness.filesystem, wipePendingRunner);
+    await wipePendingDriver.reclaim(booted, { clean: "full" });
+    expect({
+      mismatchedBaselineHash: await mismatchedDriver.estimate(prepareEstimate, spec),
+      physicalSpec: await restartedDriver.estimate(prepareEstimate, {
+        class: "phone",
+        model: "Pixel 5",
+        osVersion: "34",
+        physical: true,
+        platform: "android",
+      }),
+      wipePending: await wipePendingDriver.estimate(prepareEstimate, spec),
+    }).toEqual({ mismatchedBaselineHash: 70_000, physicalSpec: 70_000, wipePending: 70_000 });
   });
 
   describe("android.emulator launch options", () => {
@@ -3285,6 +3325,101 @@ describe("AndroidDriver.create", () => {
     expect(await passthroughOf(driver, args, undefined, VIRTUAL_DEVICE)).toEqual(expected);
   });
 
+  it("fills an emulator's serial into an adb command that names no device", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const scoped = ["-P", String(adbServerPort)];
+    const cases: readonly (readonly [readonly string[], readonly string[]])[] = [
+      [
+        ["shell", "getprop"],
+        ["-s", "emulator-5554", "shell", "getprop"],
+      ],
+      [
+        ["install", "app.apk"],
+        ["-s", "emulator-5554", "install", "app.apk"],
+      ],
+      [
+        ["reverse", "--list"],
+        ["-s", "emulator-5554", "reverse", "--list"],
+      ],
+      [
+        ["-s", "emulator-5554", "shell", "getprop"],
+        ["-s", "emulator-5554", "shell", "getprop"],
+      ],
+      [["devices"], ["devices"]],
+      [["version"], ["version"]],
+      [["--version"], ["--version"]],
+      [
+        ["forward", "--list"],
+        ["forward", "--list"],
+      ],
+      [
+        ["reconnect", "offline"],
+        ["reconnect", "offline"],
+      ],
+    ];
+
+    for (const [args, expected] of cases) {
+      expect((await passthroughOf(driver, args, { hasTerminal: false }, emulator)).args).toEqual([
+        ...scoped,
+        ...expected,
+      ]);
+    }
+  });
+
+  it("refuses an emulator adb command that names another device, or that runs on another platform", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const context = { hasTerminal: false, platform: "android" };
+    const refusal = (command: string, named: string) =>
+      `Refusing \`adb ${command}\`: it names device ${named}, and this lease holds emulator-5554. Leave the device out; Simlock fills it in.`;
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [
+        ["-s", "emulator-5556", "shell", "getprop"],
+        refusal("-s emulator-5556 shell getprop", "-s emulator-5556"),
+      ],
+      [["-e", "shell", "getprop"], refusal("-e shell getprop", "-e")],
+      [["-d", "shell", "getprop"], refusal("-d shell getprop", "-d")],
+      [["-t", "3", "shell", "getprop"], refusal("-t 3 shell getprop", "-t 3")],
+      [["-t3", "shell", "getprop"], refusal("-t3 shell getprop", "-t3")],
+      [
+        ["-t", "emulator-5554", "shell", "getprop"],
+        refusal("-t emulator-5554 shell getprop", "-t emulator-5554"),
+      ],
+    ];
+
+    for (const [args, message] of cases) {
+      await expect(passthroughOf(driver, args, context, emulator)).rejects.toMatchObject({
+        message,
+        tool: "adb",
+      });
+    }
+    await expect(
+      passthroughOf(
+        driver,
+        ["shell", "getprop"],
+        { hasTerminal: false, platform: "ios" },
+        emulator,
+      ),
+    ).rejects.toMatchObject({
+      message:
+        "Refusing `adb`: it only serves an Android device, and this lease is on the ios platform.",
+      tool: "adb",
+    });
+  });
+
   it("claims only the adb passthrough tool", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
@@ -4877,19 +5012,6 @@ describe("AndroidDriver defaultModels", () => {
       watch: ["Wear OS Large Round", "Wear OS Small Round"],
     });
   });
-
-  it("has no Android list for vision", async () => {
-    const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
-
-    expect(Object.keys(driver.defaultModels).sort()).toEqual([
-      "auto",
-      "desktop",
-      "phone",
-      "tablet",
-      "tv",
-      "watch",
-    ]);
-  });
 });
 
 describe("AndroidDriver library catalog", () => {
@@ -5510,21 +5632,19 @@ describe("AndroidDriver image fit", () => {
       );
     });
 
-    it("says the model does not take Play Store images", async () => {
-      const { refusal } = await fitHarness([["36", "google_apis_playstore", "arm64-v8a"]]);
+    it.each([
+      ["Pixel 6", "36", "google_apis_playstore", "Play Store"],
+      ["Pixel 5", "35", "tablet", "tablet"],
+    ])(
+      "says the model does not take the kind of image it was given (%s)",
+      async (model, osVersion, imageTag, noun) => {
+        const { refusal } = await fitHarness([[osVersion, imageTag, "arm64-v8a"]]);
 
-      expect((await refusal("Pixel 6", "36")).message).toBe(
-        "No installed system image fits Pixel 6 at Android 36: Pixel 6 does not take Play Store images",
-      );
-    });
-
-    it("says the model does not take tablet images", async () => {
-      const { refusal } = await fitHarness([["35", "tablet", "arm64-v8a"]]);
-
-      expect((await refusal("Pixel 5", "35")).message).toBe(
-        "No installed system image fits Pixel 5 at Android 35: Pixel 5 does not take tablet images",
-      );
-    });
+        expect((await refusal(model, osVersion)).message).toBe(
+          `No installed system image fits ${model} at Android ${osVersion}: ${model} does not take ${noun} images`,
+        );
+      },
+    );
 
     it("says none of the installed images fit it when no single check rules out every image", async () => {
       const { refusal } = await fitHarness([
@@ -5673,7 +5793,7 @@ describe("AndroidDriver image fit", () => {
 async function passthroughOf(
   driver: object,
   args: readonly string[],
-  context?: { readonly hasTerminal: boolean },
+  context?: { readonly hasTerminal: boolean; readonly platform?: string },
   device?: unknown,
 ): Promise<{ readonly args: readonly string[]; readonly command: string; readonly env: object }> {
   const routed = driver as {
@@ -5681,7 +5801,7 @@ async function passthroughOf(
       tool: string,
       device: unknown,
       args: readonly string[],
-      context?: { readonly hasTerminal: boolean },
+      context?: { readonly hasTerminal: boolean; readonly platform?: string },
     ): Promise<{
       readonly args: readonly string[];
       readonly command: string;

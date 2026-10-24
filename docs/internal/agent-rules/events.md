@@ -29,4 +29,5 @@ Rules for defining and emitting events on the daemon's event bus.
    powers `simlock events --since` and is the audit trail.
 8. **New events are documented in the same change.** Adding or modifying an
    event requires updating [../EVENTS.md](../EVENTS.md) — name, payload,
-   emission point, status.
+   emission point, status — and the website's events reference
+   (`website/src/content/docs/docs/reference/events.mdx`).

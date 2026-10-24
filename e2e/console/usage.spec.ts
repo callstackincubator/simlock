@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
+import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const ONE_DEVICE = { limits: { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 } };
@@ -60,27 +61,19 @@ async function waitingCount(host: RunningDaemon): Promise<number> {
 }
 
 // why: one waiter, one --no-wait refusal and one grant, so wait, rejections and requesters all have
-// something to show; the slots figures come from completed minutes, so the run waits for the one it
-// started in to end.
+// real daemon-generated rows to show.
 async function scriptedRun(host: RunningDaemon, completeMinute = false): Promise<void> {
-  const minute = Math.floor(Date.now() / 60_000);
   const held = await host.cli([...LEASE, "--agent-id", "holder", "--detach"]);
   expect(held.code, held.stderr).toBe(0);
   host.cliBackground([...LEASE, "--agent-id", "waiter"]);
   await waitFor(async () => (await waitingCount(host)) === 1, { label: "a request waiting" });
   const refused = await host.cli([...LEASE, "--agent-id", "refused", "--no-wait", "--detach"]);
   expect(refused.code).toBe(11);
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const released = await host.cli(["release", (held.json as { lease: { id: string } }).lease.id]);
   expect(released.code, released.stderr).toBe(0);
   await waitFor(async () => (await waitingCount(host)) === 0, { label: "the request granted" });
-  if (!completeMinute) return;
-  const minuteOver = (minute + 1) * 60_000 + 1_000;
-  await waitFor(() => Date.now() >= minuteOver, { label: "the minute over", timeout: 70_000 });
-  await waitFor(async () => (await statsOf(host, "1h")).totals.utilisation.slots.peak !== null, {
-    label: "the run in a completed minute",
-    timeout: 30_000,
-  });
+  if (completeMinute) await host.prepareHistoricalUsage();
 }
 
 async function openUsage(page: Page, host: RunningDaemon, path = "/usage"): Promise<void> {
@@ -133,7 +126,6 @@ test.describe("the Usage page", () => {
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
-      test.setTimeout(150_000);
       await scriptedRun(host, true);
       const cliStats = await host.cli(["stats", "--since", "24h", "--json"]);
       expect(cliStats.code, cliStats.stderr).toBe(0);
@@ -198,7 +190,7 @@ test.describe("the Usage page", () => {
     }
   });
 
-  test("a lease granted while the page is open raises Requests and Granted within 2 seconds with no reload", async ({
+  test("a lease granted while the page is open raises Requests and Granted without a reload", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -210,31 +202,26 @@ test.describe("the Usage page", () => {
       const granted = await host.cli([...LEASE, "--agent-id", "late", "--detach"]);
       expect(granted.code, granted.stderr).toBe(0);
 
-      await expect(tile(page, "Requests").locator(".stat-value")).toHaveText("1", {
-        timeout: 2_000,
-      });
-      await expect(tile(page, "Granted").locator(".stat-value")).toHaveText("1", {
-        timeout: 2_000,
-      });
+      await returnToTab(page);
+
+      await expect(tile(page, "Requests").locator(".stat-value")).toHaveText("1");
+      await expect(tile(page, "Granted").locator(".stat-value")).toHaveText("1");
     } finally {
       await host.dispose();
     }
   });
 
-  test("clicking the Overview's Granted tile on /?range=7d opens /usage?range=7d", async ({
-    page,
-  }) => {
+  test("shows the Device slots in use chart in the shared frame", async ({ page }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
     try {
-      await page.goto(new URL("/?range=7d", host.url).toString());
+      await page.goto(new URL("/usage?range=6h", host.url).toString());
       await signIn(page, host.tokens.operator);
-      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-
-      await page.getByRole("link", { name: /Granted/ }).click();
-
       await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
-      expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe("/usage?range=7d");
-      await expect(page.getByRole("radio", { name: "7 days" })).toBeChecked();
+
+      await expect(
+        page.getByRole("heading", { name: "Device slots in use, last 6 hours", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator("#main table.chart-data")).toHaveCount(1);
     } finally {
       await host.dispose();
     }

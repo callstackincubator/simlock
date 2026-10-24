@@ -1,117 +1,179 @@
 ---
-import CopyCommand from '../site/CopyCommand.astro';
+// why: the hero tells the product's story in two steps: one machine that agents lease from three
+// ways, then a fleet of them behind a gateway. The copy is in content.ts and the steps in story.ts;
+// hero.ts plays them.
 import Dither from '../site/Dither.astro';
-import Window from '../site/Window.astro';
-import { docs, home, site } from '../../site/content';
-import { gatewayUrl, lanes, stageLabel } from './story';
+import { docs, site } from '../../site/content';
+import { gatewayUrl, prompt, stageLabel, steps, tokens } from './story';
 
-const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device":"${l.device}"}`;
+const num = (i: number) => String(i + 1).padStart(2, '0');
+// why: the server HTML is the first step's finished frame (BRAND.md, Motion); hero.ts resets it
+// before it plays. One stage holds both steps: the fleet's machines are a superset of the first
+// step's, so the second step only shows what the first hides.
+const [first, fleet] = steps;
+const machines = fleet!.machines;
+const holder = (mi: number, si: number) => first!.agents.find((a) => mi === 0 && a.slot === si);
+const streams = (mi: number, si: number) =>
+  steps.some((s) => s.agents.some((a) => a.via === 'AGENT-DEVICE' && a.worker === machines[mi]!.name && a.slot === si));
 ---
 
 <section class="hero" aria-labelledby="hero-title">
-  <div class="hero-top va-top">
-    <div class="hero-copy">
-      <h1 class="h1" id="hero-title">{site.headline[0]} <em>{site.headline[1]}</em></h1>
-      <p class="lede">{site.lede}</p>
-      <div class="actions">
-        <a class="btn" href={docs.start}>Get started <span aria-hidden="true">→</span></a>
-        <CopyCommand command={site.install} />
-      </div>
+  <div class="hero-top st-top">
+    <h1 class="h1" id="hero-title">{site.headline[0]} <em>{site.headline[1]}</em></h1>
+    <p class="lede">{site.lede}</p>
+    <div class="actions">
+      <a class="btn" href={docs.start}>Get started <span aria-hidden="true">→</span></a>
     </div>
-    <Window title="zsh" class="va-side">
-      <div class="term">
-        {home.setup.map((l) => ('cmd' in l ? <div class="ln"><span class="p">$</span> {l.cmd}</div> : <div class="ln dim"># {l.comment}</div>))}
-      </div>
-    </Window>
   </div>
 
-  <div class="viz va-viz" data-va-hero role="img" aria-label={stageLabel}>
-    <Dither scene="fleet" focus={0.5} />
-    <div class="va-stage">
+  <div class="st" data-stage>
+    <div class="st-steps" role="group" aria-label="Story">
       {
-        lanes.map((l, i) => (
-          <Window title={`${l.where} · ${l.agent}`} class={`va-agent va-agent--${i}`}>
-            <div class="term va-term" data-lane={i}>
-              <div class="ln" data-type><span class="p">$ </span><span data-t>POST /v1/lease-requests</span></div>
-              <div class="ln out" data-step>{body(l)}</div>
-              <div class="ln out" data-step>state    <span class="va-state" data-state>granted</span></div>
-              <div class="ln out" data-step>lease    <span class="tool">{l.lease}</span></div>
-              <div class="ln ok" data-step>✓ worker {l.worker.label}</div>
-            </div>
-          </Window>
+        steps.map((s, i) => (
+          <button type="button" class:list={['st-step', { 'is-on': i === 0 }]} data-goto={i} aria-pressed={i === 0 ? 'true' : 'false'}>
+            <span class="st-step-lab">
+              <b>{num(i)}</b>
+              {s.label}
+            </span>
+            <span class="st-step-fill" aria-hidden="true">
+              <span class="st-step-lab">
+                <b>{num(i)}</b>
+                {s.label}
+              </span>
+            </span>
+          </button>
         ))
       }
+    </div>
 
+    <div class="st-caps">
       {
-        lanes.map((_, i) => (
-          <span class={`va-duct va-duct--up va-col-${i}`} data-up={i} aria-hidden="true">
-            <span class="pkt" />
-            <span class="pkt pkt--back" />
-          </span>
+        steps.map((s, i) => (
+          <p class:list={['st-cap', { 'is-on': i === 0 }]} data-cap={i} aria-hidden={i === 0 ? undefined : 'true'}>
+            <b>{s.caption[0]}</b> {s.caption[1]}
+            <br />
+            {s.caption[2]}
+          </p>
         ))
       }
+    </div>
 
-      <Window title={`gateway · ${gatewayUrl}`} class="va-gw">
-        <div class="va-table">
-          <div class="pane-row pane-head va-row">
-            <span>Agent</span><span class="va-c-dev">Device</span><span>Worker</span><span>Why</span><span class="va-c-state">State</span>
-          </div>
+    <div class="viz st-viz">
+      <Dither scene="flow" />
+      <div class="st-stage" data-step="0" role="img" aria-label={stageLabel}>
+        <div class="st-col st-agents">
           {
-            lanes.map((l, i) => (
-              <div class="pane-row va-row is-on" data-row data-gw={i}>
-                <span class="mut">{l.agent}</span>
-                <span class="va-c-dev mut">{l.device}</span>
-                <span>{l.worker.label}</span>
-                <span class="mut">{l.why}</span>
-                <span class="va-c-state va-live" data-gw-state>granted</span>
+            first!.agents.map((a, i) => (
+              <div class="st-chip" data-agent={i}>
+                <div class="st-bar">
+                  <span class="st-via" data-via>
+                    {a.via}
+                  </span>
+                  <span class="st-title" data-title>
+                    {a.agent} · {a.where}
+                  </span>
+                </div>
+                <div class="st-term">
+                  <div class="ln" data-cmd>
+                    <span class="p">{prompt(a.via)} </span>
+                    {tokens(a.cmd).map((t) => (
+                      <span class={t.cls}>{t.text}</span>
+                    ))}
+                  </div>
+                  <div class="ln out" data-result>
+                    <span class="st-live">{a.via === 'AGENT-DEVICE' ? 'streaming' : 'granted'}</span> {a.result}
+                  </div>
+                </div>
               </div>
             ))
           }
-          <div class="pane-row va-foot">
-            <span>{lanes.length} workers connected · dialled out over wss · no inbound port</span>
+        </div>
+
+        <div class="st-col st-mid">
+          <div class="st-gw" data-gw>
+            <div class="st-bar st-gw-bar">gateway · {gatewayUrl}</div>
+            <div class="st-gw-body">
+              one URL for every agent
+              <br />
+              <span class="st-dim">picks a machine with room</span>
+            </div>
           </div>
         </div>
-      </Window>
 
-      {
-        lanes.map((_, i) => (
-          <span class={`va-duct va-duct--down va-col-${i}`} data-down={i} aria-hidden="true">
-            <span class="pkt" />
-            <span class="pkt pkt--back" />
-          </span>
-        ))
-      }
-
-      {
-        lanes.map((l, i) => (
-          <div class={`va-worker va-col-${i}`} data-worker={i}>
-            <div class="va-whead">
-              <span class="va-wname">{l.worker.label}</span>
-              <span class="va-whost">{l.worker.host} · {l.worker.platforms}</span>
-            </div>
-            <div class="va-phone" data-phone data-state="leased">
-              <div class="va-phone-in">
-                <div class="va-screen">
-                  <span class="va-boot" />
-                  <span class="va-prov"><i /></span>
-                  <span class="va-app">
-                    <b />
-                    <span class="va-tiles"><span /><span /><span /><span /></span>
-                    <i /><i /><i /><i /><i /><i />
-                  </span>
+        <div class="st-col st-machines">
+          {
+            machines.map((m, mi) => (
+              <div class="st-machine" data-machine={mi}>
+                <div class="st-mhead">
+                  <span class="st-mname">{m.name}</span>
+                  <span class="st-mhost">{m.host}</span>
                 </div>
-                <span class="va-home" />
+                <div class="st-devs">
+                  {m.devices.map((d, si) => {
+                    const h = holder(mi, si);
+                    const live = !!h && h.via === 'AGENT-DEVICE';
+                    return (
+                      <div class:list={['st-dev', { 'is-live': live }]} data-dev={si} data-start={d.start}>
+                        <div class="st-phone" data-state={h ? 'leased' : d.start}>
+                          <div class="st-phone-in">
+                            <div class="st-screen">
+                              <span class="st-boot" />
+                              <span class="st-app">
+                                <b />
+                                <span class="st-tiles">
+                                  <span />
+                                  <span />
+                                  <span />
+                                  <span />
+                                </span>
+                                <i />
+                                <i />
+                                <i />
+                              </span>
+                              {streams(mi, si) && (
+                                <span class="st-stream" data-view="home">
+                                  <span class="st-v st-v-splash">
+                                    <b />
+                                  </span>
+                                  <span class="st-v st-v-signin">
+                                    <b />
+                                    <i />
+                                    <i />
+                                    <u data-tap />
+                                  </span>
+                                  <span class="st-v st-v-home">
+                                    <b />
+                                    <i class="st-q" data-q>
+                                      <s />
+                                    </i>
+                                    <span class="st-row" />
+                                    <span class="st-row" data-f />
+                                    <span class="st-row" />
+                                    <span class="st-row" data-f />
+                                  </span>
+                                  <span class="st-tap" />
+                                </span>
+                              )}
+                            </div>
+                            <span class="st-home" />
+                          </div>
+                        </div>
+                        <span class="st-ltag">LIVE</span>
+                        <span class="st-dname">{d.name}</span>
+                        <span class="st-dstate" data-dstate>
+                          {h ? <span class="st-live">{h.agent}</span> : d.start}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-            <div class="va-wfoot">
-              <span class="va-dev">{l.device}</span>
-              <span class="va-wstate" data-wstate>
-                <span class="va-live">leased</span> {l.agent}
-              </span>
-            </div>
-          </div>
-        ))
-      }
+            ))
+          }
+        </div>
+
+        <svg class="st-wires" data-wires aria-hidden="true"></svg>
+      </div>
     </div>
   </div>
 </section>
@@ -119,146 +181,329 @@ const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device
 <script>
   import { whenNear } from '../site/lazy';
 
-  const root = document.querySelector<HTMLElement>('[data-va-hero]');
+  const root = document.querySelector<HTMLElement>('[data-stage]');
   if (root) whenNear(root, () => void import('./hero').then((m) => m.default(root)));
 </script>
 
 <style>
-  .va-top {
-    grid-template-columns: minmax(0, 1fr) 28.5rem;
-    align-items: center;
-    padding-block: clamp(2rem, 4.5vw, 3.75rem);
+  .st-top {
+    justify-items: center;
+    gap: 1.25rem;
+    padding-bottom: clamp(2rem, 4vw, 3rem);
+    text-align: center;
   }
-  .va-top .h1 {
-    max-width: 16ch;
+  .st-top .h1 {
+    max-width: 20ch;
+    margin: -0.18em 0 0;
   }
-  :global(.va-side) .term {
-    font-size: 0.6875rem;
-    overflow-wrap: normal;
+  .st-top .lede {
+    max-width: 38rem;
+  }
+  .st-top .actions {
+    justify-content: center;
+    margin-top: 0.25rem;
   }
 
-  .va-stage {
+  /* why: the steps are buttons; the playing one fills with the accent from left to right, and its
+     label turns dark where the fill has passed. */
+  .st-steps {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    width: min(100% - 2 * var(--pad), 32rem);
+    margin: 0 auto 1.25rem;
+    border: 1px solid var(--line-strong);
+  }
+  .st-step {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1rem;
+    border: 0;
+    background: none;
+    color: var(--faint);
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 0.12s,
+      color 0.12s;
+  }
+  .st-step + .st-step {
+    border-left: 1px solid var(--line-strong);
+  }
+  .st-step:hover {
+    background: var(--surface);
+    color: var(--text);
+  }
+  .st-step:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .st-step-lab {
+    display: flex;
+    align-items: baseline;
+    gap: 0.625rem;
+  }
+  .st-step b {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 400;
+  }
+  .st-step.is-on {
+    background: var(--accent-low);
+    color: var(--text);
+  }
+  .st-step-fill {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent);
+    color: var(--on-accent);
+    clip-path: inset(0 100% 0 0);
+    pointer-events: none;
+  }
+  .st-step-fill b {
+    color: rgb(10 10 10 / 0.7);
+  }
+  .st-step.is-on.is-done .st-step-fill {
+    clip-path: inset(0);
+  }
+  .st-step.is-on.is-playing .st-step-fill {
+    animation: st-fill var(--dur, 8s) steps(40) forwards;
+  }
+  @keyframes st-fill {
+    to {
+      clip-path: inset(0);
+    }
+  }
+
+  /* why: both captions share one grid cell and two lines, so the stage never moves on a step. */
+  .st-caps {
+    display: grid;
+    margin: 0 auto clamp(1.5rem, 3vw, 2rem);
+    padding: 0 var(--pad);
+    max-width: 46rem;
+  }
+  .st-cap {
+    grid-area: 1 / 1;
+    margin: 0;
+    color: var(--muted);
+    font-size: clamp(0.9375rem, 0.9rem + 0.2vw, 1.0625rem);
+    line-height: 1.55;
+    text-align: center;
+    visibility: hidden;
+  }
+  .st-cap.is-on {
+    visibility: visible;
+  }
+  .st-cap b {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* why: the Flow scene is dimmed behind the stage, so the dashed wires read over it. */
+  .st-viz :global(.dither) {
+    opacity: 0.5;
+  }
+  .st-stage {
     position: relative;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    column-gap: clamp(0.75rem, 2vw, 1.5rem);
-    padding: clamp(2rem, 5vw, 3.5rem) var(--pad);
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.65fr) minmax(0, 1.1fr);
+    column-gap: clamp(2.5rem, 5vw, 4.5rem);
+    height: 30rem;
+    padding: clamp(1.5rem, 3vw, 2.5rem) var(--pad);
+    box-sizing: content-box;
   }
-  .va-stage :global(.va-agent) {
-    grid-row: 1;
-  }
-  .va-stage :global(.va-agent--0) {
-    grid-column: 1;
-  }
-  .va-stage :global(.va-agent--1) {
-    grid-column: 2;
-  }
-  .va-stage :global(.va-agent--2) {
-    grid-column: 3;
-  }
-  .va-term {
-    padding: 0.75rem 0.875rem;
-    font-size: 0.6875rem;
-  }
-  .va-col-0 {
-    grid-column: 1;
-  }
-  .va-col-1 {
-    grid-column: 2;
-  }
-  .va-col-2 {
-    grid-column: 3;
-  }
-
-  .va-duct {
-    --track: rgb(255 255 255 / 0.5);
+  .st-col {
     position: relative;
-    justify-self: center;
-    width: 2px;
-    height: clamp(2rem, 4vw, 3rem);
-    background: repeating-linear-gradient(180deg, var(--track) 0 4px, transparent 4px 8px);
-  }
-  .va-duct:global(.is-live) {
-    --track: var(--accent);
-  }
-  .va-duct--up {
-    grid-row: 2;
-  }
-  .va-duct--down {
-    grid-row: 4;
-  }
-  .va-duct :global(.pkt) {
-    top: 0;
-    left: 50%;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.25rem;
+    min-width: 0;
   }
 
-  .va-stage :global(.va-gw) {
-    grid-row: 3;
-    grid-column: 1 / -1;
+  .st-chip,
+  .st-gw,
+  .st-machine {
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
   }
-  .va-table {
+  .st-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+  .st-via {
+    flex: none;
+    padding: 0 0.3rem;
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+    font-size: 0.5625rem;
+    letter-spacing: var(--label-tracking);
+  }
+  .st-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .st-term {
+    padding: 0.625rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: clamp(0.625rem, 0.4rem + 0.35vw, 0.75rem);
+    line-height: 1.8;
+    white-space: nowrap;
+  }
+  .st-term .ln {
+    min-height: 1.8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* why: hero.ts builds these spans at run time, outside Astro's scoping, so they are global. */
+  .st-term :global(.p),
+  .st-term :global(.str),
+  :global(.st-live) {
+    color: var(--accent);
+  }
+  .st-term .out {
+    color: var(--muted);
+  }
+  .st-term :global(.opt),
+  :global(.st-dim) {
+    color: var(--faint);
+  }
+
+  /* why: the gateway is only in the second step; it keeps its place in the first, hidden, so the
+     agents' column never changes width. */
+  .st-gw-bar {
+    justify-content: center;
+  }
+  .st-gw-body {
+    padding: 0.75rem;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1.6;
+    text-align: center;
+  }
+  .st-stage[data-step='0'] .st-gw {
+    visibility: hidden;
+  }
+  .st-stage[data-step='0'] .st-machine:not([data-machine='0']) {
+    display: none;
+  }
+  /* why: steps cut on opacity only, never on a transform, so every box is where hero.ts measured
+     it when it drew the wires. */
+  .st-stage[data-step='1'] .st-gw,
+  .st-machine:global(.is-joined) {
+    animation: st-in 0.4s steps(3) both;
+  }
+  @keyframes st-in {
+    from {
+      opacity: 0;
+    }
+  }
+  .st-machine:global(.is-joining) {
+    border-style: dashed;
+    opacity: 0.35;
+  }
+  .st-machine:global(.is-flash) {
+    border-color: var(--accent);
+  }
+
+  .st-machine {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    min-width: 0;
+    padding: 1rem;
     font-family: var(--font-mono);
     font-size: 0.6875rem;
   }
-  .va-row {
-    --cols: 0.8fr 1fr 1fr 1.2fr 0.9fr;
+  .st-mhead {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
   }
-  .va-table .pane-row:last-child {
-    border-bottom: 0;
+  .st-mname {
+    color: var(--text);
   }
-  .va-foot {
-    --cols: 1fr;
-    color: var(--faint);
-    font-size: 0.625rem;
-    letter-spacing: var(--label-tracking);
-    text-transform: uppercase;
-  }
-  .mut {
-    color: var(--muted);
-  }
-  :global(.va-live) {
-    color: var(--accent);
-  }
-  :global(.va-idle) {
+  .st-mhost {
     color: var(--faint);
   }
-
-  .va-worker {
-    grid-row: 5;
+  .st-devs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+  }
+  .st-dev {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.875rem;
+    gap: 0.25rem;
     min-width: 0;
-    padding: 0.875rem;
-    background: var(--bg);
-    border: 1px solid var(--line-strong);
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
+    text-align: center;
   }
-  .va-whead,
-  .va-wfoot {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 0.125rem 0.75rem;
+  .st-dname,
+  .st-dstate {
     width: 100%;
-  }
-  .va-wname {
-    color: var(--text);
-  }
-  .va-whost,
-  .va-dev {
-    color: var(--faint);
-  }
-  .va-wstate {
-    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .st-dname {
+    color: var(--muted);
+  }
+  .st-dstate {
+    color: var(--faint);
+  }
+  /* why: the LIVE tag keeps its room under every phone, so nothing moves when one starts to stream. */
+  .st-ltag {
+    margin-top: 0.3rem;
+    padding: 0 0.3rem;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 0.5rem;
+    letter-spacing: var(--label-tracking);
+    line-height: 1.5;
+    visibility: hidden;
+  }
+  .st-dev:global(.is-live) .st-ltag {
+    visibility: visible;
+  }
 
-  /* why: square steps, not border-radius, so the frame matches the fleet scene's phones. */
-  .va-phone,
-  .va-phone-in {
+  /* why: in the fleet, every machine is a small row of phones, without labels. */
+  .st-stage[data-step='1'] .st-machine {
+    gap: 0.875rem;
+    padding: 0.625rem 0.875rem;
+  }
+  .st-stage[data-step='1'] .st-devs {
+    display: flex;
+    gap: 1rem;
+  }
+  .st-stage[data-step='1'] .st-dname,
+  .st-stage[data-step='1'] .st-dstate {
+    display: none;
+  }
+  .st-stage[data-step='1'] .st-phone {
+    --pw: 2.375rem;
+  }
+
+  /* why: square steps, not border-radius, so the frame matches the dithered scenes' phones. */
+  .st-phone,
+  .st-phone-in {
     clip-path: polygon(
       0 8px, 4px 8px, 4px 4px, 8px 4px, 8px 0,
       calc(100% - 8px) 0, calc(100% - 8px) 4px, calc(100% - 4px) 4px, calc(100% - 4px) 8px, 100% 8px,
@@ -267,173 +512,292 @@ const body = (l: (typeof lanes)[number]) => `{"platform":"${l.platform}","device
       8px 100%, 8px calc(100% - 4px), 4px calc(100% - 4px), 4px calc(100% - 8px), 0 calc(100% - 8px)
     );
   }
-  .va-phone {
-    position: relative;
-    width: clamp(4.75rem, 8vw, 6.5rem);
+  .st-phone {
+    --pw: min(4.5rem, 100%);
+    flex: none;
+    width: var(--pw);
     aspect-ratio: 1 / 2;
     padding: 1px;
     background: #313131;
   }
-  .va-phone-in {
+  .st-phone-in {
     display: flex;
     flex-direction: column;
     height: 100%;
-    padding: 12px 6px 0;
+    padding: 18% 7% 0;
     background: #050505;
   }
-  .va-screen {
+  .st-screen {
     position: relative;
     flex: 1;
     background: var(--bg);
     border: 1px solid #1f1f1f;
     overflow: hidden;
   }
-  .va-home {
+  .st-home {
     display: flex;
-    flex: 0 0 18px;
+    flex: 0 0 12%;
     align-items: center;
     justify-content: center;
   }
-  .va-home::before {
+  .st-home::before {
     content: '';
     width: 34%;
     height: 3px;
     background: #313131;
   }
-  .va-boot,
-  .va-prov,
-  .va-app {
+  .st-phone:global(.is-flash),
+  .st-phone:global(.is-flash) .st-screen {
+    background: var(--accent);
+  }
+  /* why: BRAND.md draws a free slot dashed, a ready one grey, a booting one hatched. */
+  .st-phone[data-state='free'] {
+    background:
+      repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) top / 100% 1px no-repeat,
+      repeating-linear-gradient(90deg, #5a5a5a 0 4px, transparent 4px 8px) bottom / 100% 1px no-repeat,
+      repeating-linear-gradient(180deg, #5a5a5a 0 4px, transparent 4px 8px) left / 1px 100% no-repeat,
+      repeating-linear-gradient(180deg, #5a5a5a 0 4px, transparent 4px 8px) right / 1px 100% no-repeat;
+  }
+  .st-phone[data-state='free'] .st-phone-in {
+    background: transparent;
+  }
+  .st-phone[data-state='free'] .st-screen,
+  .st-phone[data-state='free'] .st-home::before {
+    visibility: hidden;
+  }
+  .st-phone[data-state='ready'] .st-screen {
+    background: #1a1a1a;
+  }
+  .st-boot,
+  .st-app,
+  .st-stream {
     position: absolute;
     inset: 0;
     display: none;
   }
-  .va-boot {
-    background: var(--accent);
-  }
-  .va-prov {
-    align-items: center;
-    padding: 0 18%;
-  }
-  .va-prov i {
+  .st-phone[data-state='booting'] .st-boot,
+  .st-phone[data-state='cleaning'] .st-boot {
     display: block;
-    width: 100%;
-    height: 4px;
-    background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 8px);
-    animation: va-fill 1.4s steps(8) infinite;
+    overflow: hidden;
   }
-  @keyframes va-fill {
-    from {
-      clip-path: inset(0 100% 0 0);
-    }
+  /* why: the stripes move as one oversized layer, not by background-position, so the pattern
+     never tiles and shows no seam. 33.94px is three stripe periods (8px × √2 × 3). */
+  .st-boot::before {
+    content: '';
+    position: absolute;
+    inset: -40px 0 0;
+    background: repeating-linear-gradient(135deg, var(--hatch) 0 3px, transparent 3px 8px);
+    animation: st-hatch 0.9s steps(6) infinite;
+  }
+  .st-phone[data-state='booting'] {
+    --hatch: rgb(var(--accent-rgb) / 0.55);
+  }
+  .st-phone[data-state='cleaning'] {
+    --hatch: rgb(255 255 255 / 0.3);
+  }
+  @keyframes st-hatch {
     to {
-      clip-path: inset(0 0 0 0);
+      transform: translateY(33.94px);
     }
   }
-  .va-app {
+  .st-app {
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 9px;
+    gap: 8%;
+    padding: 14% 12%;
   }
-  .va-app b {
-    display: block;
-    flex: 0 0 14px;
+  .st-phone[data-state='leased'] .st-app {
+    display: flex;
+  }
+  .st-app b {
+    flex: 0 0 9%;
     background: var(--accent);
   }
-  .va-tiles {
+  .st-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    margin-bottom: 4px;
+    gap: 6%;
   }
-  .va-tiles span {
+  .st-tiles span {
     aspect-ratio: 1;
     background: rgb(var(--accent-rgb) / 0.3);
   }
-  .va-tiles span:first-child {
+  .st-tiles span:first-child {
     background: rgb(var(--accent-rgb) / 0.7);
   }
-  .va-app i {
-    display: block;
-    height: 4px;
+  .st-app i {
+    height: 3px;
     background: rgb(var(--accent-rgb) / 0.45);
   }
-  .va-app i:nth-of-type(2n) {
+  .st-app i:nth-of-type(2n) {
     width: 70%;
     background: rgb(255 255 255 / 0.3);
   }
-  .va-app i:nth-of-type(3) {
-    width: 85%;
+
+  /* why: an agent-device lease streams its screen: the app the agent drives, in place of the
+     generic leased screen. */
+  .st-dev:global(.is-live) .st-phone[data-state='leased'] .st-app {
+    display: none;
   }
-  .va-phone[data-state='provisioning'] .va-prov {
-    display: flex;
-  }
-  .va-phone[data-state='booting'] .va-boot {
+  .st-dev:global(.is-live) .st-phone[data-state='leased'] .st-stream {
     display: block;
   }
-  .va-phone[data-state='leased'] .va-app {
+  .st-v {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    gap: 7%;
+    padding: 14% 10%;
+  }
+  .st-stream[data-view='splash'] .st-v-splash,
+  .st-stream[data-view='signin'] .st-v-signin,
+  .st-stream[data-view='home'] .st-v-home {
     display: flex;
   }
-
-  @media (max-width: 64rem) {
-    .va-top {
-      grid-template-columns: minmax(0, 1fr);
+  .st-v-splash {
+    align-items: center;
+    justify-content: center;
+  }
+  .st-v-splash b {
+    width: 34%;
+    aspect-ratio: 1;
+    background: var(--accent);
+  }
+  .st-v b {
+    flex: none;
+    height: 6%;
+    width: 55%;
+    background: #fff;
+  }
+  .st-v-signin i,
+  .st-q {
+    flex: none;
+    height: 9%;
+    border: 1px solid #3a3a3a;
+  }
+  .st-v-signin u {
+    flex: none;
+    height: 10%;
+    background: var(--accent);
+  }
+  .st-q {
+    display: flex;
+    align-items: center;
+    padding: 0 6%;
+  }
+  .st-q:global(.is-focus) {
+    border-color: var(--accent);
+  }
+  .st-q s {
+    height: 30%;
+    width: var(--typed, 0%);
+    background: #fff;
+  }
+  .st-row {
+    display: flex;
+    flex: none;
+    gap: 8%;
+    height: 11%;
+  }
+  .st-row::before {
+    content: '';
+    aspect-ratio: 1;
+    background: rgb(var(--accent-rgb) / 0.55);
+  }
+  .st-row::after {
+    content: '';
+    flex: 1;
+    margin: 6% 0;
+    background: linear-gradient(rgb(255 255 255 / 0.5) 0 25%, transparent 25% 60%, rgb(255 255 255 / 0.22) 60% 85%, transparent 85%);
+  }
+  .st-row:global(.is-gone) {
+    display: none;
+  }
+  .st-tap {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    margin: -5px 0 0 -5px;
+    border: 1px solid #fff;
+    visibility: hidden;
+  }
+  .st-tap:global(.is-on) {
+    visibility: visible;
+    animation: st-tap 0.5s steps(4) forwards;
+  }
+  @keyframes st-tap {
+    from {
+      transform: scale(0.4);
     }
-    :global(.va-side) {
-      display: none;
-    }
-    .va-stage :global(.va-agent) {
-      grid-column: 1 / -1;
-    }
-    .va-stage :global(.va-agent--1) {
-      grid-row: 2;
-    }
-    .va-stage :global(.va-agent--2) {
-      grid-row: 3;
-    }
-    .va-stage :global(.va-agent--0),
-    .va-stage :global(.va-agent--1) {
-      margin-bottom: 0.75rem;
-    }
-    .va-duct--up {
-      grid-row: 4;
-    }
-    .va-stage :global(.va-gw) {
-      grid-row: 5;
-    }
-    .va-duct--down {
-      grid-row: 6;
-    }
-    .va-worker {
-      grid-row: 7;
+    to {
+      transform: scale(1.4);
+      opacity: 0;
     }
   }
-  @media (max-width: 48rem) {
-    .va-table {
-      font-size: 0.625rem;
+
+  .st-wires {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .st-wires :global(path) {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.4);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+  }
+  .st-wires :global(path.is-live) {
+    stroke: var(--accent);
+  }
+  :global(.st-pkt) {
+    position: absolute;
+    z-index: 2;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    background: var(--accent);
+    pointer-events: none;
+  }
+  :global(.st-pkt.is-back) {
+    background: var(--text);
+  }
+
+  /* why: below a three-column width the stage stacks; dashed connectors stand in for the wires. */
+  @media (max-width: 60rem) {
+    .st-stage {
+      grid-template-columns: minmax(0, 1fr);
+      height: auto;
+      row-gap: 2.75rem;
     }
-    .va-row {
-      --cols: 7ch 12ch minmax(0, 1fr);
-      gap: 0.625rem;
-      padding-inline: 0.75rem;
-    }
-    .va-foot {
-      white-space: normal;
-      padding-inline: 0.75rem;
-    }
-    .va-c-dev,
-    .va-c-state {
+    .st-wires {
       display: none;
     }
-    .va-worker {
-      padding: 0.625rem 0.5rem;
-      gap: 0.625rem;
-      font-size: 0.625rem;
+    .st-stage[data-step='0'] .st-mid {
+      display: none;
     }
-    .va-whead,
-    .va-wfoot {
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
+    .st-col + .st-col::before {
+      content: '';
+      position: absolute;
+      bottom: calc(100% + 0.5rem);
+      left: 50%;
+      height: 1.75rem;
+      border-left: 1.5px dashed rgb(255 255 255 / 0.4);
+    }
+    .st-gw {
+      width: min(100%, 18rem);
+      align-self: center;
+    }
+  }
+  @media (max-width: 30rem) {
+    .st-step {
+      padding: 0.625rem 0.5rem;
+      font-size: 0.875rem;
+    }
+    .st-devs {
+      gap: 0.5rem;
     }
   }
 </style>

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { connectSimlockAdmin } from "../admin/index.js";
 import { connectSimlock } from "../client/index.js";
+import type { SimlockAdminClient } from "./client.js";
 import type { LeaseGrant } from "./types.js";
 import { completeHello, ScriptedConnection } from "./test-support.js";
 
@@ -181,67 +182,61 @@ describe("connectSimlock: handshake", () => {
     expect(connection.sent).toHaveLength(before);
   });
 
-  it("lists components from an agent client with component.list, sending the platform and returning the daemon's answer", async () => {
+  it.each([
+    {
+      name: "component.list from an agent client",
+      admin: false,
+      operation: "component.list",
+      payload: { platform: "ios" },
+      answer: {
+        components: [
+          {
+            devices: 0,
+            foreignDevices: 2,
+            installedBySimlock: false,
+            platform: "ios",
+            sizeBytes: 9_100_000_000,
+            variant: "23A343",
+            version: "26.0",
+          },
+        ],
+      },
+      call: (client: SimlockAdminClient) => client.listComponents({ platform: "ios" }),
+    },
+    {
+      name: "identity.get from an agent client",
+      admin: false,
+      operation: "identity.get",
+      payload: {},
+      answer: { name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" },
+      call: (client: SimlockAdminClient) => client.identity(),
+    },
+    {
+      name: "component.remove from an admin client",
+      admin: true,
+      operation: "component.remove",
+      payload: { dryRun: true, platform: "ios", version: "26.4" },
+      answer: { outcome: "would-remove", platform: "ios", sizeBytes: 7, version: "26.4" },
+      call: (client: SimlockAdminClient) =>
+        client.removeComponent({ dryRun: true, platform: "ios", version: "26.4" }),
+    },
+  ])("sends $name with its input and returns the daemon's answer", async (row) => {
     const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
+    const connectPromise = row.admin
+      ? connectSimlockAdmin({ connection, credential: "operator-secret" })
+      : connectSimlock({ connection });
     await flushMicrotasks();
-    completeHello(connection);
-    const client = await connectPromise;
-    const answer = {
-      components: [
-        {
-          devices: 0,
-          foreignDevices: 2,
-          installedBySimlock: false,
-          platform: "ios",
-          sizeBytes: 9_100_000_000,
-          variant: "23A343",
-          version: "26.0",
-        },
-      ],
-    };
+    if (row.admin) completeHello(connection, { role: "admin" });
+    else completeHello(connection);
+    const client = (await connectPromise) as SimlockAdminClient;
 
-    const callPromise = client.listComponents({ platform: "ios" });
+    const callPromise = row.call(client);
     await flushMicrotasks();
-    const call = connection.lastSentOf("component.list")!;
-    expect(call.payload).toEqual({ platform: "ios" });
-    connection.reply(call.id, answer);
+    const call = connection.lastSentOf(row.operation)!;
+    expect(call.payload).toEqual(row.payload);
+    connection.reply(call.id, row.answer);
 
-    await expect(callPromise).resolves.toEqual(answer);
-  });
-
-  it("identity() sends identity.get and returns its output", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
-    await flushMicrotasks();
-    completeHello(connection);
-    const client = await connectPromise;
-    const answer = { name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" };
-
-    const callPromise = client.identity();
-    await flushMicrotasks();
-    const call = connection.lastSentOf("identity.get")!;
-    expect(call.payload).toEqual({});
-    connection.reply(call.id, answer);
-
-    await expect(callPromise).resolves.toEqual(answer);
-  });
-
-  it("removes a component from an admin client with component.remove, sending the input and returning the daemon's answer", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
-    await flushMicrotasks();
-    completeHello(connection, { role: "admin" });
-    const client = await connectPromise;
-    const answer = { outcome: "would-remove", platform: "ios", sizeBytes: 7, version: "26.4" };
-
-    const callPromise = client.removeComponent({ dryRun: true, platform: "ios", version: "26.4" });
-    await flushMicrotasks();
-    const call = connection.lastSentOf("component.remove")!;
-    expect(call.payload).toEqual({ dryRun: true, platform: "ios", version: "26.4" });
-    connection.reply(call.id, answer);
-
-    await expect(callPromise).resolves.toEqual(answer);
+    await expect(callPromise).resolves.toEqual(row.answer);
   });
 
   it("the admin client's testAlertDestination sends alerts.test and returns its output", async () => {
@@ -270,6 +265,36 @@ describe("connectSimlock: handshake", () => {
     await expect(failing).rejects.toMatchObject({
       code: "ALERT_SEND_FAILED",
       details: { destination: "ops-slack", status: 404 },
+    });
+  });
+
+  it("the admin client's updateWorker sends worker.update and returns its output, and refuses an empty worker id before sending", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const answer = {
+      health: "running",
+      lastUpdateFailure: null,
+      latestVersion: "0.4.0",
+      resolved: "0.4.0",
+      started: true,
+      update: null,
+      upToDate: false,
+      version: "0.3.0",
+      workerId: "wrk_1",
+    };
+
+    const callPromise = client.updateWorker({ force: true, version: "0.4.0", workerId: "wrk_1" });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("worker.update");
+    expect(call?.payload).toEqual({ force: true, version: "0.4.0", workerId: "wrk_1" });
+    connection.reply(call!.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+    await expect(client.updateWorker({ workerId: "" })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
     });
   });
 
@@ -405,7 +430,14 @@ describe("connectSimlock: handshake", () => {
           warm: 0,
         },
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
       leases: [],
@@ -1011,6 +1043,45 @@ describe("requestLease abort (ADR §10)", () => {
     connection.fail(requestCall.id, "QUEUE_TIMEOUT", "cancelled by request", { requestId: "r1" });
 
     await expect(leasePromise).rejects.toMatchObject({ code: "CANCELLED" });
+  });
+
+  it("aborting one of two waiting requests of different platforms sends lease.cancel naming that request's platform and leaves the other waiting", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const iosController = new AbortController();
+    const androidController = new AbortController();
+    const iosLease = client.requestLease(
+      { model: "iPhone 17", platform: "ios" },
+      { signal: iosController.signal },
+    );
+    const androidLease = client.requestLease(
+      { model: "Pixel 9", platform: "android" },
+      { signal: androidController.signal },
+    );
+    await flushMicrotasks();
+    const requestOf = (platform: string) =>
+      connection.sent
+        .filter((frame) => frame.type === "lease.request")
+        .find((frame) => (frame.payload as { platform: string }).platform === platform)!;
+    const androidCall = requestOf("android");
+
+    androidController.abort();
+    await flushMicrotasks();
+    const cancelCall = connection.lastSentOf("lease.cancel")!;
+    connection.reply(cancelCall.id, { result: "cancelled" });
+    await flushMicrotasks();
+    connection.fail(androidCall.id, "QUEUE_TIMEOUT", "cancelled by request", { requestId: "r2" });
+
+    await expect(androidLease).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(cancelCall.payload).toMatchObject({ platform: "android" });
+    expect(connection.sent.filter((frame) => frame.type === "lease.cancel")).toHaveLength(1);
+    expect(requestOf("ios")).toBeDefined();
+    const iosState = await Promise.race([iosLease.catch((e: unknown) => e), "waiting"]);
+    expect(iosState).toBe("waiting");
   });
 
   it("while device work is in flight: releases a grant that still arrives, then rejects CANCELLED", async () => {

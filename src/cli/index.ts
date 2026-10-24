@@ -16,7 +16,7 @@ const USAGE = `Usage: simlock <command> [options]
 
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events, stats,
-  daemon, config, token, whoami
+  update, daemon, config, token, whoami
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway; on a
                               single host, list shows the host itself
@@ -34,6 +34,9 @@ Commands:
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
+  instructions [--json]       Print the rules an agent must follow, for its prompt
+  setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]
+                              Install the Simlock skill into Claude Code and Codex
 Run 'simlock <command> --help' for command usage.
 
 Pass --token <secret> anywhere on the command line to connect as admin
@@ -88,44 +91,73 @@ function extractGlobalFlags(argv: readonly string[]): {
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
  * touching it; only a real command builds an environment. A `SIMLOCK_HOME` whose socket path
  * exceeds the platform limit throws `SocketPathTooLongError`, and this runs inside `runCli`'s
- * try, where that throw becomes the single structured error line `docs/CLI.md` promises instead
+ * try, where that throw becomes the single structured error line the CLI reference promises instead
  * of a raw stack trace. */
 async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment> {
-  const [{ join, dirname }, { fileURLToPath }, ports, { buildCliEnvironment }] = await Promise.all([
+  const [
+    { join, dirname },
+    { fileURLToPath },
+    ports,
+    { buildCliEnvironment },
+    { homedir, userInfo },
+  ] = await Promise.all([
     import("node:path"),
     import("node:url"),
     import("../ports/index.js"),
     import("./environment.js"),
+    import("node:os"),
   ]);
   const {
-    NodeDaemonLauncher,
+    launcherFor,
     NodeFilesystem,
     NodeIpcTransport,
+    NodeProcessRunner,
     NodeSystemStats,
     SystemClock,
+    productionServiceManager,
     resolveDaemonHome,
     resolveSimlockHome,
   } = ports;
   const root = resolveSimlockHome(process.env);
   const filesystem = new NodeFilesystem();
   const daemonHome = await resolveDaemonHome({ root, flag, filesystem });
-  const logPath = join(daemonHome.dataDirectory, "daemon.log");
+  const mainPath = join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js");
+  const serviceManager = productionServiceManager(process.platform, {
+    runner: new NodeProcessRunner(),
+    filesystem,
+    uid: process.getuid?.() ?? 0,
+  });
   return buildCliEnvironment(
     {
       filesystem,
       clock: new SystemClock(),
       systemStats: new NodeSystemStats(),
       ipc: new NodeIpcTransport(),
-      launcher: new NodeDaemonLauncher({
-        args: [
-          join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js"),
-          ...(daemonHome.role === "gateway" ? ["--gateway"] : []),
-        ],
-        command: process.execPath,
-        logPath,
-        simlockHome: root,
+      launcher: launcherFor({
+        role: daemonHome.role,
+        root,
+        dataDirectory: daemonHome.dataDirectory,
+        mainPath,
+        serviceManager,
+        notify: (line) => process.stderr.write(`${line}\n`),
       }),
       daemonHome,
+      homeDirectory: homedir(),
+      workingDirectory: process.cwd(),
+      codexHome: process.env.CODEX_HOME,
+      runTool: async (bin, args, options) => {
+        const { toolRunner } = await import("../instructions/index.js");
+        return toolRunner(new NodeProcessRunner())(bin, args, options);
+      },
+      service: {
+        manager: serviceManager,
+        platform: process.platform,
+        home: homedir(),
+        user: () => userInfo().username,
+        root,
+        nodePath: process.execPath,
+        mainPath,
+      },
     },
     process.env,
   );
@@ -137,8 +169,12 @@ function isHelp(value: string | undefined): boolean {
 
 const GATEWAY_EXEMPT_PATHS: readonly (readonly string[])[] = [
   ["daemon", "start"],
+  ["daemon", "install"],
+  ["daemon", "uninstall"],
   ["config", "set"],
   ["mcp"],
+  ["instructions"],
+  ["setup"],
 ];
 
 const GATEWAY_ALSO_HERE_HINT =

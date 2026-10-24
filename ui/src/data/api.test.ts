@@ -121,6 +121,103 @@ describe("createApiClient", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("a write sends its method and path with the token, maps an error body to ApiError, sends a 401 to the session, and on a network error throws without calling refuse", async () => {
+    const sent = answering(202, { released: true });
+    const writer = createApiClient({ fetch: sent.fetch, token: () => "slk_operator" });
+
+    await writer.write("DELETE", "/v1/leases/lse_1");
+    await writer.write("POST", "/v1/workers/wrk_1/drain");
+
+    expect(sent.calls.map(({ input, init }) => [input, init.method])).toEqual([
+      ["/v1/leases/lse_1", "DELETE"],
+      ["/v1/workers/wrk_1/drain", "POST"],
+    ]);
+    expect(sent.calls[0]?.init.credentials).toBe("same-origin");
+    expect(sent.calls[0]?.init.headers).toEqual({ Authorization: "Bearer slk_operator" });
+
+    const conflict = createApiClient({
+      fetch: answering(409, {
+        error: { code: "WORKER_CONNECTED", message: "Stop the worker first" },
+      }).fetch,
+      token: () => "slk_operator",
+    });
+    const refused = conflict.write("DELETE", "/v1/workers/wrk_1");
+    await expect(refused).rejects.toBeInstanceOf(ApiError);
+    await expect(refused).rejects.toMatchObject({
+      code: "WORKER_CONNECTED",
+      message: "Stop the worker first",
+      status: 409,
+    });
+
+    const onRefused = vi.fn();
+    const signedOut = createApiClient({
+      fetch: answering(401, { error: { code: "UNAUTHENTICATED", message: "Unknown bearer token" } })
+        .fetch,
+      onRefused,
+      token: () => "slk_revoked",
+    });
+    await expect(signedOut.write("DELETE", "/v1/leases/lse_1")).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(onRefused.mock.calls).toEqual([["unauthorized"]]);
+
+    const unreachable: Fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+    const readRefused = vi.fn();
+    const reader = createApiClient({
+      fetch: unreachable,
+      onRefused: readRefused,
+      token: () => "slk_operator",
+    });
+    await expect(reader.getJson("/v1/leases")).rejects.toBeInstanceOf(TypeError);
+    expect(readRefused.mock.calls).toEqual([["not-simlock"]]);
+    const writeRefused = vi.fn();
+    const unanswered = createApiClient({
+      fetch: unreachable,
+      onRefused: writeRefused,
+      token: () => "slk_operator",
+    });
+    await expect(unanswered.write("DELETE", "/v1/leases/lse_1")).rejects.toBeInstanceOf(TypeError);
+    expect(writeRefused).not.toHaveBeenCalled();
+  });
+
+  it("an action sends its body: write sends a JSON body with its content type, resolves the parsed answer or undefined, and waits as long as asked", async () => {
+    const sent = answering(202, { started: true });
+    const writer = createApiClient({ fetch: sent.fetch, token: () => "slk_operator" });
+
+    const answer = await writer.write("POST", "/v1/workers/wrk_1/update", {
+      body: { force: true },
+    });
+
+    expect(answer).toEqual({ started: true });
+    expect(sent.calls[0]?.init.body).toBe('{"force":true}');
+    expect(sent.calls[0]?.init.headers).toEqual({
+      Authorization: "Bearer slk_operator",
+      "Content-Type": "application/json",
+    });
+    await writer.write("DELETE", "/v1/leases/lse_1");
+    expect(sent.calls[1]?.init.body).toBeUndefined();
+    expect(sent.calls[1]?.init.headers).toEqual({ Authorization: "Bearer slk_operator" });
+
+    const empty = createApiClient({
+      fetch: async () => new Response(null, { status: 204 }),
+      token: () => "slk_operator",
+    });
+    expect(await empty.write("DELETE", "/v1/leases/lse_1")).toBeUndefined();
+
+    vi.useFakeTimers();
+    const slow = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });
+    const outcome = slow
+      .write("POST", "/v1/workers/wrk_1/update", { body: {}, timeoutMs: 100_000 })
+      .then(
+        () => "answered",
+        (error: unknown) => error,
+      );
+    await vi.advanceTimersByTimeAsync(99_999);
+    expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(RequestTimeoutError);
+  });
+
   it("a read hands back the response's Date header with its body", async () => {
     const date = "Fri, 02 Oct 2026 12:00:00 GMT";
     const fetch: Fetch = async () =>
@@ -128,6 +225,36 @@ describe("createApiClient", () => {
     const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
 
     expect(await api.get("/v1/workers")).toEqual({ body: { workers: [] }, date });
+  });
+
+  it("a read with a tag sends it as If-None-Match and answers a 304 as not modified, a 200 with its body and tag", async () => {
+    const date = "Fri, 02 Oct 2026 12:00:00 GMT";
+    const sent: (string | undefined)[] = [];
+    let answer: () => Response = () => new Response(null, { headers: { Date: date }, status: 304 });
+    const fetch: Fetch = async (_input, init) => {
+      sent.push(new Headers(init.headers).get("If-None-Match") ?? undefined);
+      return answer();
+    };
+    const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
+
+    expect(await api.get("/v1/workers", { tag: '"a"' })).toEqual({ date, notModified: true });
+    answer = () =>
+      new Response(JSON.stringify({ workers: [] }), {
+        headers: { Date: date, ETag: '"b"' },
+        status: 200,
+      });
+    expect(await api.get("/v1/workers", { tag: '"a"' })).toEqual({
+      body: { workers: [] },
+      date,
+      tag: '"b"',
+    });
+    answer = () => new Response(JSON.stringify({ workers: [] }), { status: 200 });
+    expect(await api.get("/v1/workers", { tag: undefined })).toEqual({
+      body: { workers: [] },
+      date: null,
+      tag: null,
+    });
+    expect(sent).toEqual(['"a"', '"a"', undefined]);
   });
 
   it("/v1/healthz is asked with no token, and only a success status counts as up", async () => {
@@ -173,7 +300,7 @@ describe("createApiClient", () => {
     const api = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });
 
     const outcome = api
-      .stream("/v1/stream/leases/lse_1", new AbortController().signal, 90_000)
+      .stream("/v1/stream/workers/w1/devices/dev_1", new AbortController().signal, 90_000)
       .then(
         () => "answered",
         (error: unknown) => error,

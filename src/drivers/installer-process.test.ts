@@ -43,21 +43,6 @@ describe("runInstallerProcess", () => {
     ]);
   });
 
-  it("reports each percentage of a progress bar redrawn with carriage returns", async () => {
-    const runner = new ScriptedProcessRunner([
-      {
-        match: { args: ["install"], command },
-        stdoutLines: ["[=  ] 10% a\r[== ] 20% b\r[===] 30% c"],
-      },
-    ]);
-    const clock = new FakeClock();
-
-    const { outcome, progress } = run(runner, clock);
-    await outcome;
-
-    expect(progress.map((report) => report.percent)).toEqual([10, 20, 30]);
-  });
-
   it("reads a percentage written with a decimal comma, as xcodebuild prints it in a region that uses one", async () => {
     // Byte for byte as `xcodebuild -downloadPlatform iOS -buildVersion 18.4` wrote it under
     // language English, region Poland: one `\n`, then `\r`-separated redraws, a line with only

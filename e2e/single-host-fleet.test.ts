@@ -124,6 +124,18 @@ describe("a single host as a fleet of one", () => {
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
   });
 
+  it("GET /v1/inbox on a worker answers 200 with its items for an operator token and 403 for an agent token", async () => {
+    const host = await httpHost();
+
+    const operator = await fetch(`${host.baseUrl}/v1/inbox`, { headers: host.operatorAuth });
+    const agent = await fetch(`${host.baseUrl}/v1/inbox`, { headers: host.agentAuth });
+
+    expect(operator.status).toBe(200);
+    expect(await operator.json()).toEqual({ items: [] });
+    expect(agent.status).toBe(403);
+    expect(((await agent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+  });
+
   it("POST /v1/workers/{id}/drain on a worker answers 501 UNSUPPORTED_IN_WORKER_MODE", async () => {
     const host = await httpHost();
     const id = await instanceId(host.env);

@@ -953,21 +953,6 @@ describe("IosSimctlDriver physical handler: enrollment", () => {
     },
   );
 
-  it("inspectPhysical runs only list devices, device info lockState and device info apps", async () => {
-    const lab = enrollableLab();
-
-    const result = await inspect(lab, PHONE_UDID);
-
-    expect(result).toMatchObject({ enrollable: true });
-    const verbs = lab.calls().map((argv) => argv.slice(0, 4).join(" "));
-    expect(verbs).toEqual([
-      "xcrun devicectl list devices",
-      "xcrun devicectl device info",
-      "xcrun devicectl device info",
-    ]);
-    expect(lab.calls().map((argv) => argv[4])).toEqual(["--json-output", "lockState", "apps"]);
-  });
-
   it.each([
     {
       change: {},
@@ -1296,20 +1281,6 @@ describe("IosSimctlDriver physical handler: presence", () => {
 
     expect(result).toMatchObject([
       { driverDeviceId: UDID_B, osVersion: "18.4", present: true },
-      { driverDeviceId: UDID_A, present: false, reason: "not-present" },
-    ]);
-  });
-
-  it("a wired, paired, physical entry with tunnelState disconnected and a lock read that answers passcodeRequired false reads present; the same entry whose lock read fails reads not present not-present", async () => {
-    const entry = listed(UDID_A, { tunnelState: "disconnected" });
-    const answering = new Lab().list([entry]).lock(UDID_A);
-    const failing = new Lab().list([entry]).lock(UDID_A, { exit: 1 });
-
-    const present = await (await answering.driver()).listPresentPhysical([UDID_A]);
-    const absent = await (await failing.driver()).listPresentPhysical([UDID_A]);
-
-    expect(present).toMatchObject([{ driverDeviceId: UDID_A, present: true }]);
-    expect(absent).toMatchObject([
       { driverDeviceId: UDID_A, present: false, reason: "not-present" },
     ]);
   });

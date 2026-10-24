@@ -9,19 +9,21 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 
 ## Files
 
-| File             | Role                                                                          |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `operations.ts`  | Every operation: name, role, effect, input, output, `authorize`; `OPERATIONS` |
-| `schemas.ts`     | Wire shapes, re-declared by hand from core; `fit*` bounders                   |
-| `roles.ts`       | `Role`, `AuthorizeContext`, `ownsLease`                                       |
-| `errors.ts`      | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`             |
-| `pushes.ts`      | `PUSH_SCHEMAS`: every push kind                                               |
-| `protocol.ts`    | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                        |
-| `worker-view.ts` | `workerViewFields`, view refresh interval and events                          |
-| `os-range.ts`    | OS constraint grammar: parse, `satisfies`, `compareVersions`                  |
-| `duration.ts`    | `parseDurationMs`, for the CLI and HTTP                                       |
-| `relay.ts`       | Bounded relay ids, channel ids, headers                                       |
-| `console-url.ts` | The console address `status.get` reports                                      |
+| File               | Role                                                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operations.ts`    | Every operation: name, role, effect, input, output, `authorize`; `OPERATIONS`                                                                                                                                                                           |
+| `schemas.ts`       | Wire shapes, re-declared by hand from core; `fit*` bounders                                                                                                                                                                                             |
+| `roles.ts`         | `Role`, `AuthorizeContext`, `ownsLease`                                                                                                                                                                                                                 |
+| `errors.ts`        | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`                                                                                                                                                                                       |
+| `pushes.ts`        | `PUSH_SCHEMAS`: every push kind                                                                                                                                                                                                                         |
+| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                                                                                                                                                                                                  |
+| `worker-view.ts`   | `workerViewFields`, view refresh interval and events                                                                                                                                                                                                    |
+| `inbox.ts`         | The Inbox rules: `inboxItems` (what needs the operator, with each item's group, key and subject), `problemCount`, and the helpers they call (`holderOf`, `workerOfLease`, `isExpiring`, ...); no runtime import, so the console imports it by this path |
+| `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                                                                                            |
+| `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod)                                                                       |
+| `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                                                                                                 |
+| `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                                                                                                 |
+| `console-url.ts`   | The console address `status.get` reports                                                                                                                                                                                                                |
 
 ## Operations
 
@@ -31,9 +33,9 @@ park on readiness (all but `status.get`) → handler → parse output.
 every operation but `daemon.stop`, which `DaemonServer` answers.
 
 - `agent`: `catalog.get`, `status.get`, `component.list`, `lease.request`, `lease.cancel`,
-  `lease.renew`, `lease.release`, `lease.list`, `driver.passthrough`, `device.exec`,
+  `lease.renew`, `lease.release`, `lease.list`, `lease.get`, `driver.passthrough`, `device.exec`,
   `doctor.run` without `fix` or `purgeOrphans`.
-- `admin`: every other operation (`list.get`, `config.get`, `daemon.stop`, `events.*`,
+- `admin`: every other operation (`list.get`, `config.get`, `inbox.get`, `daemon.stop`, `events.*`,
   `token.*`, `worker.*`, `component.install`, `device.add`, `relay.request`, ...).
 - `role` and `effect` may be functions of the validated input: `doctor.run` (role, effect),
   `cleanup.run` (`dryRun` is a `read`).
@@ -55,20 +57,20 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 51, max: 51 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 59, max: 59 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
   helpers its `NOT_SHAPES` lists. A new helper that carries no wire shape goes in that list.
 - `hello` picks the highest overlap. None → `PROTOCOL_VERSION_UNSUPPORTED` with both ranges.
   A protocol-2 daemon is mapped by `mapLegacyProtocolMismatch`.
-- `daemon.stop` is accepted at any version, so the upgrade path exists.
+- `daemon.stop` and `daemon.update` are accepted at any version (`DaemonServer` skips the version gate for them; the role check still runs, and readiness too except for `daemon.update {query}`), so the upgrade path exists. Their input and answer never change shape; `operations.test.ts` pins `daemon.update`'s JSON schemas.
 
 ## Errors
 
 - `SimlockErrorCode` is a closed union (`ErrorDetailsMap`). `ERROR_TABLE` gives each code
   `kind` (`transport` | `protocol` | `domain`), `cliExitCode` and `httpStatus`.
-- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface.
+- `HISTORY_NOT_KEPT` (exit 12, 422, `details.oldestTs`) and `HISTORY_UNAVAILABLE` (exit 1, 503) are `usage.get`'s and `events.replay`'s with `beforeId`; `includeLedger` adds `requests[]` (at most 100,000, newest; `ledgerTruncated` when cut); the window it takes is bounded by `usageWindowSchema` (integers to 8.64e15, `from < to`, 90 days at most) and `usageWindow` (`usage-window.ts`) parses the CLI's flags once for every surface. `events.replay` takes `beforeId` and `limit` (1 to 500), refused with `sinceTs`, and `workerId` (1 to 128 characters) with any of them; `eventsPageQuery` (`events-page.ts`) parses the HTTP query once, with the bounds.
 - `fromWireError` wraps an unknown code as `UNKNOWN_DAEMON_ERROR`. That code and `CANCELLED`
   are built client side only.
 - `CODES_WITH_DECLARED_DETAILS`: codes whose `details` are contract. The compiler keeps it
@@ -91,9 +93,12 @@ Three identities:
 - `workerViewFields` builds it from `status.get`, `list.get`, `catalog.get` and `config.get`
   answers. A gateway's `WorkerLink` and a worker answering about itself both call it; the
   caller adds `id`, `label`, `connection`, `drained`, `lastSeenAt`, `version`.
+- `update`, `lastUpdateFailure` and `latestVersion` come from `status.get`'s `daemon` block; `null` when there
+  is nothing to show, and absent until the first status read. A status without an update clears `update`.
 - A `starting` worker's view is `health`, `host` and `load` only. Absent, never empty.
 - Full re-read every `WORKER_VIEW_REFRESH_INTERVAL_MS` (30 s); catalog at once on
-  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`).
+  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`); status at once on
+  `WORKER_VIEW_UPDATE_EVENTS` (`daemon.update-started`, `daemon.update-failed`).
 
 ## OS ranges and durations
 
@@ -130,5 +135,5 @@ Three identities:
 6. Frontends as needed: CLI (`src/cli/commands/`), HTTP (`src/http/app.ts`), MCP only for an
    agent session's need.
 7. A new error code: `ErrorDetailsMap` and `ERROR_TABLE` (`errors.ts`).
-8. Docs: [CLIENT.md](../../docs/CLIENT.md), [CLI.md](../../docs/CLI.md),
-   [HTTP-API.md](../../docs/HTTP-API.md).
+8. Docs: the website pages that describe it, at least
+   [errors.mdx](../../website/src/content/docs/docs/reference/errors.mdx) (documentation rule 9).

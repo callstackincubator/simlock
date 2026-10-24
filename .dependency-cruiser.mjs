@@ -15,13 +15,22 @@ const escape = (path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const testFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?)$";
 const linkTestFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?|/testing\\.ts)$";
 // why: the console layers below the screens are plain TypeScript, so a test drives them without a browser.
-const uiLibrary = "(^|node_modules/)(react|react-dom|recharts|@tanstack/[^/]+)(/|$)";
+const uiLibrary = "(^|node_modules/)(react|react-dom|recharts|@base-ui/react|@tanstack/[^/]+)(/|$)";
 const fsOrProcess = "^(node:)?(fs|fs/promises|child_process)$";
 
 // why: e2e imports the compiled package from dist/, which mirrors src/, so each component's rule covers its compiled copy too.
 const components = findComponents("src")
   .filter((dir) => dir !== "src")
   .flatMap((dir) => [dir, `dist${dir.slice("src".length)}`]);
+
+// why: the console imports the contract's `isNewerVersion` as a value; the index also exports the
+// zod schemas, which would put zod's `eval` in the bundle and break its Content-Security-Policy.
+// Maintainer-authorized 2026-10-22 (#825 Decisions, "Console import of the newer rule"): this one file only.
+// `inbox.ts` is the same case (ADR 0044 §3, #915): the rules the daemon and the console share, with no runtime import.
+const entryFiles = (component) =>
+  component === "src/contract"
+    ? "index|testing|definition|version-order|inbox"
+    : "index|testing|definition";
 
 const pastIndex = components.map((component) => ({
   name: "past-index",
@@ -30,7 +39,7 @@ const pastIndex = components.map((component) => ({
   from: { pathNot: `^${escape(component)}/` },
   to: {
     path: `^${escape(component)}/`,
-    pathNot: `^${escape(component)}/(index|testing|definition)\\.(ts|js)$`,
+    pathNot: `^${escape(component)}/(${entryFiles(component)})\\.(ts|js)$`,
   },
 }));
 
@@ -132,6 +141,12 @@ export default {
       "host-load reads the machine through the HostLoadProbe port and imports no other component",
       "^src/host-load/",
       { path: "^src/(core|leasing|gateway|drivers|contract|http|cli|mcp|daemon)/" },
+    ),
+    direction(
+      "updater-imports-little",
+      "the updater imports only ports, contract and admin: it runs while its own files are being replaced, so it carries nothing else",
+      "^src/updater/",
+      { path: "^src/", pathNot: "^src/(ports|contract|admin|updater)/" },
     ),
     direction(
       "not-host-load",
@@ -251,6 +266,12 @@ export default {
       "a console screen reaches data only through the state layer: no network, storage or business rule of its own",
       "^ui/src/screens/",
       { path: "^ui/src/(app|data|model)/" },
+    ),
+    direction(
+      "ui-base-ui-in-ds-only",
+      "only the console's design system imports Base UI; everything else uses its wrapped parts",
+      "^ui/src/(?!ds/)",
+      { path: "(^|node_modules/)@base-ui/react(/|$)" },
     ),
     direction(
       "cli-router-imports-no-component-values",

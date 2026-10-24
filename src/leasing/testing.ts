@@ -147,8 +147,9 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
       return leasing.physicalQueueDepth;
     },
     waitingRequests: () => leasing.waitingRequests(),
-    cancelPending: (requesterId) => leasing.cancelPending(requesterId),
-    pendingRequestOwner: (requesterId) => leasing.pendingRequestOwner(requesterId),
+    cancelPending: (requesterId, platform) => leasing.cancelPending(requesterId, platform),
+    pendingRequestOwner: (requesterId, platform) =>
+      leasing.pendingRequestOwner(requesterId, platform),
     servesDefaultMode: (spec: DeviceSpec) => leasing.servesDefaultMode(spec),
     figures: () => core.warmPoolReader.figures(),
     get runningCapacity() {

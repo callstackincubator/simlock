@@ -7,7 +7,7 @@ import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } fr
 /**
  * why: reproduces #642. The workers page's response helpers (`answerWithoutLoad`, `answerMemory`)
  * answer the page's re-reads of `/v1/workers` by fetching them from the gateway through
- * `route.fetch()`, and the page re-reads every second. A re-read intercepted but not yet fetched
+ * `route.fetch()`, and the page re-reads every 15 seconds. A re-read intercepted but not yet fetched
  * when the test's `finally` disposes the fleet gets a refused connect — a listener destroyed
  * mid-request reads the same way as a socket hang up — and Playwright attributes the handler's
  * rejection to the test, so the spec dies on the helper's `route.fetch()` line although every
@@ -22,12 +22,15 @@ const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 async function openConsole(page: Page, daemon: RunningDaemon): Promise<void> {
   await page.goto(daemon.url);
   await signIn(page, daemon.tokens.operator);
-  await page.getByRole("link", { name: "Workers", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+  await page.getByRole("link", { name: "Fleet", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
 }
 
 function workerRows(page: Page): Locator {
-  return page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem");
+  return page
+    .getByRole("table")
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell") });
 }
 
 async function askForWorkerList(page: Page, daemon: RunningDaemon): Promise<number> {
@@ -95,7 +98,7 @@ test.describe("the workers page response helper against a gateway whose listener
       parkNext = true;
       const asked = askForWorkerList(page, fleet.gateway);
       await arrived;
-      await disposeFleet(fleet);
+      await disposeFleet(fleet, { preservePages: [page] });
       await waitFor(() => listenerIsGone(fleet.gateway), {
         interval: 50,
         label: "the gateway's HTTP listener stopped",
@@ -106,7 +109,7 @@ test.describe("the workers page response helper against a gateway whose listener
       // why: once the helper drops the re-read the page's own promise settles (0 when aborted);
       // a rejection escaping the helper fails the test at its `route.fetch()` line instead.
       await asked;
-      await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
     } finally {
       await disposeFleet(fleet).catch(() => undefined);
     }
@@ -130,6 +133,7 @@ test.describe("what the workers page response helper drops and what it lets thro
       abort: async () => {
         aborted = true;
       },
+      request: () => ({ headers: () => ({}) }),
       fetch: async () => {
         throw new Error("getaddrinfo ENOTFOUND gateway.invalid");
       },
@@ -158,6 +162,7 @@ test.describe("what the workers page response helper drops and what it lets thro
           abort: async () => {
             aborted = true;
           },
+          request: () => ({ headers: () => ({}) }),
           fetch: async () => {
             throw new Error(message);
           },

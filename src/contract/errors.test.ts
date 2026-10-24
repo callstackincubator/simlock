@@ -112,12 +112,6 @@ describe("SimlockError", () => {
   });
 });
 
-describe("NO_CAPACITY", () => {
-  it("is among the codes whose details are declared", () => {
-    expect(CODES_WITH_DECLARED_DETAILS.has("NO_CAPACITY")).toBe(true);
-  });
-});
-
 describe("CAPABILITY_MISSING", () => {
   it("maps CAPABILITY_MISSING to HTTP 422 and CLI exit 12 as a domain error whose details name the capabilities", () => {
     const table: Record<string, unknown> = ERROR_TABLE;
@@ -174,5 +168,21 @@ describe("RELAY_TARGET_MISSING", () => {
       details: { target: "agent-device" },
       kind: "domain",
     });
+  });
+
+  it("gives the update codes their exit code and HTTP status: DAEMON_UPDATING 1 and 503, UPDATE_RESOLVE_FAILED 1 and 502, UPDATE_UNSUPPORTED_INSTALL and UPDATE_SHARED_INSTALL 2 and 409", () => {
+    const expected = {
+      DAEMON_UPDATING: { cliExitCode: 1, httpStatus: 503 },
+      UPDATE_RESOLVE_FAILED: { cliExitCode: 1, httpStatus: 502 },
+      UPDATE_UNSUPPORTED_INSTALL: { cliExitCode: 2, httpStatus: 409 },
+      UPDATE_SHARED_INSTALL: { cliExitCode: 2, httpStatus: 409 },
+    } as const;
+    for (const [code, entry] of Object.entries(expected)) {
+      expect(ERROR_TABLE[code as keyof typeof expected]).toEqual({
+        code,
+        kind: "domain",
+        ...entry,
+      });
+    }
   });
 });

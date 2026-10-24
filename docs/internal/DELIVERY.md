@@ -148,9 +148,25 @@ Weekly routines keep the suite and the reviews in shape: `harden-tests`,
 
 `main` takes changes only through a PR whose Quality, Fallow and Console
 checks passed. It is a GitHub ruleset that binds agents and you alike.
-Releases run from the Release workflow (`.github/workflows/release.yml`),
-started by hand on `main`; agents cannot start it (`gh workflow run` is
-denied in `.claude/settings.json`).
+
+A release is cut by hand from the Release workflow
+(`.github/workflows/release.yml`): Actions → Release → Run workflow on
+`main`, choosing `feature` (the next 0.X), `patch` (the next 0.X.Y) or
+`auto` (`feature` when a commit since the last tag is a `feat` or a
+breaking change, else `patch`). There is no semantic versioning. The run
+checks that main's CI passed on the commit, builds the package on macOS so
+both iOS capture programs ship, pushes the release commit (`package.json`,
+`CHANGELOG.md`) and the tag `v0.X.Y`, publishes the same tarball to npm
+through trusted publishing with provenance, creates the GitHub release with
+the tarball attached, and deploys the website from the release commit.
+`dry_run` stops after the build. The version and changelog arithmetic is
+`node scripts/release.mjs`, tested in `src/release-script.test.ts`. Agents
+cannot start the workflow (`gh workflow run` is denied in
+`.claude/settings.json`).
+
+The website deploys with every release and by hand (Actions → Website → Run
+workflow, optionally from a commit or tag), and no longer on every push to
+`main`, so the site describes the version on npm.
 
 ## Where ADRs fit
 

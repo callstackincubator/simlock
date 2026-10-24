@@ -5,8 +5,8 @@
 export class StreamRefusalError extends Error {
   // why: `code` is a free string rather than a closed union, because a gateway forwards the code its
   // worker answered with and that worker may be a build this one has never seen. The codes this
-  // service raises itself are `UNKNOWN_LEASE`, `BAD_REQUEST`, `STREAM_NOT_SUPPORTED`,
-  // `STREAM_UNAVAILABLE` and `INTERNAL`, and `docs/HTTP-API.md` is where they are promised.
+  // service raises itself are `UNKNOWN_DEVICE`, `UNKNOWN_WORKER`, `DEVICE_NOT_RUNNING`,
+  // `BAD_REQUEST`, `STREAM_NOT_SUPPORTED`, `STREAM_UNAVAILABLE` and `INTERNAL`, and the HTTP API promises exactly these.
   constructor(
     readonly status: number,
     readonly code: string,
@@ -17,15 +17,35 @@ export class StreamRefusalError extends Error {
   }
 }
 
-export function unknownLease(leaseId: string): StreamRefusalError {
-  return new StreamRefusalError(404, "UNKNOWN_LEASE", `Unknown lease: ${leaseId}`);
+export function unknownDevice(deviceId: string): StreamRefusalError {
+  return new StreamRefusalError(404, "UNKNOWN_DEVICE", `Unknown device: ${deviceId}`);
+}
+
+export function unknownWorker(workerId: string): StreamRefusalError {
+  return new StreamRefusalError(404, "UNKNOWN_WORKER", `Unknown worker: ${workerId}`);
+}
+
+export function deviceNotRunning(state: string): StreamRefusalError {
+  return new StreamRefusalError(
+    409,
+    "DEVICE_NOT_RUNNING",
+    `The device is ${state}; only a ready or leased device streams`,
+  );
+}
+
+export function deviceStopped(): StreamRefusalError {
+  return new StreamRefusalError(
+    409,
+    "DEVICE_NOT_RUNNING",
+    "The device stopped before its picture started",
+  );
 }
 
 export function noSuchStream(): StreamRefusalError {
-  // why: the same status and code as an unknown lease on purpose -- a daemon with `capabilities.stream.enabled` off
+  // why: the same status and code as an unknown device on purpose -- a daemon with `capabilities.stream.enabled` off
   // never mounts this route at all and answers any path it has not heard of as a 404, so a client that
   // could tell these apart would be able to learn which daemons can stream by asking one.
-  return new StreamRefusalError(404, "UNKNOWN_LEASE", "This path names no stream lease");
+  return new StreamRefusalError(404, "UNKNOWN_DEVICE", "This path names no stream");
 }
 
 export function notStreamable(message: string): StreamRefusalError {
@@ -43,7 +63,7 @@ const MAX_RELAYED_MESSAGE = 1_000;
 
 export function relayedRefusal(
   workerId: string,
-  leaseId: string,
+  subject: string,
   status: number,
   body: string,
 ): StreamRefusalError {
@@ -64,7 +84,7 @@ export function relayedRefusal(
   return new StreamRefusalError(
     relayedStatus,
     "STREAM_UNAVAILABLE",
-    `Worker ${workerId} refused the stream for lease ${leaseId} with status ${String(status)}`,
+    `Worker ${workerId} refused the stream for ${subject} with status ${String(status)}`,
   );
 }
 

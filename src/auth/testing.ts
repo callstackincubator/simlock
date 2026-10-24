@@ -37,7 +37,7 @@ export function fakeAuth(identities: ReadonlyMap<string, Identity>): Auth {
     },
     resolveHelloRole: unused,
     authenticateUplink: unused,
-    tokens: { create: unused, list: unused, revoke: unused },
+    tokens: { create: unused, list: unused, revoke: unused, verify: unused },
     adminSecret: { persist: unused, remove: unused },
   };
 }
@@ -142,7 +142,7 @@ export function openMemoryStateDatabase(
 /** why: the daemon opens `state.db` itself, so a test that starts one with known tokens writes them to the file first. */
 export async function seedTokensDatabase(
   directory: string,
-  records: readonly (readonly [id: string, secret: string, role: TokenRole])[],
+  records: readonly (readonly [id: string, secret: string, role: TokenRole, label?: string])[],
 ): Promise<void> {
   const hasher = new CryptoTokenSecrets();
   const state = await openStateDatabase({
@@ -155,12 +155,12 @@ export async function seedTokensDatabase(
     upgradeStep: "",
   });
   try {
-    for (const [id, secret, role] of records) {
+    for (const [id, secret, role, label] of records) {
       state.database
         .prepare(
-          "INSERT OR REPLACE INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, NULL, 0)",
+          "INSERT OR REPLACE INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, ?, 0)",
         )
-        .run(id, hasher.hash(secret), role);
+        .run(id, hasher.hash(secret), role, label ?? null);
     }
   } finally {
     state.close();

@@ -60,6 +60,7 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "lease", load: leaseModule, children: [{ name: "renew", load: leaseModule }] },
   { name: "release", load: () => import("./commands/release.js") },
   { name: "status", load: () => import("./commands/status.js") },
+  { name: "update", load: () => import("./commands/update.js") },
   { name: "list", load: () => import("./commands/list.js") },
   { name: "catalog", load: () => import("./commands/catalog.js") },
   { name: "cleanup", load: () => import("./commands/cleanup.js") },
@@ -75,6 +76,8 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "stop", load: daemonModule },
       { name: "status", load: daemonModule },
       { name: "logs", load: daemonModule },
+      { name: "install", load: daemonModule },
+      { name: "uninstall", load: daemonModule },
     ],
   },
   {
@@ -126,4 +129,6 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "simctl", load: () => import("./commands/passthrough.js") },
   { name: "adb", load: () => import("./commands/passthrough.js") },
   { name: "mcp", load: () => import("./commands/mcp.js") },
+  { name: "instructions", load: () => import("./commands/instructions.js") },
+  { name: "setup", load: () => import("./commands/setup.js") },
 ];

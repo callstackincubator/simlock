@@ -1,6 +1,6 @@
 # 0013. The console reads the routes and follows the event stream
 
-- **Status:** Accepted
+- **Status:** Accepted; §3 superseded by [0044](0044-the-console-reads-what-its-page-shows-and-events-mark-it-stale.md)
 - **Date:** 2026-10-02
 - **Issue:** [#88](https://github.com/callstackincubator/simlock/issues/88)
 - **Supersedes:** nothing.

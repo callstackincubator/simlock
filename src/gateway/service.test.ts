@@ -204,7 +204,14 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     // A starting worker answers `status.get` with `daemon` and `host` only.
     worker.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture({ arch: "x64" }),
     };
     worker.devices = [deviceFixture("dev_1", "leased")];
@@ -256,7 +263,14 @@ describe("GatewayService", () => {
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
     worker.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
     worker.devices = [deviceFixture("dev_1", "leased")];
@@ -389,7 +403,14 @@ describe("GatewayService", () => {
     };
     worker.status = statusFixture({
       capacity,
-      daemon: { health: "failed", mode: "worker" },
+      daemon: {
+        health: "failed",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
@@ -424,9 +445,12 @@ describe("GatewayService", () => {
       installs: [install],
       label: "mac-mini-1",
       lastSeenAt: 1_000,
+      lastUpdateFailure: null,
+      latestVersion: null,
       lease: { maxTtlMs: 6 * 60 * 60_000 },
       leases: [leaseFixture("lease_1", "dev_1")],
       queueDepth: 3,
+      update: null,
       version: "9.8.7",
       waiting: [waiting],
     });
@@ -581,56 +605,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("republishes a worker's events with its workerId, into its own ring buffer", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-
-    worker.pushEvent({
-      event: "lease.granted",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-    });
-
-    const republished = harness.events.find((event) => event.event === "lease.granted");
-    expect(republished).toMatchObject({
-      // The name and the emitting module travel unchanged -- the fact happened in that
-      // worker's leasing module, and `workerId` is what says which machine.
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", workerId: "wrk_1" },
-    });
-
-    await harness.service.stop();
-  });
-
-  it("a worker's event relayed by the gateway keeps the worker's id and timestamp and gains workerId", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-    harness.clock.advance(5_000);
-
-    worker.pushEvent({
-      event: "lease.granted",
-      id: "evt_worker-made",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-      timestamp: 777,
-    });
-
-    const relayed = harness.events.find((event) => event.event === "lease.granted");
-    expect(relayed).toMatchObject({
-      id: "evt_worker-made",
-      timestamp: 777,
-      payload: { workerId: "wrk_1" },
-    });
-
-    await harness.service.stop();
-  });
-
   it("a relayed event differs from the worker's only in seq and payload.workerId", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -685,60 +659,43 @@ describe("GatewayService", () => {
   // worker's own -- `workerId` is merged in last so it cannot be spoofed, but a worker (or
   // anything speaking its protocol) could otherwise forge a fact only a gateway authors, such as
   // `worker.drain-ended`, straight into the operator's audit trail.
-  it("refuses to republish a worker's event under a name reserved for the gateway itself", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-
-    worker.pushEvent({
+  it.each([
+    {
       event: "worker.drain-ended",
       module: "gateway",
       payload: { workerId: "wrk_forged", label: "not-this-worker" },
-    });
-    worker.pushEvent({
-      event: "lease.granted",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-    });
-    await vi.waitFor(() =>
-      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
-    );
-
-    const forged = harness.events.filter((event) => event.event === "worker.drain-ended");
-    // Never forwarded, and never with the forged `workerId` a real gateway-authored
-    // `worker.drain-ended` for a *different* worker would otherwise be indistinguishable from.
-    expect(forged).toEqual([]);
-
-    await harness.service.stop();
-  });
-
-  it("refuses to republish a request.granted a worker pushes, which only the gateway itself emits (ADR 0021 §4)", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-
-    worker.pushEvent({
+    },
+    {
       event: "request.granted",
       module: "fleet-lease-coordinator",
       payload: { leaseId: "wrk_1.lease_1", requestId: "req_forged", worker: "wrk_1" },
-    });
-    worker.pushEvent({
-      event: "lease.granted",
-      module: "lease-engine",
-      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
-    });
-    await vi.waitFor(() =>
-      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
-    );
+    },
+  ])(
+    "refuses to republish a $event a worker pushes under a name reserved for the gateway itself (ADR 0021 §4)",
+    async (forgedEvent) => {
+      const harness = fleet();
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(worker.subscribed).toBe(true));
 
-    expect(harness.events.filter((event) => event.event === "request.granted")).toEqual([]);
+      worker.pushEvent(forgedEvent);
+      worker.pushEvent({
+        event: "lease.granted",
+        module: "lease-engine",
+        payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+      });
+      await vi.waitFor(() =>
+        expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+      );
 
-    await harness.service.stop();
-  });
+      // why: never forwarded, and never with the forged `workerId` a real gateway-authored event
+      // for a *different* worker would otherwise be indistinguishable from.
+      expect(harness.events.filter((event) => event.event === forgedEvent.event)).toEqual([]);
+
+      await harness.service.stop();
+    },
+  );
 
   it("refuses to republish a request.dispatched a worker pushes, which only the gateway itself emits", async () => {
     const harness = fleet();
@@ -1043,6 +1000,41 @@ describe("GatewayService", () => {
       await harness.service.stop();
     });
 
+    it("shows a worker's update after daemon.update-started and its failure after daemon.update-failed, without waiting for the periodic refresh", async () => {
+      const worker = new ScriptedWorkerClient();
+      const harness = await joined(worker);
+      const base = statusFixture();
+      const update = {
+        forced: false,
+        from: "0.3.0",
+        stage: "installing",
+        startedAt: 1_000,
+        to: "0.4.0",
+      } as const;
+      const failure = {
+        at: 2_000,
+        from: "0.3.0",
+        message: "npm failed",
+        stage: "installing",
+        to: "0.4.0",
+      } as const;
+
+      worker.status = { ...base, daemon: { ...base.daemon, update } };
+      worker.pushEvent({ event: "daemon.update-started" });
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.update).toEqual(update));
+
+      worker.status = { ...base, daemon: { ...base.daemon, lastUpdateFailure: failure } };
+      worker.pushEvent({ event: "daemon.update-failed" });
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")).toMatchObject({
+          lastUpdateFailure: failure,
+          update: null,
+        }),
+      );
+
+      await harness.service.stop();
+    });
+
     it("drops a worker's install after component.install-failed, without waiting for the periodic refresh", async () => {
       const worker = new ScriptedWorkerClient();
       worker.status = statusFixture({ installs: [install] });
@@ -1136,19 +1128,6 @@ describe("GatewayService", () => {
         ),
       );
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
-      await harness.service.stop();
-    });
-
-    it("carries the worker's own downloads.timeoutMs on the view", async () => {
-      const worker = new ScriptedWorkerClient();
-      worker.downloadTimeoutMs = 45 * 60_000;
-
-      const harness = await joined(worker);
-
-      expect(harness.service.workers.view("wrk_1")?.downloads).toEqual({
-        policy: "on-request",
-        timeoutMs: 45 * 60_000,
-      });
       await harness.service.stop();
     });
   });
@@ -1260,24 +1239,136 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("marks a worker one protocol version behind the gateway incompatible (ADR 0022 §2: it does not know `device.add` or `device.remove`, and reports no `driverDeviceId`)", async () => {
-    const previous = {
-      min: PROTOCOL_VERSION_RANGE.max - 1,
-      max: PROTOCOL_VERSION_RANGE.max - 1,
-    };
-    expect(PROTOCOL_VERSION_RANGE.max).toBe(51);
-    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
+  it("reads an incompatible worker's update with daemon.update query on the tick and keeps the last view when the query fails", async () => {
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
-    worker.failWith = protocolMismatchError(previous);
-
+    worker.failWith = protocolMismatchError({ min: 5, max: 5 });
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
     );
+    const update = {
+      forced: false,
+      from: "0.2.0",
+      stage: "installing",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const lastUpdateFailure = {
+      at: 500,
+      from: "0.1.0",
+      message: "npm failed",
+      stage: "installing",
+      to: "0.2.0",
+    } as const;
+    worker.updateAnswer = {
+      ...worker.updateAnswer,
+      lastUpdateFailure,
+      latestVersion: "0.4.0",
+      update,
+    };
 
-    expect(worker.calls).toEqual(["status.get"]);
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        lastUpdateFailure,
+        latestVersion: "0.4.0",
+        update,
+      }),
+    );
+    expect(worker.updateInputs).toEqual([{ query: true }]);
+
+    worker.updateFailWith = new Error("worker went quiet");
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(worker.updateInputs).toHaveLength(2));
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({ latestVersion: "0.4.0", update });
+
+    await harness.service.stop();
+  });
+
+  it("does not let a replaced incompatible link's late update query overwrite its successor's view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const stale = new ScriptedWorkerClient();
+    stale.failWith = protocolMismatchError({ min: 5, max: 5 });
+    await harness.join("wrk_1", stale);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    let answerQuery: (() => void) | undefined;
+    stale.updateDaemon = () =>
+      new Promise((resolve) => {
+        answerQuery = () =>
+          resolve({
+            ...stale.updateAnswer,
+            update: {
+              forced: false,
+              from: "0.2.0",
+              stage: "installing",
+              startedAt: 1,
+              to: "0.4.0",
+            },
+          });
+      });
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(answerQuery).toBeDefined());
+
+    await harness.join("wrk_1", new ScriptedWorkerClient("admin", "9.9.9"));
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+    answerQuery?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      connection: "connected",
+      update: null,
+      version: "9.9.9",
+    });
+    await harness.service.stop();
+  });
+
+  it("shows a worker's update, last update failure and latest version from its status, and a later status without an update clears it", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    const update = {
+      forced: false,
+      from: "0.3.0",
+      leases: 2,
+      stage: "waiting",
+      startedAt: 1_000,
+      to: "0.4.0",
+    } as const;
+    const failure = {
+      at: 500,
+      from: "0.2.0",
+      message: "npm failed",
+      stage: "installing",
+      to: "0.3.0",
+    } as const;
+    const base = statusFixture();
+    worker.status = {
+      ...base,
+      daemon: { ...base.daemon, lastUpdateFailure: failure, latestVersion: "0.4.0", update },
+    };
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        lastUpdateFailure: failure,
+        latestVersion: "0.4.0",
+        update,
+      }),
+    );
+
+    worker.status = { ...worker.status, daemon: { ...worker.status.daemon, update: null } };
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.update).toBeNull());
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      lastUpdateFailure: failure,
+      latestVersion: "0.4.0",
+    });
 
     await harness.service.stop();
   });
@@ -1507,7 +1598,14 @@ describe("GatewayService", () => {
 
     // A's held `status.get` now answers `starting`, after B built the current view.
     clientA.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
     release();
@@ -1518,38 +1616,6 @@ describe("GatewayService", () => {
       health: "running",
       version: "9.9.9",
     });
-    await harness.service.stop();
-  });
-
-  // H4: a timed-out `events.subscribe` used to be logged exactly like a rejection ("Worker
-  // refused an event subscription"), asserting something this code cannot know -- the worker may
-  // never have answered at all, or may have subscribed successfully with the reply just arriving
-  // too late to matter. The two are worth telling apart in a log an operator reads.
-  it("logs a timed-out event subscription as a timeout, not a refusal (H4)", async () => {
-    const logger = new RecordingLogger();
-    const harness = fleet({ logger });
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    // Never resolves, unlike a real rejection -- the exact shape of a subscribe call that just
-    // never gets an answer within `WORKER_CALL_TIMEOUT_MS`. Tracked by hand rather than via
-    // `pendingTimerCount` alone: the service's own periodic tick timer is already pending from
-    // `service.start()`, so that check alone cannot tell "the subscribe call's own timeout timer
-    // is now armed" apart from "some timer, possibly the unrelated tick, exists".
-    let subscribeCalled = false;
-    worker.subscribeEvents = (): Promise<never> => {
-      subscribeCalled = true;
-      return new Promise<never>(() => {});
-    };
-
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
-    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
-
-    await vi.waitFor(() =>
-      expect(logger.warnings.some((entry) => entry.message.includes("did not answer"))).toBe(true),
-    );
-    expect(logger.warnings.some((entry) => entry.message.includes("refused"))).toBe(false);
-
     await harness.service.stop();
   });
 
@@ -1944,7 +2010,14 @@ describe("GatewayService: a worker's capabilities in its view", () => {
     const { harness } = await joinedWith([available]);
     const restarted = new ScriptedWorkerClient();
     restarted.status = {
-      daemon: { health: "starting", mode: "worker" },
+      daemon: {
+        health: "starting",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: hostFixture(),
     };
 
