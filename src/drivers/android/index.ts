@@ -416,22 +416,31 @@ function actsOnNoDevice(args: readonly string[], index: number): boolean {
   return subcommand === "reconnect" && args[index + 1] === "offline";
 }
 
+/** why: Whether the globals before `end` already name `serial`; any other device flag is refused. */
+function namesOwnSerial(args: readonly string[], end: number, serial: string): boolean {
+  let named = false;
+  for (let index = 0; index < end; index += 1) {
+    const flag = args[index] as string;
+    const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
+    if (flag !== "-s" || value !== serial) {
+      throw otherDeviceRefusal(
+        "adb",
+        args,
+        value === undefined ? flag : `${flag} ${value}`,
+        serial,
+      );
+    }
+    named = true;
+    index += 1;
+  }
+  return named;
+}
+
 /** why: Puts `-s <serial>` in front of the globals unless the subcommand needs no device or the caller already named this one. */
 function fillAdbDevice(args: readonly string[], serial: string): readonly string[] {
   const walked = walkGlobals(args);
   if (walked.kind !== "subcommand" || actsOnNoDevice(args, walked.index)) return args;
-  let alreadyNamed = false;
-  for (let index = 0; index < walked.index; index += 1) {
-    const flag = args[index] as string;
-    const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
-    if (flag === "-s" && value === serial) {
-      alreadyNamed = true;
-      index += 1;
-      continue;
-    }
-    throw otherDeviceRefusal("adb", args, value === undefined ? flag : `${flag} ${value}`, serial);
-  }
-  return alreadyNamed ? args : ["-s", serial, ...args];
+  return namesOwnSerial(args, walked.index, serial) ? args : ["-s", serial, ...args];
 }
 
 function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {

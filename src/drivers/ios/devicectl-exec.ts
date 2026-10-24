@@ -148,6 +148,20 @@ interface Scan {
   expectsValue: boolean;
 }
 
+function takeDeviceValue(scan: Scan, value: string): void {
+  if (scan.deviceOption === undefined) return;
+  scan.namedDevices.push({ named: `${scan.deviceOption} ${value}`, value });
+  scan.deviceOption = undefined;
+}
+
+function noteDeviceOption(scan: Scan, argument: string, name: string, inline: boolean): void {
+  if (inline) {
+    scan.namedDevices.push({ named: argument, value: argument.slice(name.length + 1) });
+  } else {
+    scan.deviceOption = name;
+  }
+}
+
 function scanArgument(
   command: string,
   spec: CommandSpec,
@@ -157,10 +171,7 @@ function scanArgument(
 ): void {
   if (scan.expectsValue) {
     scan.expectsValue = false;
-    if (scan.deviceOption !== undefined) {
-      scan.namedDevices.push({ named: `${scan.deviceOption} ${argument}`, value: argument });
-      scan.deviceOption = undefined;
-    }
+    takeDeviceValue(scan, argument);
     return;
   }
   if (!isOption(argument)) {
@@ -173,13 +184,7 @@ function scanArgument(
     refuse(`${command}: ${argument} is not on the reviewed list`);
   }
   if (!lists.valued.has(name)) return;
-  if (name === "-d" || name === "--device") {
-    if (inline) {
-      scan.namedDevices.push({ named: argument, value: argument.slice(name.length + 1) });
-    } else {
-      scan.deviceOption = name;
-    }
-  }
+  if (name === "-d" || name === "--device") noteDeviceOption(scan, argument, name, inline);
   scan.expectsValue = !inline;
 }
 
