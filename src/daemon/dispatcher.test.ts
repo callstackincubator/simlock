@@ -305,6 +305,7 @@ async function buildDispatcher(
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
     readonly load?: DispatcherOptions["load"];
+    readonly driverRejections?: ConstructorParameters<typeof Doctor>[0]["driverRejections"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -377,6 +378,9 @@ async function buildDispatcher(
     clock,
     config,
     drivers: [driver],
+    ...(overrides.driverRejections === undefined
+      ? {}
+      : { driverRejections: overrides.driverRejections }),
     eventBus,
     leaseExpirer: engine,
     quarantine: engine.core.quarantine,
@@ -938,6 +942,46 @@ describe("Dispatcher: role rejection", () => {
       prerequisites: true,
       purgeOrphans: true,
     });
+  });
+
+  it("doctor.run answers a driver-unavailable finding with its reason and detail while iOS is refused", async () => {
+    const cases = [
+      {
+        reason: "invalid-device-set",
+        root: "Default",
+        summary: "Refusing the ios device set: bad",
+      },
+      {
+        reason: "device-set-changed",
+        root: "/Volumes/sims",
+        summary: "Refusing the ios device set: left",
+      },
+    ] as const;
+    for (const { reason, root, summary } of cases) {
+      const { dispatcher } = await buildDispatcher({
+        driverRejections: [
+          {
+            event: "driver.root-rejected",
+            payload: { platform: "ios", reason, root },
+            platform: "ios",
+            reason,
+            summary,
+          },
+        ],
+      });
+
+      const report = (await dispatcher.dispatch("doctor.run", {}, session({ role: "admin" }))) as {
+        findings: { kind: string; platform?: string; reason?: string; detail?: string }[];
+      };
+
+      const finding = report.findings.find((entry) => entry.kind === "driver-unavailable");
+      expect(finding, reason).toMatchObject({
+        kind: "driver-unavailable",
+        platform: "ios",
+        reason,
+      });
+      expect(finding?.detail, reason).toContain(summary);
+    }
   });
 
   // `driver.passthrough` was declared in the contract and dispatched by the socket switch while
