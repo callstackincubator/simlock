@@ -4979,4 +4979,78 @@ describe("IosSimctlDriver device set", () => {
       }
     }
   });
+
+  it.each([
+    ["simlock", { deviceRoot, deviceSet: "simlock" }, deviceRoot],
+    ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`],
+  ] as const)(
+    "a new or reclaimed simulator's marks name this instance under deviceSet %s",
+    async (setting, config, devicesDir) => {
+      const scoped = setting === "simlock";
+      const argv = (...args: string[]) => (scoped ? simctlArgs(...args) : ["simctl", ...args]);
+      const marks = [
+        `${devicesDir}/${driverData.udid}/data/simlock-mark.json`,
+        `${devicesDir}/${driverData.udid}/simlock-mark.json`,
+      ];
+      const driverFor = async (steps: readonly (readonly [string[], string?])[]) => {
+        const runner = new ScriptedProcessRunner(
+          steps.map(([args, stdout]) => ({
+            match: { args, command: "xcrun" },
+            ...(stdout === undefined ? {} : { result: { code: 0, stderr: "", stdout } }),
+          })),
+        );
+        const filesystem = new MemoryFilesystem();
+        if (scoped) await plantManagedDevice(filesystem);
+        else await filesystem.mkdirp(`${devicesDir}/${driverData.udid}/data`);
+        const driver = await IosSimctlDriver.create({
+          clock: new FakeClock(),
+          coreSimulatorRoot,
+          driverConfig: config,
+          filesystem,
+          idGenerator: { generate: () => "device-1" },
+          instanceId,
+          processRunner: runner,
+          simlockHome: "/home/.simlock",
+        });
+        return { driver, filesystem, runner };
+      };
+      const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
+      const created = [
+        argv("list", "-j", "devicetypes", "runtimes"),
+        argv("create", driverData.name, driverData.deviceTypeId, driverData.runtimeId),
+      ];
+
+      const { driver, filesystem } = await driverFor([
+        [created[0] ?? [], listFixture],
+        [created[1] ?? [], `${driverData.udid}\n`],
+        [argv("shutdown", driverData.udid)],
+        [argv("erase", driverData.udid)],
+      ]);
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      await driver.provision(spec);
+      for (const path of marks) {
+        expect(JSON.parse(await filesystem.readFile(path)), path).toMatchObject({ instanceId });
+      }
+      for (const path of marks) await filesystem.rm(path);
+      await driver.reclaim(device, { clean: "standard" });
+      for (const path of marks) {
+        expect(JSON.parse(await filesystem.readFile(path)), path).toMatchObject({ instanceId });
+      }
+
+      if (scoped) return;
+      const failing = await driverFor([
+        [created[0] ?? [], listFixture],
+        [created[1] ?? [], `${driverData.udid}\n`],
+        [argv("delete", driverData.udid)],
+      ]);
+      await failing.filesystem.rm(`${devicesDir}/${driverData.udid}/data`);
+      await failing.driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      await expect(failing.driver.provision(spec)).rejects.toThrow();
+      expect(failing.runner.calls.at(-1)).toEqual({
+        args: argv("delete", driverData.udid),
+        command: "xcrun",
+        options: { timeoutMs: 30_000 },
+      });
+    },
+  );
 });
