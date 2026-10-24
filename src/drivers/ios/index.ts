@@ -1330,6 +1330,12 @@ export class IosSimctlDriver implements Driver {
         `Refusing \`${tool}\`: the iOS driver does not wrap it.`,
       );
     }
+    if (context?.platform !== undefined && context.platform !== this.platform) {
+      throw new PassthroughRefusedError(
+        tool,
+        `Refusing \`simctl\`: it only serves an iOS simulator, and this lease is on the ${context.platform} platform.`,
+      );
+    }
     if (device !== undefined && isPhysicalDriverDevice(device)) {
       throw new PassthroughRefusedError(
         tool,
