@@ -5188,4 +5188,56 @@ describe("IosSimctlDriver device set", () => {
     );
     expect(removal.residue).toContain("2 never-used simulators");
   });
+
+  it.each([
+    ["simlock", { deviceRoot, deviceSet: "simlock" }, { SIMLOCK_IOS_DEVICE_SET: deviceRoot }],
+    ["default", { deviceSet: "default" }, {}],
+  ] as const)(
+    "a lease holder and the screen capture get the device set only under deviceSet %s",
+    async (_setting, config, leaseEnvironment) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/dist/bin");
+      await filesystem.writeFileAtomic("/dist/bin/simlock-screen-capture", "");
+      const launcher = new FakeBytePipeLauncher();
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        coreSimulatorRoot,
+        driverConfig: config,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: new ScriptedProcessRunner([]),
+        screenCapture: {
+          baseEnvironment: { PATH: "/usr/bin", SIMLOCK_IOS_DEVICE_SET: "/from/the/daemon" },
+          command: "/dist/bin/simlock-screen-capture",
+          launcher,
+        },
+        simlockHome: "/home/.simlock",
+      });
+      const capture = driver.screenCapture;
+      if (capture === undefined) throw new Error("the driver offers no screen capture");
+
+      await capture.open(
+        { address: driverData.udid, deviceId: driverData.udid, driverData, physical: false },
+        { bitrateKbps: 1_500, fps: 30, maxDimension: 720 },
+        new AbortController().signal,
+      );
+
+      expect(driver.virtualLeaseEnvironment()).toEqual(leaseEnvironment);
+      expect(
+        driver.leaseEnvironment({
+          address: driverData.udid,
+          deviceId: driverData.udid,
+          driverData,
+        }),
+      ).toEqual(leaseEnvironment);
+      expect(driver.leaseEnvironment(PHYSICAL_DEVICE)).toEqual({
+        SIMLOCK_DEVICE_UDID: PHYSICAL_DEVICE.deviceId,
+      });
+      expect(launcher.starts[0]?.env).toEqual({
+        PATH: "/usr/bin",
+        ...leaseEnvironment,
+      });
+    },
+  );
 });
