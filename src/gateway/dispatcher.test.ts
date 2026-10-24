@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 
 import { createAlerts } from "../alerts/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
-import type { AlertDestination } from "../core/index.js";
+import type { AlertDestination, MaxPerRequester } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
@@ -212,6 +212,8 @@ function harness(
     readonly alertDestinations?: readonly AlertDestination[];
     /** why: replaces the fake poster behind `alertDestinations`, for a case that needs a real connection. */
     readonly webhookPoster?: WebhookPoster;
+    /** why: the coordinator's per-requester limit; unset leaves the coordinator's own default. */
+    readonly maxPerRequester?: MaxPerRequester;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -237,6 +239,7 @@ function harness(
       message: error instanceof Error ? error.message : String(error),
     }),
     leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
+    ...(options.maxPerRequester === undefined ? {} : { maxPerRequester: options.maxPerRequester }),
     eventBus,
     execTimeoutMs: gatewayConfig.gateway.execTimeoutMs,
     leaseRequestTimeoutMs: gatewayConfig.gateway.leaseRequestTimeoutMs,
@@ -2232,6 +2235,69 @@ describe("GatewayDispatcher: waiting requests", () => {
     // `status.get` carries the fleet queue only; each worker's own is on its view.
     const status = await dispatcher.dispatch("status.get", {}, session());
     expect(status.waiting).toEqual([listed[0]]);
+  });
+
+  it("lease.cancel {platform} cancels only the named platform's waiting fleet request and is gated on that request's owner", async () => {
+    const { coordinator, dispatcher, workers } = harness({
+      maxPerRequester: { android: 1, ios: 1 },
+    });
+    const capacity = statusFixture().capacity;
+    // why: both platforms are full, so each fleet request waits in the gateway's own queue.
+    for (const [workerId, platform, model] of [
+      ["wrk_ios", "ios", "iPhone 17"],
+      ["wrk_android", "android", "Pixel 9"],
+    ] as const) {
+      workers.connected(workerId, undefined, "0.3.0");
+      workers.refresh(workerId, {
+        capacity: {
+          ...capacity,
+          android: { ...capacity.android, maxRunning: 0 },
+          ios: { ...capacity.ios, maxRunning: 0 },
+        },
+        catalog: catalogFixture([{ models: [model], platform, runtimes: ["26.0"] }]).platforms,
+        health: "running",
+        queueDepth: 0,
+        waiting: [],
+      });
+    }
+    const request = (platform: "ios" | "android", owner: string) =>
+      dispatcher.dispatch(
+        "lease.request",
+        {
+          model: platform === "ios" ? "iPhone 17" : "Pixel 9",
+          platform,
+          requesterId: "fleet-agent",
+        },
+        session({ principal: owner, role: "agent" }),
+      );
+    void request("ios", "owner-ios").catch(() => undefined);
+    await settle();
+    void request("android", "owner-android").catch(() => undefined);
+    await settle();
+    const waitingPlatforms = () =>
+      coordinator
+        .waitingRequests()
+        .map((waiting) => waiting.spec.platform)
+        .sort();
+    expect(waitingPlatforms()).toEqual(["android", "ios"]);
+
+    // why: the iOS request is the earliest, so a hook that ignored the platform would name its owner.
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { platform: "android", requesterId: "fleet-agent" },
+        session({ principal: "owner-ios", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { platform: "android", requesterId: "fleet-agent" },
+        session({ principal: "owner-android", role: "agent" }),
+      ),
+    ).resolves.toEqual({ result: "cancelled" });
+
+    expect(waitingPlatforms()).toEqual(["ios"]);
   });
 
   it("a fleet request dispatched to a worker is listed once, by the gateway", async () => {

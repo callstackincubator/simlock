@@ -297,6 +297,8 @@ async function buildDispatcher(
     readonly claims?: { isClaimed(deviceId: string): boolean };
     /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
     readonly otherStallDrivers?: readonly FakeDriver[];
+    /** why: a second platform's driver for the leasing engine, for a test that leases on both. */
+    readonly extraDrivers?: readonly FakeDriver[];
     /** Extra leasing options, such as `defaultModes` (a platform's default device mode). */
     readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
     readonly physicalDevices?: readonly SeededPhysicalDevice[];
@@ -342,7 +344,7 @@ async function buildDispatcher(
   const wiring = testComponentWiring({
     clock: clock,
     components: overrides.components,
-    drivers: [driver],
+    drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus: eventBus,
     registry: registry,
   });
@@ -351,7 +353,7 @@ async function buildDispatcher(
     clock,
     config,
     ...overrides.engine,
-    drivers: [driver],
+    drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus,
     idGenerator: sequence(),
     registry,
@@ -1303,6 +1305,77 @@ describe("Dispatcher: ownership", () => {
       (rejected: unknown) => rejected,
     );
     expect(cancelled).toBeInstanceOf(RequestCancelledError);
+  });
+
+  it("lease.cancel {platform}: cancels only the named platform's waiting request, and is gated on that request's owner", async () => {
+    const clock = new FakeClock(1_000);
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const { dispatcher, engine, registry } = await buildDispatcher({
+      capacity: {
+        strategy: "resource",
+        config: {
+          limits: {
+            android: { maxDevices: 1, maxRunning: 1 },
+            ios: { maxDevices: 1, maxRunning: 1 },
+            maxRunning: 2,
+          },
+          ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+        },
+      },
+      clock,
+      extraDrivers: [android],
+      lease: { maxPerRequester: { ios: 1, android: 1 } },
+    });
+    const iosRequest = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const androidRequest = { model: "Pixel 8", osVersion: "36", platform: "android" } as const;
+    await dispatcher.dispatch(
+      "lease.request",
+      { ...iosRequest, requesterId: "holder-ios" },
+      session({ principal: "holder-ios" }),
+    );
+    await dispatcher.dispatch(
+      "lease.request",
+      { ...androidRequest, requesterId: "holder-android" },
+      session({ principal: "holder-android" }),
+    );
+    const waiting = (platform: "ios" | "android") =>
+      registry
+        .leaseRequests()
+        .filter((record) => record.state === "open" && record.request.platform === platform);
+    const iosWaiting = dispatcher.dispatch(
+      "lease.request",
+      { ...iosRequest, requesterId: "agent-1" },
+      session({ principal: "owner-ios" }),
+    );
+    await expect.poll(() => waiting("ios")).toHaveLength(1);
+    const androidWaiting = dispatcher.dispatch(
+      "lease.request",
+      { ...androidRequest, requesterId: "agent-1" },
+      session({ principal: "owner-android" }),
+    );
+    await expect.poll(() => waiting("android")).toHaveLength(1);
+
+    // why: the iOS request is the earliest, so a hook that ignored the platform would name its owner.
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { platform: "android", requesterId: "agent-1" },
+        session({ principal: "owner-ios", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { platform: "android", requesterId: "agent-1" },
+        session({ principal: "owner-android", role: "agent" }),
+      ),
+    ).resolves.toEqual({ result: "cancelled" });
+
+    await expect(androidWaiting).rejects.toBeInstanceOf(RequestCancelledError);
+    expect(waiting("ios")).toHaveLength(1);
+    expect(waiting("android")).toHaveLength(0);
+    expect(engine.queueDepth).toBe(1);
+    void iosWaiting.catch(() => undefined);
   });
 });
 
