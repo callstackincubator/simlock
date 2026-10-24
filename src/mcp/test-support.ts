@@ -15,6 +15,7 @@ import {
   type DoctorReport,
   type DoctorRunInput,
   type ExecInput,
+  type ExecOptions,
   type ExecOutput,
   type DriverPassthroughInput,
   type LeaseCancelInput,
@@ -76,7 +77,7 @@ export class FakeSimlockClient implements SimlockClient {
   runDoctorImpl: (input: DoctorRunInput) => Promise<DoctorReport> = notStubbed("runDoctor");
   resolvePassthroughImpl: (input: DriverPassthroughInput) => Promise<PassthroughCommand> =
     notStubbed("resolvePassthrough");
-  execImpl: (input: ExecInput) => Promise<ExecOutput> = notStubbed("exec");
+  execImpl: (input: ExecInput, options: ExecOptions) => Promise<ExecOutput> = notStubbed("exec");
 
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
@@ -146,10 +147,9 @@ export class FakeSimlockClient implements SimlockClient {
     return this.#dead ? this.#deadConnection() : this.resolvePassthroughImpl(input);
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP exposes no device.exec tool of its own.
-  exec(input: ExecInput): Promise<ExecOutput> {
+  exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     this.calls.push({ input, method: "exec" });
-    return this.#dead ? this.#deadConnection() : this.execImpl(input);
+    return this.#dead ? this.#deadConnection() : this.execImpl(input, options);
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {

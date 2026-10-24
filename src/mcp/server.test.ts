@@ -66,6 +66,7 @@ describe("MCP server (smoke)", () => {
         "list_devices",
         "release_simulator",
         "lease_status",
+        "run_on_device",
       ]);
       expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
         "modelClasses",
@@ -558,6 +559,52 @@ async function connectedServer(client: FakeSimlockClient) {
     mcpClient,
   };
 }
+
+describe("MCP run_on_device", () => {
+  it("returns the command's stdout, stderr and exit code, run on the session's lease", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const cases = [
+        {
+          input: { args: ["listapps", "booted"], tool: "simctl" },
+          chunks: [{ chunk: "com.x\n", stream: "stdout" as const }],
+          exitCode: 0,
+          expected: { exitCode: 0, stderr: "", stdout: "com.x\n", truncated: false },
+        },
+        {
+          input: { args: ["install", "/b/App.app"], tool: "simctl" },
+          chunks: [{ chunk: "no such file", stream: "stderr" as const }],
+          exitCode: 3,
+          expected: { exitCode: 3, stderr: "no such file", stdout: "", truncated: false },
+        },
+        {
+          input: { args: ["shell", "cat"], stdin: "hello", tool: "adb" },
+          chunks: [],
+          exitCode: 0,
+          expected: { exitCode: 0, stderr: "", stdout: "", truncated: false },
+        },
+      ];
+      for (const entry of cases) {
+        client.execImpl = (_input, options) => {
+          for (const chunk of entry.chunks) options.onOutput?.(chunk);
+          return Promise.resolve({ exitCode: entry.exitCode });
+        };
+        const result = await call(mcpClient, "run_on_device", entry.input);
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toEqual(entry.expected);
+        expect(client.calls.filter((c) => c.method === "exec").at(-1)?.input).toEqual({
+          ...entry.input,
+          leaseId: "lease-1",
+        });
+      }
+    } finally {
+      await close();
+    }
+  });
+});
 
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
