@@ -826,6 +826,35 @@ describe("MCP run_on_device progress", () => {
   });
 });
 
+describe("MCP run_on_device alongside other tools", () => {
+  it("lets lease_status answer while the command is still running", async () => {
+    const client = new FakeSimlockClient();
+    const grant = sampleGrant();
+    client.requestLeaseImpl = () => Promise.resolve(grant);
+    client.listLeasesImpl = () =>
+      Promise.resolve({
+        leases: [{ ...grant.lease, deviceId: grant.device.id }],
+      });
+    let finish: (() => void) | undefined;
+    client.execImpl = () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ exitCode: 0 });
+      });
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const running = call(mcpClient, "run_on_device", { args: [], tool: "simctl" });
+      await waitFor(() => finish !== undefined);
+      const status = await call(mcpClient, "lease_status", {});
+      expect(status.structuredContent).toMatchObject({ held: true, id: "lease-1" });
+      finish?.();
+      expect((await running).structuredContent).toMatchObject({ exitCode: 0 });
+    } finally {
+      await close();
+    }
+  });
+});
+
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
     { method: "tools/call", params: { arguments: arguments_, name } },
