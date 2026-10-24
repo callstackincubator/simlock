@@ -75,7 +75,7 @@ import {
   lineOf,
   type LeaseRequestOptions,
   RequestCancelledError,
-  RequesterAlreadyLeasedError,
+  requesterLimitDecision,
   type Waiter,
   type WaitQueue,
 } from "./wait-queue.js";
@@ -316,16 +316,29 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     options: LeaseRequestOptions,
     requestId: string,
   ): void {
-    const held = this.options.registry.snapshot.leases.filter(
-      (lease) => lease.requesterId === options.requesterId,
-    );
-    const configured = this.options.maxPerRequester ?? 1;
-    const limit = typeof configured === "number" ? configured : 1;
+    const { devices, leases } = this.options.registry.snapshot;
+    const held = leases
+      .filter((lease) => lease.requesterId === options.requesterId)
+      .map((lease) => {
+        const platform = devices.find((device) => device.id === lease.deviceId)?.spec.platform;
+        return {
+          grantedAt: lease.grantedAt,
+          id: lease.id,
+          ...(platform === undefined ? {} : { platform }),
+        };
+      });
     const waiting = this.options.queue.hasPendingRequester(options.requesterId);
     // why: a probe's held leases were counted by the gateway, fleet-wide; only its waiting
     // request is checked here (ADR 0023 §2).
-    const atLimit = options.fleetRequestId === undefined && held.length >= limit;
-    if (!waiting && !atLimit) return;
+    const refusal = requesterLimitDecision({
+      held,
+      maxPerRequester: this.options.maxPerRequester,
+      platform: request.platform,
+      probe: options.fleetRequestId !== undefined,
+      requesterId: options.requesterId,
+      waiting,
+    });
+    if (refusal === undefined) return;
     emitLeaseRefusal(
       this.options.eventBus,
       {
@@ -337,11 +350,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       },
       "lease-acquisition-coordinator",
     );
-    throw new RequesterAlreadyLeasedError(options.requesterId, earliestGranted(held)?.id, {
-      held: held.length,
-      limit,
-      waiting,
-    });
+    throw refusal;
   }
 
   /**
@@ -1514,14 +1523,4 @@ function requestedRange(request: DeviceRequest): OsRange | undefined {
   if (request.osVersion === undefined) return undefined;
   const parsed = parseOsConstraint(request.osVersion);
   return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
-}
-
-function earliestGranted<Lease extends { readonly grantedAt: number }>(
-  leases: readonly Lease[],
-): Lease | undefined {
-  let earliest: Lease | undefined;
-  for (const lease of leases) {
-    if (earliest === undefined || lease.grantedAt < earliest.grantedAt) earliest = lease;
-  }
-  return earliest;
 }

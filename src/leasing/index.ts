@@ -30,6 +30,7 @@ export {
   type QueuePlace,
   RequestCancelledError,
   RequesterAlreadyLeasedError,
+  requesterLimitDecision,
   type WaiterState,
   WaitQueue,
 } from "./wait-queue.js";

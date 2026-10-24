@@ -1,5 +1,11 @@
 import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
-import { type DeviceRequest, type LeaseGrant, type LeaseProgress } from "../core/index.js";
+import {
+  type DeviceRequest,
+  type LeaseGrant,
+  type LeaseProgress,
+  type MaxPerRequester,
+  type Platform,
+} from "../core/index.js";
 import { type WaitingReason } from "./acquisition-planner.js";
 
 export interface LeaseRequestOptions {
@@ -84,6 +90,53 @@ function requesterRefusalMessage(
   return existingLeaseId === undefined
     ? `Requester already has a lease or pending request: ${requesterId}`
     : `Requester ${requesterId} already holds lease ${existingLeaseId}; release it (\`simlock release ${existingLeaseId}\`) before requesting another device`;
+}
+
+export interface HeldLease {
+  readonly id: string;
+  readonly grantedAt: number;
+  readonly platform?: Platform;
+}
+
+export interface RequesterLimitInput {
+  readonly requesterId: string;
+  readonly platform: Platform;
+  readonly maxPerRequester: MaxPerRequester | undefined;
+  readonly held: readonly HeldLease[];
+  readonly waiting: boolean;
+  readonly probe: boolean;
+}
+
+/**
+ * why: worker and gateway admit a request by this one rule (architecture rule 10). It returns the
+ * refusal for the caller to emit and throw, or `undefined` to admit.
+ */
+export function requesterLimitDecision(
+  input: RequesterLimitInput,
+): RequesterAlreadyLeasedError | undefined {
+  const configured = input.maxPerRequester ?? 1;
+  const perPlatform = typeof configured !== "number";
+  const limit = perPlatform ? (configured[input.platform] ?? 1) : configured;
+  const held = perPlatform
+    ? input.held.filter(
+        (lease) => lease.platform === undefined || lease.platform === input.platform,
+      )
+    : input.held;
+  const atLimit = !input.probe && held.length >= limit;
+  if (!input.waiting && !atLimit) return undefined;
+  return new RequesterAlreadyLeasedError(input.requesterId, earliestGranted(held)?.id, {
+    held: held.length,
+    limit,
+    waiting: input.waiting,
+  });
+}
+
+function earliestGranted(leases: readonly HeldLease[]): HeldLease | undefined {
+  let earliest: HeldLease | undefined;
+  for (const lease of leases) {
+    if (earliest === undefined || lease.grantedAt < earliest.grantedAt) earliest = lease;
+  }
+  return earliest;
 }
 
 /** A request named a lease ID an active lease or a waiting request already holds (ADR 0020). */
