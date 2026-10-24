@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
 import { SimlockError } from "../client/index.js";
+import type { Clock } from "../ports/index.js";
 import { describeSchemaIssues } from "../contract/index.js";
 import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS } from "../instructions/index.js";
 import {
@@ -140,7 +141,10 @@ function createLeaseProgressReporter(
 }
 
 /** Creates the MCP tool surface for one lease-owning session. */
-export function createMcpServer(session: McpSession): McpServer {
+export function createMcpServer(
+  session: McpSession,
+  _options: { readonly clock: Clock },
+): McpServer {
   const server = new McpServer(SERVER_INFO, {
     capabilities: { logging: {} },
     instructions: MCP_SERVER_INSTRUCTIONS,

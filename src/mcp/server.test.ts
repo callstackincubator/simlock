@@ -543,16 +543,18 @@ describe("MCP server (smoke)", () => {
 });
 
 async function connectedServer(client: FakeSimlockClient) {
+  const clock = new FakeClock();
   const session = new McpSession({
-    clock: new FakeClock(),
+    clock,
     connect: async () => client,
     connectForRenew: async () => client,
   });
-  const server = createMcpServer(session);
+  const server = createMcpServer(session, { clock });
   const mcpClient = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([mcpClient.connect(clientTransport), server.connect(serverTransport)]);
   return {
+    clock,
     close: async () => {
       await Promise.all([mcpClient.close(), server.close(), session.close()]);
     },
@@ -712,6 +714,106 @@ describe("MCP run_on_device daemon errors", () => {
         const result = await call(mcpClient, "run_on_device", { args: [], tool: "simctl" });
         expect(result.isError).toBe(true);
         expect(JSON.parse(text(result))).toEqual({ code: error.code, message: error.message });
+      }
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("MCP run_on_device progress", () => {
+  it("sends progress at most once per second while output arrives and every 10 s while none does, only with a progress token", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const { clock, mcpClient, close } = await connectedServer(client);
+    try {
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const install = ["install", "/b/App.app"];
+      const cases = [
+        {
+          args: install,
+          message: "Running simctl install",
+          script: [
+            { at: 0, chunk: true },
+            { at: 400, chunk: true },
+            { at: 900, chunk: true },
+          ],
+          token: true,
+          notifications: 1,
+        },
+        {
+          args: install,
+          message: "Running simctl install",
+          script: [
+            { at: 0, chunk: true },
+            { at: 1500, chunk: true },
+          ],
+          token: true,
+          notifications: 2,
+        },
+        {
+          args: install,
+          message: "Running simctl install",
+          script: [{ at: 25_000, chunk: false }],
+          token: true,
+          notifications: 2,
+        },
+        {
+          args: [],
+          message: "Running simctl",
+          script: [{ at: 0, chunk: true }],
+          token: true,
+          notifications: 1,
+        },
+        {
+          args: install,
+          message: "",
+          script: [
+            { at: 0, chunk: true },
+            { at: 1500, chunk: true },
+            { at: 25_000, chunk: false },
+          ],
+          token: false,
+          notifications: 0,
+        },
+      ];
+      for (const entry of cases) {
+        let emit: ((chunk: { stream: "stdout"; chunk: string }) => void) | undefined;
+        let finish: (() => void) | undefined;
+        client.execImpl = (_input, options) =>
+          new Promise((resolve) => {
+            emit = (chunk) => options.onOutput?.(chunk);
+            finish = () => resolve({ exitCode: 0 });
+          });
+        const events: Array<{
+          message?: string | undefined;
+          progress: number;
+          total?: number | undefined;
+        }> = [];
+        const pending = mcpClient.request(
+          {
+            method: "tools/call",
+            params: { arguments: { args: entry.args, tool: "simctl" }, name: "run_on_device" },
+          },
+          CallToolResultSchema,
+          entry.token ? { onprogress: (progress) => events.push(progress) } : undefined,
+        );
+        await waitFor(() => emit !== undefined);
+        let elapsed = 0;
+        for (const step of entry.script) {
+          clock.advance(step.at - elapsed);
+          elapsed = step.at;
+          if (step.chunk) emit?.({ chunk: "x", stream: "stdout" });
+        }
+        finish?.();
+        await pending;
+        expect(events.map((event) => event.progress)).toEqual(
+          Array.from({ length: entry.notifications }, (_, index) => index + 1),
+        );
+        for (const event of events) {
+          expect(event.message).toBe(entry.message);
+          expect(event.total).toBeUndefined();
+        }
       }
     } finally {
       await close();
