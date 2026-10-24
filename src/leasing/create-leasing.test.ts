@@ -1531,15 +1531,14 @@ describe("createLeasing RAM budget by mode", () => {
       rule: "test",
       target: toShutDown.device.id,
     });
-    expect(before.engine.ramBudget?.usedBytes).toBe(1.5 * gibibyte);
+    expect(before.engine.ramBudget?.usedBytes).toBe(1 * gibibyte);
 
-    // Restarted at 2 GiB slim: the three slim devices use 6 GiB of 5.
     const after = await createHarness({
       driver,
       state: before.state,
       idleShutdownAfterMs: 0,
       limits: roomy,
-      ramBudget: { ...ramBudget, iosSlimBytesPerDevice: 2 * gibibyte },
+      ramBudget: { ...ramBudget, iosSlimBytesPerDevice: 3 * gibibyte },
       totalRamBytes: 9 * gibibyte,
     });
     await after.engine.convergeRunningCapacity();
@@ -1574,8 +1573,6 @@ describe("createLeasing RAM budget by mode", () => {
     expect(reused.device.id).toBe(idle.device.id);
     expect(after.registry.snapshot.leases.map((lease) => lease.deviceId)).toContain(held.device.id);
 
-    // A release lowers nothing; deleting both idle devices brings use to 2 GiB of 5, and a new
-    // device's 3 GiB fits again.
     await after.engine.release(reused.lease.id, "explicit");
     await after.engine.settle();
     expect(after.engine.ramBudget?.overLimit).toBe(true);
@@ -1587,12 +1584,11 @@ describe("createLeasing RAM budget by mode", () => {
       await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
     }
     await after.engine.settle();
-    // why: the pool keeps the kind the reused lease taught it: the one slim device it made takes the 2 GiB the deletes freed.
-    expect(operations(driver, "makeReady")).toBe(boots + 1);
+    expect(operations(driver, "makeReady")).toBe(boots);
     expect(after.engine.ramBudget).toEqual({
       limitBytes: 5 * gibibyte,
       overLimit: false,
-      usedBytes: 4 * gibibyte,
+      usedBytes: 3 * gibibyte,
     });
   });
 });

@@ -301,7 +301,7 @@ describe("CapacityCoordinator", () => {
     expect(capacity.ramBudget([slim, iosDevice("ready-1", "full", "ready")])).toEqual({
       limitBytes: 8 * gibibyte,
       overLimit: false,
-      usedBytes: 4 * gibibyte,
+      usedBytes: 3 * gibibyte,
     });
   });
 

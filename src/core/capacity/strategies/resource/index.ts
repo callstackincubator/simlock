@@ -20,6 +20,8 @@ import {
 
 const GIBIBYTE = 1024 ** 3;
 const OS_RAM_RESERVE_BYTES = 4 * GIBIBYTE;
+// why: a shut-down device holds no RAM, so it is the one state the budget leaves out.
+const SHUTDOWN = "shutdown";
 
 /**
  * Device and running ceilings derived from the machine, with a RAM budget gate
@@ -60,8 +62,9 @@ class ResourceCapacityStrategy implements CapacityStrategy {
   }
 
   canBoot(device: CapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision {
+    const fullBytes = this.#bytesPerDevice({ ...device, mode: "full" });
     const extraBytes =
-      this.#bytesPerDevice({ ...device, mode: "full" }) - this.#bytesPerDevice(device);
+      device.state === SHUTDOWN ? fullBytes : fullBytes - this.#bytesPerDevice(device);
     if (extraBytes <= 0) return { ok: true };
     return this.#usedBytes(devices) + extraBytes > this.#limitBytes()
       ? { ok: false, reason: "ram-budget" }
@@ -98,10 +101,9 @@ class ResourceCapacityStrategy implements CapacityStrategy {
   }
 
   #usedBytes(devices: readonly CapacityDevice[]): number {
-    return activeDevices(devices).reduce(
-      (total, device) => total + this.#bytesPerDevice(device),
-      0,
-    );
+    return activeDevices(devices)
+      .filter((device) => device.state !== SHUTDOWN)
+      .reduce((total, device) => total + this.#bytesPerDevice(device), 0);
   }
 
   #bytesPerDevice({ platform, mode }: PlannedCapacityDevice): number {

@@ -214,17 +214,18 @@ describe("resource strategy RAM budget by mode", () => {
     });
   });
 
-  it("never refuses booting a shut-down full device for RAM, even over the limit", () => {
+  it("charges booting a shut-down full device its whole size, refusing it only when that no longer fits", () => {
     const strategy = sized({
       androidBytesPerDevice: 4 * gibibyte,
       iosBytesPerDevice: 3 * gibibyte,
       iosSlimBytesPerDevice: gibibyte,
     });
     const shutdown = device("ios", "full", "shutdown");
-    const over = [shutdown, device("ios", "full"), device("ios", "full")];
 
-    expect(strategy.ramBudget(over)?.overLimit).toBe(true);
-    expect(strategy.canBoot(shutdown, over)).toEqual({ ok: true });
+    expect(strategy.canBoot(shutdown, [shutdown, device("ios", "full")])).toEqual({ ok: true });
+    expect(
+      strategy.canBoot(shutdown, [shutdown, device("ios", "full"), device("ios", "full")]),
+    ).toEqual({ ok: false, reason: "ram-budget" });
   });
 
   it("counts slim and full devices on both platforms at the sum of each device's own size", () => {
@@ -262,7 +263,7 @@ describe("resource strategy RAM budget by mode", () => {
     });
   });
 
-  it("reports the limit as total RAM minus the reserve, use over non-deleted devices, and over only past the limit", () => {
+  it("reports the limit as total RAM minus the reserve, use over devices neither deleted nor shut down, and over only past the limit", () => {
     const strategy = sized({
       androidBytesPerDevice: 4 * gibibyte,
       iosBytesPerDevice: 2 * gibibyte,
@@ -277,9 +278,9 @@ describe("resource strategy RAM budget by mode", () => {
     expect(strategy.ramBudget(atLimit)).toEqual({
       limitBytes: 8 * gibibyte,
       overLimit: false,
-      usedBytes: 8 * gibibyte,
+      usedBytes: 6 * gibibyte,
     });
-    expect(strategy.ramBudget([...atLimit, device("ios", "slim")])).toEqual({
+    expect(strategy.ramBudget([...atLimit, device("android", "full")])).toEqual({
       limitBytes: 8 * gibibyte,
       overLimit: true,
       usedBytes: 10 * gibibyte,
