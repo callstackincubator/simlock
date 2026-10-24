@@ -416,13 +416,13 @@ function actsOnNoDevice(args: readonly string[], index: number): boolean {
   return subcommand === "reconnect" && args[index + 1] === "offline";
 }
 
-/** why: Whether the globals before `end` already name `serial`; any other device flag is refused. */
+/** why: Whether the globals before `end` already name `serial` with `-s`; `-t`, `-e`, `-d` and any other serial are refused. */
 function namesOwnSerial(args: readonly string[], end: number, serial: string): boolean {
   let named = false;
   for (let index = 0; index < end; index += 1) {
     const flag = args[index] as string;
     const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
-    if (value !== serial) {
+    if (flag !== "-s" || value !== serial) {
       throw otherDeviceRefusal(
         "adb",
         args,

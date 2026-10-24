@@ -3312,10 +3312,6 @@ describe("AndroidDriver.create", () => {
         ["-s", "emulator-5554", "shell", "getprop"],
         ["-s", "emulator-5554", "shell", "getprop"],
       ],
-      [
-        ["-t", "emulator-5554", "shell", "getprop"],
-        ["-t", "emulator-5554", "shell", "getprop"],
-      ],
       [["devices"], ["devices"]],
       [["version"], ["version"]],
       [["--version"], ["--version"]],
@@ -3358,6 +3354,10 @@ describe("AndroidDriver.create", () => {
       [["-d", "shell", "getprop"], refusal("-d shell getprop", "-d")],
       [["-t", "3", "shell", "getprop"], refusal("-t 3 shell getprop", "-t 3")],
       [["-t3", "shell", "getprop"], refusal("-t3 shell getprop", "-t3")],
+      [
+        ["-t", "emulator-5554", "shell", "getprop"],
+        refusal("-t emulator-5554 shell getprop", "-t emulator-5554"),
+      ],
     ];
 
     for (const [args, message] of cases) {
