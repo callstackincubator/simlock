@@ -233,7 +233,6 @@ export class FleetLeaseCoordinator {
     return this.#queue.depth;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option.
   get physicalQueueDepth(): number {
     return this.#queue.physicalDepth;
   }

@@ -77,10 +77,6 @@ export class FleetQueue {
     return this.#queue.places();
   }
 
-  hasPendingRequester(requesterId: string): boolean {
-    return this.#queue.hasPendingRequester(requesterId);
-  }
-
   pendingPlatforms(requesterId: string): readonly Platform[] {
     return this.#queue.pendingPlatforms(requesterId);
   }
