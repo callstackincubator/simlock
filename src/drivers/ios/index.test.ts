@@ -5053,4 +5053,73 @@ describe("IosSimctlDriver device set", () => {
       });
     },
   );
+
+  it("under deviceSet default listManaged reports only devices whose durable mark names this instance", async () => {
+    const devicesDir = `${coreSimulatorRoot}/Devices`;
+    const udid = (n: number) => `00000000-0000-0000-0000-00000000010${String(n)}`;
+    const mark = (owner?: string) =>
+      JSON.stringify({ ...(owner === undefined ? {} : { instanceId: owner }), token: "t" });
+    const filesystem = new MemoryFilesystem();
+    const cases = [
+      { durable: mark(instanceId), erasable: mark(instanceId), listed: true, name: "simlock-0" },
+      { durable: mark(instanceId), erasable: undefined, listed: true, name: "simlock-9" },
+      { durable: undefined, erasable: mark(instanceId), listed: false, name: "no-durable" },
+      { durable: mark(), erasable: mark(), listed: false, name: "no-instance" },
+      { durable: mark("other"), erasable: mark("other"), listed: false, name: "another" },
+      { durable: undefined, erasable: undefined, listed: false, name: "simlock-1" },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      await filesystem.mkdirp(`${devicesDir}/${udid(index)}/data`);
+      if (entry.durable !== undefined) {
+        await filesystem.writeFileAtomic(
+          `${devicesDir}/${udid(index)}/simlock-mark.json`,
+          entry.durable,
+        );
+      }
+      if (entry.erasable !== undefined) {
+        await filesystem.writeFileAtomic(
+          `${devicesDir}/${udid(index)}/data/simlock-mark.json`,
+          entry.erasable,
+        );
+      }
+    }
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["simctl", "list", "-j", "devices"], command: "xcrun" },
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            devices: {
+              "com.apple.CoreSimulator.SimRuntime.iOS-26-5": cases.map((entry, index) => ({
+                dataPath: `${devicesDir}/${udid(index)}/data`,
+                name: entry.name,
+                state: "Shutdown",
+                udid: udid(index),
+              })),
+            },
+          }),
+        },
+      },
+    ]);
+    const driver = await IosSimctlDriver.create({
+      clock: new FakeClock(),
+      coreSimulatorRoot,
+      driverConfig: { deviceSet: "default" },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: runner,
+      simlockHome: "/home/.simlock",
+    });
+
+    const reality = await driver.listManaged();
+
+    expect(reality.devices.map((device) => [device.deviceId, device.mark?.erasable])).toEqual([
+      [udid(0), "t"],
+      [udid(1), undefined],
+    ]);
+    await expect(driver.findLegacy(udid(0))).resolves.toBeUndefined();
+    expect(runner.calls).toHaveLength(1);
+  });
 });
