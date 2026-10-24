@@ -658,7 +658,8 @@ export class IosSimctlDriver implements Driver {
     ]);
     let foreign: ReadonlyMap<string, DefaultSetDevices>;
     try {
-      foreign = devicesPerRuntime(JSON.parse(defaultSet.stdout) as unknown);
+      const parsed = JSON.parse(defaultSet.stdout) as unknown;
+      foreign = devicesPerRuntime(parsed, await this.#ownedUdids(parsed));
     } catch (error: unknown) {
       if (error instanceof DriverCrashError) throw error;
       throw new DriverCrashError(`Could not parse simctl device list: ${errorMessage(error)}`);
@@ -1552,6 +1553,16 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
+  /** why: Under Xcode's set the default set holds this instance's simulators too, and they are not foreign. */
+  async #ownedUdids(listed: unknown): Promise<ReadonlySet<string>> {
+    if (this.#rootOptions !== undefined || !isRecord(listed) || !isRecord(listed.devices)) {
+      return new Set();
+    }
+    const udids = parseManagedDevices(listed).map((device) => device.udid);
+    const owned = await Promise.all(udids.map((udid) => this.#isMarkedByThisInstance(udid)));
+    return new Set(udids.filter((_udid, index) => owned[index]));
+  }
+
   async #isMarkedByThisInstance(udid: string): Promise<boolean> {
     const durable = await this.#readMarkFile(join(this.#deviceDirectory(udid), MARK_FILE_NAME));
     return durable?.instanceId === this.#instanceId;
@@ -2077,13 +2088,18 @@ interface DefaultSetDevices {
   readonly unused: number;
 }
 
-function devicesPerRuntime(value: unknown): ReadonlyMap<string, DefaultSetDevices> {
+function devicesPerRuntime(
+  value: unknown,
+  owned: ReadonlySet<string>,
+): ReadonlyMap<string, DefaultSetDevices> {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
   return new Map(
     Object.entries(value.devices).map(([runtime, devices]): [string, DefaultSetDevices] => {
-      const entries: readonly unknown[] = Array.isArray(devices) ? devices : [];
+      const entries: readonly unknown[] = (Array.isArray(devices) ? devices : []).filter(
+        (device: unknown) => !(isRecord(device) && owned.has(String(device.udid))),
+      );
       const used = entries.filter(
         (device) => !isRecord(device) || device.lastUsedAt !== undefined,
       ).length;
