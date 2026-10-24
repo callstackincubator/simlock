@@ -4736,3 +4736,97 @@ function assetInfoPlist(simulatorVersion: string, build: string): string {
 
 const prepareFull = { mode: "full", purpose: "prepare" } as const;
 const prepareSlim = { mode: "slim", purpose: "prepare" } as const;
+
+describe("IosSimctlDriver device set", () => {
+  const coreSimulatorRoot = "/CoreSim";
+  const runtimeImage = {
+    build: "23E244",
+    identifier: "IMG-26.4-23E244",
+    platformIdentifier: "com.apple.platform.iphonesimulator",
+    runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+    sizeBytes: 1_000,
+    state: "Ready",
+    version: "26.4",
+  };
+  const imageList = JSON.stringify({ [runtimeImage.identifier]: runtimeImage });
+  const emptyDevices = JSON.stringify({ devices: {} });
+
+  interface Step {
+    readonly args: readonly string[];
+    readonly scoped: boolean;
+    readonly stdout?: string;
+  }
+
+  async function plantDevice(filesystem: Filesystem, devicesDir: string): Promise<void> {
+    await filesystem.mkdirp(`${devicesDir}/${driverData.udid}/data`);
+  }
+
+  it.each([
+    ["unset", {}, deviceRoot, true],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true],
+    ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`, false],
+  ] as const)(
+    "the driver given deviceSet %s runs every simctl call with or without --set",
+    async (_case, config, devicesDir, scoped) => {
+      const steps: Step[] = [
+        { args: ["list", "-j", "devicetypes", "runtimes"], scoped: true, stdout: listFixture },
+        {
+          args: ["create", driverData.name, driverData.deviceTypeId, driverData.runtimeId],
+          scoped: true,
+          stdout: `${driverData.udid}\n`,
+        },
+        { args: ["boot", driverData.udid], scoped: true },
+        { args: ["bootstatus", driverData.udid, "-b"], scoped: true },
+        { args: ["listapps", driverData.udid], scoped: true },
+        { args: ["shutdown", driverData.udid], scoped: true },
+        { args: ["erase", driverData.udid], scoped: true },
+        { args: ["shutdown", driverData.udid], scoped: true },
+        { args: ["delete", driverData.udid], scoped: true },
+        { args: ["list", "-j", "devices"], scoped: true, stdout: emptyDevices },
+        { args: ["runtime", "list", "-j"], scoped: true, stdout: imageList },
+        { args: ["list", "-j", "devices"], scoped: false, stdout: emptyDevices },
+        { args: ["runtime", "delete", runtimeImage.identifier], scoped: true },
+        { args: ["runtime", "list", "-j"], scoped: true, stdout: "{}" },
+        { args: ["runtime", "list", "-j"], scoped: true, stdout: "{}" },
+        { args: ["list", "-j", "devices"], scoped: false, stdout: emptyDevices },
+      ];
+      const argvOf = (step: Step): string[] =>
+        step.scoped && scoped ? simctlArgs(...step.args) : ["simctl", ...step.args];
+      const runner = new ScriptedProcessRunner(
+        steps.map((step) => ({
+          match: { args: argvOf(step), command: "xcrun" },
+          ...(step.stdout === undefined
+            ? {}
+            : { result: { code: 0, stderr: "", stdout: step.stdout } }),
+        })),
+      );
+      const filesystem = new MemoryFilesystem();
+      await plantDevice(filesystem, devicesDir);
+      if (scoped) await plantManagedDevice(filesystem);
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        coreSimulatorRoot,
+        driverConfig: scoped ? { deviceRoot, ...config } : config,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+      const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
+
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+      await driver.provision(spec);
+      await driver.makeReady(device, prepareFull);
+      await driver.reclaim(device, { clean: "standard" });
+      await driver.destroy(device);
+      await driver.listManaged();
+      await driver.removeComponent(
+        { build: runtimeImage.build, image: runtimeImage.identifier },
+        { signal: new AbortController().signal },
+      );
+
+      expect(runner.calls.map((call) => call.args)).toEqual(steps.map(argvOf));
+    },
+  );
+});
