@@ -55,6 +55,7 @@ import type {
   ProcessRunner,
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
+import { refuseOwnSetLeftovers, refuseXcodeSetLeftovers } from "./device-set-leftovers.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
@@ -360,8 +361,17 @@ export class IosSimctlDriver implements Driver {
    * machine's default device set (safety rule 9).
    */
   static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
-    if (configuredDeviceSet(options) === "default") {
+    const deviceSet = configuredDeviceSet(options);
+    if (deviceSet === "default") {
+      await refuseOwnSetLeftovers(options.filesystem, join(options.simlockHome, "devices", "ios"));
       return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
+    }
+    if (options.coreSimulatorRoot !== undefined) {
+      await refuseXcodeSetLeftovers(
+        options.filesystem,
+        xcodeDeviceSetPath(options),
+        options.instanceId,
+      );
     }
     const rootOptions: EnsureOwnedRootOptions = {
       filesystem: options.filesystem,
