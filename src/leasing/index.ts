@@ -29,6 +29,7 @@ export {
   QueueTimeoutError,
   type QueuePlace,
   RequestCancelledError,
+  type HeldLease,
   RequesterAlreadyLeasedError,
   requesterLimitDecision,
   type WaiterState,

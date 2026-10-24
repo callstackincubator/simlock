@@ -41,6 +41,7 @@
               {
                 "group": ["**/leasing/index.js"],
                 "allowImportNames": [
+                  "HeldLease",
                   "IdempotencyConflictError",
                   "InMemoryLeaseRequestStore",
                   "LeaseRequestBook",

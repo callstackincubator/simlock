@@ -81,6 +81,10 @@ export class FleetQueue {
     return this.#queue.hasPendingRequester(requesterId);
   }
 
+  pendingPlatforms(requesterId: string): readonly Platform[] {
+    return this.#queue.pendingPlatforms(requesterId);
+  }
+
   findPendingWaiter(requesterId: string, platform?: Platform): FleetWaiter | undefined {
     return asFleet(this.#queue.findPendingWaiter(requesterId, platform));
   }

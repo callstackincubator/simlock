@@ -64,6 +64,7 @@ import {
 import {
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
+  requesterLimitDecision,
   type WaitingRequest,
 } from "../leasing/index.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -76,7 +77,6 @@ import {
   FleetQueue,
   lineOf,
   RequestCancelledError,
-  RequesterAlreadyLeasedError,
   type FleetLeaseGrant,
   type FleetLeaseRecord,
   type FleetWaiter,
@@ -309,20 +309,22 @@ export class FleetLeaseCoordinator {
     requesterId: string,
     requestId: string,
   ): void {
-    const existingLeaseId = this.options.leaseIndex.existingLeaseId(requesterId);
-    const held = this.options.leaseIndex.leaseCount(requesterId);
-    const configured = this.options.maxPerRequester ?? 1;
-    const limit = typeof configured === "number" ? configured : 1;
-    const waiting = this.#queue.hasPendingRequester(requesterId);
-    if (held >= limit || waiting) {
-      this.#emit("lease.rejected", {
-        requestId,
-        requester: requesterId,
-        requestSpec: deviceRequest,
-        reason: "already-leased",
-      });
-      throw new RequesterAlreadyLeasedError(requesterId, existingLeaseId, { held, limit, waiting });
-    }
+    const refusal = requesterLimitDecision({
+      held: this.options.leaseIndex.held(requesterId),
+      maxPerRequester: this.options.maxPerRequester,
+      platform: deviceRequest.platform,
+      probe: false,
+      requesterId,
+      waiting: this.#queue.pendingPlatforms(requesterId),
+    });
+    if (refusal === undefined) return;
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: requesterId,
+      requestSpec: deviceRequest,
+      reason: "already-leased",
+    });
+    throw refusal;
   }
 
   /**
@@ -1271,7 +1273,7 @@ export class FleetLeaseCoordinator {
       workerId,
       workerLeaseId: grant.lease.id,
     };
-    if (!this.options.leaseIndex.add(entry)) {
+    if (!this.options.leaseIndex.add(entry, waiter.request.platform)) {
       // The index already routes this bare id to another worker, which got it there first: the
       // new worker's lease is given back and the caller is told the id is taken.
       this.#releaseOnWorker(workerId, grant.lease.id);
@@ -1462,7 +1464,7 @@ export class FleetLeaseCoordinator {
       // holds for that worker until the worker answers `running`.
       if (view.leases === undefined) continue;
       if (this.#lastReconciledLeases.get(view.id) === view.leases) continue;
-      this.options.leaseIndex.rebuildFromWorker(view.id, view.leases);
+      this.options.leaseIndex.rebuildFromWorker(view.id, view.leases, view.devices);
       this.#lastReconciledLeases.set(view.id, view.leases);
     }
     for (const workerId of this.#knownWorkerIds) {
