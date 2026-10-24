@@ -243,8 +243,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * Synchronous and not routed through `decisions.run`: `lease.cancel`'s `authorize` hook runs
    * before the handler, so it cannot go through the handler's serialized decision.
    */
-  pendingRequestOwner(requesterId: string): string | undefined {
-    return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
+  pendingRequestOwner(requesterId: string, platform?: Platform): string | undefined {
+    return this.options.queue.findPendingWaiter(requesterId, platform)?.options.ownerId;
   }
 
   /**
@@ -688,9 +688,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
    * read, so it is cancellable in any live state.
    */
-  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+  async cancelPending(
+    requesterId: string,
+    platform?: Platform,
+  ): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.options.decisions.run(async () => {
-      const waiter = this.options.queue.findPendingWaiter(requesterId) as
+      const waiter = this.options.queue.findPendingWaiter(requesterId, platform) as
         | AcquisitionWaiter
         | undefined;
       if (waiter === undefined) return "not-found";

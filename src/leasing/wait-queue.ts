@@ -280,7 +280,7 @@ export class WaitQueue {
   /**
    * Includes a waiter driven straight to `processing`, which is never enqueued.
    */
-  findPendingWaiter(requesterId: string): Waiter | undefined {
+  findPendingWaiter(requesterId: string, _platform?: Platform): Waiter | undefined {
     for (const waiter of this.#pendingWaiters) {
       if (waiter.options.requesterId === requesterId) return waiter;
     }

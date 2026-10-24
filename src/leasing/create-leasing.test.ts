@@ -4271,6 +4271,69 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
     await expect(Promise.race([android2, Promise.resolve("waiting")])).resolves.toBe("waiting");
   });
 
+  it.each([
+    {
+      name: "Android",
+      waiting: ["ios", "android"],
+      cancel: "android",
+      result: "cancelled",
+      left: ["ios"],
+    },
+    {
+      name: "none",
+      waiting: ["ios", "android"],
+      cancel: undefined,
+      result: "cancelled",
+      left: ["android"],
+    },
+    {
+      name: "iOS with only Android waiting",
+      waiting: ["android"],
+      cancel: "ios",
+      result: "not-found",
+      left: ["android"],
+    },
+  ] as const)(
+    "cancelPending names the platform of the waiting request to cancel, and the earliest without one ($name)",
+    async ({ waiting, cancel, result, left }) => {
+      const clock = new FakeClock(1_000);
+      const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+      const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+      const harness = await createHarness({
+        driver: ios,
+        drivers: [ios, android],
+        lease: { maxPerRequester: { ios: 1, android: 1 } },
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 2,
+        },
+      });
+      await harness.engine.request(request, asking("holder-1"));
+      await harness.engine.request(androidRequest, asking("holder-2"));
+      const specs = { android: androidRequest, ios: request };
+      for (const [index, platform] of waiting.entries()) {
+        void harness.engine.request(specs[platform], asking("agent-1")).catch(() => undefined);
+        await expect
+          .poll(() =>
+            harness.registry
+              .leaseRequests()
+              .filter((record) => record.requesterId === "agent-1" && record.state === "open"),
+          )
+          .toHaveLength(index + 1);
+      }
+
+      await expect(harness.engine.cancelPending("agent-1", cancel)).resolves.toBe(result);
+
+      expect(
+        harness.registry
+          .leaseRequests()
+          .filter((record) => record.requesterId === "agent-1" && record.state === "open")
+          .map((record) => record.request.platform),
+      ).toEqual(left);
+    },
+  );
+
   it("a refusal at the lease limit emits lease.rejected with reason already-leased", async () => {
     const harness = await createHarness({ lease: { maxPerRequester: 2 }, limits: roomy });
     await harness.engine.request(request, asking("agent-1"));
