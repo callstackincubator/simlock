@@ -63,7 +63,7 @@ While the request waits in the queue or a device boots, `simlock lease` blocks a
 
 ## Use the MCP server
 
-`simlock mcp` runs Simlock's MCP server over stdio. It has four tools:
+`simlock mcp` runs Simlock's MCP server over stdio. It has five tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -71,6 +71,7 @@ While the request waits in the queue or a device boots, `simlock lease` blocks a
 | `lease_simulator` | Leases one simulator or emulator for this session. Takes `platform` and, optionally, `model` or `class`, `osVersion`, `ttlMs`, `noWait`, `timeoutMs` and `allowDownload`, the same options as `simlock lease`. Returns the same lease the CLI prints. |
 | `release_simulator` | Releases this session's lease. |
 | `lease_status` | Reports this session's lease, or `held: false` when it has none. Safe to call any time, for example after the agent's context was compacted. |
+| `run_on_device` | Runs one `simctl`, `adb` or `devicectl` command on this session's lease, on the machine that holds the device. Takes `tool`, `args` and, optionally, `stdin`. Never takes a device or a lease id: Simlock fills in the lease's device and refuses a command that names another. Returns `{exitCode, stdout, stderr, truncated}`; stdout and stderr each keep their last 32768 characters, and `truncated` says when any was cut. A non-zero `exitCode` is the command's own answer, not an error. Without a lease it answers `NO_LEASE`. There is no terminal, and a command that waits for input is stopped after the time limit (10 minutes by default). |
 
 The server sends the short version of the rules to the client when it connects, and the full text as the resource `simlock://instructions`. It renews its lease while it runs, and releases it when the agent tool closes the connection. It also starts the daemon if it is not running.
 
@@ -115,7 +116,7 @@ This works when the client starts one server process per agent session. If your 
 </TabItem>
 </Tabs>
 
-The MCP tools lease and release devices. They do not run commands on the device. To install and launch apps, the agent still runs `simlock simctl` or `simlock adb` in its shell with the lease's `device.address`, as in the CLI instructions above.
+To install and launch apps, the agent calls `run_on_device`, for example `{"tool":"simctl","args":["install","/builds/App.app"]}`. File paths are on the machine that holds the device. It works the same through `simlock --gateway mcp`.
 
 If the agent's lease ends for another reason, such as an operator releasing it, the server sends the agent a warning log message. If the device crashes and Simlock reboots it, the agent gets a warning, then a notice when it is ready again under the same lease.
 

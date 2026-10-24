@@ -59,14 +59,15 @@ Every failure writes one JSON line on stderr, \`{"error":{"code":"...","message"
 
 const MCP = `## MCP
 
-When Simlock is connected to you as an MCP server, it has four tools:
+When Simlock is connected to you as an MCP server, it has five tools:
 
 - \`list_devices\`: what can be leased. Call it before leasing.
 - \`lease_simulator\`: lease one device. It is renewed for you and released when the server exits.
 - \`release_simulator\`: give the device back.
 - \`lease_status\`: whether you still hold a lease, and which. Call it after a context compaction.
+- \`run_on_device\`: run one \`simctl\`, \`adb\` or \`devicectl\` command on your leased device, for example install and launch an app. Leave the device out; Simlock fills it in. It returns \`exitCode\`, \`stdout\`, \`stderr\` and \`truncated\`; a non-zero exit code is the command's answer, not an error.
 
-The tools lease and release only. Install and launch through \`simlock simctl\` and \`simlock adb\` with \`device.address\`. Under Codex, the MCP server and the CLI are two identities: use only one of them per session.`;
+Under Codex, the MCP server and the CLI are two identities: use only one of them per session.`;
 
 const MORE = "More: https://callstackincubator.github.io/simlock/docs/";
 

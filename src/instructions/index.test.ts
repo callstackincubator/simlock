@@ -25,7 +25,13 @@ const HEADINGS = [
   "## MCP",
 ] as const;
 
-const TOOL_NAMES = ["lease_simulator", "list_devices", "release_simulator", "lease_status"];
+const TOOL_NAMES = [
+  "lease_simulator",
+  "list_devices",
+  "release_simulator",
+  "lease_status",
+  "run_on_device",
+];
 
 const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> = {
   "## Rules for every agent": [

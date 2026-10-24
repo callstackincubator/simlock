@@ -36,7 +36,13 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
    - `list_devices` → `catalog.get`.
    - `release_simulator` → `lease.release`. A lease not this principal's: the daemon's `FORBIDDEN`.
    - `lease_status` → `lease.list`, filtered to the held lease; `{ held: false }` when none.
-4. **Serialize** — every tool call queues on one chain in `McpSession`.
+   - `run_on_device` → `device.exec` on the held lease. Input: `tool`, `args`, `stdin?`, never a lease
+     or device. Result `{ exitCode, stdout, stderr, truncated }`, each stream cut to its last
+     32 768 characters; a non-zero exit is a result. No held lease: `NO_LEASE`. With a progress
+     token: `notifications/progress` on the first output, then at most one a second, and every 10 s
+     while silent (the session's clock).
+4. **Serialize** — every tool call but `run_on_device` queues on one chain in `McpSession`;
+   `run_on_device` does not queue, so `lease_status` and `release_simulator` run while a command does.
 5. **Renew** — a grant starts `startLeaseRenewal` (lease-policy): every third of the TTL.
 6. **Pushes** → MCP logging messages, logger `simlock`: lease lost (warning), device
    unhealthy (warning), device recovered (info).
