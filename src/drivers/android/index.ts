@@ -2128,14 +2128,19 @@ export class AndroidDriver implements Driver {
     const data = this.#dataFor(device);
     const state = this.#devices.get(data.avdName);
     if (state?.needsWipe === true) return COLD_BOOT_ESTIMATE_MS;
+    const matches = await this.#baselineMatches(data, state?.imageIdentity ?? data.imageIdentity);
+    return matches ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
+  }
+
+  async #baselineMatches(
+    data: AndroidDriverData,
+    imageIdentity: string | undefined,
+  ): Promise<boolean> {
     const baselineHash = await this.#baselineHash(data.avdName);
-    if (baselineHash === undefined) return COLD_BOOT_ESTIMATE_MS;
-    const currentHash = await this.#currentConfigHash(
-      data.avdName,
-      state?.imageIdentity ?? data.imageIdentity ?? "",
-    );
+    if (baselineHash === undefined) return false;
+    const currentHash = await this.#currentConfigHash(data.avdName, imageIdentity ?? "");
     this.#estimatedConfigHashes.set(data.avdName, { at: this.#clock.now(), hash: currentHash });
-    return baselineHash === currentHash ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
+    return baselineHash === currentHash;
   }
 
   /**
