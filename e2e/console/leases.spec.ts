@@ -667,6 +667,16 @@ test.describe("the leases page", () => {
         await expect(link).toBeFocused();
         await page.keyboard.press("Enter");
       };
+      // why: a loaded runner answers the first identity check late; holding it for a second keeps the
+      // "Signing in…" screen up, so a keyboard sign-in that does not wait for the form loses here every run.
+      await page.route(
+        (url) => url.pathname === "/v1/identity",
+        async (route) => {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          await route.continue();
+        },
+        { times: 1 },
+      );
       await page.goto(host.url);
       await signInWithKeyboard(page, host.tokens.operator, tab);
       await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
