@@ -3285,6 +3285,46 @@ describe("AndroidDriver.create", () => {
     expect(await passthroughOf(driver, args, undefined, VIRTUAL_DEVICE)).toEqual(expected);
   });
 
+  it("fills an emulator's serial into an adb command that names no device", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const scoped = ["-P", String(adbServerPort)];
+    const cases: readonly (readonly [readonly string[], readonly string[]])[] = [
+      [
+        ["shell", "getprop"],
+        ["-s", "emulator-5554", "shell", "getprop"],
+      ],
+      [
+        ["install", "app.apk"],
+        ["-s", "emulator-5554", "install", "app.apk"],
+      ],
+      [
+        ["reverse", "--list"],
+        ["-s", "emulator-5554", "reverse", "--list"],
+      ],
+      [
+        ["-s", "emulator-5554", "shell", "getprop"],
+        ["-s", "emulator-5554", "shell", "getprop"],
+      ],
+      [["devices"], ["devices"]],
+      [["version"], ["version"]],
+      [["--version"], ["--version"]],
+    ];
+
+    for (const [args, expected] of cases) {
+      expect((await passthroughOf(driver, args, { hasTerminal: false }, emulator)).args).toEqual([
+        ...scoped,
+        ...expected,
+      ]);
+    }
+  });
+
   it("claims only the adb passthrough tool", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
