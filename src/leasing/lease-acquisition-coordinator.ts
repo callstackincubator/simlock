@@ -1135,15 +1135,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     capacityReservation: CapacityReservation,
     claim: DeviceOperationClaim,
   ): Promise<void> {
-    const driver = this.options.drivers.get(device.spec.platform);
     let handoff: ReadyDeviceHandoff;
     try {
       this.options.queue.notifyProgress(waiter, {
         stage: "booting",
-        etaMs: await driver.estimate(
-          { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
-          device.spec,
-        ),
+        etaMs: waiter.timing.estimatedBootMs,
       });
       const ready = await this.options.lifecycle.bootForLease(device, claim);
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
@@ -1367,10 +1363,15 @@ function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
 
 async function estimatedBootTiming(driver: Driver, device: DeviceRecord): Promise<LeaseTiming> {
   const spec = device.spec;
-  const estimatedBootMs = await driver.estimate(
-    { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
-    spec,
-  );
+  // why: The quote is advisory. A driver that cannot read the device's own boot path (a failed
+  // `emulator -version`, say) must not strand the claim and capacity reservation that the boot
+  // below releases, so the device-less figure stands in.
+  const estimatedBootMs = await Promise.resolve(
+    driver.estimate(
+      { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
+      spec,
+    ),
+  ).catch(() => driver.estimate({ operation: "boot" }, spec));
   return {
     estimatedBootMs,
     estimatedProvisionMs: 0,

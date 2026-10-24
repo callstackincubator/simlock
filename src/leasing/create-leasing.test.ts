@@ -1036,6 +1036,45 @@ describe("createLeasing", () => {
     expect(bootedGrant.timing.estimatedBootMs).toBe(4);
   });
 
+  it("grants a shut-down device with the cold boot figure when its own boot estimate rejects", async () => {
+    const clock = new FakeClock(1_000);
+    class RejectingDeviceEstimateDriver extends FakeDriver {
+      override estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+        if (estimate.operation === "boot" && estimate.device !== undefined) {
+          return Promise.reject(new Error("emulator -version failed")) as unknown as number;
+        }
+        return super.estimate(estimate, spec);
+      }
+    }
+    const driver = new RejectingDeviceEstimateDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      estimateMs: { boot: 20, provision: 10, reclaim: 15 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver, idleShutdownAfterMs: 0 });
+    const first = await harness.engine.request(request, { requesterId: "a", ownerId: "a" });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    const shutdown = harness.registry.snapshot.devices[0];
+    if (shutdown === undefined) throw new Error("Expected provisioned device");
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+
+    const granted = harness.engine
+      .request(request, { requesterId: "b", ownerId: "b" })
+      .then((grant) => grant.timing.estimatedBootMs);
+    // why: Without the fallback the waiter hangs, so the race turns that hang into a named failure.
+    const outcome = await Promise.race([
+      granted,
+      new Promise<string>((resolve) => setTimeout(() => resolve("still pending"), 1_000)),
+    ]);
+
+    expect(outcome).toBe(20);
+  });
+
   it("reports queue insertion without speculative work and isolates callback failures", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
