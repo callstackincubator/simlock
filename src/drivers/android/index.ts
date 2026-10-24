@@ -422,7 +422,7 @@ function namesOwnSerial(args: readonly string[], end: number, serial: string): b
   for (let index = 0; index < end; index += 1) {
     const flag = args[index] as string;
     const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
-    if (flag !== "-s" || value !== serial) {
+    if (value !== serial) {
       throw otherDeviceRefusal(
         "adb",
         args,

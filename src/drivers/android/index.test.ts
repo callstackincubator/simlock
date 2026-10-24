@@ -3312,9 +3312,21 @@ describe("AndroidDriver.create", () => {
         ["-s", "emulator-5554", "shell", "getprop"],
         ["-s", "emulator-5554", "shell", "getprop"],
       ],
+      [
+        ["-t", "emulator-5554", "shell", "getprop"],
+        ["-t", "emulator-5554", "shell", "getprop"],
+      ],
       [["devices"], ["devices"]],
       [["version"], ["version"]],
       [["--version"], ["--version"]],
+      [
+        ["forward", "--list"],
+        ["forward", "--list"],
+      ],
+      [
+        ["reconnect", "offline"],
+        ["reconnect", "offline"],
+      ],
     ];
 
     for (const [args, expected] of cases) {
