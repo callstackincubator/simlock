@@ -1111,6 +1111,9 @@ export class IosSimctlDriver implements Driver {
   }
 
   async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    // why: Under Xcode's set the default set is the driver's own, so no device is "pre-root"
+    // there, and a lost mark stays a report-only finding instead of a deletable legacy device.
+    if (this.#rootOptions === undefined) return undefined;
     const result = await this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
     const found = parseManagedDevices(JSON.parse(result.stdout) as unknown).find(
       (device) => device.udid === driverDeviceId,
@@ -1151,7 +1154,19 @@ export class IosSimctlDriver implements Driver {
 
   async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    const listed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    // why: Xcode's set also holds the user's own simulators and other Simlocks'; only a
+    // durable mark naming this instance proves a simulator here is ours (ADR 0048 §2).
+    const parsed =
+      this.#rootOptions !== undefined
+        ? listed
+        : (
+            await Promise.all(
+              listed.map(async (device) =>
+                (await this.#isMarkedByThisInstance(device.udid)) ? [device] : [],
+              ),
+            )
+          ).flat();
     const devices: ObservedDevice[] = await Promise.all(
       parsed.map(async (device) => {
         const mark = await this.#readMark(device.udid);
@@ -1513,15 +1528,33 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #readToken(path: string): Promise<string | undefined> {
+    return (await this.#readMarkFile(path))?.token;
+  }
+
+  async #readMarkFile(
+    path: string,
+  ): Promise<{ readonly token: string; readonly instanceId: string | undefined } | undefined> {
     try {
       const contents = await this.#filesystem.readFile(path);
       const parsed = JSON.parse(contents) as unknown;
-      return isRecord(parsed) && typeof parsed.token === "string" && parsed.token !== ""
-        ? parsed.token
-        : undefined;
+      if (!isRecord(parsed) || typeof parsed.token !== "string" || parsed.token === "") {
+        return undefined;
+      }
+      return {
+        instanceId:
+          typeof parsed.instanceId === "string" && parsed.instanceId !== ""
+            ? parsed.instanceId
+            : undefined,
+        token: parsed.token,
+      };
     } catch {
       return undefined;
     }
+  }
+
+  async #isMarkedByThisInstance(udid: string): Promise<boolean> {
+    const durable = await this.#readMarkFile(join(this.#deviceDirectory(udid), MARK_FILE_NAME));
+    return durable?.instanceId === this.#instanceId;
   }
 
   async #resolvedSpec(spec: VirtualSpec): Promise<ResolvedIosSpec> {
