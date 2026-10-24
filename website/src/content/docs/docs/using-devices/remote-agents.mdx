@@ -184,7 +184,7 @@ Errors come back as JSON with an HTTP status:
 | --- | --- | --- |
 | `401` | `UNAUTHENTICATED` | The token is missing or unknown. Check the `Authorization` header. |
 | `403` | `FORBIDDEN` | The lease or request belongs to another token, or the route needs an operator token. |
-| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds its limit of leases, or has a request waiting on the same platform. Release or cancel it first. |
+| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds or waits for its limit of leases, or, with a limit per platform, has a request waiting on that platform. Release or cancel it first. |
 | `422` | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` | The device you asked for cannot be made on this machine or fleet. Check `GET /v1/catalog`. |
 | `503` | `NO_CAPACITY` | Nothing is free and you sent `noWait: true`. Try again after the `Retry-After` seconds. |
 | `404` | `UNKNOWN_LEASE` | The lease has ended or never existed. Request a new one. |

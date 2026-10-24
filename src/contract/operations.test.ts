@@ -435,6 +435,17 @@ describe("operation input/output round trips", () => {
     expect(() => OPERATIONS["lease.renew"].input.parse({ leaseId: "lse_1", ttlMs: -1 })).toThrow();
   });
 
+  it("lease.cancel: keeps a platform of ios or android and refuses any other", () => {
+    const input = OPERATIONS["lease.cancel"].input;
+
+    expect(input.parse({ platform: "android", requesterId: "agent" })).toEqual({
+      platform: "android",
+      requesterId: "agent",
+    });
+    expect(input.parse({ platform: "ios" })).toEqual({ platform: "ios" });
+    expect(input.safeParse({ platform: "tvos" }).success).toBe(false);
+  });
+
   it("lease.request: round-trips a representative output grant", () => {
     const grant = {
       device: {

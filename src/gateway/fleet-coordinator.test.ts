@@ -4573,6 +4573,21 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
     });
   });
 
+  it("with lease.maxPerRequester per platform, a fleet lease whose device a worker view does not list counts against every platform", async () => {
+    const { coordinator, leaseIndex } = harness({ maxPerRequester: { ios: 1, android: 1 } });
+    leaseIndex.rebuildFromWorker("wrk_a", [{ ...held("lse_1", 10), deviceId: "dev_unlisted" }], []);
+
+    const refusal = await coordinator
+      .request({ ...REQUEST, model: "Pixel 9", platform: "android" }, requestOptions())
+      .catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      message:
+        "Requester agent-1 already holds Android lease wrk_a.lse_1; release it (`simlock release wrk_a.lse_1`) before requesting another Android device",
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
   describe("per platform, waiting", () => {
     it("with lease.maxPerRequester per platform, a requester may wait for an iOS and an Android lease at once but not two of one platform, and lease.cancel names which one to cancel", async () => {
       const built = harness({ maxPerRequester: { ios: 1, android: 1 } });
@@ -4597,9 +4612,10 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
       const android = built.coordinator.request(androidRequest, requestOptions());
       void android.catch(() => undefined);
       await tick();
-      const secondIos = await built.coordinator
-        .request(REQUEST, requestOptions())
-        .catch((e: unknown) => e);
+      const secondIos = await Promise.race([
+        built.coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e),
+        tick().then(() => "admitted"),
+      ]);
       const platformsWaiting = () =>
         built.coordinator
           .waitingRequests()

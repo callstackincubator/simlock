@@ -293,13 +293,13 @@ export class WaitQueue {
   }
 
   /**
-   * `id` is the stored request's id when the caller stored one first (`LeaseRequestBook`), so
+   * why: `id` is the stored request's id when the caller stored one first (`LeaseRequestBook`), so
    * the waiter and its record share one name; omitted, the queue mints its own.
    *
-   * One pending request per requester is the owner's rule, not the queue's: the owner asks
-   * `hasPendingRequester` inside its admission decision, before it stores the request and calls
-   * this, and answers a duplicate with its own refusal (`emitLeaseRefusal`). Checking again here would be a
-   * second copy of that rule, firing only after the request was already stored.
+   * The pending-request limit is the owner's rule, not the queue's: the owner asks
+   * `pendingPlatforms` inside its admission decision (`requesterLimitDecision`), before it stores
+   * the request and calls this, and answers a refusal with its own (`emitLeaseRefusal`). Checking
+   * again here would be a second copy of that rule, firing only after the request was already stored.
    */
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions, id?: string): Waiter {
     let resolvePromise!: (grant: LeaseGrant) => void;
