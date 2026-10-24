@@ -763,6 +763,19 @@ export async function signIn(page: Page, token: string): Promise<void> {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
+// why: while the first identity check runs the page shows "Signing in…" with nothing focusable, so a Tab
+// and the typing sent before the form shows are lost; wait for the form and the focus first.
+/** Signs in with the keyboard alone: tabs to the token field, types the token and presses Enter. */
+export async function signInWithKeyboard(page: Page, token: string, tab: string): Promise<void> {
+  const field = page.getByLabel("Operator token");
+  await expect(field).toBeVisible();
+  await expect(field).toBeEnabled();
+  await page.keyboard.press(tab);
+  await expect(field).toBeFocused();
+  await page.keyboard.type(token);
+  await page.keyboard.press("Enter");
+}
+
 export const NAV = [
   { label: "Overview", path: "/" },
   { label: "Inbox", path: "/inbox" },
