@@ -24,9 +24,12 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
 1. **Owned root** (ADR 0001) — `create` calls `ensureOwnedRoot` (`core/device-root.ts`): when
    nothing is there it creates the root with `.simlock-owned.json`; otherwise the marker must
    name this instance and platform; anything else refuses. Key `drivers.<platform>.deviceRoot`
-   (absolute), default `$SIMLOCK_HOME/devices/<platform>`.
+   (absolute), default `$SIMLOCK_HOME/devices/<platform>`. iOS only: `drivers.ios.deviceSet: "default"`
+   (ADR 0048) keeps simulators in Xcode's set instead, with no owned root; a device is then this
+   instance's only when its durable mark names the instance id.
    A refusal (`OwnedRootError`) skips that platform only and emits `driver.root-rejected`.
-2. **Scope every command to the root.** Ownership is membership in the root, never a name prefix.
+2. **Scope every command to the root.** Ownership is membership in the root, never a name prefix;
+   under iOS `deviceSet: "default"` it is the instance id in the device's durable mark.
 3. **Opaque to core.** `address`, `driverData`, `deviceRoot` and `drivers.<platform>.*` are carried unread. Each driver package exports a `DeviceDataTable` (`iosDeviceDataTable`, `androidDeviceDataTable`) that stores its `driverData` in its own `state.db` table, built without a driver instance so it loads where the driver is refused; `daemon/main.ts` `productionDeviceDataTables` passes both on every host.
 4. **Prerequisites** — `iosPrerequisites`, `androidPrerequisites` return a `PrerequisiteCheck`, not a
    `Driver` method; built even when the driver did not start, run only by `doctor`.

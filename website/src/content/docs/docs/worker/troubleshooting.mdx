@@ -59,6 +59,7 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 | `orphan-device` | A device sits in Simlock's device folder with no record. | Nothing. See [Orphaned devices](#orphaned-devices). |
 | `orphan-process` | A simulator or emulator is running that Simlock has no record of. | Nothing. |
 | `warm-pool-target-unreachable` | A warm pool target can never be filled: its runtime is not installed, its model is unknown, or it asks for more than capacity allows. | Nothing. Install the runtime or change the target. |
+| `driver-unavailable` | A platform's driver was refused at start, so the platform is off. The finding carries the `reason` (such as `invalid-device-set` or `device-set-changed`) and a `detail` that says what to run; `simlock doctor` also prints it as `Unavailable [<platform>] <reason>: <detail>` on stderr. | Nothing. Fix it, then restart the daemon. |
 | `driver-advisory` | A platform tool reported something worth knowing that is not a fault. | Nothing. |
 | `module-unavailable` | An optional feature that is turned on cannot run on this machine. The remedy says why. | Nothing. |
 

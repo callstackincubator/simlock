@@ -154,7 +154,7 @@ Releasing a lease taken under a different [requester identity](#requester-identi
 
 ## simlock simctl
 
-Run `xcrun simctl` against Simlock's iOS device set. Simlock's simulators live in their own set, so a bare `xcrun simctl` does not see them. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
+Run `xcrun simctl` against Simlock's iOS device set. Under `drivers.ios.deviceSet` `simlock` (the default), Simlock's simulators live in their own set, so a bare `xcrun simctl` does not see them; under `default` this runs plain `xcrun simctl` in Xcode's set. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
 
 ```text
 simlock simctl [--lease <lease-id>] <simctl-args...>
@@ -685,7 +685,7 @@ A daemon started on demand inherits the environment of the command that started 
 
 | Variable | When | Meaning |
 | --- | --- | --- |
-| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator | The device set to pass to `xcrun simctl --set`. |
+| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator under `simlock` (not set under `default`) | The device set to pass to `xcrun simctl --set`. |
 | `SIMLOCK_DEVICE_UDID` | Physical iOS device | The device's UDID. |
 | `ANDROID_ADB_SERVER_PORT` | Android | The adb server that sees the device: Simlock's own server for an emulator, `5037` for a physical device. |
 | `ANDROID_SERIAL` | Physical Android device | The device's adb serial. |

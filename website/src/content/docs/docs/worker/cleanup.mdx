@@ -87,7 +87,8 @@ Simlock keeps its simulators and emulators in its own folders, called device roo
 
 | Platform | Default device root | Config key |
 | --- | --- | --- |
-| iOS | `~/.simlock/devices/ios` | `drivers.ios.deviceRoot` |
+| iOS (`drivers.ios.deviceSet` `simlock`, the default) | `~/.simlock/devices/ios` | `drivers.ios.deviceRoot` |
+| iOS (`drivers.ios.deviceSet` `default`) | none: Xcode's own device set | none |
 | Android | `~/.simlock/devices/android` | `drivers.android.deviceRoot` |
 
 If you set `SIMLOCK_HOME`, the roots move with it.
@@ -96,8 +97,9 @@ Simlock creates each root itself, owner-only, with a marker file inside that tie
 
 What this means for you:
 
-- Simlock never touches the simulators in Xcode's own device set or the emulators in `~/.android/avd`. Your own devices are safe from cleanup, `nuke` and `doctor`.
+- Under `simlock`, Simlock never touches the simulators in Xcode's own device set. Under `default` it keeps its simulators there, and touches only those whose mark names this Simlock installation; yours and another Simlock's are left alone. It never touches the emulators in `~/.android/avd`. Your own devices are safe from cleanup, `nuke` and `doctor`.
 - Simlock only deletes devices it has a record of, inside its own roots.
+- Under `default` there is no root to own, and `drivers.ios.deviceRoot` must not be set: with both, iOS does not start and `simlock doctor` shows `invalid-device-set`. A value of `drivers.ios.deviceSet` other than `simlock` or `default` gives the same reason. When you switch with simulators left in the set you give up, iOS does not start and `simlock doctor` shows `device-set-changed`; the message lists the simulators and the steps, which [Build and run your app](/simlock/docs/using-devices/build-and-run#switch-the-device-set) explains.
 - Simlock refuses to use a root it did not create. If you point `drivers.ios.deviceRoot` at an existing folder, the iOS platform does not start and `simlock doctor` names the reason, such as `missing-marker` or `non-empty-unowned-root`.
 
 To move a root, give it an absolute path that does not exist yet, then restart the daemon so Simlock creates it:

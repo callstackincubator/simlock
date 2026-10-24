@@ -1,0 +1,74 @@
+---
+title: Build and run your app
+description: Build an app for a leased simulator or emulator and install it, for each iOS device-set setting and on Android.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An agent that holds a lease builds its app for the leased device, installs it and runs it. How an iOS build finds the simulator depends on `drivers.ios.deviceSet`, which an admin sets on the worker. Read the grant's `environment` to see which setting you are on: `SIMLOCK_IOS_DEVICE_SET` is present under `simlock` and absent under `default`.
+
+## iOS under `simlock` (the default)
+
+Simlock's simulators live in a device set Xcode does not read, so `xcodebuild` cannot find the simulator by its UDID alone.
+
+On Xcode 27 or later, tell `xcodebuild` where the set is:
+
+```sh
+xcodebuild build \
+  -destination "platform=iOS Simulator,id=$UDID" \
+  -DVTSimulatorSetLocation="$SIMLOCK_IOS_DEVICE_SET"
+```
+
+On an older Xcode, or when a tool takes no extra `xcodebuild` arguments, build for any simulator and install the result through Simlock:
+
+```sh
+xcodebuild build -destination 'generic/platform=iOS Simulator'
+simlock simctl install "$UDID" ./build/Debug-iphonesimulator/MyApp.app
+```
+
+`agent-device install` does the same install through [agent-device](/simlock/docs/using-devices/agent-device).
+
+## iOS under `default`
+
+Simlock keeps its simulators in Xcode's own device set, so the usual tools find a leased simulator by its UDID:
+
+```sh
+xcodebuild build -destination "platform=iOS Simulator,id=$UDID"
+```
+
+The React Native CLI, Detox and agent-device's test runner work the same way. Name your UDID every time: Xcode's set also holds your own simulators and other agents' simulators.
+
+<Aside type="caution">
+Under `default`, `xcrun simctl shutdown all` stops every leased simulator. Simlock boots each again under its lease, and the holder loses its running apps. A simulator erased while stopped ends its lease. Name your own UDID in every command.
+</Aside>
+
+## Android
+
+Read `ANDROID_ADB_SERVER_PORT` from the grant and name the emulator with `-s`:
+
+```sh
+export ANDROID_ADB_SERVER_PORT=5038
+adb -s emulator-5556 install ./app/build/outputs/apk/debug/app-debug.apk
+```
+
+`ANDROID_SERIAL` works in place of `-s`.
+
+## Switch the device set
+
+An admin switches on the worker:
+
+1. Set the key and restart the daemon:
+
+   ```sh
+   simlock config set drivers.ios.deviceSet default
+   simlock daemon stop
+   simlock daemon start
+   ```
+
+2. If iOS stays off, run `simlock doctor`. The reason `device-set-changed` means simulators are left from the setting you gave up. Set the key back, run `simlock nuke --delete-devices` and `simlock doctor --purge-orphans`, then switch again. The message names any simulator that remains, with the `xcrun simctl delete` command for it.
+
+`invalid-device-set` means the value is not exactly `simlock` or `default`, or `drivers.ios.deviceRoot` is set together with `default`. Remove one of them.
+
+If you set `drivers.ios.deviceRoot`, keep it set while you run the two cleanup commands, and remove it only when you switch to `default`. The leftover check reads only the default root, `~/.simlock/devices/ios`, so a custom root's simulators are named by these steps, not by the check.
+
+See the key in [Configuration](/simlock/docs/reference/configuration) and the roots in [Cleanup](/simlock/docs/worker/cleanup#where-devices-live).

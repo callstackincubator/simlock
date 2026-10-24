@@ -11,7 +11,7 @@ A device is something an agent can run an app on. Simlock manages three kinds:
 - **Android emulators**, on macOS or Linux.
 - **Physical devices**: an iPhone, iPad or Android phone that an admin plugged in and enrolled with `simlock device add`.
 
-Simlock creates, boots, wipes and deletes the simulators and emulators it manages. It keeps them apart from your own: they live in a separate device set and use a separate adb server, so Xcode's device list and your usual `adb devices` do not show them. Simlock never changes a simulator or emulator it did not create.
+Simlock creates, boots, wipes and deletes the simulators and emulators it manages. It keeps them apart from your own: by default they live in a separate iOS device set (`drivers.ios.deviceSet` `simlock`) and use a separate adb server, so Xcode's device list and your usual `adb devices` do not show them. An admin can set `drivers.ios.deviceSet` to `default` to keep iOS simulators in Xcode's own device set, so build tools reach them by UDID. Under either setting Simlock never changes a simulator or emulator it did not create.
 
 Simlock never creates, erases or deletes a physical device. See [Physical devices](/simlock/docs/using-devices/physical-devices).
 
