@@ -1388,7 +1388,7 @@ export class IosSimctlDriver implements Driver {
     const scopedArgs = device === undefined ? args : fillSimctlDevice(args, device.deviceId);
     // why: No environment: simctl ignores every variable that could carry the device set.
     return await Promise.resolve({
-      args: ["simctl", "--set", this.#deviceRoot, ...scopedArgs],
+      args: this.#scopedSimctlArgv(scopedArgs),
       command: "xcrun",
       env: {},
     });
