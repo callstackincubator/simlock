@@ -4829,4 +4829,45 @@ describe("IosSimctlDriver device set", () => {
       expect(runner.calls.map((call) => call.args)).toEqual(steps.map(argvOf));
     },
   );
+
+  it.each([
+    ["Default", { deviceSet: "Default" }, "Default", 'but it is "Default"'],
+    ["the empty string", { deviceSet: "" }, "", 'but it is ""'],
+    ["a boolean", { deviceSet: true }, "true", "but it is true"],
+    [
+      "default with a deviceRoot",
+      { deviceSet: "default", deviceRoot: "/Volumes/sims" },
+      "default",
+      'drivers.ios.deviceRoot names Simlock\'s own set, but drivers.ios.deviceSet is "default". Remove one of them.',
+    ],
+  ] as const)(
+    "refuses iOS with invalid-device-set when deviceSet is %s",
+    async (_case, config, root, detail) => {
+      const create = (driverConfig: Record<string, string | number | boolean>) =>
+        IosSimctlDriver.create({
+          clock: new FakeClock(),
+          coreSimulatorRoot,
+          driverConfig,
+          filesystem: new MemoryFilesystem(),
+          idGenerator: { generate: () => "device-1" },
+          instanceId,
+          processRunner: new ScriptedProcessRunner([]),
+          simlockHome: "/home/.simlock",
+        });
+
+      await expect(create({ deviceSet: "default" })).resolves.toBeInstanceOf(IosSimctlDriver);
+      const failure = await create(config)
+        .then(() => undefined)
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(OwnedRootError);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(detail),
+        path: root,
+        platform: "ios",
+        reason: "invalid-device-set",
+      });
+      expect((failure as Error).message).toMatch(/^Refusing the ios device set: /);
+    },
+  );
 });
