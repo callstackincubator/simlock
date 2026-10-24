@@ -233,6 +233,7 @@ export class FleetLeaseCoordinator {
     return this.#queue.depth;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option.
   get physicalQueueDepth(): number {
     return this.#queue.physicalDepth;
   }
@@ -252,7 +253,6 @@ export class FleetLeaseCoordinator {
     });
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option (`authorizeLookups.ownerId`); the audit cannot follow a call through a structural type.
   ownerId(gatewayLeaseId: string): string | undefined {
     return this.options.leaseIndex.ownerId(gatewayLeaseId);
   }
