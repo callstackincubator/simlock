@@ -4236,6 +4236,41 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
     },
   );
 
+  it("with lease.maxPerRequester per platform, a gateway probe is refused only by a waiting probe on its own platform", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const harness = await createHarness({
+      driver: ios,
+      drivers: [ios, android],
+      lease: { maxPerRequester: { ios: 1, android: 1 } },
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 1, maxRunning: 1 },
+        maxRunning: 2,
+      },
+    });
+    await harness.engine.request(request, asking("holder-1"));
+    await harness.engine.request(androidRequest, asking("holder-2"));
+    const probe = (spec: typeof request | typeof androidRequest, id: string) =>
+      harness.engine
+        .request(spec, asking("gw:1:agent-1", { fleetRequestId: id }))
+        .catch((e: unknown) => e);
+    void probe(request, "fleet_1");
+    await expect
+      .poll(() => harness.registry.leaseRequests().filter((record) => record.state === "open"))
+      .toHaveLength(1);
+
+    const android2 = probe(androidRequest, "fleet_2");
+    const ios2 = probe(request, "fleet_3");
+
+    await expect(ios2).resolves.toMatchObject({
+      message: expect.stringContaining("already has a waiting iOS request"),
+      name: "RequesterAlreadyLeasedError",
+    });
+    await expect(Promise.race([android2, Promise.resolve("waiting")])).resolves.toBe("waiting");
+  });
+
   it("a refusal at the lease limit emits lease.rejected with reason already-leased", async () => {
     const harness = await createHarness({ lease: { maxPerRequester: 2 }, limits: roomy });
     await harness.engine.request(request, asking("agent-1"));
