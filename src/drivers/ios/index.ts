@@ -360,7 +360,7 @@ export class IosSimctlDriver implements Driver {
    * machine's default device set (safety rule 9).
    */
   static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
-    if (options.driverConfig["deviceSet"] === "default") {
+    if (configuredDeviceSet(options) === "default") {
       return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
     }
     const rootOptions: EnsureOwnedRootOptions = {
@@ -1721,6 +1721,28 @@ function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string
 function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
   const configured = options.driverConfig["deviceCaptureCommand"];
   return typeof configured === "string" && configured !== "" ? configured : undefined;
+}
+
+function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "default" {
+  const configured = options.driverConfig["deviceSet"];
+  if (configured === undefined || configured === "simlock") return "simlock";
+  if (configured !== "default") {
+    throw new OwnedRootError(
+      `Refusing the ios device set: drivers.ios.deviceSet must be "simlock" or "default", but it is ${JSON.stringify(configured)}`,
+      "invalid-device-set",
+      typeof configured === "string" ? configured : JSON.stringify(configured),
+      "ios",
+    );
+  }
+  if (options.driverConfig["deviceRoot"] !== undefined) {
+    throw new OwnedRootError(
+      `Refusing the ios device set: drivers.ios.deviceRoot names Simlock's own set, but drivers.ios.deviceSet is "default". Remove one of them.`,
+      "invalid-device-set",
+      configured,
+      "ios",
+    );
+  }
+  return "default";
 }
 
 function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
