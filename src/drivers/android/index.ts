@@ -123,7 +123,6 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
-const ESTIMATED_HASH_FRESH_MS = 30_000;
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
 // mid-download.
@@ -510,10 +509,6 @@ export class AndroidDriver implements Driver {
   readonly #legacyAvdHome: string;
   readonly #emulatorFlags: readonly string[];
   readonly #baselineLaunchInputs: readonly string[];
-  readonly #estimatedConfigHashes = new Map<
-    string,
-    { readonly at: number; readonly hash: string }
-  >();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -2115,10 +2110,22 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * why: Read-only twin of `#reconcileBaseline` and the `makeReady` branches: the snapshot figure
-   * is quoted only where `makeReady` would load the baseline, so an unknown, invalidated, wipe-pending
-   * or recovery boot keeps the cold figure.
+   * why: The one decision both `makeReady` (through `#reconcileBaseline`) and the boot estimate read,
+   * so the figure quoted is the boot `makeReady` then takes: `load` where the baseline is recorded
+   * and matches the current emulator and image, `stale` where it is recorded but no longer matches,
+   * and `none` where a wipe is pending or no baseline is recorded. It changes nothing.
    */
+  async #baselineVerdict(
+    data: AndroidDriverData,
+    needsWipe: boolean,
+    imageIdentity: string,
+  ): Promise<"load" | "stale" | "none"> {
+    const baselineHash = await this.#baselineHash(data.avdName);
+    if (needsWipe || baselineHash === undefined) return "none";
+    const currentHash = await this.#currentConfigHash(data.avdName, imageIdentity);
+    return baselineHash === currentHash ? "load" : "stale";
+  }
+
   async #bootEstimate(
     device: DriverDevice,
     purpose: "prepare" | "recover" | undefined,
@@ -2127,42 +2134,18 @@ export class AndroidDriver implements Driver {
     if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
     const data = this.#dataFor(device);
     const state = this.#devices.get(data.avdName);
-    if (state?.needsWipe === true) return COLD_BOOT_ESTIMATE_MS;
-    const matches = await this.#baselineMatches(data, state?.imageIdentity ?? data.imageIdentity);
-    return matches ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
-  }
-
-  async #baselineMatches(
-    data: AndroidDriverData,
-    imageIdentity: string | undefined,
-  ): Promise<boolean> {
-    const baselineHash = await this.#baselineHash(data.avdName);
-    if (baselineHash === undefined) return false;
-    const currentHash = await this.#currentConfigHash(data.avdName, imageIdentity ?? "");
-    this.#estimatedConfigHashes.set(data.avdName, { at: this.#clock.now(), hash: currentHash });
-    return baselineHash === currentHash;
-  }
-
-  /**
-   * why: The hash a boot estimate just computed answers the `makeReady` it quotes for, once: it saves
-   * a second `emulator -version` run and is dropped on use so no later decision reads a stale one.
-   */
-  async #takeEstimatedConfigHash(avdName: string, imageIdentity: string): Promise<string> {
-    const estimated = this.#estimatedConfigHashes.get(avdName);
-    this.#estimatedConfigHashes.delete(avdName);
-    if (estimated !== undefined && this.#clock.now() - estimated.at < ESTIMATED_HASH_FRESH_MS) {
-      return estimated.hash;
-    }
-    return this.#currentConfigHash(avdName, imageIdentity);
+    const verdict = await this.#baselineVerdict(
+      data,
+      state?.needsWipe === true,
+      state?.imageIdentity ?? data.imageIdentity ?? "",
+    );
+    return verdict === "load" ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
   }
 
   async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    const baselineHash = await this.#baselineHash(data.avdName);
-    if (state.needsWipe || baselineHash === undefined) {
-      return;
-    }
-    const currentHash = await this.#takeEstimatedConfigHash(data.avdName, state.imageIdentity);
-    if (baselineHash === currentHash) {
+    const verdict = await this.#baselineVerdict(data, state.needsWipe, state.imageIdentity);
+    if (verdict === "none") return;
+    if (verdict === "load") {
       state.baselineCaptured = true;
       state.snapshotExpected = true;
       return;

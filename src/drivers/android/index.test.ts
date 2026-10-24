@@ -772,6 +772,7 @@ describe("AndroidDriver", () => {
 
     const restartedRunner = new ScriptedProcessRunner([
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       avdPathExpectation("emulator-5586"),
       processResult(
         binaries.adb,
