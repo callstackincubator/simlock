@@ -16,7 +16,7 @@ import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
 
 describe("MCP server (smoke)", () => {
-  it("advertises exactly the lease, catalog, and status tools, and walks lease -> list -> status -> release", async () => {
+  it("advertises exactly the lease, catalog, status and run_on_device tools, and walks lease -> list -> status -> release", async () => {
     const client = new FakeSimlockClient();
     const grant = sampleGrant();
     client.requestLeaseImpl = () => Promise.resolve(grant);
@@ -77,6 +77,15 @@ describe("MCP server (smoke)", () => {
       );
       expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toEqual(
         expect.arrayContaining(["platform", "model", "class"]),
+      );
+      const runTool = tools.tools.find((tool) => tool.name === "run_on_device");
+      expect(Object.keys(runTool?.inputSchema.properties ?? {}).sort()).toEqual([
+        "args",
+        "stdin",
+        "tool",
+      ]);
+      expect(runTool?.description).toBe(
+        "Run one simctl, adb or devicectl command on this session's leased device, on the machine that holds it. Leave the device out: Simlock fills in the lease's UDID or serial, and refuses a command that names another device. File paths are on that machine. Output is text: stdout and stderr each keep their last 32768 characters, and truncated says when any was cut. A non-zero exitCode is the command's own answer, not a tool error. There is no terminal: a bare adb shell is refused, and an interactive command hangs until the time limit (10 minutes by default) stops it.",
       );
       for (const tool of tools.tools) {
         expect(tool.inputSchema).toEqual(expect.any(Object));
