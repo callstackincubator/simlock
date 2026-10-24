@@ -884,9 +884,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     if (action.kind === "boot-shutdown") {
-      waiter.timing = estimatedBootTiming(
+      waiter.timing = await estimatedBootTiming(
         this.options.drivers.get(action.device.spec.platform),
-        action.device.spec,
+        action.device,
       );
       await this.#bootShutdown(waiter, action.device, action.capacityReservation, action.claim);
       return;
@@ -1140,7 +1140,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       this.options.queue.notifyProgress(waiter, {
         stage: "booting",
-        etaMs: driver.estimate({ operation: "boot" }, device.spec),
+        etaMs: await driver.estimate(
+          { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
+          device.spec,
+        ),
       });
       const ready = await this.options.lifecycle.bootForLease(device, claim);
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
@@ -1362,8 +1365,12 @@ function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   };
 }
 
-function estimatedBootTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  const estimatedBootMs = driver.estimate({ operation: "boot" }, spec);
+async function estimatedBootTiming(driver: Driver, device: DeviceRecord): Promise<LeaseTiming> {
+  const spec = device.spec;
+  const estimatedBootMs = await driver.estimate(
+    { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
+    spec,
+  );
   return {
     estimatedBootMs,
     estimatedProvisionMs: 0,

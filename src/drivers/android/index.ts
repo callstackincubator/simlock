@@ -123,6 +123,7 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+const ESTIMATED_HASH_FRESH_MS = 30_000;
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
 // mid-download.
@@ -509,6 +510,10 @@ export class AndroidDriver implements Driver {
   readonly #legacyAvdHome: string;
   readonly #emulatorFlags: readonly string[];
   readonly #baselineLaunchInputs: readonly string[];
+  readonly #estimatedConfigHashes = new Map<
+    string,
+    { readonly at: number; readonly hash: string }
+  >();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -1407,12 +1412,18 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+  estimate(
+    estimate: DriverEstimate & { readonly operation: "boot"; readonly device: DriverDevice },
+    spec: DeviceSpec,
+  ): Promise<number>;
+  estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
+  estimate(estimate: DriverEstimate, spec: DeviceSpec): number | Promise<number> {
     switch (estimate.operation) {
       case "provision":
         return PROVISION_ESTIMATE_MS;
       case "boot":
-        return COLD_BOOT_ESTIMATE_MS;
+        if (estimate.device === undefined) return COLD_BOOT_ESTIMATE_MS;
+        return this.#bootEstimate(estimate.device, estimate.purpose, spec);
       case "reclaim":
         if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
         // why: `standard` can still fall back to the wipe branch (about five times longer); `Doctor`
@@ -2103,12 +2114,49 @@ export class AndroidDriver implements Driver {
     }
   }
 
+  /**
+   * why: Read-only twin of `#reconcileBaseline` and the `makeReady` branches: the snapshot figure
+   * is quoted only where `makeReady` would load the baseline, so an unknown, invalidated, wipe-pending
+   * or recovery boot keeps the cold figure.
+   */
+  async #bootEstimate(
+    device: DriverDevice,
+    purpose: "prepare" | "recover" | undefined,
+    spec: DeviceSpec,
+  ): Promise<number> {
+    if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
+    const data = this.#dataFor(device);
+    const state = this.#devices.get(data.avdName);
+    if (state?.needsWipe === true) return COLD_BOOT_ESTIMATE_MS;
+    const baselineHash = await this.#baselineHash(data.avdName);
+    if (baselineHash === undefined) return COLD_BOOT_ESTIMATE_MS;
+    const currentHash = await this.#currentConfigHash(
+      data.avdName,
+      state?.imageIdentity ?? data.imageIdentity ?? "",
+    );
+    this.#estimatedConfigHashes.set(data.avdName, { at: this.#clock.now(), hash: currentHash });
+    return baselineHash === currentHash ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
+  }
+
+  /**
+   * why: The hash a boot estimate just computed answers the `makeReady` it quotes for, once: it saves
+   * a second `emulator -version` run and is dropped on use so no later decision reads a stale one.
+   */
+  async #takeEstimatedConfigHash(avdName: string, imageIdentity: string): Promise<string> {
+    const estimated = this.#estimatedConfigHashes.get(avdName);
+    this.#estimatedConfigHashes.delete(avdName);
+    if (estimated !== undefined && this.#clock.now() - estimated.at < ESTIMATED_HASH_FRESH_MS) {
+      return estimated.hash;
+    }
+    return this.#currentConfigHash(avdName, imageIdentity);
+  }
+
   async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
     const baselineHash = await this.#baselineHash(data.avdName);
     if (state.needsWipe || baselineHash === undefined) {
       return;
     }
-    const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
+    const currentHash = await this.#takeEstimatedConfigHash(data.avdName, state.imageIdentity);
     if (baselineHash === currentHash) {
       state.baselineCaptured = true;
       state.snapshotExpected = true;
