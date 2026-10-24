@@ -388,6 +388,44 @@ function walkGlobals(args: readonly string[]): GlobalsWalkResult {
   return { kind: "none" };
 }
 
+/**
+ * why: ADR 0047 §1. `adb help` (platform-tools 37.0.0): these subcommands act on no device, so
+ * a `-s` in front of them would be noise. `forward --list` and `reconnect offline` are the
+ * two that depend on their operand and are matched in `actsOnNoDevice`.
+ */
+const NO_DEVICE_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "devices",
+  "help",
+  "version",
+  "connect",
+  "disconnect",
+  "pair",
+  "mdns",
+  "keygen",
+  "start-server",
+  "kill-server",
+  "--version",
+  "--help",
+]);
+
+function actsOnNoDevice(args: readonly string[], index: number): boolean {
+  const subcommand = args[index] as string;
+  if (NO_DEVICE_SUBCOMMANDS.has(subcommand)) return true;
+  if (subcommand === "forward") return args[index + 1] === "--list";
+  return subcommand === "reconnect" && args[index + 1] === "offline";
+}
+
+/** why: Puts `-s <serial>` in front of the globals unless the subcommand needs no device or the caller already named this one. */
+function fillAdbDevice(args: readonly string[], serial: string): readonly string[] {
+  const walked = walkGlobals(args);
+  if (walked.kind !== "subcommand" || actsOnNoDevice(args, walked.index)) return args;
+  const globals = args.slice(0, walked.index);
+  if (globals.some((argument, index) => argument === "-s" && globals[index + 1] === serial)) {
+    return args;
+  }
+  return ["-s", serial, ...args];
+}
+
 function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
   const walked = walkGlobals(args);
   return walked.kind === "refused" ? walked.argument : undefined;
@@ -691,8 +729,10 @@ export class AndroidDriver implements Driver {
       return this.#physical.passthrough(device, args, context);
     }
     this.#assertProxyable(args, context);
+    const scopedArgs =
+      device === undefined || device.address === "" ? args : fillAdbDevice(args, device.address);
     return await Promise.resolve({
-      args: ["-P", String(this.#adbServerPort), ...args],
+      args: ["-P", String(this.#adbServerPort), ...scopedArgs],
       command: this.#sdk.adb,
       env: { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) },
     });
