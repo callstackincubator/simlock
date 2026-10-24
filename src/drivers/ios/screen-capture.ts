@@ -19,7 +19,8 @@ export interface IosScreenCaptureOptions {
   readonly clock: Clock;
   readonly filesystem: Filesystem;
   readonly baseEnvironment: NodeJS.ProcessEnv;
-  readonly deviceSet: string;
+  /** why: absent when the simulators live in Xcode's own set, which the capture program searches by default. */
+  readonly deviceSet?: string;
   readonly onLog?: (line: string) => void;
 }
 
@@ -118,9 +119,14 @@ function startCapture(
 }
 
 function envFor(options: IosScreenCaptureOptions, physical: boolean): NodeJS.ProcessEnv {
-  const { SIMLOCK_COREDEVICE_INFO_PLIST: _coreDevicePlist, ...environment } =
-    options.baseEnvironment;
-  return physical ? environment : { ...environment, SIMLOCK_IOS_DEVICE_SET: options.deviceSet };
+  const {
+    SIMLOCK_COREDEVICE_INFO_PLIST: _coreDevicePlist,
+    SIMLOCK_IOS_DEVICE_SET: _daemonDeviceSet,
+    ...environment
+  } = options.baseEnvironment;
+  return physical || options.deviceSet === undefined
+    ? environment
+    : { ...environment, SIMLOCK_IOS_DEVICE_SET: options.deviceSet };
 }
 
 // why: a program that dies mid-picture ends its stdout like one that finished, so the body asks how

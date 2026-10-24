@@ -343,7 +343,7 @@ export class IosSimctlDriver implements Driver {
                     configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
                 }),
             deviceOsVersion: (udid) => this.#physical.osVersion(udid),
-            deviceSet: deviceRoot,
+            ...(rootOptions === undefined ? {} : { deviceSet: deviceRoot }),
             filesystem: options.filesystem,
             launcher: options.screenCapture.launcher,
             ...(options.screenCapture.onLog === undefined
@@ -1349,7 +1349,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   virtualLeaseEnvironment(): Readonly<Record<string, string>> {
-    return { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
+    return this.#rootOptions === undefined ? {} : { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
   }
 
   leaseEnvironment(device: DriverDevice): Readonly<Record<string, string>> {
