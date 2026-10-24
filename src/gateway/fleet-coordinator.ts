@@ -257,12 +257,12 @@ export class FleetLeaseCoordinator {
     return this.options.leaseIndex.ownerId(gatewayLeaseId);
   }
 
-  // fallow-ignore-next-line unused-class-member -- see `ownerId` above; reached via `authorizeLookups.leaseRequesterId`.
+  // fallow-ignore-next-line unused-class-member -- reached via `authorizeLookups.leaseRequesterId`.
   leaseRequesterId(gatewayLeaseId: string): string | undefined {
     return this.options.leaseIndex.leaseRequesterId(gatewayLeaseId);
   }
 
-  // fallow-ignore-next-line unused-class-member -- see `ownerId` above; reached via `authorizeLookups.pendingRequestOwner`.
+  // fallow-ignore-next-line unused-class-member -- reached via `authorizeLookups.pendingRequestOwner`.
   pendingRequestOwner(requesterId: string, platform?: Platform): string | undefined {
     return this.#queue.findPendingWaiter(requesterId, platform)?.options.ownerId;
   }
