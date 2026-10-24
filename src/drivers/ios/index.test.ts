@@ -5240,4 +5240,34 @@ describe("IosSimctlDriver device set", () => {
       });
     },
   );
+
+  it("simlock simctl under deviceSet default runs plain xcrun simctl and keeps its refusals", async () => {
+    const driver = await IosSimctlDriver.create({
+      clock: new FakeClock(),
+      coreSimulatorRoot,
+      driverConfig: { deviceSet: "default" },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: new ScriptedProcessRunner([]),
+      simlockHome: "/home/.simlock",
+    });
+
+    await expect(
+      simctlPassthrough(driver, ["install", driverData.udid, "app.app"]),
+    ).resolves.toEqual({
+      args: ["simctl", "install", driverData.udid, "app.app"],
+      command: "xcrun",
+      env: {},
+    });
+    for (const refused of [
+      ["erase", driverData.udid],
+      ["shutdown", "all"],
+      ["--set", "/tmp", "list"],
+    ]) {
+      await expect(simctlPassthrough(driver, refused), refused.join(" ")).rejects.toBeInstanceOf(
+        PassthroughRefusedError,
+      );
+    }
+  });
 });
