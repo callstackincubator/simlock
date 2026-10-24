@@ -606,6 +606,52 @@ describe("MCP run_on_device", () => {
   });
 });
 
+describe("MCP run_on_device output cap", () => {
+  it("keeps the last 32768 characters of each stream and sets truncated when either lost any", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const cap = 32_768;
+      const cases = [
+        {
+          chunks: [
+            { chunk: "a".repeat(cap), stream: "stdout" as const },
+            { chunk: "tail", stream: "stdout" as const },
+          ],
+          expected: {
+            stderr: "",
+            stdout: "a".repeat(cap - 4) + "tail",
+            truncated: true,
+          },
+        },
+        {
+          chunks: [
+            { chunk: "out", stream: "stdout" as const },
+            { chunk: "b".repeat(cap + 1), stream: "stderr" as const },
+          ],
+          expected: { stderr: "b".repeat(cap), stdout: "out", truncated: true },
+        },
+        {
+          chunks: [{ chunk: "c".repeat(cap), stream: "stdout" as const }],
+          expected: { stderr: "", stdout: "c".repeat(cap), truncated: false },
+        },
+      ];
+      for (const entry of cases) {
+        client.execImpl = (_input, options) => {
+          for (const chunk of entry.chunks) options.onOutput?.(chunk);
+          return Promise.resolve({ exitCode: 0 });
+        };
+        const result = await call(mcpClient, "run_on_device", { args: [], tool: "adb" });
+        expect(result.structuredContent).toEqual({ exitCode: 0, ...entry.expected });
+      }
+    } finally {
+      await close();
+    }
+  });
+});
+
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
     { method: "tools/call", params: { arguments: arguments_, name } },
