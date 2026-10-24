@@ -32,6 +32,7 @@ import {
   type LeaseGrant,
   type LeaseProgress,
   type LeaseRecord,
+  type MaxPerRequester,
   type LeaseTiming,
   newLeaseRequestId,
   type Platform,
@@ -169,7 +170,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
   readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "holdsLeaseId" | "replay">;
-  readonly maxPerRequester?: number;
+  readonly maxPerRequester?: MaxPerRequester;
 }
 
 interface AcquisitionWaiter extends Waiter {
@@ -318,7 +319,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const held = this.options.registry.snapshot.leases.filter(
       (lease) => lease.requesterId === options.requesterId,
     );
-    const limit = this.options.maxPerRequester ?? 1;
+    const configured = this.options.maxPerRequester ?? 1;
+    const limit = typeof configured === "number" ? configured : 1;
     const waiting = this.options.queue.hasPendingRequester(options.requesterId);
     // why: a probe's held leases were counted by the gateway, fleet-wide; only its waiting
     // request is checked here (ADR 0023 §2).

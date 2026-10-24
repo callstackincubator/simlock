@@ -24,6 +24,7 @@
                   "LeaseRecord",
                   "LeaseRequestFailure",
                   "LeaseRequestLimits",
+                  "MaxPerRequester",
                   "SerializedDecision",
                   "UsageReader",
                   "createUsageReader",

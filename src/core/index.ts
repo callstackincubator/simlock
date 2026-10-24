@@ -12,6 +12,7 @@ export {
   effectiveAllowDownload,
   loadConfig,
   loadConfigWithDefaults,
+  type MaxPerRequester,
   type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,

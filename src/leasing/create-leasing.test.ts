@@ -48,6 +48,12 @@ const request = {
   platform: "ios",
 } as const;
 
+const androidRequest = {
+  model: "Pixel 9",
+  osVersion: "36",
+  platform: "android",
+} as const;
+
 function config(
   overrides: Partial<Config["lease"]> = {},
   warmPoolEnabled = true,
@@ -169,7 +175,7 @@ async function createHarness(
     /** The state directory of an earlier harness: loading it again is a daemon restart. */
     readonly state?: StateDatabase;
     readonly identity?: Config["lease"]["identity"];
-    readonly lease?: Partial<Config["lease"]> & { readonly maxPerRequester?: number };
+    readonly lease?: Partial<Config["lease"]>;
     readonly capacity?: Config["capacity"];
     readonly defaultModes?: Parameters<typeof createTestEngine>[0]["defaultModes"];
     readonly limits?: CapacityLimits;
@@ -4001,6 +4007,24 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
       message: waitingMessage,
       name: "RequesterAlreadyLeasedError",
     });
+  });
+
+  it("with lease.maxPerRequester per platform, a requester holding an iOS lease is granted an Android one", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const harness = await createHarness({
+      driver: ios,
+      drivers: [ios, android],
+      lease: { maxPerRequester: { ios: 1, android: 1 } },
+      limits: roomy,
+    });
+    const first = await harness.engine.request(request, asking("agent-1"));
+
+    const second = await harness.engine.request(androidRequest, asking("agent-1"));
+
+    expect(first.device.spec.platform).toBe("ios");
+    expect(second.device.spec.platform).toBe("android");
   });
 
   it("a refusal at the lease limit emits lease.rejected with reason already-leased", async () => {
