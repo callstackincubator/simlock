@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 
 import { createAlerts } from "../alerts/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
-import type { AlertDestination, MaxPerRequester } from "../core/index.js";
+import type { AlertDestination } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
@@ -212,8 +212,6 @@ function harness(
     readonly alertDestinations?: readonly AlertDestination[];
     /** why: replaces the fake poster behind `alertDestinations`, for a case that needs a real connection. */
     readonly webhookPoster?: WebhookPoster;
-    /** why: the coordinator's per-requester limit; unset leaves the coordinator's own default. */
-    readonly maxPerRequester?: MaxPerRequester;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -239,7 +237,7 @@ function harness(
       message: error instanceof Error ? error.message : String(error),
     }),
     leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
-    ...(options.maxPerRequester === undefined ? {} : { maxPerRequester: options.maxPerRequester }),
+    maxPerRequester: { android: 1, ios: 1 },
     eventBus,
     execTimeoutMs: gatewayConfig.gateway.execTimeoutMs,
     leaseRequestTimeoutMs: gatewayConfig.gateway.leaseRequestTimeoutMs,
@@ -2238,9 +2236,7 @@ describe("GatewayDispatcher: waiting requests", () => {
   });
 
   it("lease.cancel {platform} cancels only the named platform's waiting fleet request and is gated on that request's owner", async () => {
-    const { coordinator, dispatcher, workers } = harness({
-      maxPerRequester: { android: 1, ios: 1 },
-    });
+    const { coordinator, dispatcher, workers } = harness();
     const capacity = statusFixture().capacity;
     // why: both platforms are full, so each fleet request waits in the gateway's own queue.
     for (const [workerId, platform, model] of [
