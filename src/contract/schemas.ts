@@ -911,6 +911,12 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     message: z.string(),
   }),
   z.object({
+    kind: z.literal("driver-unavailable"),
+    platform: platformSchema,
+    reason: z.string().max(64),
+    detail: z.string(),
+  }),
+  z.object({
     kind: z.literal("service-broken"),
     manager: z.enum(["launchd", "systemd"]),
     name: z.string(),
