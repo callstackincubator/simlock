@@ -11,6 +11,8 @@ Runs the command on the machine that owns the device and streams its output back
   the daemon is a gateway, on `--lease <id>` or the caller's one lease. Against a
   worker the CLI asks `driver.passthrough` for the command and spawns it itself,
   with its own terminal.
+- The MCP tool `run_on_device` ([mcp](../../../src/mcp/AGENTS.md)): the same `exec` on the
+  session's held lease, which the caller never names.
 - HTTP `POST /v1/leases/{id}/exec` → SSE: `output`, then `exit` or `error`.
   The requester is the token's; only an `operator` token may send `requesterId`.
   Every failure before the process exists is a plain JSON error with its status;

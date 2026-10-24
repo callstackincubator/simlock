@@ -773,6 +773,41 @@ describe("MCP run_on_device progress", () => {
           notifications: 2,
         },
         {
+          args: install,
+          message: "Running simctl install",
+          script: [
+            { at: 0, chunk: true },
+            { at: 1000, chunk: true },
+          ],
+          token: true,
+          notifications: 2,
+        },
+        {
+          args: install,
+          message: "Running simctl install",
+          script: [{ at: 9_999, chunk: false }],
+          token: true,
+          notifications: 0,
+        },
+        {
+          args: install,
+          message: "Running simctl install",
+          script: [{ at: 10_000, chunk: false }],
+          token: true,
+          notifications: 1,
+        },
+        {
+          args: install,
+          message: "Running simctl install",
+          script: [
+            { at: 0, chunk: true },
+            { at: 5000, chunk: true },
+            { at: 12_000, chunk: false },
+          ],
+          token: true,
+          notifications: 2,
+        },
+        {
           args: [],
           message: "Running simctl",
           script: [{ at: 0, chunk: true }],
@@ -804,6 +839,8 @@ describe("MCP run_on_device progress", () => {
           progress: number;
           total?: number | undefined;
         }> = [];
+        const unexpected: Error[] = [];
+        mcpClient.onerror = (error) => unexpected.push(error);
         const pending = mcpClient.request(
           {
             method: "tools/call",
@@ -821,6 +858,11 @@ describe("MCP run_on_device progress", () => {
         }
         finish?.();
         await pending;
+        // why: a notification the server sends without a token, or after the call ended, reaches
+        // the client as an error for an unknown token.
+        clock.advance(30_000);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(unexpected).toEqual([]);
         expect(events.map((event) => event.progress)).toEqual(
           Array.from({ length: entry.notifications }, (_, index) => index + 1),
         );
