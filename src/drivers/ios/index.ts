@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
@@ -1157,7 +1156,7 @@ export class IosSimctlDriver implements Driver {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
     const listed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
     // why: Xcode's set also holds the user's own simulators and other Simlocks'; only a
-    // durable mark naming this instance proves a simulator here is ours (ADR 0048 §2).
+    // durable mark naming this instance proves a simulator here is ours.
     const parsed =
       this.#rootOptions !== undefined
         ? listed
@@ -1647,7 +1646,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   #scopedSimctlArgv(args: readonly string[]): string[] {
-    // why: Xcode's own set is simctl's default, and ADR 0048 puts no `--set` on a call there.
+    // why: Xcode's own set is simctl's default, so a call there carries no `--set`.
     if (this.#rootOptions === undefined) return ["simctl", ...args];
     return ["simctl", "--set", this.#deviceRoot, ...args];
   }
@@ -1812,10 +1811,7 @@ function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "defa
 }
 
 function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
-  return join(
-    options.coreSimulatorRoot ?? join(homedir(), "Library", "Developer", "CoreSimulator"),
-    "Devices",
-  );
+  return join(options.coreSimulatorRoot ?? ".", "Devices");
 }
 
 function configuredDeviceRoot(options: IosSimctlDriverOptions): string {

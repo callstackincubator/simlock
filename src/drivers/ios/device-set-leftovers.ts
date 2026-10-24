@@ -11,7 +11,7 @@ const SWITCH_STEPS =
 
 /**
  * why: Switching `drivers.ios.deviceSet` with simulators left in the set being given up would
- * leave them invisible to the new setting, so the driver refuses to start (ADR 0048 §3). The
+ * leave them invisible to the new setting, so the driver refuses to start. The
  * check reads files only: a start-up `simctl` call would be a new way for start-up to hang.
  */
 export async function refuseOwnSetLeftovers(filesystem: Filesystem, root: string): Promise<void> {
