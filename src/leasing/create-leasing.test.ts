@@ -4083,6 +4083,71 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
     },
   );
 
+  it.each([
+    {
+      name: "an Android request while an iOS one waits is admitted",
+      limit: { ios: 1, android: 1 },
+      iosDevices: 1,
+      next: androidRequest,
+      refusal: undefined,
+    },
+    {
+      name: "an iOS request while an iOS one waits is refused",
+      limit: { ios: 1, android: 1 },
+      iosDevices: 1,
+      next: request,
+      refusal:
+        "Requester agent-1 already has a waiting iOS request; wait for it to be granted or cancel it before requesting another iOS device",
+    },
+    {
+      name: "an iOS request holding one iOS lease and waiting for another under an iOS limit of 2 is refused",
+      limit: { ios: 2 },
+      iosDevices: 2,
+      next: request,
+      holdsIos: true,
+      refusal:
+        "Requester agent-1 already has a waiting iOS request; wait for it to be granted or cancel it before requesting another iOS device",
+    },
+  ])(
+    "with lease.maxPerRequester per platform, a requester with a waiting request is refused another on that platform only ($name)",
+    async ({ limit, iosDevices, next, refusal, holdsIos }) => {
+      const clock = new FakeClock(1_000);
+      const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+      const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+      const harness = await createHarness({
+        driver: ios,
+        drivers: [ios, android],
+        lease: { maxPerRequester: limit },
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: iosDevices, maxRunning: iosDevices },
+          maxRunning: iosDevices + 1,
+        },
+      });
+      await harness.engine.request(request, asking("holder"));
+      const heldAndroid = await harness.engine.request(androidRequest, asking("holder"));
+      if (holdsIos === true) await harness.engine.request(request, asking("agent-1"));
+      void harness.engine.request(request, asking("agent-1")).catch(() => undefined);
+      const openOf = (requesterId: string) =>
+        harness.registry
+          .leaseRequests()
+          .filter((record) => record.requesterId === requesterId && record.state === "open");
+      await expect.poll(() => openOf("agent-1")).toHaveLength(1);
+
+      const outcome = harness.engine.request(next, asking("agent-1")).catch((e: unknown) => e);
+
+      if (refusal === undefined) {
+        await harness.engine.release(heldAndroid.lease.id, "explicit");
+        await expect(outcome).resolves.toMatchObject({ device: { spec: { platform: "android" } } });
+      } else {
+        await expect(outcome).resolves.toMatchObject({
+          message: refusal,
+          name: "RequesterAlreadyLeasedError",
+        });
+      }
+    },
+  );
+
   it("a refusal at the lease limit emits lease.rejected with reason already-leased", async () => {
     const harness = await createHarness({ lease: { maxPerRequester: 2 }, limits: roomy });
     await harness.engine.request(request, asking("agent-1"));

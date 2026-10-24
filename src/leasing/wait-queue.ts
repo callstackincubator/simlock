@@ -221,7 +221,6 @@ export class WaitQueue {
   readonly #ownedWaiters = new WeakSet<MutableWaiter>();
   readonly #waiters: MutableWaiter[] = [];
   readonly #pendingWaiters = new Set<MutableWaiter>();
-  readonly #pendingRequesters = new Set<string>();
 
   constructor(private readonly options: WaitQueueOptions) {}
 
@@ -258,7 +257,13 @@ export class WaitQueue {
   }
 
   hasPendingRequester(requesterId: string): boolean {
-    return this.#pendingRequesters.has(requesterId);
+    return this.pendingPlatforms(requesterId).length > 0;
+  }
+
+  pendingPlatforms(requesterId: string): readonly Platform[] {
+    return [...this.#pendingWaiters]
+      .filter((waiter) => waiter.options.requesterId === requesterId)
+      .map((waiter) => waiter.request.platform);
   }
 
   /**
@@ -302,7 +307,6 @@ export class WaitQueue {
     };
     this.#ownedWaiters.add(waiter);
     this.#pendingWaiters.add(waiter);
-    this.#pendingRequesters.add(requestOptions.requesterId);
     return waiter;
   }
 
@@ -385,7 +389,6 @@ export class WaitQueue {
     if (isTerminal(mutable.state)) return false;
     this.#remove(mutable);
     mutable.state = "granted";
-    this.#pendingRequesters.delete(mutable.options.requesterId);
     mutable.resolvePromise(grant);
     return true;
   }
@@ -395,7 +398,6 @@ export class WaitQueue {
     if (isTerminal(mutable.state)) return false;
     this.#remove(mutable);
     mutable.state = "rejected";
-    this.#pendingRequesters.delete(mutable.options.requesterId);
     mutable.rejectPromise(error);
     return true;
   }
