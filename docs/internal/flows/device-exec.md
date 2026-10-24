@@ -52,7 +52,7 @@ Runs the command on the machine that owns the device and streams its output back
 
 A bare `adb shell` is refused only here (`hasTerminal: false`); the local
 `simlock adb shell` stays interactive. For `simctl` and `adb` the daemon parses
-no argument beyond these lists; the arguments name the device.
+no argument beyond these lists; the driver (not the daemon) fills in and checks the device.
 
 ## Through a gateway
 
