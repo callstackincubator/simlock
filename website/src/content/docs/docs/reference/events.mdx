@@ -187,7 +187,7 @@ as `incompatible` in `simlock --gateway worker list`.
 | `doctor.reconciled` | Simlock compared its records with the devices on disk (at start and on `simlock doctor`). | `driftFindings` | Relayed |
 | `cleanup.executed` | Cleanup shut down or deleted an idle device. | `ruleName` (`idle-shutdown` or `idle-destroy`), `action` (`shutdown` or `destroy`), `target`, `reason` | Relayed |
 | `disk.pressure-detected` | Free disk space fell below `diskPressure.freeBytesThreshold`. Once per crossing. | `freeBytes`, `threshold` | Relayed |
-| `driver.root-rejected` | A device folder failed its ownership check, so that platform did not start. | `platform`, `root`, `reason` | Relayed |
+| `driver.root-rejected` | A device folder failed its ownership check, or (iOS) `drivers.ios.deviceSet` was invalid or switched with simulators left over, so that platform did not start. Reasons include `invalid-device-set` and `device-set-changed`; `root` is then the configured value or the set that holds the leftovers. | `platform`, `root`, `reason` | Relayed |
 | `driver.adb-server-rejected` | Simlock's own adb server could not start, so Android did not start. | `port`, `reason` (`occupied`, `start-failed`, `invalid-port`) | Relayed |
 
 <Aside>
