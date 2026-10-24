@@ -687,6 +687,38 @@ describe("MCP run_on_device without a lease", () => {
   });
 });
 
+describe("MCP run_on_device daemon errors", () => {
+  it("comes back as isError with the daemon's code and message", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const refusal = new SimlockError(
+        "PASSTHROUGH_REFUSED",
+        "domain",
+        "Refusing `simctl boot booted`: it names device booted.",
+        { tool: "simctl" },
+      );
+      const cases = [
+        refusal,
+        new SimlockError("UNKNOWN_PASSTHROUGH_TOOL", "domain", "No driver wraps rm.", {
+          tool: "rm",
+        }),
+        new SimlockError("EXEC_TIMEOUT", "domain", "The command ran past its time limit.", {}),
+      ];
+      for (const error of cases) {
+        client.execImpl = () => Promise.reject(error);
+        const result = await call(mcpClient, "run_on_device", { args: [], tool: "simctl" });
+        expect(result.isError).toBe(true);
+        expect(JSON.parse(text(result))).toEqual({ code: error.code, message: error.message });
+      }
+    } finally {
+      await close();
+    }
+  });
+});
+
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
     { method: "tools/call", params: { arguments: arguments_, name } },
