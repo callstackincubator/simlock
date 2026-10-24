@@ -61,6 +61,9 @@ test("a daemon start that cannot bind its HTTP port reports the port conflict, e
         `premise: the daemon bound port ${String(daemon.port)}, which this test holds`,
       );
     }
+    // why: `startDaemon` words a failed start "daemon start failed (exit code N)", so this pins the
+    // exit-0 order #933 is about; if the slow read stops forcing it, the test fails here.
+    expect(reported(failure)).toContain("daemon start failed (exit code 0)");
     expect(reported(failure)).toContain("EADDRINUSE");
     expect(reported(failure)).toContain(String(daemon.port));
   } finally {
