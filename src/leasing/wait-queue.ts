@@ -63,6 +63,7 @@ export interface RequesterLimitContext {
   readonly limit: number;
   readonly held: number;
   readonly waiting: boolean;
+  readonly platform?: Platform;
 }
 
 export class RequesterAlreadyLeasedError extends Error {
@@ -81,6 +82,9 @@ function requesterRefusalMessage(
   existingLeaseId: string | undefined,
   context: RequesterLimitContext | undefined,
 ): string {
+  if (context?.platform !== undefined) {
+    return platformRefusalMessage(requesterId, existingLeaseId, context, context.platform);
+  }
   if (context !== undefined && context.limit > 1) {
     if (context.waiting) {
       return `Requester ${requesterId} already has a waiting request; wait for it to be granted or cancel it before requesting another device`;
@@ -128,6 +132,7 @@ export function requesterLimitDecision(
     held: held.length,
     limit,
     waiting: input.waiting,
+    ...(perPlatform ? { platform: input.platform } : {}),
   });
 }
 
@@ -137,6 +142,20 @@ function earliestGranted(leases: readonly HeldLease[]): HeldLease | undefined {
     if (earliest === undefined || lease.grantedAt < earliest.grantedAt) earliest = lease;
   }
   return earliest;
+}
+
+function platformRefusalMessage(
+  requesterId: string,
+  existingLeaseId: string | undefined,
+  context: RequesterLimitContext,
+  platform: Platform,
+): string {
+  const label = platform === "ios" ? "iOS" : "Android";
+  const release = `release it (\`simlock release ${String(existingLeaseId)}\`)`;
+  if (context.limit === 1) {
+    return `Requester ${requesterId} already holds ${label} lease ${String(existingLeaseId)}; ${release} before requesting another ${label} device`;
+  }
+  return `Requester ${requesterId} already holds ${String(context.held)} ${label} leases and lease.maxPerRequester.${platform} is ${String(context.limit)}; release one (\`simlock release ${String(existingLeaseId)}\`) before requesting another ${label} device`;
 }
 
 /** A request named a lease ID an active lease or a waiting request already holds (ADR 0020). */
