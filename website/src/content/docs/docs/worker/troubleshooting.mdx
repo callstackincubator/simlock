@@ -117,7 +117,7 @@ Request req_3c8e1f52-9a4d-4b7e-8f20-6d1a5c9e3b74: codex:7a1d4e9b-2c3f-4e8a-b6d0-
 
 To stop waiting forever, pass `--timeout 5m` (the request fails with `QUEUE_TIMEOUT`, exit 10) or `--no-wait` (it fails at once with `NO_CAPACITY`, exit 11).
 
-A request refused with `REQUESTER_ALREADY_LEASED` (exit 13) did not queue: the same requester already holds a lease or already has a waiting request. One lease per requester is the default (`lease.maxPerRequester`).
+A request refused with `REQUESTER_ALREADY_LEASED` (exit 13) did not queue: the same requester already holds its limit of leases or already has a waiting request. One lease per requester is the default (`lease.maxPerRequester`, a number or a limit per platform).
 
 ## A device will not boot or reset
 

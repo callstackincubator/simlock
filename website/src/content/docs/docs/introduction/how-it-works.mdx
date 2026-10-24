@@ -37,7 +37,7 @@ See [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle).
 
 ## Agent identity (requester)
 
-Each lease belongs to a **requester**: the identity of the agent that asked for it. By default one requester holds at most one lease at a time, so a second request from the same agent fails with `REQUESTER_ALREADY_LEASED`.
+Each lease belongs to a **requester**: the identity of the agent that asked for it. By default one requester holds at most one lease at a time, so a second request from the same agent fails with `REQUESTER_ALREADY_LEASED`. An operator can raise the limit, for all platforms together or for each platform.
 
 Under Claude Code and Codex, Simlock takes the requester from the agent's session, so every command in one session, sub-agents included, shares one identity. With other tools, set `SIMLOCK_AGENT_ID` to a different value for each agent session. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
 

@@ -19,7 +19,7 @@ Simlock counts leases per **requester**, the agent identity a lease belongs to. 
 | Codex | Automatic: `codex:<session id>` | Automatic, but different from the CLI's: `mcp:<process id>` |
 | Any other tool | Set `SIMLOCK_AGENT_ID` | Automatic: `mcp:<process id>` |
 
-Under Claude Code and Codex, every `simlock` command in one session, including those its sub-agents run, uses the session's identity. So the session and its sub-agents share one lease. If your sub-agents need a device each, ask the operator to raise `lease.maxPerRequester`. See [Configuration](/simlock/docs/reference/configuration).
+Under Claude Code and Codex, every `simlock` command in one session, including those its sub-agents run, uses the session's identity. So the session and its sub-agents share one lease. If your sub-agents need a device each, ask the operator to raise `lease.maxPerRequester`, as a number or per platform. See [Configuration](/simlock/docs/reference/configuration).
 
 Codex does not pass its session ID to MCP servers. Under Codex, the MCP server and the CLI are two different requesters in the same session, so the session could hold two leases. Use only one of them per session.
 

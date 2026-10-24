@@ -157,9 +157,9 @@ export class McpSession {
   /**
    * why: ADR 0004 §2, the session's half of "held is a client policy" -- one renew timer per lease
    * this session obtained, keyed by lease id. Keyed rather than single because nothing here
-   * limits a session to one lease: the daemon's per-requester lease limit is the authority
-   * (ADR 0003 §11), and when it allows more than one (`lease.maxPerRequester`), both have to be kept alive and both have to
-   * be handed back on close. An entry lives exactly as long as this session holds that lease.
+   * limits a session to one lease: the daemon's per-requester lease limit is the authority, and
+   * when it allows more than one (`lease.maxPerRequester`, a number or one per platform), every
+   * one has to be kept alive and handed back on close. An entry lives exactly as long as this session holds that lease.
    *
    * Each entry keeps the lease record its timer is renewing, refreshed from every renewal, so
    * a timer stopped for a release that then failed can be started again against the lease as

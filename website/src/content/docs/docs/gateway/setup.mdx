@@ -68,7 +68,7 @@ The settings a gateway reads:
 | `http.host` | The address the gateway listens on. | `127.0.0.1` |
 | `http.port` | The port it listens on. | `4700` |
 | `http.proxyAuth` | Sign-in through a sign-in proxy. See [Access control](/simlock/docs/gateway/access-control#sign-in-to-the-console-through-a-sign-in-proxy). | not set |
-| `lease.defaultTtlMs`, `lease.maxTtlMs`, `lease.maxPerRequester` | Lease time to live and the lease limit per requester, for every lease made through this gateway. | 15 minutes, 4 hours, 1 |
+| `lease.defaultTtlMs`, `lease.maxTtlMs`, `lease.maxPerRequester` | Lease time to live and the lease limit per requester, for every lease made through this gateway. | 15 minutes, 4 hours, 1 (a number, or a limit per platform) |
 | `gateway.disconnectedRetentionMs` | How long the gateway keeps showing a worker after it disconnects. A worker that still holds a lease made through the gateway stays as long as the lease. | 24 hours |
 | `gateway.leaseRequestTimeoutMs` | How long the gateway waits for a worker to grant a lease it asked for. | 5 minutes |
 | `gateway.execTimeoutMs` | How long the gateway waits for one `simctl`, `adb` or exec command on a worker. | 11 minutes |
@@ -126,7 +126,7 @@ simlock --gateway token create --role operator --label alex-laptop
 Make one of each kind you need:
 
 - `--role worker` for each worker that joins. See [Join workers](/simlock/docs/gateway/joining-workers).
-- `--role agent` for each agent that leases devices over HTTP. Give every agent its own token: an agent token is one requester, and a requester holds one lease at a time.
+- `--role agent` for each agent that leases devices over HTTP. Give every agent its own token: an agent token is one requester, and a requester holds one lease at a time by default (one per platform when the operator sets `lease.maxPerRequester` for each platform).
 - `--role operator` for each person who uses the console or manages the fleet over HTTP.
 
 What each role may do, and how to list and revoke tokens, is in [Access control](/simlock/docs/gateway/access-control).

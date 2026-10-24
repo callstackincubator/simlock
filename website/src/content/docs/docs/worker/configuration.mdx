@@ -95,7 +95,7 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 | Keep shut-down devices on disk longer | `idle.deleteAfterMs` | `3600000` (60 min) |
 | Let Simlock download runtimes and images | `downloads.policy` | `on-request` |
 | Accept the Android SDK licences | `downloads.acceptAndroidLicenses` | `false` |
-| Let one agent hold more than one device | `lease.maxPerRequester` | `1` |
+| Let one agent hold more than one device | `lease.maxPerRequester` (a number, or a limit per platform) | `1` |
 | Change how long a lease lasts when the agent names no time | `lease.defaultTtlMs` | `900000` (15 min) |
 | Change the longest lease anyone can ask for | `lease.maxTtlMs` | `14400000` (4 h) |
 | Run more or fewer devices | `capacity.strategy` and `capacity.config` | `resource`, sized from this machine |
@@ -123,11 +123,19 @@ Turning on HTTP opens a network listener. It listens on `127.0.0.1` by default, 
 
 ### Let one agent hold several devices
 
-By default each agent identity holds one lease at a time, and a second request fails with `REQUESTER_ALREADY_LEASED`. To allow two:
+By default each agent identity holds one lease at a time, and a second request fails with `REQUESTER_ALREADY_LEASED`. To allow two leases of any platform:
 
 ```sh
 simlock config set lease.maxPerRequester 2
 ```
+
+To allow one iOS and one Android lease, but never two of one platform, give a limit per platform. A platform you leave out keeps a limit of `1`:
+
+```sh
+simlock config set lease.maxPerRequester '{"ios":1,"android":1}'
+```
+
+With the per-platform form an agent may also wait for one iOS and one Android request at once. Stop and start the daemon to apply either form.
 
 ### Pick default models
 
