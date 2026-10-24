@@ -1045,6 +1045,45 @@ describe("requestLease abort (ADR §10)", () => {
     await expect(leasePromise).rejects.toMatchObject({ code: "CANCELLED" });
   });
 
+  it("aborting one of two waiting requests of different platforms sends lease.cancel naming that request's platform and leaves the other waiting", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const iosController = new AbortController();
+    const androidController = new AbortController();
+    const iosLease = client.requestLease(
+      { model: "iPhone 17", platform: "ios" },
+      { signal: iosController.signal },
+    );
+    const androidLease = client.requestLease(
+      { model: "Pixel 9", platform: "android" },
+      { signal: androidController.signal },
+    );
+    await flushMicrotasks();
+    const requestOf = (platform: string) =>
+      connection.sent
+        .filter((frame) => frame.type === "lease.request")
+        .find((frame) => (frame.payload as { platform: string }).platform === platform)!;
+    const androidCall = requestOf("android");
+
+    androidController.abort();
+    await flushMicrotasks();
+    const cancelCall = connection.lastSentOf("lease.cancel")!;
+    connection.reply(cancelCall.id, { result: "cancelled" });
+    await flushMicrotasks();
+    connection.fail(androidCall.id, "QUEUE_TIMEOUT", "cancelled by request", { requestId: "r2" });
+
+    await expect(androidLease).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(cancelCall.payload).toMatchObject({ platform: "android" });
+    expect(connection.sent.filter((frame) => frame.type === "lease.cancel")).toHaveLength(1);
+    expect(requestOf("ios")).toBeDefined();
+    const iosState = await Promise.race([iosLease.catch((e: unknown) => e), "waiting"]);
+    expect(iosState).toBe("waiting");
+  });
+
   it("while device work is in flight: releases a grant that still arrives, then rejects CANCELLED", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
