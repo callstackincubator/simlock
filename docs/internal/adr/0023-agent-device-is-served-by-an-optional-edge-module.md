@@ -1,6 +1,6 @@
 # 0023. agent-device is served by an optional edge module, and the simlock lease is the only clock
 
-- **Status:** Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md)
+- **Status:** Accepted; §1 narrowed by 0026 for gateway mode; §3 narrowed by 0030 (no reap while turned off); §3–4 superseded in part by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md); §1, §3 and §4 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) for a standalone worker
 - **Date:** 2026-10-12
 - **Issue:** [#466](https://github.com/callstackincubator/simlock/issues/466)
 - **Supersedes:** nothing. Builds on [ADR 0020](0020-a-requester-may-choose-its-lease-id.md)

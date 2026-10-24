@@ -15,6 +15,8 @@ import type {
   GatewayContext,
   GatewayModule,
   ModuleFinding,
+  ModuleTokenRecord,
+  ModuleTokens,
   OptionalModuleDefinition,
   WorkerContext,
   WorkerHooks,
@@ -121,6 +123,34 @@ export function fakeModule(options: FakeModuleOptions): FakeModule {
   return fake;
 }
 
+// why: secrets are `secret-<n>`, and a revoked one stops verifying, as in the real store.
+export function fakeModuleTokens(): ModuleTokens {
+  const records = new Map<string, { record: ModuleTokenRecord; secret: string }>();
+  let next = 1;
+  return {
+    create: (role, label) => {
+      const id = `tok_${String(next)}`;
+      const entry = {
+        record: {
+          createdAt: 1,
+          hash: "unused",
+          id,
+          role,
+          ...(label === undefined ? {} : { label }),
+        },
+        secret: `secret-${String(next)}`,
+      };
+      next += 1;
+      records.set(id, entry);
+      return Promise.resolve(entry);
+    },
+    list: () => Promise.resolve([...records.values()].map(({ record }) => record)),
+    revoke: (id) => Promise.resolve(records.delete(id)),
+    verify: (secret) =>
+      Promise.resolve([...records.values()].find((entry) => entry.secret === secret)?.record),
+  };
+}
+
 export interface FakeWorkerContext<C> {
   readonly ctx: WorkerContext<C>;
   readonly clock: FakeClock;
@@ -145,6 +175,7 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
       config,
       daemonConfig,
       dataDirectory: "/tmp/simlock-fake",
+      enabledByDefault: false,
       environment: {},
       events: { subscribe: (event, handler) => bus.subscribe(event, handler) },
       filesystem: new MemoryFilesystem(),

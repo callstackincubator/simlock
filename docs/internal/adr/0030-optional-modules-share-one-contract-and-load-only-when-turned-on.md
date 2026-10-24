@@ -1,6 +1,6 @@
 # 0030. Optional modules share one contract and load only when turned on
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — not yet implemented; §2 narrowed by [ADR 0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)
 - **Date:** 2026-10-15
 - **Issue:** [#591](https://github.com/callstackincubator/simlock/issues/591)
 - **Supersedes:** nothing. Narrows [ADR

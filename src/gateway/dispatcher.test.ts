@@ -125,6 +125,10 @@ class FakeTokens implements TokenOperations {
     };
   }
 
+  async verify(): Promise<undefined> {
+    return undefined;
+  }
+
   async list() {
     return [
       { createdAt: 1, hash: "unused", id: "tok_1", role: "worker" as const },

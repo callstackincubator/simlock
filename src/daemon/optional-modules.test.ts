@@ -131,7 +131,12 @@ async function prepare(options: RigOptions) {
     clock,
     configOverrides: {
       capabilities: Object.fromEntries((options.on ?? []).map((name) => [name, { enabled: true }])),
-      ...(port === undefined ? {} : { http: { enabled: true, host: "127.0.0.1", port } }),
+      // why: a standalone worker serves HTTP by default (ADR 0046); a rig that asks for no HTTP pins it off.
+      ...(port === undefined
+        ? options.extra?.role === "gateway"
+          ? {}
+          : { http: { enabled: false } }
+        : { http: { enabled: true, host: "127.0.0.1", port } }),
       ...options.overrides,
     },
     dataDirectory: directory,
@@ -623,7 +628,7 @@ describe("optional modules: afterSocketClaimed", () => {
       ) =>
         ({
           clock: new FakeClock(1_000),
-          configOverrides: { capabilities: { alpha: { enabled: true } } },
+          configOverrides: { capabilities: { alpha: { enabled: true } }, http: { enabled: false } },
           dataDirectory: directory,
           drivers: [
             new FakeDriver({

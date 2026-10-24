@@ -16,6 +16,8 @@ export type {
   ModuleMount,
   ModuleRegistryView,
   ModuleRelayTarget,
+  ModuleTokenRecord,
+  ModuleTokens,
   OptionalModuleDefinition,
   WorkerContext,
   WorkerHooks,

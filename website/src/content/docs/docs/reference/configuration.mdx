@@ -214,7 +214,7 @@ makes the next boot wipe the device once to take a new clean snapshot.
 
 | Key                          | Type                     | Default                               | Meaning                                                                                                    | Applies to |
 | ---------------------------- | ------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------- |
-| `http.enabled`               | boolean                  | `false` on a worker, `true` on a gateway | Serve the HTTP API and the web console. A gateway with `false` does not start; a worker with `gateway.url` set must be `false`.                        | Both       |
+| `http.enabled`               | boolean                  | `true` on a gateway and on a standalone worker, `false` on a worker with `gateway.url` set | Serve the HTTP API and the web console. A gateway with `false` does not start; a worker with `gateway.url` set must be `false`.                        | Both       |
 | `http.host`                  | string                   | `127.0.0.1`                           | Address to listen on. Simlock does no TLS: put a reverse proxy in front for HTTPS.                          | Both       |
 | `http.port`                  | integer `1`–`65535`      | `4701` on a worker, `4700` on a gateway | Port to listen on.                                                                                       | Both       |
 | `http.proxyAuth`             | object                   | not set (proxy sign-in off)           | Treat a person your sign-in proxy (Cloudflare Access, for example) has signed in as an operator, with no Simlock token. Set `header`, `jwksUrl`, `issuer` and `audience` together, as one object. | Both       |
@@ -299,12 +299,12 @@ and delivery.
 
 ## Optional modules
 
-Each optional module has a block under `capabilities.<name>`. A module is off until you turn it on.
+Each optional module has a block under `capabilities.<name>`. A module is off until you turn it on, except agent-device on a standalone worker, which is on until you turn it off.
 A name Simlock does not know is warned about and ignored.
 
 | Key                                         | Type                                 | Default          | Meaning                                                                                                     | Applies to |
 | ------------------------------------------- | ------------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------- | ---------- |
-| `capabilities.agent-device.enabled`         | boolean                              | `false`          | On a worker: run an agent-device daemon that sees Simlock's devices, and a phone daemon beside it. On a gateway: serve agent-device and send each agent to a worker that has it. | Both       |
+| `capabilities.agent-device.enabled`         | boolean                              | `true` on a standalone worker, `false` on a worker with `gateway.url` set and on a gateway | On a worker: run an agent-device daemon that sees Simlock's devices, and a phone daemon beside it. On a gateway: serve agent-device and send each agent to a worker that has it. On a standalone worker where you never set it and `agent-device` is not installed, the capability reads `off` and `simlock doctor` says nothing. | Both       |
 | `capabilities.agent-device.command`         | non-empty string                     | `agent-device`   | The agent-device program: a name looked up on `PATH`, or a path.                                             | Worker     |
 | `capabilities.agent-device.leaseTtlCapMs`   | integer from `5000` to `lease.maxTtlMs` | not set (no cap) | Longest TTL for leases agent-device takes through Simlock. A longer TTL is lowered to it; a lease with none gets it. | Both       |
 | `capabilities.agent-device.ios.teamId`      | non-empty string                     | not set          | Apple developer team ID agent-device signs its iPhone runner with. Passed to the phone daemon.               | Worker     |

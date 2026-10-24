@@ -44,13 +44,7 @@ import {
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
-/**
- * `lease.defaultTtlMs`'s default (ADR 0004 §4): the width a request that names no `ttlMs` is
- * granted. Exported because `Registry` needs the same number to migrate a lease record written
- * before ADR 0004, which has no stored width of its own -- one definition, read from both
- * places, rather than the same fifteen minutes spelled twice.
- */
-export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
+const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 
 /** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
@@ -516,6 +510,7 @@ export interface ModuleConfigEntry {
   readonly validator: Validator;
   readonly defaults: unknown;
   readonly gatewayKeys: readonly string[];
+  readonly enabledByDefault?: "standalone-worker";
   readonly check?: (section: never, config: Config) => void;
 }
 
@@ -535,7 +530,11 @@ export interface LoadConfigOptions {
 
 type Layer = Record<string, unknown>;
 
-export async function loadConfig({
+export async function loadConfig(options: LoadConfigOptions): Promise<Config> {
+  return (await loadConfigWithDefaults(options)).config;
+}
+
+export async function loadConfigWithDefaults({
   authStrategies = registeredAuthStrategies,
   configPath = DEFAULT_CONFIG_PATH,
   filesystem,
@@ -544,7 +543,10 @@ export async function loadConfig({
   role = "worker",
   systemStats,
   warn = () => {},
-}: LoadConfigOptions): Promise<Config> {
+}: LoadConfigOptions): Promise<{
+  readonly config: Config;
+  readonly defaulted: ReadonlySet<string>;
+}> {
   const fromFile = await readConfigFile(filesystem, configPath);
   const fromOverrides = overrides ?? {};
 
@@ -571,8 +573,27 @@ export async function loadConfig({
     warn,
   );
 
+  const layers = [fileConfig, overrideConfig];
+  const standalone =
+    role === "worker" && !layers.some((layer) => asObject(layer["gateway"])["url"] !== undefined);
+  const defaulted = new Set(
+    modules
+      .filter(
+        (entry) =>
+          entry.enabledByDefault === "standalone-worker" &&
+          standalone &&
+          !layers.some(
+            (layer) =>
+              asObject(asObject(layer["capabilities"])[entry.name])["enabled"] !== undefined,
+          ),
+      )
+      .map((entry) => entry.name),
+  );
   const mergedWithoutMetrics = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, role, modules, authStrategies), fileConfig),
+    mergeConfig(
+      defaultConfig(systemStats, strategy, role, modules, authStrategies, standalone, defaulted),
+      fileConfig,
+    ),
     overrideConfig,
   ) as unknown as Omit<Config, "metrics"> & { readonly metrics?: Config["metrics"] };
   const merged: Config = {
@@ -596,7 +617,7 @@ export async function loadConfig({
     // them there would fail a start over a value nothing reads.
     validateGatewayMembership(merged);
   }
-  return deepFreeze(merged);
+  return { config: deepFreeze(merged), defaulted };
 }
 
 /**
@@ -885,13 +906,15 @@ function defaultConfig(
   role: DaemonMode,
   modules: readonly ModuleConfigEntry[],
   authStrategies: readonly AuthStrategyDefinition[],
+  standalone: boolean,
+  defaulted: ReadonlySet<string>,
 ): Omit<Config, "metrics"> {
   return {
     mode: role,
     capabilities: Object.fromEntries(
       modules.map((entry) => [
         entry.name,
-        { ...(entry.defaults as Record<string, unknown>), enabled: false },
+        { ...(entry.defaults as Record<string, unknown>), enabled: defaulted.has(entry.name) },
       ]),
     ) as Config["capabilities"],
     capacity: {
@@ -935,11 +958,9 @@ function defaultConfig(
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
-    // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
-    // something every operator has to remember to switch on; a worker's HTTP gateway stays
-    // opt-in exactly as before.
+    // why: ADR 0005 §2 and ADR 0046 §1: a gateway and a standalone worker listen on HTTP by default; a joined worker is reached through its gateway, so its default is off.
     http: {
-      enabled: role === "gateway",
+      enabled: role === "gateway" || standalone,
       host: "127.0.0.1",
       port: role === "gateway" ? 4700 : 4701,
       ...Object.fromEntries(

@@ -4,13 +4,13 @@ Does: runs two agent-device daemons per worker (the simulator daemon over Simloc
 Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds one `AgentDeviceSupervisor` per role). The module host loads both.
 Uses: ports, auth (`Identity`), http (session, errors), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
 Imported by: the module registry (`index.ts` only); `daemon/main.ts` imports nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
-Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.
+On unless `capabilities.agent-device.enabled` is set false, on a standalone worker (`definition.ts` declares `enabledByDefault: "standalone-worker"`); off on a joined worker and a gateway unless set true. Off: nothing mounted, no daemon. When on only by default and the command is not found, the capability reads `off` and `agentDeviceFindings` says nothing (`isAbsentByDefault`); every other trouble, and a not-found with `enabled: true` set, stays `unavailable` with its finding.
 
 ## Files
 
 | File                                                          | Role                                                                                                                                                                                   |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on                                                                                                       |
+| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check, `localProfile` (file name, token label, `render`); loads `worker.ts` only when on                                                    |
 | `worker.ts`                                                   | `createWorker`: both supervisors, edge parts, capability, relay target, mount, hooks                                                                                                   |
 | `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop one role's daemon (`simulators` or `phones`); availability state                                                                                              |
 | `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                                                                                                                               |
@@ -132,6 +132,8 @@ under leasing's signal (`lease.endWaitMs`).
 
 Disk: `<data dir>/agent-device/` and `<data dir>/agent-device-phones/` (agent-device's own files) and the two pid records. Front map,
 renewals and release scopes: memory only.
+
+Local profile: a standalone worker with HTTP and this module on keeps `<data dir>/agent-device-profile.json` (0600) so an agent on the same Mac connects with `agent-device connect --remote-config <file>` and no token of its own ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)). `definition.ts` declares the file as plain data; the module host writes it at each start, reuses the one `agent`-role token labelled `agent-device on this Mac` (so an agent's saved connection stays valid), revokes other tokens with that label, and deletes the file and revokes the token when HTTP or the module is off. No worker code runs for it.
 
 ## Rules
 

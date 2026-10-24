@@ -152,7 +152,11 @@ async function isUnavailable(error: unknown): Promise<boolean> {
 
 async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
   const { optionalModules } = await import("../module-registry/index.js");
-  return optionalModules.map(({ config, name }) => ({ name, ...config }));
+  return optionalModules.map(({ config, enabledByDefault, name }) => ({
+    name,
+    ...config,
+    ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
+  }));
 }
 
 async function readAdminTokenFile(
@@ -283,6 +287,11 @@ export function buildCliEnvironment(
           },
         }),
     requesterId,
+    homeDirectory: ports.homeDirectory,
+    workingDirectory: ports.workingDirectory,
+    codexHome: ports.codexHome,
+    runTool: ports.runTool,
+    filesystem,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     daemonEndpointPresent: async () => {

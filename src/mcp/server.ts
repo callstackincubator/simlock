@@ -3,6 +3,7 @@ import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
 import { SimlockError } from "../client/index.js";
 import { describeSchemaIssues } from "../contract/index.js";
+import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS } from "../instructions/index.js";
 import {
   leaseSimulatorCheckedInputSchema,
   leaseSimulatorInputSchema,
@@ -116,7 +117,23 @@ function createLeaseProgressReporter(
 
 /** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(session: McpSession): McpServer {
-  const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
+  const server = new McpServer(SERVER_INFO, {
+    capabilities: { logging: {} },
+    instructions: MCP_SERVER_INSTRUCTIONS,
+  });
+
+  server.registerResource(
+    "instructions",
+    "simlock://instructions",
+    {
+      title: "Rules for using Simlock",
+      description: "The full rules for using Simlock: the CLI, agent-device, iOS builds and MCP.",
+      mimeType: "text/markdown",
+    },
+    (uri) => ({
+      contents: [{ uri: uri.href, mimeType: "text/markdown", text: AGENT_INSTRUCTIONS }],
+    }),
+  );
 
   server.registerTool(
     "lease_simulator",

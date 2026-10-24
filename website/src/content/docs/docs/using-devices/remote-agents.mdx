@@ -11,15 +11,7 @@ The `simlock` CLI talks only to the daemon on its own machine; it cannot target 
 
 On the machine you connect to:
 
-- **A standalone worker** has HTTP off by default. Turn it on, then restart the daemon. A worker that has joined a gateway cannot turn it on: its agents connect to the gateway instead.
-
-  ```sh
-  simlock config set http.enabled true
-  simlock daemon stop
-  simlock daemon start
-  ```
-
-  It listens on `127.0.0.1:4701`.
+- **A standalone worker** has HTTP on by default, on `127.0.0.1:4701`. A worker that has joined a gateway has it off and cannot turn it on: its agents connect to the gateway instead.
 
 - **A gateway** has HTTP on by default, on `127.0.0.1:4700`.
 
