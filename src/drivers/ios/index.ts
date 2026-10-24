@@ -297,6 +297,7 @@ export class IosSimctlDriver implements Driver {
   readonly #physical: IosPhysicalHandler;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
   readonly #deviceRoot: string;
+  readonly #instanceId: string;
   readonly #rootOptions: EnsureOwnedRootOptions | undefined;
   readonly #slim: SlimOptions | undefined;
   readonly #slimByDefault: boolean;
@@ -323,6 +324,7 @@ export class IosSimctlDriver implements Driver {
       simlockHome: options.simlockHome,
     });
     this.#deviceRoot = deviceRoot;
+    this.#instanceId = options.instanceId;
     this.#rootOptions = rootOptions;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
@@ -756,7 +758,16 @@ export class IosSimctlDriver implements Driver {
       throw new DriverCrashError("simctl create returned no device UDID");
     }
 
-    await this.#writeMark(udid);
+    try {
+      await this.#writeMark(udid);
+    } catch (error: unknown) {
+      // why: In Xcode's set an unmarked simulator is nobody's, so one left here would never
+      // be listed, reclaimed or deleted by Simlock again.
+      if (this.#rootOptions === undefined) {
+        await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      }
+      throw error;
+    }
 
     return {
       address: udid,
@@ -1477,6 +1488,7 @@ export class IosSimctlDriver implements Driver {
   async #writeMark(udid: string): Promise<void> {
     const token = this.#idGenerator.generate();
     const contents = JSON.stringify({
+      instanceId: this.#instanceId,
       token,
       udid,
       writtenAt: new Date(this.#clock.now()).toISOString(),
