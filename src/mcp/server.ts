@@ -40,6 +40,28 @@ const STAGE_BASE_PROGRESS: Record<LeaseProgressNotice["stage"], number> = {
 };
 const TOTAL_PROGRESS = 4_000;
 
+const OUTPUT_CAP_CHARACTERS = 32_768;
+
+class TailBuffer {
+  text = "";
+  lostAny = false;
+  readonly #cap: number;
+
+  constructor(cap: number) {
+    this.#cap = cap;
+  }
+
+  append(chunk: string): void {
+    const joined = this.text + chunk;
+    if (joined.length > this.#cap) {
+      this.lostAny = true;
+      this.text = joined.slice(joined.length - this.#cap);
+    } else {
+      this.text = joined;
+    }
+  }
+}
+
 /** Maps a lease progress push onto an MCP progress notification's `params`. */
 function leaseProgressParams(progress: LeaseProgressNotice): {
   readonly message: string;
@@ -237,13 +259,17 @@ export function createMcpServer(session: McpSession): McpServer {
     },
     async (input) => {
       try {
-        let stdout = "";
-        let stderr = "";
+        const stdout = new TailBuffer(OUTPUT_CAP_CHARACTERS);
+        const stderr = new TailBuffer(OUTPUT_CAP_CHARACTERS);
         const { exitCode } = await session.runOnDevice(input, (chunk) => {
-          if (chunk.stream === "stdout") stdout += chunk.chunk;
-          else stderr += chunk.chunk;
+          (chunk.stream === "stdout" ? stdout : stderr).append(chunk.chunk);
         });
-        return success({ exitCode, stderr, stdout, truncated: false });
+        return success({
+          exitCode,
+          stderr: stderr.text,
+          stdout: stdout.text,
+          truncated: stdout.lostAny || stderr.lostAny,
+        });
       } catch (error: unknown) {
         return failure(error);
       }
