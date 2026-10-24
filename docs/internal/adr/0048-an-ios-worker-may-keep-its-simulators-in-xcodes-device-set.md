@@ -1,6 +1,6 @@
 # 0048. An iOS worker may keep its simulators in Xcode's device set
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-23
 - **Issue:** [#962](https://github.com/callstackincubator/simlock/issues/962), from request [#946](https://github.com/callstackincubator/simlock/issues/946)
 - **Narrows:** ADR 0001 §2, §3, §5 and §7, for iOS simulators under `drivers.ios.deviceSet: "default"`. Android, physical devices and the `simlock` setting keep ADR 0001 unchanged.

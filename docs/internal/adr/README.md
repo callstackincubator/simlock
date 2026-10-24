@@ -84,4 +84,4 @@ the status is stale.
 | [0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md) | Physical devices reach agent-device through a second daemon on the worker | Accepted — not yet implemented; supersedes 0023 §3–4 in part |
 | [0044](0044-the-console-reads-what-its-page-shows-and-events-mark-it-stale.md) | The console reads what its page shows, and events mark it stale | Accepted — not yet implemented; supersedes 0013 §3 |
 | [0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md) | A device's screen streams to operators, not a lease's | Accepted — not yet implemented |
-| [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Proposed; narrows 0001 §2, §3, §5 and §7 for iOS under `deviceSet: "default"` |
+| [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted — not yet implemented; narrows 0001 §2, §3, §5 and §7 for iOS under `deviceSet: "default"` |
