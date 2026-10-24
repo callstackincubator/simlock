@@ -14,6 +14,8 @@ import {
   listDevicesOutputSchema,
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
+  runOnDeviceInputSchema,
+  runOnDeviceOutputSchema,
 } from "./contracts.js";
 import {
   McpSession,
@@ -218,6 +220,30 @@ export function createMcpServer(session: McpSession): McpServer {
     async () => {
       try {
         return success(await session.status());
+      } catch (error: unknown) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "run_on_device",
+    {
+      title: "Run on device",
+      description:
+        "Run one simctl, adb or devicectl command on this session's leased device, on the machine that holds it. Leave the device out: Simlock fills in the lease's UDID or serial, and refuses a command that names another device. File paths are on that machine. Output is text: stdout and stderr each keep their last 32768 characters, and truncated says when any was cut. A non-zero exitCode is the command's own answer, not a tool error. There is no terminal: a bare adb shell is refused, and an interactive command hangs until the time limit (10 minutes by default) stops it.",
+      inputSchema: runOnDeviceInputSchema,
+      outputSchema: runOnDeviceOutputSchema,
+    },
+    async (input) => {
+      try {
+        let stdout = "";
+        let stderr = "";
+        const { exitCode } = await session.runOnDevice(input, (chunk) => {
+          if (chunk.stream === "stdout") stdout += chunk.chunk;
+          else stderr += chunk.chunk;
+        });
+        return success({ exitCode, stderr, stdout, truncated: false });
       } catch (error: unknown) {
         return failure(error);
       }

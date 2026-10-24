@@ -1,6 +1,8 @@
 import {
   isSimlockError,
   SimlockError,
+  type DeviceOutputChunk,
+  type ExecOutput,
   type LeaseProgress,
   type LeaseRecord,
   type LeaseRequestInput,
@@ -21,6 +23,7 @@ import type {
   ListDevicesOutput,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
+  RunOnDeviceInput,
 } from "./contracts.js";
 
 /**
@@ -277,6 +280,24 @@ export class McpSession {
       const lease = leases.find((candidate) => candidate.id === this.#heldLeaseId);
       return lease === undefined ? { held: false } : { ...lease, held: true };
     });
+  }
+
+  // why: not on `#mutate` -- a command can run for minutes, and `lease_status` or a release
+  // must not wait behind it (ADR 0047 §6).
+  async runOnDevice(
+    input: RunOnDeviceInput,
+    onOutput: (chunk: DeviceOutputChunk) => void,
+  ): Promise<ExecOutput> {
+    this.#throwIfClosed();
+    const leaseId = this.#heldLeaseId;
+    if (leaseId === undefined) {
+      throw new McpSessionError(
+        "NO_LEASE",
+        "This MCP session holds no lease. Call lease_simulator first.",
+      );
+    }
+    const client = await this.#clientForUse();
+    return client.exec({ ...input, leaseId }, { onOutput });
   }
 
   /** Notifies when this session's held lease ends elsewhere (expiry or a force-release). */
