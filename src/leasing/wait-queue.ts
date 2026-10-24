@@ -121,8 +121,8 @@ export function requesterLimitDecision(
   const configured = input.maxPerRequester ?? 1;
   if (typeof configured === "number") {
     const waiting = input.waiting.length > 0;
-    const atLimit = !input.probe && input.held.length >= configured;
-    if (!waiting && !atLimit) return undefined;
+    const atLimit = !input.probe && input.held.length + input.waiting.length >= configured;
+    if (!input.waiting.includes(input.platform) && !atLimit) return undefined;
     return new RequesterAlreadyLeasedError(input.requesterId, earliestGranted(input.held)?.id, {
       held: input.held.length,
       limit: configured,
