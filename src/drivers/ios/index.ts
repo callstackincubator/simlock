@@ -55,6 +55,7 @@ import type {
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
+import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
@@ -1336,9 +1337,10 @@ export class IosSimctlDriver implements Driver {
       );
     }
     this.#assertProxyable(args);
+    const scopedArgs = device === undefined ? args : fillSimctlDevice(args, device.deviceId);
     // why: No environment: simctl ignores every variable that could carry the device set.
     return await Promise.resolve({
-      args: ["simctl", "--set", this.#deviceRoot, ...args],
+      args: ["simctl", "--set", this.#deviceRoot, ...scopedArgs],
       command: "xcrun",
       env: {},
     });
