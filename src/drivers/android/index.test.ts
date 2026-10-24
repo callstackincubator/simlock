@@ -772,7 +772,6 @@ describe("AndroidDriver", () => {
 
     const restartedRunner = new ScriptedProcessRunner([
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       avdPathExpectation("emulator-5586"),
       processResult(
         binaries.adb,
@@ -805,6 +804,7 @@ describe("AndroidDriver", () => {
     const booted = await harness.driver.makeReady(harness.device);
 
     const restartedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
       {
@@ -853,7 +853,7 @@ describe("AndroidDriver", () => {
     await expect(restartedDriver.makeReady(booted)).resolves.toMatchObject({
       address: "emulator-5586",
     });
-    expect(restartedRunner.calls[2]).toMatchObject({
+    expect(restartedRunner.calls[3]).toMatchObject({
       args: [
         "-avd",
         "simlock_one",
