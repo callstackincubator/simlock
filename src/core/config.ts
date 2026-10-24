@@ -1117,7 +1117,7 @@ function configValidators(
       }),
       requestRetentionMs: positiveNumber,
       maxRequestRecords: positiveInteger,
-      maxPerRequester: positiveInteger,
+      maxPerRequester: maxPerRequesterValidator,
       endWaitMs: endWaitValidator,
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
@@ -1286,6 +1286,12 @@ function driverSettings(value: unknown, path: string): Record<string, string | n
   }
 
   return result;
+}
+
+function maxPerRequesterValidator(value: unknown, path: string, warn: Warn): unknown {
+  return typeof value === "object" && value !== null
+    ? objectValidator({ ios: positiveInteger, android: positiveInteger })(value, path, warn)
+    : positiveInteger(value, path);
 }
 
 function mergeConfig<Base extends object>(base: Base, overrides: object): Base {
