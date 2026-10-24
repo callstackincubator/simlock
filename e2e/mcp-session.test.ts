@@ -9,7 +9,7 @@ interface McpErrorPayload {
 }
 
 describe("MCP session semantics", () => {
-  it("exercises all four tools, streams strictly increasing progress with human messages, and its lease is the one the CLI lists", async () => {
+  it("exercises the lease, list, status and release tools, streams strictly increasing progress with human messages, and its lease is the one the CLI lists", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
