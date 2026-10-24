@@ -3325,6 +3325,49 @@ describe("AndroidDriver.create", () => {
     }
   });
 
+  it("refuses an emulator adb command that names another device, or that runs on another platform", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const context = { hasTerminal: false, platform: "android" };
+    const refusal = (command: string, named: string) =>
+      `Refusing \`adb ${command}\`: it names device ${named}, and this lease holds emulator-5554. Leave the device out; Simlock fills it in.`;
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [
+        ["-s", "emulator-5556", "shell", "getprop"],
+        refusal("-s emulator-5556 shell getprop", "-s emulator-5556"),
+      ],
+      [["-e", "shell", "getprop"], refusal("-e shell getprop", "-e")],
+      [["-d", "shell", "getprop"], refusal("-d shell getprop", "-d")],
+      [["-t", "3", "shell", "getprop"], refusal("-t 3 shell getprop", "-t 3")],
+      [["-t3", "shell", "getprop"], refusal("-t3 shell getprop", "-t3")],
+    ];
+
+    for (const [args, message] of cases) {
+      await expect(passthroughOf(driver, args, context, emulator)).rejects.toMatchObject({
+        message,
+        tool: "adb",
+      });
+    }
+    await expect(
+      passthroughOf(
+        driver,
+        ["shell", "getprop"],
+        { hasTerminal: false, platform: "ios" },
+        emulator,
+      ),
+    ).rejects.toMatchObject({
+      message:
+        "Refusing `adb`: it only serves an Android device, and this lease is on the ios platform.",
+      tool: "adb",
+    });
+  });
+
   it("claims only the adb passthrough tool", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
@@ -5698,7 +5741,7 @@ describe("AndroidDriver image fit", () => {
 async function passthroughOf(
   driver: object,
   args: readonly string[],
-  context?: { readonly hasTerminal: boolean },
+  context?: { readonly hasTerminal: boolean; readonly platform?: string },
   device?: unknown,
 ): Promise<{ readonly args: readonly string[]; readonly command: string; readonly env: object }> {
   const routed = driver as {
@@ -5706,7 +5749,7 @@ async function passthroughOf(
       tool: string,
       device: unknown,
       args: readonly string[],
-      context?: { readonly hasTerminal: boolean },
+      context?: { readonly hasTerminal: boolean; readonly platform?: string },
     ): Promise<{
       readonly args: readonly string[];
       readonly command: string;
