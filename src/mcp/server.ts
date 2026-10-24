@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
 import { SimlockError } from "../client/index.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, TimerHandle } from "../ports/index.js";
 import { describeSchemaIssues } from "../contract/index.js";
 import { AGENT_INSTRUCTIONS, MCP_SERVER_INSTRUCTIONS } from "../instructions/index.js";
 import {
@@ -140,10 +140,46 @@ function createLeaseProgressReporter(
   };
 }
 
+const RUN_PROGRESS_MIN_GAP_MS = 1_000;
+const RUN_PROGRESS_HEARTBEAT_MS = 10_000;
+
+function createRunProgressReporter(
+  clock: Clock,
+  progressToken: string | number,
+  sendNotification: (notification: ProgressNotification) => Promise<void>,
+  message: string,
+): { readonly onOutput: () => void; readonly stop: () => void } {
+  let sent = 0;
+  let lastSentAt: number | undefined;
+  let heartbeat: TimerHandle | undefined;
+  const send = (): void => {
+    sent += 1;
+    lastSentAt = clock.now();
+    if (heartbeat !== undefined) clock.cancel(heartbeat);
+    heartbeat = clock.setTimer(RUN_PROGRESS_HEARTBEAT_MS, send);
+    // why: progress is advisory -- a transport that went away mid-command must not surface here
+    // as an unhandled rejection.
+    void sendNotification({
+      method: "notifications/progress",
+      params: { message, progress: sent, progressToken },
+    }).catch(() => undefined);
+  };
+  heartbeat = clock.setTimer(RUN_PROGRESS_HEARTBEAT_MS, send);
+  return {
+    onOutput: () => {
+      if (lastSentAt === undefined || clock.now() - lastSentAt >= RUN_PROGRESS_MIN_GAP_MS) send();
+    },
+    stop: () => {
+      if (heartbeat !== undefined) clock.cancel(heartbeat);
+      heartbeat = undefined;
+    },
+  };
+}
+
 /** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(
   session: McpSession,
-  _options: { readonly clock: Clock },
+  options: { readonly clock: Clock },
 ): McpServer {
   const server = new McpServer(SERVER_INFO, {
     capabilities: { logging: {} },
@@ -261,12 +297,23 @@ export function createMcpServer(
       inputSchema: runOnDeviceInputSchema,
       outputSchema: runOnDeviceOutputSchema,
     },
-    async (input) => {
+    async (input, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const progress =
+        progressToken === undefined
+          ? undefined
+          : createRunProgressReporter(
+              options.clock,
+              progressToken,
+              extra.sendNotification,
+              `Running ${[input.tool, input.args[0]].filter((word) => word !== undefined).join(" ")}`,
+            );
       try {
         const stdout = new TailBuffer(OUTPUT_CAP_CHARACTERS);
         const stderr = new TailBuffer(OUTPUT_CAP_CHARACTERS);
         const { exitCode } = await session.runOnDevice(input, (chunk) => {
           (chunk.stream === "stdout" ? stdout : stderr).append(chunk.chunk);
+          progress?.onOutput();
         });
         return success({
           exitCode,
@@ -276,6 +323,8 @@ export function createMcpServer(
         });
       } catch (error: unknown) {
         return failure(error);
+      } finally {
+        progress?.stop();
       }
     },
   );

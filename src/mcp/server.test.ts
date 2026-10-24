@@ -724,7 +724,12 @@ describe("MCP run_on_device daemon errors", () => {
 describe("MCP run_on_device progress", () => {
   it("sends progress at most once per second while output arrives and every 10 s while none does, only with a progress token", async () => {
     const client = new FakeSimlockClient();
-    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const grant = sampleGrant();
+    client.requestLeaseImpl = () =>
+      Promise.resolve({
+        ...grant,
+        lease: { ...grant.lease, ttlDeadline: 3_600_000, ttlMs: 3_600_000 },
+      });
     const { clock, mcpClient, close } = await connectedServer(client);
     try {
       await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
