@@ -5122,4 +5122,70 @@ describe("IosSimctlDriver device set", () => {
     await expect(driver.findLegacy(udid(0))).resolves.toBeUndefined();
     expect(runner.calls).toHaveLength(1);
   });
+
+  it("under deviceSet default foreignDevices and the removal's unused count take only devices this instance's mark does not name", async () => {
+    const devicesDir = `${coreSimulatorRoot}/Devices`;
+    const udids = ["A", "B", "C"].map((n) => `0000000${n}-0000-0000-0000-000000000000`);
+    const devices = (used: boolean) =>
+      JSON.stringify({
+        devices: {
+          [runtimeImage.runtimeIdentifier]: udids.map((udid) => ({
+            ...(used ? { lastUsedAt: "2026-10-01T12:00:00Z" } : {}),
+            name: "d",
+            state: "Shutdown",
+            udid,
+          })),
+        },
+      });
+    const driverWith = async (steps: readonly (readonly [readonly string[], string?])[]) => {
+      const filesystem = new MemoryFilesystem();
+      const marked = [instanceId, undefined, "other"] as const;
+      for (const [index, udid] of udids.entries()) {
+        await filesystem.mkdirp(`${devicesDir}/${udid}`);
+        const owner = marked[index];
+        if (owner !== undefined) {
+          await filesystem.writeFileAtomic(
+            `${devicesDir}/${udid}/simlock-mark.json`,
+            JSON.stringify({ instanceId: owner, token: "t" }),
+          );
+        }
+      }
+      return IosSimctlDriver.create({
+        clock: new FakeClock(),
+        coreSimulatorRoot,
+        driverConfig: { deviceSet: "default" },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: new ScriptedProcessRunner(
+          steps.map(([args, stdout]) => ({
+            match: { args: [...args], command: "xcrun" },
+            ...(stdout === undefined ? {} : { result: { code: 0, stderr: "", stdout } }),
+          })),
+        ),
+        simlockHome: "/home/.simlock",
+      });
+    };
+    const runtimeList = [["simctl", "runtime", "list", "-j"], imageList] as const;
+    const deviceList = (used: boolean) =>
+      [["simctl", "list", "-j", "devices"], devices(used)] as const;
+
+    const listing = await driverWith([runtimeList, deviceList(true)]);
+    const [component] = await listing.listComponents();
+    expect(component?.foreignDevices).toBe(2);
+
+    const removing = await driverWith([
+      runtimeList,
+      deviceList(false),
+      [["simctl", "runtime", "delete", runtimeImage.identifier]],
+      [["simctl", "runtime", "list", "-j"], "{}"],
+      [["simctl", "runtime", "list", "-j"], "{}"],
+      deviceList(false),
+    ]);
+    const removal = await removing.removeComponent(
+      { build: runtimeImage.build, image: runtimeImage.identifier },
+      { signal: new AbortController().signal },
+    );
+    expect(removal.residue).toContain("2 never-used simulators");
+  });
 });
