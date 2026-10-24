@@ -4125,7 +4125,7 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
         },
       });
       await harness.engine.request(request, asking("holder"));
-      const heldAndroid = await harness.engine.request(androidRequest, asking("holder"));
+      await harness.engine.request(androidRequest, asking("holder"));
       if (holdsIos === true) await harness.engine.request(request, asking("agent-1"));
       void harness.engine.request(request, asking("agent-1")).catch(() => undefined);
       const openOf = (requesterId: string) =>
@@ -4137,8 +4137,9 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
       const outcome = harness.engine.request(next, asking("agent-1")).catch((e: unknown) => e);
 
       if (refusal === undefined) {
-        await harness.engine.release(heldAndroid.lease.id, "explicit");
-        await expect(outcome).resolves.toMatchObject({ device: { spec: { platform: "android" } } });
+        await harness.engine.settle();
+        await expect(Promise.race([outcome, Promise.resolve("waiting")])).resolves.toBe("waiting");
+        expect(openOf("agent-1")).toHaveLength(2);
       } else {
         await expect(outcome).resolves.toMatchObject({
           message: refusal,

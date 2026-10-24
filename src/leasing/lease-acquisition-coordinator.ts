@@ -131,7 +131,7 @@ export type AcquisitionQueue = Pick<
   | "depth"
   | "enqueue"
   | "findPendingWaiter"
-  | "hasPendingRequester"
+  | "pendingPlatforms"
   | "head"
   | "isQueued"
   | "markNew"
@@ -327,7 +327,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           ...(platform === undefined ? {} : { platform }),
         };
       });
-    const waiting = this.options.queue.hasPendingRequester(options.requesterId);
+    const waiting = this.options.queue.pendingPlatforms(options.requesterId);
     // why: a probe's held leases were counted by the gateway, fleet-wide; only its waiting
     // request is checked here (ADR 0023 §2).
     const refusal = requesterLimitDecision({

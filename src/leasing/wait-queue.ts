@@ -107,7 +107,7 @@ export interface RequesterLimitInput {
   readonly platform: Platform;
   readonly maxPerRequester: MaxPerRequester | undefined;
   readonly held: readonly HeldLease[];
-  readonly waiting: boolean;
+  readonly waiting: readonly Platform[];
   readonly probe: boolean;
 }
 
@@ -119,20 +119,28 @@ export function requesterLimitDecision(
   input: RequesterLimitInput,
 ): RequesterAlreadyLeasedError | undefined {
   const configured = input.maxPerRequester ?? 1;
-  const perPlatform = typeof configured !== "number";
-  const limit = perPlatform ? (configured[input.platform] ?? 1) : configured;
-  const held = perPlatform
-    ? input.held.filter(
-        (lease) => lease.platform === undefined || lease.platform === input.platform,
-      )
-    : input.held;
+  if (typeof configured === "number") {
+    const waiting = input.waiting.length > 0;
+    const atLimit = !input.probe && input.held.length >= configured;
+    if (!waiting && !atLimit) return undefined;
+    return new RequesterAlreadyLeasedError(input.requesterId, earliestGranted(input.held)?.id, {
+      held: input.held.length,
+      limit: configured,
+      waiting,
+    });
+  }
+  const limit = configured[input.platform] ?? 1;
+  const held = input.held.filter(
+    (lease) => lease.platform === undefined || lease.platform === input.platform,
+  );
   const atLimit = !input.probe && held.length >= limit;
-  if (!input.waiting && !atLimit) return undefined;
+  const waiting = input.waiting.includes(input.platform);
+  if (!waiting && !atLimit) return undefined;
   return new RequesterAlreadyLeasedError(input.requesterId, earliestGranted(held)?.id, {
     held: held.length,
     limit,
-    waiting: input.waiting,
-    ...(perPlatform ? { platform: input.platform } : {}),
+    platform: input.platform,
+    waiting: waiting && !atLimit,
   });
 }
 
@@ -151,6 +159,9 @@ function platformRefusalMessage(
   platform: Platform,
 ): string {
   const label = platform === "ios" ? "iOS" : "Android";
+  if (context.waiting) {
+    return `Requester ${requesterId} already has a waiting ${label} request; wait for it to be granted or cancel it before requesting another ${label} device`;
+  }
   const release = `release it (\`simlock release ${String(existingLeaseId)}\`)`;
   if (context.limit === 1) {
     return `Requester ${requesterId} already holds ${label} lease ${String(existingLeaseId)}; ${release} before requesting another ${label} device`;
