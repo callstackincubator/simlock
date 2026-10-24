@@ -203,8 +203,9 @@ const OPTION_CASES: readonly (readonly [
   const forms: (readonly string[])[] = [
     ...valued.flatMap((aliases) =>
       aliases.flatMap((alias) => {
-        const separate = [alias, "x"];
-        return alias.startsWith("--") ? [separate, [`${alias}=x`]] : [separate];
+        const value = isDeviceOption(alias) ? UDID : "x";
+        const separate = [alias, value];
+        return alias.startsWith("--") ? [separate, [`${alias}=${value}`]] : [separate];
       }),
     ),
     ...flags.map((flag) => [flag]),
@@ -269,15 +270,35 @@ describe("IosSimctlDriver passthrough", () => {
       );
     });
 
-    it.each([
-      ["--device", ["--device", "OTHER"]],
-      ["-d", ["-d", "OTHER"]],
-      ["--device=", ["--device=OTHER"]],
-    ])("passes %s before -- as the caller gave it, naming another device", async (_name, given) => {
-      const args = ["device", "process", "launch", ...given, APP];
-      const { outcome } = await resolvesFor(args);
+    it("refuses a --device or -d naming another device, and leaves the lease's own alone", async () => {
+      const launch = (...given: readonly string[]) => [
+        "device",
+        "process",
+        "launch",
+        ...given,
+        APP,
+      ];
+      const own = [
+        ["--device", UDID],
+        ["--device", UDID.toLowerCase()],
+        ["-d", UDID.toUpperCase()],
+        [`--device=${UDID}`],
+      ];
+      for (const given of own) {
+        const { outcome } = await resolvesFor(launch(...given));
+        expect(outcome).toEqual(runs(["devicectl", ...launch(...given)]));
+      }
 
-      expect(outcome).toEqual(runs(["devicectl", ...args]));
+      const other = [["--device", "OTHER"], ["-d", "OTHER"], ["--device=OTHER"]];
+      for (const given of other) {
+        const { outcome } = await resolvesFor(launch(...given));
+        expect(outcome).toMatchObject({
+          rejected: {
+            message: `Refusing \`devicectl ${launch(...given).join(" ")}\`: it names device ${given.join(" ")}, and this lease holds ${UDID}. Leave the device out; Simlock fills it in.`,
+            tool: "devicectl",
+          },
+        });
+      }
     });
 
     it("inserts --device <UDID> when the only -d is the app's own, after --", async () => {
