@@ -21,8 +21,11 @@ export interface LeaseCommands {
 export interface QueueControl {
   readonly queueDepth: number;
   readonly physicalQueueDepth: number;
-  cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable">;
-  pendingRequestOwner(requesterId: string): string | undefined;
+  cancelPending(
+    requesterId: string,
+    platform?: Platform,
+  ): Promise<"cancelled" | "not-found" | "not-cancellable">;
+  pendingRequestOwner(requesterId: string, platform?: Platform): string | undefined;
   waitingRequests(): readonly WaitingRequest[];
 }
 

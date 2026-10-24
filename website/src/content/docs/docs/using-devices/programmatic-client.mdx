@@ -38,7 +38,7 @@ const client = await connectSimlock({
 ```
 
 - `endpoint` is the daemon's socket: `~/.simlock/daemon.sock`. If you set `SIMLOCK_HOME`, it is `$SIMLOCK_HOME/daemon.sock`. A gateway's socket is `~/.simlock/gateway/daemon.sock`.
-- `principal` is your requester id. Leases you take belong to it, and it can hold one lease at a time. Give every agent or worker process its own value. Without it, every client that leaves it out shares the daemon's own default id, and with it one lease.
+- `principal` is your requester id. Leases you take belong to it, and by default it can hold one lease at a time (see `lease.maxPerRequester`). Give every agent or worker process its own value. Without it, every client that leaves it out shares the daemon's own default id, and with it one lease.
 
 One client is one connection. It does not reconnect: if the daemon stops, every call in progress fails with `DAEMON_CONNECTION_LOST`, and you connect again. Your lease is not released by a lost connection.
 

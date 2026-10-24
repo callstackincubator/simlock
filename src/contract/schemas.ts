@@ -1087,7 +1087,10 @@ export const configSchema = z.object({
     }),
     requestRetentionMs: z.number(),
     maxRequestRecords: z.number(),
-    maxPerRequester: z.number(),
+    maxPerRequester: z.union([
+      z.number(),
+      z.object({ ios: z.number().optional(), android: z.number().optional() }),
+    ]),
     endWaitMs: z.number(),
   }),
   exec: z.object({ timeoutMs: z.number() }),

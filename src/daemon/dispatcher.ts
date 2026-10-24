@@ -366,7 +366,8 @@ export class Dispatcher {
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId,
         leaseRequesterId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.requesterId,
-        pendingRequestOwner: (requesterId) => this.options.queue.pendingRequestOwner(requesterId),
+        pendingRequestOwner: (requesterId, platform) =>
+          this.options.queue.pendingRequestOwner(requesterId, platform),
       },
       awaitReady: () => this.options.awaitReady(),
       onOutputMismatch: (operationName, issues) => {
@@ -579,7 +580,7 @@ export class Dispatcher {
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
-    const result = await this.options.queue.cancelPending(requesterId);
+    const result = await this.options.queue.cancelPending(requesterId, input.platform);
     return { result };
   };
 

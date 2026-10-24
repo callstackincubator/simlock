@@ -8,22 +8,22 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [start
 
 ## Files
 
-| File                                      | Role                                                                |
-| ----------------------------------------- | ------------------------------------------------------------------- |
-| `create-leasing.ts`                       | Composition root; builds `corePorts` for `core.connect`             |
-| `lease-acquisition-coordinator.ts`        | Admission, spec resolution, plan → perform loop, grant              |
-| `acquisition-planner.ts`                  | Read-only plan; takes the claim or reservation it hands back        |
-| `wait-queue.ts`                           | FIFO, two lines (virtual, physical), timeouts, cancel               |
-| `lease-request-book.ts`                   | Request records: store before queue, idempotent replay, settle once |
-| `lease-lifecycle.ts`                      | Registry half of grant, renew, release                              |
-| `lease-expiry-scheduler.ts`               | TTL timers                                                          |
-| `lease-release-coordinator.ts`            | Every lease ending; lease-end participants; background reclaim      |
-| `lease-health-monitor.ts`                 | Reboots a crashed leased virtual device under its lease             |
-| `physical-device-watcher.ts`              | Presence polling of enrolled physical devices                       |
-| `lease-startup.ts`, `lease-reconciler.ts` | Lease half of startup                                               |
-| `lease-refusal.ts`                        | `lease.rejected`, or `lease.declined` for a gateway request         |
-| `lease-ports.ts`                          | `LeaseCommands`, `QueueControl`, `LeaseEndParticipant`              |
-| `testing.ts`                              | Builds core + leasing for other modules' tests                      |
+| File                                      | Role                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| `create-leasing.ts`                       | Composition root; builds `corePorts` for `core.connect`                         |
+| `lease-acquisition-coordinator.ts`        | Admission, spec resolution, plan → perform loop, grant                          |
+| `acquisition-planner.ts`                  | Read-only plan; takes the claim or reservation it hands back                    |
+| `wait-queue.ts`                           | FIFO, two lines (virtual, physical), timeouts, cancel; `requesterLimitDecision` |
+| `lease-request-book.ts`                   | Request records: store before queue, idempotent replay, settle once             |
+| `lease-lifecycle.ts`                      | Registry half of grant, renew, release                                          |
+| `lease-expiry-scheduler.ts`               | TTL timers                                                                      |
+| `lease-release-coordinator.ts`            | Every lease ending; lease-end participants; background reclaim                  |
+| `lease-health-monitor.ts`                 | Reboots a crashed leased virtual device under its lease                         |
+| `physical-device-watcher.ts`              | Presence polling of enrolled physical devices                                   |
+| `lease-startup.ts`, `lease-reconciler.ts` | Lease half of startup                                                           |
+| `lease-refusal.ts`                        | `lease.rejected`, or `lease.declined` for a gateway request                     |
+| `lease-ports.ts`                          | `LeaseCommands`, `QueueControl`, `LeaseEndParticipant`                          |
+| `testing.ts`                              | Builds core + leasing for other modules' tests                                  |
 
 ## The update hold
 
@@ -36,7 +36,8 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
 
 1. **Admit** (lock) — `LeaseAcquisitionCoordinator.request`: replay by
    idempotency key + requester → refuse under the update hold (`DaemonUpdatingError`, `lease.rejected` reason `updating`) → refuse under maintenance → refuse a requester
-   at `lease.maxPerRequester` (1) or with a pending request → refuse a taken
+   at `lease.maxPerRequester` (1; a number, or one per platform) or with a pending request
+   on its platform (`requesterLimitDecision`) → refuse a taken
    `leaseId` → `LeaseRequestBook.admit` stores the request, then queues it.
    Emits `lease.requested`.
 2. **Resolve** (no lock) — request → spec: default mode, class or OS range →

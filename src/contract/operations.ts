@@ -337,7 +337,7 @@ export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
   effect: "write",
-  input: z.object({ requesterId: z.string().optional() }),
+  input: z.object({ requesterId: z.string().optional(), platform: platformSchema.optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
    * ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
@@ -356,7 +356,10 @@ export const leaseCancel = defineOperation({
    */
   authorize: (input, context) => {
     if (context.role === "admin") return true;
-    const owner = context.pendingRequestOwner(input.requesterId ?? context.principal);
+    const owner = context.pendingRequestOwner(
+      input.requesterId ?? context.principal,
+      input.platform,
+    );
     return owner === undefined || owner === context.principal;
   },
 });

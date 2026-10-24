@@ -660,7 +660,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 
 ### Requester identity
 
-Simlock limits leases per requester (one by default), so each agent session needs one stable identity. The CLI uses the first of these:
+Simlock limits leases per requester (one by default, or per platform when the operator sets it), so each agent session needs one stable identity. The CLI uses the first of these:
 
 1. `--agent-id <id>` on `simlock lease`.
 2. `SIMLOCK_AGENT_ID`, when set.

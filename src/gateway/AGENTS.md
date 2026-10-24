@@ -62,8 +62,8 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs`
    from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.
-2. Admit: idempotent replay → `lease.maxPerRequester` (1) over the index plus a pending request
-   (`already-leased`) → `leaseId` held by the index or an open request (`lease-id-taken`) →
+2. Admit: idempotent replay → `lease.maxPerRequester` (1; a number, or one per platform) over the index plus a pending request
+   (`already-leased`, `requesterLimitDecision`) → `leaseId` held by the index or an open request (`lease-id-taken`) →
    `requests.admit` stores it, creates the waiter. Emits `lease.requested`.
 3. Walk (on admit, on any view change, after each settled attempt), oldest first: `assess` the
    request over views minus workers that said cannot-serve. A reject ends the request. Else

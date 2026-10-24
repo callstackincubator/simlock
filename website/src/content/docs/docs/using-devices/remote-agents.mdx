@@ -31,7 +31,7 @@ simlock token create --role agent --label ci-runner-3
 
 The secret is shown once. Every request sends it as `Authorization: Bearer <secret>`.
 
-The token is the requester: its leases belong to it, and it can hold one lease at a time. Agents that share a token share that one lease. A token works only on the daemon that created it; a gateway's tokens are not valid on its workers.
+The token is the requester: its leases belong to it, and by default it can hold one lease at a time (an operator can set `lease.maxPerRequester` higher, or per platform). Agents that share a token share that limit. A token works only on the daemon that created it; a gateway's tokens are not valid on its workers.
 
 <Aside type="danger">
 An agent token on a worker reaches the whole worker, not only one device. A command run through `exec` runs on the worker as the daemon's user, and its arguments can read and write files anywhere that user can (for example, `adb pull` writes a file to a path you choose on the worker). Through a gateway, the command runs on whichever worker holds the device. Give agent tokens only to agents you would let run commands on those machines.
@@ -184,7 +184,7 @@ Errors come back as JSON with an HTTP status:
 | --- | --- | --- |
 | `401` | `UNAUTHENTICATED` | The token is missing or unknown. Check the `Authorization` header. |
 | `403` | `FORBIDDEN` | The lease or request belongs to another token, or the route needs an operator token. |
-| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds a lease or has a request waiting. Release or cancel it first. |
+| `409` | `REQUESTER_ALREADY_LEASED` | This token already holds its limit of leases, or has a request waiting on the same platform. Release or cancel it first. |
 | `422` | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` | The device you asked for cannot be made on this machine or fleet. Check `GET /v1/catalog`. |
 | `503` | `NO_CAPACITY` | Nothing is free and you sent `noWait: true`. Try again after the `Retry-After` seconds. |
 | `404` | `UNKNOWN_LEASE` | The lease has ended or never existed. Request a new one. |

@@ -23,6 +23,8 @@ On each agent's machine:
 
 agent-device through Simlock drives simulators, emulators and, with `--physical`, phones enrolled in Simlock (see [Physical devices](/simlock/docs/using-devices/physical-devices)). `open --physical` leases an enrolled phone: the command goes to the phone daemon and the reply names the device with `physical: true`. Simlock picks the phone, so name no `--udid` or `--serial`.
 
+Each agent-device session is its own requester and holds one device. To use a second device, open a second session.
+
 The phone daemon runs `adb` without Simlock's version check, so its `adb` must come from the same Android SDK (platform-tools) as Simlock's.
 
 ## Turn it on

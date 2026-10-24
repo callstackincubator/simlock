@@ -239,6 +239,12 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
 export type DownloadPolicy = "never" | "on-request" | "always";
 
 /**
+ * why: one number counts a requester's leases across all platforms; the object counts per
+ * platform, and a platform it leaves out is 1.
+ */
+export type MaxPerRequester = number | { readonly ios?: number; readonly android?: number };
+
+/**
  * why: which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine and a
  * `gateway` owns none and fronts the workers that joined it. One daemon runs exactly one mode,
  * and the folder it lives in decides it (ADR 0034): the daemon is told its role at start, and
@@ -319,7 +325,7 @@ export interface Config {
      * an open record is never evicted.
      */
     readonly maxRequestRecords: number;
-    readonly maxPerRequester: number;
+    readonly maxPerRequester: MaxPerRequester;
     readonly endWaitMs: number;
   };
   /**
@@ -1111,7 +1117,7 @@ function configValidators(
       }),
       requestRetentionMs: positiveNumber,
       maxRequestRecords: positiveInteger,
-      maxPerRequester: positiveInteger,
+      maxPerRequester: maxPerRequesterValidator,
       endWaitMs: endWaitValidator,
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
@@ -1280,6 +1286,12 @@ function driverSettings(value: unknown, path: string): Record<string, string | n
   }
 
   return result;
+}
+
+function maxPerRequesterValidator(value: unknown, path: string, warn: Warn): unknown {
+  return typeof value === "object" && value !== null
+    ? objectValidator({ ios: positiveInteger, android: positiveInteger })(value, path, warn)
+    : positiveInteger(value, path);
 }
 
 function mergeConfig<Base extends object>(base: Base, overrides: object): Base {

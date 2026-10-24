@@ -5,6 +5,7 @@ import {
   type LeaseProgress,
   NoDriverError,
   type Config,
+  type MaxPerRequester,
   type PhysicalDevice,
   UnknownModelError,
 } from "../core/index.js";
@@ -107,7 +108,7 @@ function config(leaseOverrides: object = {}): Config {
 async function createHarness(
   options: {
     readonly reclaimEstimateMs?: number;
-    readonly lease?: { readonly maxPerRequester?: number };
+    readonly lease?: { readonly maxPerRequester?: MaxPerRequester };
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -530,6 +531,19 @@ describe("createLeasing with physical devices", () => {
     const third = await outcome(harness.engine.request(virtualRequest, asking("agent-1")));
 
     expect(third).toMatchObject({ name: "RequesterAlreadyLeasedError" });
+  });
+
+  it("a physical iPhone lease counts against the iOS limit of a per-platform lease.maxPerRequester", async () => {
+    const harness = await createHarness({ lease: { maxPerRequester: { ios: 1, android: 1 } } });
+    await enrollIphone(harness, "UDID-A");
+    const phone = await harness.engine.request(physicalRequest, asking("agent-1"));
+
+    const simulator = await outcome(harness.engine.request(virtualRequest, asking("agent-1")));
+
+    expect(simulator).toMatchObject({
+      message: `Requester agent-1 already holds iOS lease ${phone.lease.id}; release it (\`simlock release ${phone.lease.id}\`) before requesting another iOS device`,
+      name: "RequesterAlreadyLeasedError",
+    });
   });
 
   it("declines a probe for a physical request nothing could match unresolvable-spec, and one whose matches are all leased no-wait", async () => {

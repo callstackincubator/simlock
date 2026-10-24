@@ -1,4 +1,5 @@
-import { LEASE_ID_PATTERN } from "../contract/index.js";
+import { LEASE_ID_PATTERN, type Platform } from "../contract/index.js";
+import type { HeldLease } from "../leasing/index.js";
 import type { Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
@@ -35,11 +36,17 @@ export interface FleetLeaseEntry {
  * own entries from (`WorkerView.leases`'s element shape, structurally). */
 export interface WorkerReportedLease {
   readonly id: string;
+  readonly deviceId?: string;
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
   /** ADR 0020: whether the requester chose `id`. Absent, the id is a generated one. */
   readonly idChosenByRequester?: boolean;
+}
+
+export interface ReportedDevice {
+  readonly id: string;
+  readonly spec: { readonly platform: Platform };
 }
 
 /** A lease record projected for a fleet client: rewritten to the gateway's id and fleet-level
@@ -61,6 +68,8 @@ export class FleetLeaseIndex {
   readonly #byGatewayId = new Map<string, FleetLeaseEntry>();
   readonly #byRequester = new Map<string, Set<string>>();
   readonly #byWorkerLease = new Map<string, string>();
+  // why: kept beside the entry, not in it, because a module sees the entry's shape; a lease with no platform here counts against every platform.
+  readonly #platforms = new Map<string, Platform>();
   readonly #removalListeners: ((entry: FleetLeaseEntry) => void)[] = [];
   /** C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
    * `rebuildFromWorker` call for that worker -- what lets reconciliation (below) tell "missing
@@ -140,6 +149,21 @@ export class FleetLeaseIndex {
     return earliest?.gatewayLeaseId;
   }
 
+  held(requesterId: string): readonly HeldLease[] {
+    const held: HeldLease[] = [];
+    for (const id of this.#byRequester.get(requesterId) ?? []) {
+      const entry = this.#byGatewayId.get(id);
+      if (entry === undefined) continue;
+      const platform = this.#platforms.get(id);
+      held.push({
+        grantedAt: entry.grantedAt,
+        id: entry.gatewayLeaseId,
+        ...(platform === undefined ? {} : { platform }),
+      });
+    }
+    return held;
+  }
+
   leaseCount(requesterId: string): number {
     return this.#byRequester.get(requesterId)?.size ?? 0;
   }
@@ -150,11 +174,12 @@ export class FleetLeaseIndex {
    * duplicates. A bare id (ADR 0020) belongs to the worker that first held it: another worker's
    * entry under it is not added, and `false` says so.
    */
-  add(entry: FleetLeaseEntry): boolean {
+  add(entry: FleetLeaseEntry, platform?: Platform): boolean {
     const existing = this.#byGatewayId.get(entry.gatewayLeaseId);
     if (existing !== undefined && existing.workerId !== entry.workerId) return false;
     this.#endedByWorkerAnswer.delete(entry.gatewayLeaseId);
     this.#byGatewayId.set(entry.gatewayLeaseId, entry);
+    if (platform !== undefined) this.#platforms.set(entry.gatewayLeaseId, platform);
     const ids = this.#byRequester.get(entry.requesterId) ?? new Set<string>();
     ids.add(entry.gatewayLeaseId);
     this.#byRequester.set(entry.requesterId, ids);
@@ -217,17 +242,25 @@ export class FleetLeaseIndex {
    * this class's own caller re-runs after every worker-view change) rather than evicting on the
    * first miss.
    */
-  rebuildFromWorker(workerId: string, leases: readonly WorkerReportedLease[]): void {
+  rebuildFromWorker(
+    workerId: string,
+    leases: readonly WorkerReportedLease[],
+    devices: readonly ReportedDevice[] = [],
+  ): void {
     const generation = (this.#generation.get(workerId) ?? 0) + 1;
     this.#generation.set(workerId, generation);
-    const reported = this.#addReported(workerId, leases);
+    const reported = this.#addReported(workerId, leases, devices);
     this.#reconcileMissing(workerId, generation, reported);
   }
 
   /** `rebuildFromWorker`'s addition half: adds every gateway-issued lease this snapshot reports
    * that the index does not already know, and returns the full set of gateway ids it saw (used
    * to know which of this worker's *existing* entries this snapshot did not mention). */
-  #addReported(workerId: string, leases: readonly WorkerReportedLease[]): ReadonlySet<string> {
+  #addReported(
+    workerId: string,
+    leases: readonly WorkerReportedLease[],
+    devices: readonly ReportedDevice[],
+  ): ReadonlySet<string> {
     const reported = new Set<string>();
     for (const lease of leases) {
       if (!this.isGatewayRequester(lease.requesterId)) continue;
@@ -258,14 +291,18 @@ export class FleetLeaseIndex {
           { gatewayLeaseId, workerId },
         );
       }
-      this.add({
-        gatewayLeaseId,
-        grantedAt: lease.grantedAt,
-        ownerId: lease.ownerId,
-        requesterId: lease.requesterId.slice(this.gatewayRequesterPrefix.length),
-        workerId,
-        workerLeaseId: lease.id,
-      });
+      const platform = devices.find((device) => device.id === lease.deviceId)?.spec.platform;
+      this.add(
+        {
+          gatewayLeaseId,
+          grantedAt: lease.grantedAt,
+          ownerId: lease.ownerId,
+          requesterId: lease.requesterId.slice(this.gatewayRequesterPrefix.length),
+          workerId,
+          workerLeaseId: lease.id,
+        },
+        platform,
+      );
     }
     return reported;
   }
@@ -351,6 +388,7 @@ export class FleetLeaseIndex {
 
   #forget(entry: FleetLeaseEntry): void {
     this.#byGatewayId.delete(entry.gatewayLeaseId);
+    this.#platforms.delete(entry.gatewayLeaseId);
     this.#dropRequesterLink(entry);
     this.#byWorkerLease.delete(workerKey(entry.workerId, entry.workerLeaseId));
     this.#missingSince.delete(entry.gatewayLeaseId);

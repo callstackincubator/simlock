@@ -28,15 +28,18 @@ const body = { device: "iPhone 17 Pro", platform: "ios" as const };
 async function createTracked(
   tracker: LeaseRequestTracker,
   dispatcher: FakeDispatcher,
-  requestBody: typeof body & {
+  requestBody: {
+    readonly device: string;
+    readonly platform: "ios" | "android";
     readonly ttlMs?: number;
     readonly mode?: "slim" | "full";
     readonly imageTag?: string;
     readonly physical?: boolean;
   } = body,
+  nth = 0,
 ): Promise<{ readonly view: TrackedRequestView; readonly callIndex: number }> {
   const outcomePromise = tracker.submit(identity, requestBody);
-  const call = await waitForDispatch(dispatcher, "lease.request");
+  const call = await waitForDispatch(dispatcher, "lease.request", nth);
   const callIndex = dispatcher.calls.indexOf(call);
   call.session.onProgress?.({ queuePosition: 1, stage: "queued" });
   const outcome = await outcomePromise;
@@ -161,6 +164,32 @@ describe("LeaseRequestTracker.cancel", () => {
     const result = await tracker.cancel(view.id, identity);
     expect(result).toEqual({ kind: "cancelled" });
     expect(tracker.get(view.id)?.state).toEqual({ stage: "cancelled" });
+  });
+
+  it("cancelling one of a requester's two waiting requests of different platforms cancels that one and leaves the other waiting", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    const ios = await createTracked(tracker, dispatcher);
+    const android = await createTracked(
+      tracker,
+      dispatcher,
+      { device: "Pixel 9", platform: "android" },
+      1,
+    );
+    const cancelled: string[] = [];
+    dispatcher.handlers["lease.cancel"] = (input) => {
+      const { platform } = input as { platform?: string };
+      const index = platform === "android" ? android.callIndex : ios.callIndex;
+      cancelled.push(platform ?? "none");
+      dispatcher.calls[index]?.reject(new RequestCancelledError("req"));
+      return { result: "cancelled" };
+    };
+
+    const result = await tracker.cancel(android.view.id, identity);
+
+    expect(result).toEqual({ kind: "cancelled" });
+    expect(cancelled).toEqual(["android"]);
+    expect(tracker.get(android.view.id)?.state).toEqual({ stage: "cancelled" });
+    expect(tracker.get(ios.view.id)?.state).toEqual({ queuePosition: 1, stage: "queued" });
   });
 
   it("reports not-cancellable, naming the lease, once the request is already granted", async () => {

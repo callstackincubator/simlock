@@ -1216,6 +1216,13 @@ describe("operation input/output round trips", () => {
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+    for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
+      const parsed = OPERATIONS["config.get"].output.parse({
+        ...config,
+        lease: { ...config.lease, maxPerRequester },
+      });
+      expect(parsed.lease.maxPerRequester).toEqual(maxPerRequester);
+    }
   });
 
   it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {

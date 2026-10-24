@@ -1,5 +1,6 @@
 import type { Clock, IdGenerator } from "../ports/index.js";
 import { type LeaseRecord, type DeviceRequest, type LeaseProgress } from "../core/index.js";
+import type { Platform } from "../contract/index.js";
 import {
   WaitQueue,
   type LeaseRequestOptions,
@@ -76,12 +77,12 @@ export class FleetQueue {
     return this.#queue.places();
   }
 
-  hasPendingRequester(requesterId: string): boolean {
-    return this.#queue.hasPendingRequester(requesterId);
+  pendingPlatforms(requesterId: string): readonly Platform[] {
+    return this.#queue.pendingPlatforms(requesterId);
   }
 
-  findPendingWaiter(requesterId: string): FleetWaiter | undefined {
-    return asFleet(this.#queue.findPendingWaiter(requesterId));
+  findPendingWaiter(requesterId: string, platform?: Platform): FleetWaiter | undefined {
+    return asFleet(this.#queue.findPendingWaiter(requesterId, platform));
   }
 
   create(request: DeviceRequest, options: LeaseRequestOptions, id?: string): FleetWaiter {

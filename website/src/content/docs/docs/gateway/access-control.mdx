@@ -23,7 +23,7 @@ Tokens never cross machines. A token made on the gateway works only on the gatew
 
 ### One agent, one token
 
-Over HTTP, the token is the requester. Every lease and request made with one agent token belongs to the same requester, and a requester holds one lease at a time by default. Give every agent its own token, and a label you will recognise in the console.
+Over HTTP, the token is the requester. Every lease and request made with one agent token belongs to the same requester, and a requester holds one lease at a time by default (per requester and per platform when the operator sets `lease.maxPerRequester` for each platform). Give every agent its own token, and a label you will recognise in the console.
 
 ### An agent token reaches the worker's machine
 
