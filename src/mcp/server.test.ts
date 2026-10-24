@@ -652,6 +652,41 @@ describe("MCP run_on_device output cap", () => {
   });
 });
 
+describe("MCP run_on_device without a lease", () => {
+  it("answers NO_LEASE with no daemon call when the session holds no lease", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    client.execImpl = () => Promise.resolve({ exitCode: 0 });
+    const { mcpClient, close } = await connectedServer(client);
+    const noLease = {
+      code: "NO_LEASE",
+      message: "This MCP session holds no lease. Call lease_simulator first.",
+    };
+    const run = () => call(mcpClient, "run_on_device", { args: [], tool: "simctl" });
+    try {
+      const never = await run();
+      expect(never.isError).toBe(true);
+      expect(JSON.parse(text(never))).toEqual(noLease);
+
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      expect((await run()).isError).not.toBe(true);
+
+      await call(mcpClient, "release_simulator", { leaseId: "lease-1" });
+      expect(JSON.parse(text(await run()))).toEqual(noLease);
+
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      expect((await run()).isError).not.toBe(true);
+      client.emitLeaseLost({ deviceId: "SIM-1", leaseId: "lease-1", reason: "expired" });
+      expect(JSON.parse(text(await run()))).toEqual(noLease);
+
+      expect(client.calls.filter((entry) => entry.method === "exec")).toHaveLength(2);
+    } finally {
+      await close();
+    }
+  });
+});
+
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
     { method: "tools/call", params: { arguments: arguments_, name } },
