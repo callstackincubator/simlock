@@ -30,13 +30,14 @@ const SCRIPTS = new Set([
   "typecheck:e2e:types",
   "lint",
   "lint:comments",
+  "lint:tests",
   "format",
   "format:check",
   "fallow",
   "mutate",
 ]);
 const TOOLS = new Set(["tsc", "oxlint", "depcruise", "oxfmt", "fallow", "stryker"]);
-const NODE_SCRIPTS = new Set(["comment-lint.mjs", "mutate.mjs"]);
+const NODE_SCRIPTS = new Set(["comment-lint.mjs", "test-lint.mjs", "mutate.mjs"]);
 const WRAPPERS = new Set(["time", "nice", "env", "command", "exec"]);
 const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "-F", "--filter", "--reporter"]);
 const STAGES = new Set(["implementer", "reviewer", "hardware-verifier"]);

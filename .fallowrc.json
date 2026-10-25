@@ -8,8 +8,8 @@
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
   // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.
   // vitest.mutate.config.ts is named only by stryker.config.mjs (`pnpm mutate`).
-  // .agents/scripts/*.mjs are run by node from the hooks, the skills and the merge gate; two of
-  // them (budget-guard, comment-lint) import from their neighbours (usage, comments).
+  // .agents/scripts/*.mjs are run by node from the hooks, the skills and the merge gate; three of
+  // them (budget-guard, comment-lint, test-lint) import from their neighbours (usage, comments).
   // .dependency-cruiser.cycles.mjs is named only by src/lint-rules.test.ts, which runs depcruise
   // with it (ADR 0027).
   // vendor/screen-capture/scripts/unframe.mjs is a diagnostic a person runs by hand against a

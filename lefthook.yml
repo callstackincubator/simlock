@@ -25,6 +25,13 @@ pre-commit:
       glob: "*.{ts,tsx,js,mjs,mts,cts,sh}"
       run: node .agents/scripts/comment-lint.mjs --base HEAD {staged_files}
       fail_text: "Delete the comment, or start it with 'why:' when it says why the code does something unexpected."
+    # A test line the commit adds keeps testing rules 5, 6 and 10, and a contract line bounds wire input (always-in-scope 8).
+    tests:
+      glob:
+        - "*.test.{ts,tsx}"
+        - "src/contract/*.ts"
+      run: node .agents/scripts/test-lint.mjs --base HEAD {staged_files}
+      fail_text: "Each line names the rule it breaks and what to write instead."
     # A change can break the files that call it, so this checks the whole project; it takes seconds.
     typecheck:
       glob: "*.{ts,tsx,mts,cts}"

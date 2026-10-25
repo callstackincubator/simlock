@@ -42,7 +42,7 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck && pnpm run typecheck:e2e
       - name: Lint
-        run: pnpm run lint && pnpm run lint:comments
+        run: pnpm run lint && pnpm run lint:comments && pnpm run lint:tests
       - name: Format
         run: pnpm run format:check
 

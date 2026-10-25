@@ -29,18 +29,19 @@ report until it ends.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`,
+`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm typecheck:e2e:types`, `pnpm lint`, `pnpm lint:comments`, `pnpm lint:tests`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
-(outside the `garden-comments` routine). A PreToolUse hook
+(outside the `garden-comments` routine), `.agents/scripts/test-lint.mjs`. A PreToolUse hook
 (`.agents/scripts/tool-guard.mjs`) refuses them in every sub-agent; keep its
 list and this one the same.
 
 - **Commit hook:** formats the staged files and stages the result, then
-  lint, the comment lint (architecture rule 17) and typecheck. Errors show
-  in its output.
+  lint, the comment lint (architecture rule 17), the test lint (testing
+  rules 5, 6 and 10 and always-in-scope 8, on the lines the commit adds) and
+  typecheck. Errors show in its output.
 - **Push hook:** Fallow, then the e2e typecheck.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the timing

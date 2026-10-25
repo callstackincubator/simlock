@@ -63,11 +63,12 @@
     "typecheck:e2e:types": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run && tsc -p e2e/tsconfig.typecheck.json --incremental --tsBuildInfoFile node_modules/.cache/tsc/e2e.tsbuildinfo",
     "lint": "oxlint src e2e ui && depcruise src e2e ui --ignore-known",
     "lint:comments": "node .agents/scripts/comment-lint.mjs --base origin/main",
+    "lint:tests": "node .agents/scripts/test-lint.mjs --base origin/main",
     "fallow": "fallow",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "prepare": "lefthook install",
-    "check": "pnpm run typecheck && pnpm run typecheck:e2e && pnpm run lint && pnpm run lint:comments && pnpm run format:check && pnpm run test",
+    "check": "pnpm run typecheck && pnpm run typecheck:e2e && pnpm run lint && pnpm run lint:comments && pnpm run lint:tests && pnpm run format:check && pnpm run test",
     "mutate": "node scripts/mutate.mjs",
     "openapi": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run && node scripts/openapi.mjs"
   },

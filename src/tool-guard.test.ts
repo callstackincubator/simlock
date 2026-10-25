@@ -44,6 +44,8 @@ describe("tool-guard.mjs", () => {
     "npx -y tsc --noEmit",
     "node_modules/.bin/oxlint src",
     "node .agents/scripts/comment-lint.mjs --base origin/main",
+    "node .agents/scripts/test-lint.mjs --base origin/main",
+    "pnpm lint:tests",
     "pnpm test:e2e",
     "pnpm test:console",
     "sed -i '' 's/a/b/' f.ts && pnpm check 2>&1 | tail -5",
