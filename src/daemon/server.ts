@@ -637,8 +637,8 @@ export class DaemonServer {
     this.options.hostLoad?.dispose();
     this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
-    // why: a cleanup run in flight still reads the registry and calls drivers; it ends before
-    // anything below closes them.
+    // why: every cleanup run in flight (scheduled, dry-run or rule-scoped) still reads the registry
+    // and calls drivers; each ends before anything below closes them.
     await this.#engine?.reaper.settle();
     this.#engine?.healthMonitor?.dispose();
     this.#engine?.physicalDeviceWatcher?.dispose();
