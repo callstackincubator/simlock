@@ -379,8 +379,8 @@ test.describe("the Activity page", () => {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      // why: the real daemon answers the page before the oldest held only once the test has noted
-      // the row in view, as on a loaded runner (#1006); its end row then shrinks the box.
+      // why: the real daemon answers the page before the oldest late, as on a loaded runner (#1006); the
+      // test notes the row in view only after the end row has moved it.
       await page.route(
         (url) => url.pathname === "/v1/events" && url.searchParams.has("before"),
         async (route: Route) => {
@@ -396,14 +396,13 @@ test.describe("the Activity page", () => {
       await page.keyboard.press("End");
       await expect.poll(() => feed(page).evaluate((box) => box.scrollTop)).toBeGreaterThan(0);
 
-      await expect
-        .poll(() =>
-          feed(page).evaluate((box) => box.scrollHeight - box.scrollTop - box.clientHeight),
-        )
-        .toBeLessThan(2);
-      const inView = await firstRowInView(page);
+      const atEnd = () =>
+        feed(page).evaluate((box) => box.scrollHeight - box.scrollTop - box.clientHeight);
+      await expect.poll(atEnd).toBeLessThan(2);
       release();
       await expect(page.getByText("Start of the history (", { exact: false })).toBeVisible();
+      await expect.poll(atEnd).toBeLessThan(2);
+      const inView = await firstRowInView(page);
       await lease(host, "console-e2e-scroll-new");
       const more = page.getByRole("button", { name: /^\d+ new events?$/ });
       await expect(more).toBeVisible();
