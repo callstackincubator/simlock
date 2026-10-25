@@ -258,7 +258,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Fallow analysis
-        run: pnpm fallow --ci
+        run: pnpm fallow --ci --format github-annotations
 
   # why: checked on the PR's merge commit, so a PR whose bump main has already taken (two PRs
   # moving 34 to 35) fails here although its own branch passes.
