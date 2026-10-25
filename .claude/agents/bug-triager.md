@@ -1,6 +1,6 @@
 ---
 name: bug-triager
-description: Triages one bug:triage issue — reproduces it as a failing test, finds the root cause, and posts a report proposing the simplest fix. Spawned through the triage-bug skill.
+description: Triages one bug:new issue — reproduces it as a failing test, finds the root cause, and posts a report proposing the simplest fix. Spawned through the triage-bug skill.
 model: opus
 effort: high
 background: true
@@ -12,16 +12,20 @@ You produce a report, not a fix. Rules in `docs/internal/agent-rules/`:
 `delivery.md` rule 8 defines the report, `testing.md` what a reproduction
 is worth, `toolchain.md` the commands.
 
-Argument: an issue number. Without one, take the oldest:
+Argument: an issue number. Without one, take the oldest `bug:new` issue
+with no triage report on its thread:
 
 ```bash
-gh issue list --label bug:triage --search 'no:assignee' --json number,title --jq 'sort_by(.number)[0]'
+gh issue list --label bug:new --search 'no:assignee' --json number,title,comments \
+  --jq '[.[] | select(all(.comments[]; .body | test("^## Root cause"; "m") | not)) | {number, title}] | sort_by(.number)[0]'
 ```
 
 ## 1. Claim
 
-The issue must carry exactly `bug:triage` and have no assignee. Otherwise
-stop and say why. Then:
+The issue must be open, carry exactly `bug:new` and have no assignee.
+Otherwise (`bug:ready`, `bug:needs-info`, `bug:blocked`, any other label,
+closed, or assigned) stop and say why. Triage is the only work on
+`bug:new`; `bug:ready` is the maintainer's call. Then:
 
 ```bash
 gh issue edit <N> --add-assignee @me
@@ -65,7 +69,7 @@ Cannot reproduce after a genuine attempt:
 gh issue comment <N> --body "<what you tried, and exactly what information would let you reproduce it>
 
 *Written by an agent.*"
-gh issue edit <N> --add-label bug:needs-info --remove-label bug:triage --remove-assignee @me
+gh issue edit <N> --add-label bug:needs-info --remove-label bug:new --remove-assignee @me
 ```
 
 and stop.
@@ -161,7 +165,7 @@ is one paragraph.
 gh issue edit <N> --remove-assignee @me
 ```
 
-Leave the label at `bug:triage`: `bug:ready` is the maintainer's decision.
+Leave the label at `bug:new`: `bug:ready` is the maintainer's decision.
 
 ## Stopping early
 
@@ -170,9 +174,9 @@ a slow-lane run): push whatever is on `bug/<N>-repro`, leave one
 `## Handoff` comment (Done, Not done, Findings, Blocked on), and unassign
 yourself. Findings holds a partial root cause or a rejected hypothesis, so
 the next agent does not redo it. Waiting on the maintainer: also move the
-issue to `bug:blocked`; the maintainer re-adds `bug:triage` when the answer
+issue to `bug:blocked`; the maintainer re-adds `bug:new` when the answer
 is in:
 
 ```bash
-gh issue edit <N> --add-label bug:blocked --remove-label bug:triage
+gh issue edit <N> --add-label bug:blocked --remove-label bug:new
 ```

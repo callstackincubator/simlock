@@ -18,7 +18,7 @@ rules 1, 2, 3, 9, 14, 15 and 16.
 whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
 then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
-report (`remaining`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
+report (`remaining`, `fixes`, the reviewer's arguments). Include `base-sha`, `merge-base` and `head`, copied from the `base`, `merge-base` and `head` lines of `.agents/scripts/pr-shas.sh <M>` run just before the stage starts (never a SHA typed from memory or `git rev-parse`), and, after review,
 `previous` plus the resolution ledger. Last, the text the agent would
 otherwise have to open: for an `implementer`, `brief:` and the full text of
 `.agents/briefs/implement-<mode>.md`; for a `reviewer`, `protocol:` and the
@@ -85,7 +85,8 @@ nobody decided) does not stop the run either:
 
 1. Take the conservative option: the one closest to what the code does
    today and the easiest to reverse.
-2. Fold it into the issue body as rule 3 says, the line ending
+2. Fold it into the issue body as rule 3 says (`issue-body.mjs <N>
+replace` or `set-section`), the line ending
    `(decided in delivery, pending the maintainer)`, with a Tests line that
    pins it.
 3. Start the next stage on it, with a `decision:` line naming it.
@@ -131,6 +132,12 @@ gh issue view <N> --json number,title,labels,assignees,body
 - `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`: one
   issue; go to step 2.
 - `feature:planned`: walk its open sub-issues (step 3).
+- `bug:new`, unassigned: triage is the only work (delivery rules 1 and 8).
+  A triage report already on the thread with no newer reply: stop, it
+  waits on the maintainer's `bug:ready`. Otherwise run the `triage-bug`
+  procedure: start one `bug-triager` in the background with the issue
+  number, wait for its report, print it, and stop. Never add `bug:ready`:
+  it is the maintainer's call after reading the report.
 - Anything else, or assigned to someone else: stop and say why (rule 1).
 
 ## 2. Deliver one issue
@@ -148,16 +155,22 @@ they name; never build again or restart review at round 1.
    `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number; it picks the lenses
    (`docs/internal/REVIEW.md`). Before every review round
-   and every fix run, run `node .agents/scripts/ci-triage.mjs <M>` and
-   `gh pr view <M> --json mergeable` once. The triage reads the newest
-   finished CI run, which is often older than the head (newer pushes cancel
-   theirs), and sorts each failed test: `flaky` and `unknown` get its
+   and every fix run, run `.agents/scripts/pr-shas.sh <M>` and
+   `node .agents/scripts/ci-triage.mjs <M>` once. The triage reads the
+   newest finished CI run; exit 3 with a `stale:` line first means that
+   run is older than the head and the lines after it describe an older
+   commit: act on none of them. With `pending`, triage again before the
+   next fix run or the gate; with `missing`, the head's run was
+   cancelled, and the gate re-runs cancelled jobs once. A current run's
+   failed tests are sorted: `flaky` and `unknown` get its
    `rerun <id>` lines run as `gh run rerun <id> --failed`, no fix run;
    `base` means the branch inherited the failure: run
    `.agents/scripts/stack-sync.sh <top PR>` and let CI run again; only
    `reach`, and `unknown` red a second time, joins the fix run's `fixes`
-   as `ci: <its line> run <id>`. A conflict joins as `stack: merge
-origin/<parent branch>`. With no fix run due, they get one before the
+   as `ci: <its line> run <id>`; a `job <name>` line's indented lines
+   are the log's errors and join the same way, never read by hand.
+   `mergeable false` from pr-shas joins as `stack: merge
+origin/<base-ref>`. With no fix run due, they get one before the
    round.
 3. **Decide** on the review report:
    - Incomplete assessment: preserve findings and missing scope; park. It
@@ -174,6 +187,11 @@ base-sha the previous check used>`, so the inputs script can map the
      test fixes, need the applicable targeted fix-check before the gate.
      A clean base merge alone needs no repeat review; record its new head
      and base and let CI check it. Never silently reset the round cap.
+   - Every body edit goes through `node .agents/scripts/issue-body.mjs
+<M> --pr set-section <heading> <file>` (`replace <old> <new>` for
+     one line; `<N>` without `--pr` for an issue): the PR body's `##
+Review`, `### Status` and `Notes so far:`, and a decision folded into
+     a task body. Never rebuild a body by hand or with inline python.
    - After each check persist the resolution ledger, the findings file
      (`docs/internal/REVIEW.md`, "Measurement"), counts and dispositions in
      `## Review`.
@@ -214,9 +232,11 @@ base-sha the previous check used>`, so the inputs script can map the
    the counts for a review the diff's kind left out (for an ADR-only diff:
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
    legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
-   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included:
-   one `Round <r>: <full commit>` line per check first, and `round` on
-   every finding. Add
+   with `node .agents/scripts/review-ledger.mjs <M> --issue <N> --findings
+<file> --round <r>:<Commit> ...`, one `--round` per check in order,
+   fix-checks included, each SHA the `Commit` its report gave; it posts or
+   updates the comment as `docs/internal/REVIEW.md` "Measurement" says and
+   then runs `pr-body-check.mjs <M>`, exiting with its code. Add
    `Assessment: complete` only when coverage is complete and no finding is
    open; otherwise `Assessment: incomplete` and park. `<t>` is
    `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
@@ -224,8 +244,9 @@ base-sha the previous check used>`, so the inputs script can map the
    Keep duplicate outcomes in the ledger, not Rejected. Tag rejections
    `[incorrect]`, `[intentional]` or `[nonblocking]`. Every blocking finding
    not fixed or open has its disposition recorded; omit
-   "Rejected:" when there is none. Then run
-   `node .agents/scripts/pr-body-check.mjs <M>`: it checks the shape
+   "Rejected:" when there is none. The body check `review-ledger.mjs`
+   ends with (`node .agents/scripts/pr-body-check.mjs <M>`; never run it
+   before the ledger is posted) checks the shape
    `.agents/scripts/delivery-stats.mjs` parses, the footer
    `*Written by an agent.*`, and the rule 12 budget of 200 words outside
    the checklist, Status, Assumptions and Review. Fix what it fails on; cut
@@ -256,15 +277,17 @@ base-sha the previous check used>`, so the inputs script can map the
    .agents/scripts/merge-pr.sh <M>
    ```
 
-   Exit 0: merged. A conflict: an `implementer` fix run that merges the
+   While it waits it prints one `merge-pr: #<M> pending <n> check(s) ...,
+<m> min waited` line per poll and one `re-running ... run <id>` line
+   per re-run; nothing to act on. Exit 0: merged. A conflict: an `implementer` fix run that merges the
    base branch. Red CI: one `implementer` fix run with the failing test
    titles and the run id. Either way, the `fix-check` review in item 3
    (none for a fix to tests outside the PR's diff), then the gate again. Any other exit, or red CI a second time: park with the
    line it printed.
 
-After every stage, update the PR body's `### Status` section so any session
-can resume from GitHub alone: the status line, then the Fix lines the next
-stage works on, if any.
+After every stage, update the PR body's `### Status` section (`issue-body.mjs
+<M> --pr set-section Status <file>`) so any session can resume from GitHub
+alone: the status line, then the Fix lines the next stage works on, if any.
 
 ```
 ### Status
@@ -323,11 +346,18 @@ origin/<parent>`, then a fix check on that PR, then the script again.
   stack stays open and nothing merges; the maintainer decides.
 
 **Merging the stack.** When every task has joined the stack and nothing is
-in flight, run `.agents/scripts/stack-sync.sh <top>` once more (another
-feature may have merged meanwhile), resolve a conflict as above, then the
-gate on the top PR: `merge-pr.sh <top>` gates every PR in the stack and
-merges them all, bottom to top. Red CI: the fix run goes to the lowest red
-PR, then the same sync carries it up.
+in flight: first the feature's ADRs. Each ADR under its Decisions is
+_Accepted — not yet implemented_; send the top PR's branch one
+`implementer` fix run with `fixes: adr: <nnnn> to Accepted` per ADR (a
+status line and the index row, nothing else; rule 10), then the
+coordinator's mechanical fix-check. Then run
+`.agents/scripts/stack-sync.sh <top>` once more (another feature may have
+merged meanwhile), resolve a conflict as above, then the gate on the top
+PR: `merge-pr.sh <top>` gates every PR in the stack and merges them all,
+bottom to top. Red CI: the fix run goes to the lowest red PR, then the
+same sync carries it up. The feature closes itself: the issue-state
+workflow closes a `feature:planned` issue when its last sub-issue closes
+(rule 9), so post the run summary (step 4) on it and leave it.
 
 Stop when nothing is runnable and nothing is in flight.
 

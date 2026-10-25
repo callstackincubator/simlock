@@ -8,7 +8,10 @@
 # nothing. Gates, in order, for each: the PR is open and not a draft; it carries no needs-hardware label; its body
 # passes pr-body-check.mjs (a `## Review` section with its counts line, no "spec needs" line,
 # the agent footer); every CI check passed or was skipped; and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
-# that fails and exits 1, or exits 2 when checks are still pending at the deadline.
+# that fails and exits 1, or exits 2 when checks are still pending at the deadline. While it
+# waits it prints one line per poll to stderr, `merge-pr: #<pr> pending <n> check(s) (<up to 3
+# names>), <m> min waited`, and `merge-pr: #<pr> re-running the failed jobs of run <id>: <jobs>`
+# for each run it re-runs.
 #
 # Red CI gets one re-run of its failed jobs when no failure is this PR's to fix: every red
 # check is a job GitHub cancelled (no runner came), or every test that failed is named by an
@@ -64,7 +67,8 @@ checks() {
 # Waits for every check to settle, then sets `bad` to the ones that did not pass or skip.
 # Called directly, never in $( ), so its exits end the script.
 red_checks() {
-  deadline=$(($(date +%s) + 1800))
+  started=$(date +%s)
+  deadline=$((started + 1800))
   while :; do
     all=$(checks)
     checks=$(printf '%s' "$all" | sed 's/^\([^ ]*\) [^ ]* /\1 /')
@@ -74,6 +78,9 @@ red_checks() {
       echo "not merged: checks still pending after 30 minutes" >&2
       exit 2
     }
+    pending=$(echo "$checks" | sed -n 's/^pending //p')
+    echo "merge-pr: #$pr pending $(echo "$pending" | grep -c '') check(s) ($(echo "$pending" |
+      head -n 3 | paste -sd , - | sed 's/,/, /g')), $((($(date +%s) - started) / 60)) min waited" >&2
     sleep "$poll"
   done
   bad=$(echo "$checks" | grep -v -e '^pass ' -e '^skipping ' || true)
@@ -119,7 +126,12 @@ gates() {
     runs=$(rerunnable_runs)
     if [ -n "$runs" ] && ! echo "$runs" | grep -qx none; then
       echo "PR #$pr: re-running the failed jobs once: cancelled, or failed only on open flaky-test issues"
-      for run in $runs; do gh run rerun "$run" --failed; done
+      for run in $runs; do
+        jobs=$(echo "$all" | grep -e '^fail ' -e '^cancel ' | grep "/actions/runs/$run/" |
+          sed 's/^[^ ]* [^ ]* //' | paste -sd , - | sed 's/,/, /g')
+        echo "merge-pr: #$pr re-running the failed jobs of run $run: $jobs" >&2
+        gh run rerun "$run" --failed
+      done
       sleep "$poll"
       red_checks
     fi

@@ -15,8 +15,7 @@ it before anything else happens to it.
 | Label              | Set by                              | Meaning                                                   |
 | ------------------ | ----------------------------------- | --------------------------------------------------------- |
 | `request:new`      | feature request form                | Inbox. Never picked up, body never edited.                |
-| `bug:new`          | bug report form                     | Reported. Nobody has looked yet.                          |
-| `bug:triage`       | maintainer                          | An agent may reproduce it and write the triage report.    |
+| `bug:new`          | bug report form                     | An agent may triage it (rule 8), and nothing more.        |
 | `bug:needs-info`   | triage agent                        | Could not reproduce. Waiting on the reporter.             |
 | `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
 | `bug:blocked`      | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
@@ -36,15 +35,16 @@ Transitions per kind:
 
 - **request**: `new` until closed. Closed as not planned, or as completed with
   a comment naming the feature it became.
-- **bug**: `new` → `triage` → `ready`, with `needs-info` as a side-trip that
-  returns to `triage` when the reporter answers.
+- **bug**: `new` → `ready` when the maintainer accepts the triage report,
+  with `needs-info` as a side-trip that returns to `new` when the reporter
+  answers.
 - **feature**: `spec` → `planned` when the spec session has set its tasks
-  ready, then closed.
+  ready, then closed when its last sub-issue closes (rule 9).
 - **task**: `draft` → `ready` when its spec check passes, and back to
   `draft` if the technical spec is emptied or the maintainer moves it.
-- **any kind**: `triage` or `ready` → `blocked` when an agent stops on a
-  blocker it names in its handoff. The maintainer clears it by re-adding the
-  label it came from.
+- **any kind**: `ready` → `blocked` (for a bug under triage, `new` →
+  `blocked`) when an agent stops on a blocker it names in its handoff. The
+  maintainer clears it by re-adding the label it came from.
 
 Everything after `ready` is read from GitHub itself, not from a label:
 in progress means an assignee is set, in review means a linked pull request
@@ -52,11 +52,13 @@ is open, done means closed as completed.
 
 ## Rules
 
-1. **An agent acts only on `bug:triage`, `bug:ready` and `task:ready`.**
-   Nothing else is work. Agents never label their way into
-   work: only a maintainer, automation a maintainer configured, or the spec
-   session that wrote a task and saw its spec check pass (rule 7) moves an
-   issue to a state an agent may act on. The maintainer's say on a task is
+1. **An agent acts only on `bug:new` (triage only), `bug:ready` and
+   `task:ready`.** Nothing else is work. The work on `bug:new` is the
+   triage report (rule 8); only the maintainer moves a bug to `bug:ready`,
+   after reading it. Agents never label their way into work: only a
+   maintainer, automation a maintainer configured, or the spec session
+   that wrote a task and saw its spec check pass (rule 7) moves an issue
+   to a state an agent may act on. The maintainer's say on a task is
    the spec session, which they sit through; they can move a task back to
    `task:draft` at any time. A `task:ready` task runs once every issue
    under its Depends on is closed, or is a task of the same feature whose
@@ -139,9 +141,9 @@ is open, done means closed as completed.
    changed. The maintainer approves the feature, its ADRs and its tasks
    once, at the end.
 
-8. **Triage produces a report, not a fix.** An agent working `bug:triage`
-   reproduces the bug as a failing test whose title states the claim the
-   test proves, finds the root cause, and posts one comment with exactly
+8. **Triage produces a report, not a fix.** An agent triaging a `bug:new`
+   issue reproduces the bug as a failing test whose title states the claim
+   the test proves, finds the root cause, and posts one comment with exactly
    these sections: *Reproduction*, *Root cause* (with file and line),
    *Simplest fix*, *Alternatives rejected* (at most three, one line each),
    *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
@@ -152,8 +154,9 @@ is open, done means closed as completed.
    its own `bug:new` issue and listed under Side findings, not described in
    the report. It pushes the failing test to a
    `bug/<number>-repro` branch and opens no pull request. It then unassigns
-   itself. If it cannot reproduce, it moves the issue to `bug:needs-info`,
-   says exactly what is missing, and unassigns itself.
+   itself and leaves the label at `bug:new`. If it cannot reproduce, it
+   moves the issue to `bug:needs-info`, says exactly what is missing, and
+   unassigns itself.
 
 9. **Done is defined per kind.** A task or bug is done when the pull request
    that closes it is merged; for a bug the failing test from triage is the
@@ -163,7 +166,8 @@ is open, done means closed as completed.
    delivering agent merges its own PR, but only through the gate in rule
    15.
    Verification is part of delivery, not a step after it ([coding.md](coding.md)
-   rule 5). The maintainer closes the feature.
+   rule 5). The issue-state workflow closes the feature as completed when
+   its last sub-issue closes; the maintainer may reopen it.
 
 10. **ADR status follows the feature.** A decision made during a spec session
     that constrains more than one task, or would be expensive to reverse,
@@ -256,17 +260,19 @@ gh issue edit <n> --add-assignee @me
 The PR body contains `Closes #<n>`. For a bug, branch from `bug/<n>-repro`
 when it exists so the triage test is carried forward.
 
-**Finding triage work.**
+**Finding triage work.** A `bug:new` issue with no assignee and no triage
+report on its thread:
 
 ```bash
-gh issue list --label bug:triage --search 'no:assignee'
+gh issue list --label bug:new --search 'no:assignee' --json number,title,comments \
+  --jq '[.[] | select(all(.comments[]; .body | test("^## Root cause"; "m") | not))]'
 ```
 
 **Moving a label.** Add the new one and remove the old one in the same
 command, so the one-label invariant never breaks in between:
 
 ```bash
-gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
+gh issue edit <n> --add-label bug:needs-info --remove-label bug:new
 ```
 
 The repo's own skills encode these procedures; use them rather than
@@ -287,13 +293,13 @@ rules mechanically, so nobody has to remember them:
 - A `task:ready` issue with no assignee goes back to `task:draft` when its
   Technical spec section is emptied. A claimed task is left alone.
 - A comment by the reporter on a `bug:needs-info` issue moves it back to
-  `bug:triage`, reopening the issue if it had been closed. Two weeks of
+  `bug:new`, reopening the issue if it had been closed. Two weeks of
   silence closes it as not planned.
 - When the last sub-issue of a `feature:planned` issue closes, the workflow
-  comments that the feature can be closed once the completion conditions
-  hold.
-- A feature closed as completed closes the `request:new` issue it names on
-  its `Request:` line, with a comment pointing at the feature.
+  closes the feature as completed, with a comment.
+- A feature closed as completed, by that job or by a person, closes the
+  `request:new` issue it names on its `Request:` line, with a comment
+  pointing at the feature.
 - A pull request closed without merging releases the claim on every issue
   its body closes, with a comment. The label is left as it was.
 - A claim on a `*:ready` issue with no comment, label change, or commit on
@@ -301,6 +307,7 @@ rules mechanically, so nobody has to remember them:
 - A pull request from a `<kind>/<n>` branch fails its check unless its body
   closes `#<n>` and closes nothing else.
 
-The judgment calls stay manual by design: `bug:new` → `bug:triage`,
-and `bug:triage` → `bug:ready`. A task needs none: the spec session the
-maintainer sits through sets `task:ready` once its check passes (rule 1).
+The judgment call stays manual by design: `bug:new` → `bug:ready`, once
+the maintainer has read the triage report. A task needs none: the spec
+session the maintainer sits through sets `task:ready` once its check
+passes (rule 1).

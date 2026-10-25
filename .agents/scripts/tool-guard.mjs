@@ -9,6 +9,13 @@
 //              last cycle, whose code a later cycle wires in Fallow calls dead code).
 //   isolation  an `implementer`, `reviewer` or `hardware-verifier` is started with `isolation`.
 //              Every stage of a task works in the task's one worktree, one after another.
+//   waiting    a sub-agent runs a test runner without `timeout: 600000` on the Bash call (the
+//              default 120 s moves a two-minute run to the background), starts a background job
+//              (`run_in_background`, a trailing `&`), polls in a loop that sleeps, or runs a bare
+//              `cat > file` with no input (it reads stdin until the tool times out). Each of
+//              these turned into a stall: a backgrounded job holds the agent's report until the
+//              job ends or hits its 30-minute cap. The slow lane is exempt: `slow-e2e.sh` runs
+//              detached by design and its agents wait on `<log>.exit` (delivery rule 16).
 //
 // A refusal exits 2 with the reason on stderr, which the agent reads.
 import fs from "node:fs";
@@ -33,6 +40,13 @@ const NODE_SCRIPTS = new Set(["comment-lint.mjs", "mutate.mjs"]);
 const WRAPPERS = new Set(["time", "nice", "env", "command", "exec"]);
 const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "-F", "--filter", "--reporter"]);
 const STAGES = new Set(["implementer", "reviewer", "hardware-verifier"]);
+// why: the runners agents are allowed to run; `slow-e2e.sh` is excluded above, not here.
+const TEST_RUNNER = /\bvitest\b|\bplaywright\s+test\b|\bpnpm\s+(?:run\s+)?test(?::\w+)?\b/;
+// why: a `&` that is not `&&` and ends a command or a line starts a background job.
+const BACKGROUND_JOB = /(?:^|[^&])&\s*(?:$|\n|\)|;)/m;
+const SLEEP_LOOP = /\b(?:until|while|for)\b[^\n]*\bdo\b[\s\S]*?\bsleep\b/;
+// why: `cat > file` followed by a terminator, with no `<<` heredoc and no `<` input, hangs.
+const BARE_CAT = /(?:^|[;&|]\s*|\n\s*)cat\s*>{1,2}\s*\S+(?:\s+\d?>{1,2}\S+)*\s*(?:;|&&|\|\||\n|$)/;
 const HOOK_BYPASS = [
   /--no-verify\b/,
   /\bLEFTHOOK=(?:0|false)\b/,
@@ -60,6 +74,36 @@ if (tool === "Bash" && typeof input.agent_id === "string") {
         "build stage may skip Fallow, on a push before its last cycle: " +
         "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
     );
+  }
+  const raw = args.command ?? "";
+  const slowLane = /slow-e2e\.sh|\.exit\b/.test(raw);
+  if (!slowLane) {
+    if (TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
+      refuse(
+        "Refused: a test run needs `timeout: 600000` on this Bash call. The default 120 s " +
+          "moves a two-minute run to the background, and a background job holds your report " +
+          "until it ends. Run it again in the foreground with the timeout set.",
+      );
+    }
+    if (args.run_in_background === true || BACKGROUND_JOB.test(shell)) {
+      refuse(
+        "Refused: nothing runs in the background in a delivery stage. A background job holds " +
+          "your report until it ends or hits its 30-minute cap, and polling it costs the turn. " +
+          "Run the command in the foreground with `timeout: 600000` on the Bash call.",
+      );
+    }
+    if (SLEEP_LOOP.test(shell)) {
+      refuse(
+        "Refused: no loop that sleeps. Nothing you started runs in the background, so there is " +
+          "nothing to wait for: run the command itself in the foreground with `timeout: 600000`.",
+      );
+    }
+    if (BARE_CAT.test(raw)) {
+      refuse(
+        "Refused: `cat > file` with no input reads stdin until the tool times out. Write the " +
+          "file with the Write tool, or give cat a heredoc (`cat > file <<'EOF'`).",
+      );
+    }
   }
   const found = forbiddenCheck(shell);
   if (found !== null) {
@@ -113,7 +157,9 @@ function isForbiddenPnpm(args) {
   if (isTool(sub)) return true;
   // why: these scripts are allowed only in their narrow forms: named e2e files, Chromium only.
   if (sub === "test:e2e") return after.length === 0;
-  if (sub === "test:console") return !args.includes("--project=chromium");
+  // why: the whole lane is CI's; a stage runs only the spec files its diff touched.
+  if (sub === "test:console")
+    return !args.includes("--project=chromium") || !after.some((w) => w.endsWith(".spec.ts"));
   return SCRIPTS.has(sub);
 }
 

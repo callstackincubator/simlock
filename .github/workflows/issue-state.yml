@@ -5,12 +5,12 @@ name: Issue state
 # - one <kind>:<state> label per issue (adding the next label drops the old);
 # - a task:ready task whose Technical spec is emptied goes back to task:draft
 #   (the spec session sets task:ready; Depends on is the deliver skill's order);
-# - a reporter's reply moves bug:needs-info back to bug:triage, reopening the
+# - a reporter's reply moves bug:needs-info back to bug:new, reopening the
 #   issue if the stale job closed it (agents post under a maintainer's
 #   account, so comments carrying the agent footer from rule 12 do not count);
-# - a feature whose last sub-issue closed gets a note to check completion
-#   conditions and close;
-# - a feature closed as completed closes the request it came from;
+# - a feature whose last sub-issue closed is closed as completed, and so is
+#   the request it came from;
+# - a feature a person closes as completed closes the request it came from;
 # - a PR closed without merge releases the claim on the issue it would close;
 # - a claim with no activity for three days is released;
 # - bug:needs-info with no activity for two weeks closes as not planned;
@@ -118,12 +118,12 @@ jobs:
               await github.rest.issues.update({ ...context.repo, issue_number, state: "open" });
               core.info(`#${issue_number}: reopened`);
             }
-            await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["bug:triage"] });
+            await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["bug:new"] });
             await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "bug:needs-info" });
-            core.info(`#${issue_number}: bug:needs-info -> bug:triage`);
+            core.info(`#${issue_number}: bug:needs-info -> bug:new`);
 
   feature-complete:
-    name: Last sub-issue closed
+    name: Last sub-issue closed, close its feature and request
     if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
     permissions:
@@ -136,7 +136,7 @@ jobs:
             const { repository } = await github.graphql(`
               query($owner:String!,$repo:String!,$number:Int!){
                 repository(owner:$owner,name:$repo){ issue(number:$number){
-                  parent{ number state labels(first:10){nodes{name}} subIssuesSummary{ total completed } }
+                  parent{ number state body labels(first:10){nodes{name}} subIssuesSummary{ total completed } }
                 }}}`, { ...context.repo, number: context.payload.issue.number });
             const parent = repository.issue.parent;
             if (!parent || parent.state !== "OPEN") return;
@@ -145,10 +145,29 @@ jobs:
             if (completed < total) return;
             await github.rest.issues.createComment({
               ...context.repo, issue_number: parent.number,
-              body: `All ${total} sub-issues are closed. If the completion conditions hold on \`main\`, close this feature and flip its ADRs to *Accepted*.`,
+              body: `Closing: all ${total} sub-issues are closed. The PR that closed the last one walks the completion conditions (delivery rule 9); reopen this if one does not hold on \`main\`. Flip its ADRs to *Accepted* if delivery has not.`,
             });
-            core.info(`#${parent.number}: all sub-issues closed`);
+            await github.rest.issues.update({
+              ...context.repo, issue_number: parent.number, state: "closed", state_reason: "completed",
+            });
+            core.info(`#${parent.number}: all sub-issues closed, closed as completed`);
+            // why: a close made with the workflow token starts no workflow run, so request-close never
+            // sees this one; this repeats its steps for the feature closed above.
+            const m = (parent.body ?? "").match(/^Request:\s*#(\d+)/im);
+            if (!m) return;
+            const issue_number = Number(m[1]);
+            const request = await github.rest.issues.get({ ...context.repo, issue_number });
+            if (request.data.state !== "open") return;
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number, body: `Shipped as #${parent.number}.`,
+            });
+            await github.rest.issues.update({
+              ...context.repo, issue_number, state: "closed", state_reason: "completed",
+            });
+            core.info(`#${issue_number}: closed, shipped as #${parent.number}`);
 
+  # why: only a feature a person closes reaches this job; feature-complete closes the request of
+  # a feature this workflow closed, since that close starts no run.
   request-close:
     name: Feature completed, close its request
     if: >-

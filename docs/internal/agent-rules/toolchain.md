@@ -11,11 +11,16 @@ command of their own: they take every command from here.
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
 | One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
-| Console lane, Chromium only (1)                | `pnpm test:console --project=chromium`       |
+| Console specs the diff touched, Chromium only (1) | `pnpm test:console --project=chromium <spec files>` |
 | Website build and its HTTP API check (2)       | `pnpm --dir website install && pnpm --dir website build && node website/scripts/check-openapi.mjs` |
 
 (1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
-`src/contract/`.
+`src/contract/`, and only the spec files the diff changed or whose page
+it changes: the whole lane is CI's, on every push. A stage agent never
+runs it without a spec file (the tool guard refuses), never in the
+background, and sets `timeout: 600000` on the Bash call: the default
+120 s moves the run to the background, where it holds the agent's
+report until it ends.
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.
@@ -107,6 +112,14 @@ product per `swift build`, each whether or not the other built. Elsewhere the
 Swift build is skipped and iOS streams report unavailable. Neither build checks
 a CoreDevice version: the device program is the one place that enforces that
 pin.
+
+The build steps run through Turborepo (`turbo.json`): `pnpm build`,
+`pnpm build:e2e` and the test scripts that build first run the
+`build:*:run` scripts and skip each one whose inputs (listed per step in
+`turbo.json`) did not change, restoring its `dist/` files from `.turbo/cache`
+in this worktree. Any `package.json` change reruns every step. A capture
+build that skipped Swift (no Xcode selected) is cached too: once Xcode is
+selected, run `pnpm build:capture --force`.
 
 Neither runs in the unit, e2e or console lanes: both read a booted device's
 screen, which means real devices and the slow lane. The lanes cover what this
