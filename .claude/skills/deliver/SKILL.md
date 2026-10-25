@@ -214,7 +214,7 @@ Review`, `### Status` and `Notes so far:`, and a decision folded into
    - Notes never start a round. Keep every Notes and Rejected line.
 4. **Finish the PR body.** Walk every Done when line: a ticked checklist
    line that keeps the issue's words and adds `— <how it was checked>`
-   (`pr-body-check.mjs` matches the start); for the last open sub-issue of
+   (`pr-body-check.mjs` matches it by its words); for the last open sub-issue of
    a feature, the parent's Completion conditions too (rule 9). Keep `## Assumptions` as it is. Add:
 
    ```markdown
