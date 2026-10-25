@@ -17,13 +17,22 @@ function call(input: object): { status: number | null; stderr: string } {
   return { status: result.status, stderr: result.stderr };
 }
 
-function bash(command: string, agentId: string | null = "a1", agentType = "reviewer") {
+function bash(
+  command: string,
+  agentId: string | null = "a1",
+  agentType = "reviewer",
+  input: Record<string, unknown> = {},
+) {
   return call({
     tool_name: "Bash",
-    tool_input: { command },
+    tool_input: { command, ...input },
     ...(agentId && { agent_id: agentId, agent_type: agentType }),
   });
 }
+
+// why: a test run is allowed only with the Bash tool's timeout set (the default 120 s moves it to
+// the background), so the "lets run" cases pass it the way an agent must.
+const TIMEOUT = { timeout: 600_000 };
 
 describe("tool-guard.mjs", () => {
   it.each([
@@ -60,7 +69,7 @@ describe("tool-guard.mjs", () => {
     "pnpm test:changed",
     "pnpm exec vitest run --project unit src/a.test.ts",
     "pnpm test:e2e e2e/http-api.test.ts",
-    "pnpm test:console --project=chromium",
+    "pnpm test:console --project=chromium e2e/console/shell.spec.ts",
     'git commit -qm "run pnpm check in CI"',
     'git commit -m "chore(fallow): remove four stale suppressions"',
     'gh pr create --title "chore(fallow): x" --body-file b.md',
@@ -70,8 +79,40 @@ describe("tool-guard.mjs", () => {
     "python3 - <<'E'\nprint(\"pnpm check\")\nE\ngit status --short",
     "cat > x.sh <<EOF\npnpm check\nEOF\nchmod +x x.sh",
   ])("lets a sub-agent run a test, or a command that only names a check: %s", (command) => {
-    expect(bash(command)).toEqual({ status: 0, stderr: "" });
+    expect(bash(command, "a1", "reviewer", TIMEOUT)).toEqual({ status: 0, stderr: "" });
   });
+
+  it.each([
+    ["pnpm exec vitest run --project unit src/a.test.ts", {}, "timeout: 600000"],
+    ["pnpm test:changed", { timeout: 120_000 }, "timeout: 600000"],
+    ["pnpm test:console --project=chromium", TIMEOUT, "Checks agents never run"],
+    ["ls", { run_in_background: true }, "background"],
+    ["(git push origin x > log 2>&1; echo done) &", {}, "background"],
+    ["until ! pgrep -f lefthook >/dev/null; do sleep 5; done; tail x", {}, "loop that sleeps"],
+    ["for _ in $(seq 18); do [ -f out ] && break; sleep 30; done", {}, "loop that sleeps"],
+    ["cat > /tmp/x 2>/dev/null; mkdir -p .agents/scratch", {}, "no input"],
+    ["cat > ../pr-911.md", {}, "no input"],
+  ])("refuses a sub-agent's wait or background job: %s", (command, input, reason) => {
+    const result = bash(command, "a1", "implementer", input);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(reason);
+  });
+
+  it.each([
+    ["git add -A && git commit -m x", {}],
+    ["ls vitest* ui/vitest.config.ts", {}],
+    ["cat vitest.config.ts | head", {}],
+    ['for _ in $(seq 18); do [ -f "$log.exit" ] && break; sleep 30; done; cat "$log.exit"', {}],
+    ["scripts/slow-e2e.sh e2e/slow-ios.test.ts", {}],
+    ["cat > ../pr-911.md <<'EOF'\nCloses #1\nEOF\ngit status", {}],
+    ["python3 - <<'EOF'\nfor i in range(3):\n  time.sleep(1)\nEOF", {}],
+  ])(
+    "lets a sub-agent run a foreground command, the slow lane wait included: %s",
+    (command, input) => {
+      expect(bash(command, "a1", "implementer", input)).toEqual({ status: 0, stderr: "" });
+    },
+  );
 
   it.each([
     "git push --no-verify -u origin task/1",

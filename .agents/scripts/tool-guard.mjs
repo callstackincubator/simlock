@@ -76,6 +76,15 @@ if (tool === "Bash" && typeof input.agent_id === "string") {
         "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
     );
   }
+  const found = forbiddenCheck(shell);
+  if (found !== null) {
+    refuse(
+      `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
+        "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
+        "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
+        'the commands under "Tests agents run".',
+    );
+  }
   const raw = args.command ?? "";
   const slowLane = /slow-e2e\.sh|\.exit\b/.test(raw);
   if (!slowLane) {
@@ -105,15 +114,6 @@ if (tool === "Bash" && typeof input.agent_id === "string") {
           "file with the Write tool, or give cat a heredoc (`cat > file <<'EOF'`).",
       );
     }
-  }
-  const found = forbiddenCheck(shell);
-  if (found !== null) {
-    refuse(
-      `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
-        "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
-        "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
-        'the commands under "Tests agents run".',
-    );
   }
 }
 process.exit(0);
