@@ -309,7 +309,9 @@ export class FleetLeaseCoordinator {
     requestId: string,
   ): void {
     const refusal = requesterLimitDecision({
-      held: this.options.leaseIndex.held(requesterId),
+      held: this.options.leaseIndex
+        .held(requesterId)
+        .filter((lease) => !this.#isPastDeadlineOnDisconnectedWorker(lease.id)),
       maxPerRequester: this.options.maxPerRequester,
       platform: deviceRequest.platform,
       probe: false,
@@ -324,6 +326,20 @@ export class FleetLeaseCoordinator {
       reason: "already-leased",
     });
     throw refusal;
+  }
+
+  /**
+   * why: a lease past its last reported deadline on a disconnected worker cannot have been renewed
+   * through this gateway, so it must not lock its requester out of the fleet. The entry stays in
+   * the index: it is still routed to its worker (ADR 0005 §28).
+   */
+  #isPastDeadlineOnDisconnectedWorker(gatewayLeaseId: string): boolean {
+    const entry = this.options.leaseIndex.resolve(gatewayLeaseId);
+    if (entry === undefined) return false;
+    const view = this.options.views.view(entry.workerId);
+    if (view === undefined || view.connection !== "disconnected") return false;
+    const reported = view.leases?.find((lease) => lease.id === entry.workerLeaseId);
+    return reported !== undefined && reported.ttlDeadline <= this.options.clock.now();
   }
 
   /**

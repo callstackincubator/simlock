@@ -779,6 +779,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     for (const [n, extra, device] of cases) {
       rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
+      rig.fake.nameDeviceInNextReply({});
       const result = (await envelopeOf(await allocate(rig, n, extra, {}))).result as {
         data: { device: unknown; lease: Record<string, unknown> };
       };
@@ -3376,8 +3377,10 @@ async function forwarded(
   const answer = await envelopeOf(await send());
   expect(answer.error).toBeUndefined();
   expect(answer.result).toBeDefined();
-  expect(rig.fake.requests.length).toBe(before + 1);
-  return rig.fake.requests.at(-1)?.params as Record<string, unknown>;
+  // why: the front reads a leased device's name from agent-device's device list the first time a rule needs it, before it forwards the command.
+  const sent = rig.fake.requests.slice(before).filter((r) => r.params?.["command"] !== "devices");
+  expect(sent.length).toBe(1);
+  return sent[0]?.params as Record<string, unknown>;
 }
 
 async function refused(rig: Rig, send: () => Promise<Response>, message: string): Promise<void> {
@@ -3385,7 +3388,10 @@ async function refused(rig: Rig, send: () => Promise<Response>, message: string)
   const answer = await envelopeOf(await send());
   expect(answer.error).toMatchObject(refusal(message));
   expect(answer.result).toBeUndefined();
-  expect(rig.fake.requests.length).toBe(before);
+  // why: a refusal can follow the front's one read of a leased device's name from agent-device's device list; no command reaches it.
+  expect(
+    rig.fake.requests.slice(before).filter((r) => r.params?.["command"] !== "devices"),
+  ).toEqual([]);
 }
 
 function flagsOf(params: Record<string, unknown>): Record<string, unknown> {
@@ -3608,11 +3614,14 @@ describe("the agent-device front's request rules", () => {
       }
     });
 
-    it("`--device` with the leased model, or a catalog alias of it, reaches agent-device as `udid` of the leased device on iOS and `serial` on Android, with no `device`; another model is refused", async () => {
+    it("`--device` with the leased device's own name is forwarded as sent; with the leased model, or a catalog alias of it, it reaches agent-device as `udid` of the leased device on iOS and `serial` on Android, with no `device`; another model is refused", async () => {
       const rig = await setUp({ drivers: bothDrivers });
       await granted(rig, 1, { device: "iPhone 17 Pro" });
       await granted(rig, 2, { device: "Pixel 8", platform: "android" });
       await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: idOf(rig, 1) } }));
+      const byName = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { flags: { device: nameOf(rig, 1) } }),
+      );
 
       const ios = flagsOf(
         await forwarded(rig, () =>
@@ -3623,6 +3632,7 @@ describe("the agent-device front's request rules", () => {
         await forwarded(rig, () => runCommand(rig, "snapshot", 2, { flags: { device: "p8" } })),
       );
 
+      expect(flagsOf(byName)["device"]).toBe(nameOf(rig, 1));
       expect(ios["udid"]).toBe(idOf(rig, 1));
       expect(ios).not.toHaveProperty("device");
       expect(android["serial"]).toBe(idOf(rig, 2));
@@ -3959,11 +3969,11 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("`test --shard-all 2` names a device by the name agent-device gave it, and by its id when that name holds a comma or the reply named none", async () => {
+    it("`test --shard-all 2` names a device by the name agent-device gave it, and by its id when that name holds a comma or neither the reply nor the inventory named one", async () => {
       const rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Lab, left" });
       await granted(rig, 1);
-      rig.fake.nameDeviceInNextReply("none");
+      rig.fake.listDevices([]);
       await granted(rig, 2, {}, { token: secrets.two });
 
       const comma = await forwarded(rig, () => shard(rig, 1));
@@ -3971,6 +3981,39 @@ describe("the agent-device front's request rules", () => {
 
       expect(flagsOf(comma)["device"]).toBe(idOf(rig, 1));
       expect(flagsOf(unnamed)["device"]).toBe(idOf(rig, 2));
+
+      await forwarded(rig, () => shard(rig, 2, {}, secrets.two));
+      const listed = rig.fake.requests
+        .filter((r) => r.params?.["command"] === "devices")
+        .map((r) =>
+          String((r.params?.["meta"] as Record<string, unknown> | undefined)?.["leaseId"]),
+        );
+      expect(listed.length).toBe(new Set(listed).size);
+    });
+
+    // why: agent-device 0.21.28 answers an allocate with `{ lease }` and no device; only its `devices` inventory names a device, and its session check matches `--device` by that name alone (#971).
+    it("`test --shard-all` with no `--device` names each of the token's leased devices by the name agent-device's inventory gives it when the allocate reply named no device, for an agent holding one device and one holding two", async () => {
+      const rig = await setUp();
+      rig.fake.nameDeviceInNextReply("none");
+      await granted(rig, 1);
+      rig.fake.nameDeviceInNextReply("none");
+      await granted(rig, 2, {}, { token: secrets.two });
+      rig.fake.nameDeviceInNextReply("none");
+      await granted(rig, 3, {}, { token: secrets.two });
+      rig.fake.listDevices([
+        { id: idOf(rig, 1), name: "simlock-aaaa", platform: "ios" },
+        { id: idOf(rig, 2), name: "simlock-bbbb", platform: "ios" },
+        { id: idOf(rig, 3), name: "simlock-cccc", platform: "ios" },
+      ]);
+
+      const one = await forwarded(rig, () => shard(rig, 1, { shardAll: 1 }));
+      const two = await forwarded(rig, () => shard(rig, 2, {}, secrets.two));
+
+      expect(flagsOf(one)["device"]).toBe("simlock-aaaa");
+      expect(String(flagsOf(two)["device"]).split(",").sort()).toEqual([
+        "simlock-bbbb",
+        "simlock-cccc",
+      ]);
     });
 
     it('`test --shard-split 2` with `device: " , "` is filled as if no list were sent; from a token that holds no device it is refused with `refused: no device leased; run open first`', async () => {
@@ -4380,7 +4423,7 @@ describe(
       },
     );
 
-    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly, and the fake's body is cancelled", async () => {
+    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly nor delivers more than 2147483648 bytes, and the fake's body is cancelled", async () => {
       const rig = await setUp();
       rig.fake.serveArtifact({ contentLength: "none", size: downloadLimit + 1 });
 
@@ -4388,6 +4431,7 @@ describe(
       const received = await drainDownload(response);
 
       expect(received.ended).toBe(false);
+      expect(received.bytes).toBeLessThanOrEqual(downloadLimit);
       await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
     });
 

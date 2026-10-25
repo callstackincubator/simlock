@@ -117,7 +117,7 @@ async function handleRpc(
   if (kind === "wrapped-lease") {
     return frontReply(refusal("refused: send lease calls as lease RPCs"), read);
   }
-  const checked = await checkRequest(context, identity, read, status.platforms);
+  const checked = await checkRequest(context, identity, read, status.platforms, request);
   if (checked.kind === "refused") return frontReply(checked.reply, read);
   return routeCall(context, {
     identity,

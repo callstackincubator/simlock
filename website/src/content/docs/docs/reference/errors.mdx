@@ -84,7 +84,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection during the handshake or before the startup check finished. The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause (often the configuration), and run the command again. |
+| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection during the handshake or before the startup check finished, or was still starting 90 seconds after it answered (it is left running). The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause (often the configuration), and run the command again. |
 | `DAEMON_CONNECTION_LOST` | 1 | 503 | The connection to the daemon dropped mid-command. A lease held by `simlock lease` is not released and stays yours until its deadline. | Start the daemon again; renew the lease with `simlock lease renew <lease-id>` or let it expire. |
 | `DAEMON_STOPPING` | 1 | 503 | The daemon is shutting down, or stopped while an install was running. | Run the command again once the daemon is back. |
 | `PROTOCOL_VERSION_UNSUPPORTED` | 1 | 400 | The CLI and the running daemon are different Simlock versions that cannot talk to each other. | Restart the daemon after an upgrade: `simlock daemon stop`, then any command. |
