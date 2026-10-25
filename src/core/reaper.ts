@@ -93,6 +93,14 @@ export class CleanupReaper {
     }
   }
 
+  async settle(): Promise<void> {
+    try {
+      await this.#running;
+    } catch {
+      // why: the run's failure is logged by whoever started it; a stop only waits for it to end.
+    }
+  }
+
   async #runOnce({ dryRun = false, rule }: CleanupRunOptions = {}): Promise<readonly Proposal[]> {
     // A dry run is a preview and must stay free of side effects: emitting the
     // pressure fact from one would wake this reaper through its own subscription

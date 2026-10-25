@@ -1539,8 +1539,12 @@ describe("startDaemon stop with a cleanup run in flight (#985)", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
     expect(filesystem.held).toHaveLength(1);
 
-    await daemon.stop("http-start-failed");
+    // why: the stop must wait for the held run, so the read is released while the stop is pending,
+    // after a stop that did not wait would already have closed the state database.
+    const stopped = daemon.stop("http-start-failed");
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
     for (const release of filesystem.held.splice(0)) release();
+    await stopped;
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
 
     const stopping = sink.records.findIndex((record) => record.message === "Daemon stopping");
