@@ -1833,6 +1833,42 @@ describe("startDaemon HTTP gateway bind failure", () => {
       expect(startedIndex).toBeLessThan(stoppingIndex);
     }
   });
+
+  // why: the bind failure lands after convergence has finished (the bind is held back), so a
+  // start that does not wait for the listener would already be `running`.
+  it("fails a start whose HTTP listener cannot bind before it reports running, stopping with http-start-failed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-late-bind-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const port = await freeLoopbackPort();
+    const occupier = createServer();
+    await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+    const restoreListen = delayTcpListen(200);
+    try {
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
+          filesystem: new MemoryFilesystem(),
+          logger,
+          version: "1.2.3",
+        } as StartDaemonOptions),
+      ).rejects.toThrow(/EADDRINUSE|address already in use/i);
+    } finally {
+      restoreListen();
+      await new Promise((resolve) => occupier.close(resolve));
+    }
+
+    const messages = sink.records.map((record) => record.message);
+    expect(messages).not.toContain("Daemon started");
+    const stopping = sink.records.find((record) => record.message === "Daemon stopping");
+    expect(stopping?.fields?.reason).toBe("http-start-failed");
+  });
 });
 
 async function pollUntilListening(port: number, secret: string): Promise<unknown> {
