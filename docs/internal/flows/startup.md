@@ -83,7 +83,7 @@ Arm (skipped when a stop already ran):
 
 Converge throws → health `failed`; parked requests get `DAEMON_STARTUP_FAILED`;
 stop `convergence-failed`; the start rejects.
-HTTP fails to bind after a good start → stop `http-start-failed`; the start rejects.
+HTTP fails to bind → the converge hook waits for the listener before step 22's `running`, so health `failed`, no `daemon.started`, stop `http-start-failed`; the start rejects.
 
 ### Lease reconciler outcomes (ADR 0019)
 

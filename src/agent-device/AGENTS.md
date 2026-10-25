@@ -66,12 +66,12 @@ Front (`createFront`, prefix `agent-device`):
 
 1. Token checked by the http app. Role not `agent` → 403. Gateway: `adoptable` leases
    rebuilt into the map first.
-2. Non-RPC: a fixed route list (`shared/routes.ts`), else 404. `/health` answers 200 even
-   when unavailable.
+2. Non-RPC: a fixed route list (`shared/routes.ts`), else 404. `/health` answers 200 even when unavailable.
 3. `/rpc`: body ≤ 1 MiB, one JSON-RPC request; only `command` and `lease.*` methods, as agent-device's proxy takes no other from a tenant; `classifyCall` → allocate, heartbeat,
    release, command, or refused `wrapped-lease`.
 4. `checkRequest`: iOS/Android only; no device selector but the leased one; no device
    set or allowlist; `install` only from an upload; `devices` alone, not streamed.
+   A rule that needs a leased device's name (`--device`) reads it once per lease from agent-device's `devices` list (`namedTokenDevices`).
 5. Allocate → `lease.request` (`front/allocate.ts`), see flow.
 6. Heartbeat → forwarded with `ttlMs` raised to the ceiling; on success `renewLease`
    (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`, reply "ended by simlock".

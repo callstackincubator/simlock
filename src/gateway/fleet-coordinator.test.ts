@@ -1836,6 +1836,81 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect((retry as RequesterAlreadyLeasedError).existingLeaseId).toBe(rebuiltLeaseId);
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
+
+  it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline (not one ms before it), still counts a lease past its deadline on a connected worker, and keeps the lease routable to its worker, and still counts a lease its worker's last view does not list (#984)", async () => {
+    const { clock, coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a", {
+      leases: [
+        {
+          ...leaseFixture("lse_old", "dev_old"),
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+          ttlDeadline: 900_001,
+        },
+      ],
+    });
+    connectWorker(workers, "wrk_b");
+    connectWorker(workers, "wrk_c", {
+      leases: [
+        {
+          ...leaseFixture("lse_conn", "dev_conn"),
+          requesterId: `${GATEWAY_PREFIX}agent-2`,
+          ttlDeadline: 1,
+        },
+      ],
+    });
+    workers.disconnected("wrk_a");
+    directory.unreachable.add("wrk_a");
+
+    clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    clock.advance(900_000 - clock.now());
+    const beforeDeadline = await coordinator
+      .request(REQUEST, requestOptions({ noWait: true }))
+      .catch((error: unknown) => error);
+    expect(beforeDeadline).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((beforeDeadline as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_a.lse_old");
+    const connected = await coordinator
+      .request(
+        REQUEST,
+        requestOptions({ noWait: true, ownerId: "agent-2", requesterId: "agent-2" }),
+      )
+      .catch((error: unknown) => error);
+    expect(connected).toBeInstanceOf(RequesterAlreadyLeasedError);
+
+    clock.advance(1);
+    clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const afterDeadline = await coordinator
+      .request(REQUEST, requestOptions({ noWait: true }))
+      .catch((error: unknown) => error);
+
+    expect(afterDeadline).toMatchObject({ lease: { id: "wrk_b.lse_1", worker: { id: "wrk_b" } } });
+    expect(leaseIndex.resolve("wrk_a.lse_old")).toMatchObject({
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+    });
+
+    connectWorker(workers, "wrk_d");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_d.lse_unlisted",
+      grantedAt: 1,
+      ownerId: "agent-3",
+      requesterId: "agent-3",
+      workerId: "wrk_d",
+      workerLeaseId: "lse_unlisted",
+    });
+    workers.disconnected("wrk_d");
+    const unlisted = await coordinator
+      .request(
+        REQUEST,
+        requestOptions({ noWait: true, ownerId: "agent-3", requesterId: "agent-3" }),
+      )
+      .catch((error: unknown) => error);
+    expect(unlisted).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((unlisted as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_d.lse_unlisted");
+  });
 });
 
 describe("FleetLeaseCoordinator sends a worker only requests its catalog can serve (ADR 0009 §3)", () => {

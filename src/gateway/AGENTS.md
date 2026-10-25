@@ -62,7 +62,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs`
    from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.
-2. Admit: idempotent replay → `lease.maxPerRequester` (1; a number, or one per platform) over the index plus a pending request
+2. Admit: idempotent replay → `lease.maxPerRequester` (1; a number, or one per platform) over the index (not counting a lease past its last reported deadline on a disconnected worker) plus a pending request
    (`already-leased`, `requesterLimitDecision`) → `leaseId` held by the index or an open request (`lease-id-taken`) →
    `requests.admit` stores it, creates the waiter. Emits `lease.requested`.
 3. Walk (on admit, on any view change, after each settled attempt), oldest first: `assess` the
@@ -131,20 +131,20 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 
 ## Known gaps
 
-- **A fleet request is stored only once a worker takes it.** A gateway restart loses every open
-  request; ids answer `404`, a repeated `Idempotency-Key` is new. Leases survive, so a repeat may get
-  `REQUESTER_ALREADY_LEASED` naming the lease.
+- **A starting worker's leases are hidden from their owner.** `lease.list` and `lease.get` omit them
+  for the startup checks plus one refresh (up to about 60 s). Meanwhile remote commands fail with
+  "No lease is held by …" and MCP `status()` reports none; the lease stands. Don't request a new device.
+- **A fleet request is stored only once a worker takes it.** A gateway restart loses every open request;
+  ids answer `404`, a repeated `Idempotency-Key` is new (maybe `REQUESTER_ALREADY_LEASED`).
 - **A dispatched request whose uplink drops may have granted a lease anyway.** Client sees
-  `WORKER_UNREACHABLE`; the lease stands on the worker until TTL. Re-request: at the limit the
-  answer names the earlier lease once the index is rebuilt; below it you get a second lease.
-- **A lease survives a gateway restart, but nothing can renew it until the gateway is back.**
-  Renew, release and exec fail meanwhile; past the TTL it expires. Knob: the gateway's
-  `lease.defaultTtlMs`, or `--ttl`.
-- **Local agents and the gateway share a worker's capacity.** A busy local machine answers
-  `NO_CAPACITY`; the request waits for another worker. `simlock worker drain` leaves it to its owner.
+  `WORKER_UNREACHABLE`; the lease stands until TTL. A re-request may name it or get a second lease.
+- **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew,
+  release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
+- **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`;
+  the request waits elsewhere. `worker drain` leaves it to the owner.
 - **A worker's claimed id is never verified against its join token.** Any `worker`-token holder can
-  claim any id and take over that worker's link, view, drain flag and forwarded calls. Ids cut to 128 chars.
+  claim any id and take over its link, view, drain flag and calls. Ids cut to 128 chars.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
 - **Three gaps in gateway warm hits.** A slim-pool device that failed its slim pass reports `full`
-  and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for
-  a mode-less request; a `--mode slim` request on an unslimmable runtime is no hit on a ready full device.
+  and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a
+  mode-less request; a `--mode slim` request there is no hit on a ready full device.
