@@ -4423,7 +4423,7 @@ describe(
       },
     );
 
-    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly, and the fake's body is cancelled", async () => {
+    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly nor delivers more than 2147483648 bytes, and the fake's body is cancelled", async () => {
       const rig = await setUp();
       rig.fake.serveArtifact({ contentLength: "none", size: downloadLimit + 1 });
 
