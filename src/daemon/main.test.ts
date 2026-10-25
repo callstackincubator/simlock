@@ -2215,6 +2215,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       expect(sink.records.filter((record) => record.level === "warn")).toContainEqual(
         expect.objectContaining({
           fields: expect.objectContaining({ path: "/android-user/devices.xml" }),
+          message: "Android device profile source could not be read",
         }),
       );
     } finally {
