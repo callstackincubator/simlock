@@ -37,6 +37,12 @@ pre-commit:
       glob: "*.{ts,tsx,mts,cts}"
       run: pnpm run typecheck
 
+commit-msg:
+  commands:
+    # A commit on a delivery branch names its issue, in the build brief's shapes.
+    subject:
+      run: node .agents/scripts/commit-msg-check.mjs {1}
+
 # These audit the whole branch against main, so they run once per push rather than on every
 # checkpoint commit.
 pre-push:
