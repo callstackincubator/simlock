@@ -175,7 +175,7 @@ jobs:
           # --no-renames lists a moved file's old path too.
           changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
           if printf '%s\n' "$changed" | grep -v -E '^(src|ui)/.*\.test\.tsx?$' | grep -q -E \
-            '^(src/|ui/|e2e/(console|fake-driver|helpers)/|playwright\.config\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig[^/]*\.json$|\.github/workflows/ci\.yml$)'; then
+            '^(src/|ui/|e2e/(console|fake-driver|helpers)/|playwright\.config\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.json$|tsconfig[^/]*\.json$|\.github/workflows/ci\.yml$)'; then
             echo "console=true" >>"$GITHUB_OUTPUT"
           else
             echo "console=false" >>"$GITHUB_OUTPUT"
