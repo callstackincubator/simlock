@@ -1837,7 +1837,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
-  it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline (not one ms before it), still counts a lease past its deadline on a connected worker, and keeps the lease routable to its worker (#984)", async () => {
+  it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline (not one ms before it), still counts a lease past its deadline on a connected worker, and keeps the lease routable to its worker, and still counts a lease its worker's last view does not list (#984)", async () => {
     const { clock, coordinator, directory, leaseIndex, workers } = harness();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
@@ -1891,6 +1891,25 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
       requesterId: "agent-1",
       workerId: "wrk_a",
     });
+
+    connectWorker(workers, "wrk_d");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_d.lse_unlisted",
+      grantedAt: 1,
+      ownerId: "agent-3",
+      requesterId: "agent-3",
+      workerId: "wrk_d",
+      workerLeaseId: "lse_unlisted",
+    });
+    workers.disconnected("wrk_d");
+    const unlisted = await coordinator
+      .request(
+        REQUEST,
+        requestOptions({ noWait: true, ownerId: "agent-3", requesterId: "agent-3" }),
+      )
+      .catch((error: unknown) => error);
+    expect(unlisted).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((unlisted as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_d.lse_unlisted");
   });
 });
 
