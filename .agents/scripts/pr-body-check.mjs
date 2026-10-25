@@ -12,25 +12,61 @@
 //   - on a <kind>/<n> branch, `### Status` or `## Assumptions` is missing (coding rule 2);
 //   - on a <kind>/<n> branch, the Review counts line names a review that ran and the PR has no
 //     comment headed `## Review ledger` (REVIEW.md, "Measurement"); checked only with a PR number.
+//     The ledger's json block has no finding whose `outcome` is `open`, and the `## Review`
+//     section has the line `Assessment: complete` (rule 15). The ledger's `Round <r>: <sha>`
+//     lines are 40-hex SHAs with at most one round 1 and one round 2, round 1 first, each an
+//     ancestor of the head (a warning when this clone lacks a SHA); at most one comment is
+//     headed `## Review notes` (REVIEW.md, the cap);
+//   - `## Assumptions` holds lines other than `none` or `- Assumption: <q> — <choice>` (coding
+//     rule 2);
+//   - the prose runs over 200 words: everything outside code blocks, checklist lines and the
+//     Status, Assumptions and Review sections (rule 12);
+//   - with a PR number, on a <kind>/<n> branch: a `## Done when` bullet of issue <n> is not a
+//     `- [ ]` or `- [x]` line of the body (its first 60 characters, case, backticks and spaces
+//     folded, start the line; a `— <how checked>` may follow), or is not ticked; and when every
+//     other open sub-issue of the issue's parent is closed by a PR below this one in its stack
+//     (or there is none), the same for the parent's `## Completion conditions` (coding rule 5);
+//   - the diff's kind (`diff-kind.mjs` from the merge-base to the head) and the counts line
+//     disagree: Code review skipped on a `full`, `large` or `tests-only` diff, or Spec review
+//     skipped on a <kind>/<n> branch (REVIEW.md, "Routing"); a Claims review that ran on an
+//     `adr-only` diff is a warning;
+//   - a routine's branch changed what its routine may not: `chore/garden-comments-*` is
+//     `comments-only`, `chore/audit-tests-*` and `chore/harden-tests-*` are `tests-only`, and
+//     `chore/calibrate-reviews-*` changes `.agents/briefs/calibration.md` alone.
 //
-// It warns (exit 0) when the Review section has no `Rounds: <n>. Tokens: <n>M.` line, or the
-// prose runs over 200 words: everything outside code blocks, checklist lines and the Status,
-// Assumptions and Review sections (rule 12). `--draft-ok` turns every failure into a warning,
-// for the check that runs while the PR is still a draft. `--body-file <f> [--branch <b>]` reads
-// a body from a file instead of GitHub. The repo is GH_REPO, else the origin remote's owner/name.
+// The diff is read from this clone: a PR's base and head SHAs, or `--base <sha> --head <sha>`;
+// `--kind <kind>` gives the kind instead. A PR whose SHAs this clone lacks gets a warning in
+// place of the diff checks. It warns (exit 0) when the Review section has no `Rounds: <n>.
+// Tokens: <n>M.` line. `--draft-ok` turns every failure into a warning, for the check that runs
+// while the PR is still a draft. `--body-file <f> [--branch <b>]` reads a body from a file
+// instead of GitHub. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { option } from "./cli-args.mjs";
 
 const BUDGET = 200;
+const HERE = dirname(fileURLToPath(import.meta.url));
 const REVIEW_COUNTS =
   /^Spec review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\. Code review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\. Claims review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\.(?: Comment review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\.)?\s*$/;
 const ROUNDS = /^Rounds: \d+\. Tokens: (?:[\d.]+M|n\/a)\.\s*$/m;
+
+const DELIVERY_BRANCH = /^(bug|feature|task)\/(\d+)$/;
+const ROUTINES = [
+  [/^chore\/garden-comments-/, "comments-only"],
+  [/^chore\/(?:audit|harden)-tests-/, "tests-only"],
+];
+const CALIBRATION = ".agents/briefs/calibration.md";
 
 const args = process.argv.slice(2);
 const draftOk = args.includes("--draft-ok");
 let body;
 let branch = "";
 let prNumber = null;
+let pull = null;
+let diffBase = option("--base", args);
+let diffHead = option("--head", args);
 const fileAt = args.indexOf("--body-file");
 if (fileAt !== -1) {
   body = readFileSync(args[fileAt + 1], "utf8");
@@ -44,15 +80,12 @@ if (fileAt !== -1) {
   }
   // why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr view` uses; repo-scoped
   // REST works.
-  const pull = JSON.parse(
-    execFileSync("gh", ["api", "-X", "GET", `repos/${repository()}/pulls/${pr}`], {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    }),
-  );
+  pull = api(`pulls/${pr}`);
   body = pull.body ?? "";
   branch = pull.head.ref;
   prNumber = pr;
+  diffHead = pull.head.sha ?? null;
+  diffBase = pull.base?.sha ?? null;
 }
 body = body.replace(/\r/g, "");
 
@@ -87,6 +120,8 @@ if (review === null) {
   }
   if (/^Assessment: incomplete\b/im.test(review.join("\n"))) {
     failures.push("review assessment is incomplete; resolve missing coverage before ready");
+  } else if (DELIVERY_BRANCH.test(branch) && !/^Assessment: complete\b/m.test(review.join("\n"))) {
+    failures.push("the `## Review` section has no `Assessment: complete` line (delivery rule 15)");
   }
   const at = review.findIndex((l) => /^Rejected:\s*$/.test(l));
   if (at !== -1) {
@@ -107,18 +142,24 @@ if (/spec needs/i.test(prose)) {
   );
 }
 
-if (/^(bug|feature|task)\/\d+$/.test(branch)) {
+if (DELIVERY_BRANCH.test(branch)) {
   if (section(lines, /^### Status\s*$/) === null) failures.push("no `### Status` section");
   if (section(lines, /^## Assumptions\s*$/) === null) {
     failures.push("no `## Assumptions` section (coding rule 2)");
   }
+}
+for (const l of section(lines, /^## Assumptions\s*$/) ?? []) {
+  if (l.trim() === "" || /^none\.?$/i.test(l.trim()) || /^- Assumption: .+ — .+/.test(l)) continue;
+  failures.push(
+    `an Assumptions line is not "none" or "- Assumption: <question> — <choice>": "${l.slice(0, 60)}" (coding rule 2)`,
+  );
 }
 
 // why: only a delivery PR (<kind>/<n>) has a ledger; a routine's or a person's chore PR gets
 // the reviewer's findings comment instead.
 if (
   prNumber !== null &&
-  /^(bug|feature|task)\/\d+$/.test(branch) &&
+  DELIVERY_BRANCH.test(branch) &&
   lines.some(
     (l) =>
       REVIEW_COUNTS.test(l) &&
@@ -127,32 +168,27 @@ if (
       ),
   )
 ) {
-  const comments = JSON.parse(
-    execFileSync(
-      "gh",
-      [
-        "api",
-        "-X",
-        "GET",
-        `repos/${repository()}/issues/${prNumber}/comments`,
-        "-f",
-        "per_page=100",
-      ],
-      {
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-      },
-    ),
-  );
-  if (!comments.some((c) => /^## Review ledger\s*$/m.test(c.body ?? ""))) {
+  const comments = api(`issues/${prNumber}/comments`, "-f", "per_page=100");
+  const ledger = comments.find((c) => /^## Review ledger\s*$/m.test(c.body ?? ""));
+  if (ledger === undefined) {
     failures.push("no comment headed `## Review ledger` (REVIEW.md, Measurement)");
+  } else {
+    checkLedger(ledger.body.replace(/\r/g, ""));
+  }
+  if (comments.filter((c) => /^## Review notes\s*$/m.test(c.body ?? "")).length > 1) {
+    failures.push(
+      "more than one comment is headed `## Review notes`; notes go out once (REVIEW.md)",
+    );
   }
 }
 
+if (prNumber !== null && DELIVERY_BRANCH.test(branch)) checkDoneWhen();
+checkDiff();
+
 const words = budgetedWords(lines);
 if (words > BUDGET) {
-  warnings.push(
-    `${words} words outside the checklist, Status, Assumptions and Review; the budget is ${BUDGET} (delivery rule 12)`,
+  failures.push(
+    `${words} words outside the checklist, Status, Assumptions and Review; the budget is ${BUDGET}: cut it (delivery rule 12)`,
   );
 }
 
@@ -162,6 +198,185 @@ for (const f of failures) {
   console.log(`${gh ? (draftOk ? "::warning::" : "::error::") : "pr-body: "}${f}`);
 }
 process.exit(failures.length > 0 && !draftOk ? 1 : 0);
+
+function checkLedger(text) {
+  const json = /```json\n([\s\S]*?)\n```/.exec(text);
+  let findings = [];
+  try {
+    findings = JSON.parse(json?.[1] ?? "").findings ?? [];
+  } catch {
+    failures.push(
+      "the `## Review ledger` comment has no json block that parses (REVIEW.md, Measurement)",
+    );
+  }
+  for (const f of findings.filter((f) => f.outcome === "open")) {
+    failures.push(`finding ${f.id} is open in the Review ledger (delivery rule 15)`);
+  }
+  const rounds = [];
+  for (const l of text.split("\n").filter((l) => l.startsWith("Round "))) {
+    const round = /^Round (1|2|fix-check): ([0-9a-f]{40})\s*$/.exec(l);
+    if (round === null)
+      failures.push(
+        `a ledger line is not "Round <1|2|fix-check>: <full sha>": "${l.slice(0, 60)}"`,
+      );
+    else rounds.push({ round: round[1], sha: round[2] });
+  }
+  const order = rounds.map((r) => r.round).filter((r) => r !== "fix-check");
+  if (order.filter((r) => r === "1").length > 1 || order.filter((r) => r === "2").length > 1) {
+    failures.push("the ledger has more than one round 1 or round 2 (REVIEW.md, the cap)");
+  } else if (order.length > 0 && order[0] !== "1") {
+    failures.push("the ledger's first round is not round 1 (REVIEW.md, the cap)");
+  }
+  if (diffHead === null) return;
+  for (const { round, sha } of rounds) {
+    if (!hasCommit(sha) || !hasCommit(diffHead)) {
+      warnings.push(
+        `round ${round}'s ${sha.slice(0, 9)} or the head is not in this clone; its ancestry is unchecked`,
+      );
+    } else if (!git(["merge-base", "--is-ancestor", sha, diffHead], true)) {
+      failures.push(`round ${round}'s ${sha.slice(0, 9)} is not an ancestor of the head`);
+    }
+  }
+}
+
+function checkDoneWhen() {
+  const number = Number(DELIVERY_BRANCH.exec(branch)[2]);
+  const issue = api(`issues/${number}`);
+  const checklist = lines.flatMap((l) => {
+    const item = /^\s*- \[([ xX])\] (.*)$/.exec(l);
+    return item === null ? [] : [{ ticked: item[1] !== " ", text: fold(item[2]) }];
+  });
+  const walk = (text, heading, from) => {
+    for (const bullet of bullets(text, heading)) {
+      const key = fold(bullet)
+        .replace(/[.;:,]+$/, "")
+        .slice(0, 60);
+      const line = checklist.find((c) => c.text.startsWith(key));
+      const quoted = `"${bullet.slice(0, 50)}"`;
+      if (line === undefined) {
+        failures.push(
+          `${from}'s ${heading} line ${quoted} is not a checklist line of the body (coding rule 5)`,
+        );
+      } else if (!line.ticked) {
+        failures.push(`${from}'s ${heading} line ${quoted} is not ticked (coding rule 5)`);
+      }
+    }
+  };
+  walk(issue.body ?? "", "Done when", `#${number}`);
+  const parent = apiOrNull(`issues/${number}/parent`);
+  if (parent === null) return;
+  const open = api(`issues/${parent.number}/sub_issues`, "-f", "per_page=100")
+    .filter((i) => i.state === "open" && i.number !== number)
+    .map((i) => i.number);
+  if (open.length > 0) {
+    const stack = apiOrNull(`stacks?pull_request=${prNumber}`) ?? [];
+    const members = (stack.find((x) => x.open)?.pull_requests ?? []).map((p) => p.number);
+    const below = members.slice(0, Math.max(0, members.indexOf(Number(prNumber))));
+    const closed = new Set(below.flatMap((m) => closes(api(`pulls/${m}`).body ?? "")));
+    if (open.some((n) => !closed.has(n))) return;
+  }
+  walk(parent.body ?? "", "Completion conditions", `#${parent.number}`);
+}
+
+function checkDiff() {
+  const routine = ROUTINES.find(([re]) => re.test(branch));
+  const calibration = branch.startsWith("chore/calibrate-reviews-");
+  const counts = lines.find((l) => REVIEW_COUNTS.test(l)) ?? "";
+  if (DELIVERY_BRANCH.test(branch) && counts.startsWith("Spec review: skipped.")) {
+    failures.push(
+      "Spec review is skipped on a branch whose issue is its spec (REVIEW.md, Routing)",
+    );
+  }
+  let kind = option("--kind", args);
+  if (kind === null && diffBase !== null && diffHead !== null) {
+    if (!hasCommit(diffBase) || !hasCommit(diffHead)) {
+      warnings.push(
+        "the PR's base or head is not in this clone (git fetch origin); its diff is unchecked",
+      );
+      return;
+    }
+    const mergeBase = git(["merge-base", diffBase, diffHead]).trim();
+    kind = execFileSync(process.execPath, [join(HERE, "diff-kind.mjs"), mergeBase, diffHead], {
+      encoding: "utf8",
+    }).trim();
+    if (calibration) {
+      const names = git(["diff", "--name-only", mergeBase, diffHead]).split("\n").filter(Boolean);
+      if (names.some((n) => n !== CALIBRATION)) {
+        failures.push(
+          `a calibrate-reviews PR changes ${CALIBRATION} alone; it also changes ${names.filter((n) => n !== CALIBRATION)[0]}`,
+        );
+      }
+    }
+  }
+  if (kind === null) return;
+  if (routine !== undefined && kind !== routine[1]) {
+    failures.push(`this routine's PR must be ${routine[1]}, and its diff is ${kind}`);
+  }
+  if (/\bCode review: skipped\./.test(counts) && ["full", "large", "tests-only"].includes(kind)) {
+    failures.push(`Code review is skipped on a ${kind} diff (REVIEW.md, Routing)`);
+  }
+  if (kind === "adr-only" && counts !== "" && !/\bClaims review: skipped\./.test(counts)) {
+    warnings.push("a Claims review ran on an adr-only diff, which needs the spec review alone");
+  }
+}
+
+function bullets(text, heading) {
+  const all = withoutCodeBlocks(text.replace(/\r/g, "")).split("\n");
+  const out = [];
+  for (const l of section(all, new RegExp(`^## ${heading}\\s*$`)) ?? []) {
+    if (/^\s*[-*] /.test(l)) out.push(l.replace(/^\s*[-*] /, ""));
+    else if (/^\s+\S/.test(l) && out.length > 0) out[out.length - 1] += ` ${l.trim()}`;
+  }
+  return out;
+}
+
+function fold(text) {
+  return text.toLowerCase().replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function closes(text) {
+  return [
+    ...text.matchAll(
+      /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi,
+    ),
+  ].map((m) => Number(m[1]));
+}
+
+function api(at, ...extra) {
+  return JSON.parse(
+    execFileSync("gh", ["api", "-X", "GET", `repos/${repository()}/${at}`, ...extra], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+}
+
+// why: GitHub answers 404 for an issue with no parent and a PR in no stack.
+function apiOrNull(at) {
+  try {
+    return api(at);
+  } catch {
+    return null;
+  }
+}
+
+function git(argv, status = false) {
+  try {
+    const out = execFileSync("git", argv, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return status ? true : out;
+  } catch (error) {
+    if (status) return false;
+    throw error;
+  }
+}
+
+function hasCommit(sha) {
+  return git(["cat-file", "-e", `${sha}^{commit}`], true);
+}
 
 function repository() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
