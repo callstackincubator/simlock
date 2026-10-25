@@ -1920,9 +1920,10 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       await settle();
     }
     expect(settled, `daemon start still waiting at ${String(clock.now())}ms`).toBe(true);
-    expect(clock.now(), "the wait outlasts the daemon's own startup read").toBeGreaterThan(
-      STARTUP_READ_LIMIT_MS,
-    );
+    expect(
+      clock.now(),
+      "the wait outlasts the daemon's own startup read by 30 s",
+    ).toBeGreaterThanOrEqual(STARTUP_READ_LIMIT_MS + 30_000);
     expect(await run).toBe(1);
     expect(daemon.deaths, "the daemon is not stopped by the CLI").toBe(0);
     expect(JSON.parse(output.stderr)).toMatchObject({
