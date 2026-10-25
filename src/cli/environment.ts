@@ -67,9 +67,7 @@ class AutoLaunchAdminConnector {
         const client = await this.finishConnection(this.connectClient(resolveCredential));
         return options?.untilStarted === true ? await this.untilStarted(client, launched) : client;
       } catch (error: unknown) {
-        // why: a daemon whose start failed is already stopping when it answers the startup probe; that refusal is the failed start, reported as the daemon's own error.
-        if (options?.untilStarted === true && (await isStoppingRefusal(error)))
-          throw await this.failedStart(launched);
+        await this.failStoppingStart(error, options, launched);
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
         if (exit !== undefined)
@@ -120,6 +118,16 @@ class AutoLaunchAdminConnector {
       await client.close().catch(() => undefined);
       throw await this.failedStart(launched);
     }
+  }
+
+  /** why: a daemon whose start failed is already stopping when it answers the startup probe; that refusal is the failed start, reported as the daemon's own error. */
+  private async failStoppingStart(
+    error: unknown,
+    options: { readonly untilStarted?: boolean } | undefined,
+    launched: LaunchedDaemon,
+  ): Promise<void> {
+    if (options?.untilStarted === true && (await isStoppingRefusal(error)))
+      throw await this.failedStart(launched);
   }
 
   /** why: a daemon launched through a service manager has no child to exit, so the wait for its exit is short and the log is read either way. */
