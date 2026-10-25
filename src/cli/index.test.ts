@@ -10,7 +10,7 @@ import { testComponentWiring, testStateOf } from "../core/testing.js";
 
 import { EventBus } from "../bus/index.js";
 import { ringEventHistory, seedHistory } from "../history/testing.js";
-import { CleanupReaper, type Config } from "../core/index.js";
+import { CleanupReaper, STARTUP_READ_LIMIT_MS, type Config } from "../core/index.js";
 import { FakeDriver, loadTestRegistry } from "../core/testing.js";
 import {
   CryptoTokenSecrets,
@@ -1901,6 +1901,36 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     expect(daemon.helloReplies).toBe(1);
     expect(daemon.clientCloses).toBe(1);
     expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "DAEMON_STOPPING" } });
+  });
+
+  it("daemon start's wait for health to leave starting ends past the daemon's startup-read cap with DAEMON_STARTUP_FAILED, leaving the daemon running", async () => {
+    const daemon = new HelloThenDeathIpc("starting");
+    const clock = new FakeClock(0);
+    const launcher = new FakeDaemonLauncher(() => daemon.startListening());
+    const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, clock, launcher });
+    let settled = false;
+    const run = runCli(["daemon", "start", "--token", "probe"], output.environmentWith()).then(
+      (code) => {
+        settled = true;
+        return code;
+      },
+    );
+    for (let tick = 0; tick < 3_000 && !settled; tick += 1) {
+      clock.advance(50);
+      await settle();
+    }
+    expect(settled, `daemon start still waiting at ${String(clock.now())}ms`).toBe(true);
+    expect(clock.now(), "the wait outlasts the daemon's own startup read").toBeGreaterThan(
+      STARTUP_READ_LIMIT_MS,
+    );
+    expect(await run).toBe(1);
+    expect(daemon.deaths, "the daemon is not stopped by the CLI").toBe(0);
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: expect.stringContaining("still starting"),
+      },
+    });
   });
 
   it("bounds the startup status probe by the original launch deadline and closes its client", async () => {
@@ -8125,7 +8155,7 @@ class HelloThenDeathIpc implements IpcConnector {
   clientCloses = 0;
 
   constructor(
-    readonly closeAfter: "hello" | "request" | "silent" | "stopping" = "hello",
+    readonly closeAfter: "hello" | "request" | "silent" | "stopping" | "starting" = "hello",
     readonly rejectCredential = false,
   ) {}
 
@@ -8195,6 +8225,24 @@ class HelloThenDeathConnection implements IpcConnection {
           code: "DAEMON_STOPPING",
           message: "Daemon is stopping",
           details: {},
+        },
+      };
+      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
+    }
+    if (frame.type === "status.get" && this.daemon.closeAfter === "starting") {
+      const reply = {
+        id: frame.id,
+        ok: true,
+        payload: {
+          daemon: {
+            health: "starting",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
+          host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
         },
       };
       for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
