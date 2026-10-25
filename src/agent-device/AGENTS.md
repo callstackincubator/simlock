@@ -72,6 +72,8 @@ Front (`createFront`, prefix `agent-device`):
    release, command, or refused `wrapped-lease`.
 4. `checkRequest`: iOS/Android only; no device selector but the leased one; no device
    set or allowlist; `install` only from an upload; `devices` alone, not streamed.
+   A rule that needs a leased device's name (sharding's `--device`) reads it once per lease
+   from agent-device's `devices` list (`namedTokenDevices`), as its allocate reply names none.
 5. Allocate → `lease.request` (`front/allocate.ts`), see flow.
 6. Heartbeat → forwarded with `ttlMs` raised to the ceiling; on success `renewLease`
    (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`, reply "ended by simlock".

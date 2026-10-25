@@ -16,7 +16,7 @@ import {
   type Fields,
 } from "../shared/selectors.js";
 import type { FrontContext } from "./context.js";
-import { LeaseCheckFailed, tokenDevices, type TokenDevice } from "./token-devices.js";
+import { LeaseCheckFailed, namedTokenDevices, type TokenDevice } from "./token-devices.js";
 
 type RpcRequest = Extract<RpcRead, { kind: "request" }>;
 
@@ -332,6 +332,7 @@ function buildCheck(
   platforms: readonly string[],
   params: Fields,
   kind: Unit["kind"],
+  request: Request,
 ): Check {
   const leaseId = kind === "command" ? commandLeaseId(params) : undefined;
   const held = leaseId === undefined ? undefined : context.map.get(leaseId);
@@ -348,7 +349,7 @@ function buildCheck(
         : undefined,
     meta,
     platforms,
-    tokenDevices: () => (devices ??= tokenDevices(context, identity)),
+    tokenDevices: () => (devices ??= namedTokenDevices(context, identity, request)),
   };
 }
 
@@ -357,9 +358,10 @@ export async function checkRequest(
   identity: Identity,
   read: RpcRequest,
   platforms: readonly string[],
+  request: Request,
 ): Promise<RulesOutcome> {
   try {
-    return await run(context, identity, read, platforms);
+    return await run(context, identity, read, platforms, request);
   } catch (error) {
     if (error instanceof Refused) return { kind: "refused", reply: error.reply };
     if (error instanceof LeaseCheckFailed) {
@@ -379,6 +381,7 @@ async function run(
   identity: Identity,
   read: RpcRequest,
   platforms: readonly string[],
+  request: Request,
 ): Promise<RulesOutcome> {
   if (!isKnownRpcMethod(read.method)) throw refuse(`refused: unknown method ${read.method}`);
   const body = structuredClone(read.body);
@@ -387,7 +390,7 @@ async function run(
   const main = unitFor(methodName(read.method) ?? "", params);
   if (main === undefined) return { kind: "accepted", read };
   const units = [main, ...stepsOf(main)];
-  const check = buildCheck(context, identity, platforms, params, main.kind);
+  const check = buildCheck(context, identity, platforms, params, main.kind, request);
   checkMeta(check);
   for (const unit of units) checkTypes(unit);
   for (const unit of units) await applyRules(check, unit);

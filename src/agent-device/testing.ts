@@ -522,7 +522,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     });
     return envelope(id, {
       data: {
-        ...(picked === "none" || address === undefined
+        ...(picked === undefined || picked === "none" || address === undefined
           ? {}
           : { device: { id: address, name: `simlock-${address}`, ...picked } }),
         lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
@@ -669,6 +669,16 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     if (command === "devices" && inventory !== undefined) {
       if ("body" in inventory) return new Response(inventory.body, { status: 200 });
       return envelope(id, { data: { devices: inventory.list }, ok: true });
+    }
+    // why: agent-device names a leased device `simlock-<id>` in its inventory only, never in the allocate reply.
+    if (command === "devices" && typeof leaseId === "string" && this.leases.has(leaseId)) {
+      const address = this.leases.get(leaseId)?.address;
+      if (address !== undefined) {
+        return envelope(id, {
+          data: { devices: [{ id: address, name: `simlock-${address}` }] },
+          ok: true,
+        });
+      }
     }
     if (endedLeases.length > 0) {
       const data = command === "batch" ? { endedLeases, results: [] } : { endedLeases };

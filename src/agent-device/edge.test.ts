@@ -779,6 +779,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     for (const [n, extra, device] of cases) {
       rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
+      rig.fake.nameDeviceInNextReply({});
       const result = (await envelopeOf(await allocate(rig, n, extra, {}))).result as {
         data: { device: unknown; lease: Record<string, unknown> };
       };
@@ -3376,8 +3377,10 @@ async function forwarded(
   const answer = await envelopeOf(await send());
   expect(answer.error).toBeUndefined();
   expect(answer.result).toBeDefined();
-  expect(rig.fake.requests.length).toBe(before + 1);
-  return rig.fake.requests.at(-1)?.params as Record<string, unknown>;
+  // why: the front reads a leased device's name from agent-device's device list the first time a rule needs it, before it forwards the command.
+  const sent = rig.fake.requests.slice(before).filter((r) => r.params?.["command"] !== "devices");
+  expect(sent.length).toBe(1);
+  return sent[0]?.params as Record<string, unknown>;
 }
 
 async function refused(rig: Rig, send: () => Promise<Response>, message: string): Promise<void> {
@@ -3385,7 +3388,10 @@ async function refused(rig: Rig, send: () => Promise<Response>, message: string)
   const answer = await envelopeOf(await send());
   expect(answer.error).toMatchObject(refusal(message));
   expect(answer.result).toBeUndefined();
-  expect(rig.fake.requests.length).toBe(before);
+  // why: a refusal can follow the front's one read of a leased device's name from agent-device's device list; no command reaches it.
+  expect(
+    rig.fake.requests.slice(before).filter((r) => r.params?.["command"] !== "devices"),
+  ).toEqual([]);
 }
 
 function flagsOf(params: Record<string, unknown>): Record<string, unknown> {
@@ -3959,11 +3965,11 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("`test --shard-all 2` names a device by the name agent-device gave it, and by its id when that name holds a comma or the reply named none", async () => {
+    it("`test --shard-all 2` names a device by the name agent-device gave it, and by its id when that name holds a comma or neither the reply nor the inventory named one", async () => {
       const rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Lab, left" });
       await granted(rig, 1);
-      rig.fake.nameDeviceInNextReply("none");
+      rig.fake.listDevices([]);
       await granted(rig, 2, {}, { token: secrets.two });
 
       const comma = await forwarded(rig, () => shard(rig, 1));
