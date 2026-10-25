@@ -50,58 +50,47 @@ const WHY = /\bwhy:/i;
 // why: the files a component is entered through (`.dependency-cruiser.mjs`), so not internal.
 const ENTRY_FILES = new Set(["index", "testing", "definition"]);
 
-const args = process.argv.slice(2);
-let base = "origin/main";
-let head;
-const files = [];
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--base") base = args[++i];
-  else if (args[i] === "--head") head = args[++i];
-  else if (args[i].startsWith("--")) usage();
-  else files.push(args[i]);
-}
-if (base === undefined || (args.includes("--head") && head === undefined)) usage();
-
-const findings = [];
-for (const file of changedFiles({ base, head, files: files.length > 0 ? files : null })) {
-  if (TEST_FILE.test(file.path)) findings.push(...testFindings(file));
-  else if (CONTRACT_FILE.test(file.path) && !HELPER_FILE.test(file.path)) {
-    findings.push(...contractFindings(file));
-  }
-}
-const seen = new Set();
-const unique = findings
-  .map((f) => `${f.path}:${f.line}: ${MESSAGES[f.rule]}`)
-  .filter((line) => !seen.has(line) && seen.add(line));
-for (const line of unique) console.log(line);
-if (unique.length > 0) {
-  console.error(`test-lint: ${unique.length} finding${unique.length === 1 ? "" : "s"}`);
-  process.exit(1);
-}
-
 function usage() {
   console.error("usage: test-lint.mjs [--base <ref>] [--head <ref>] [<files>...]");
   process.exit(64);
 }
 
-function testFindings({ path: file, lines, added }) {
+// why: one entry per rule judged line by line; `applies` says which test files it reads.
+const LINE_RULES = [
+  {
+    rule: "time",
+    applies: (file) => !TIMING_FILE.test(file) && !SLOW_LANE.test(file),
+    breaks: (source, n) => boundsRealTime(source.codeLines, n),
+  },
+  { rule: "skip", applies: () => true, breaks: skips },
+  { rule: "vacuous", applies: () => true, breaks: vacuous },
+];
+
+// why: the chain methods that bound each wire shape; a record is never bounded by its chain.
+const BOUNDED_BY = {
+  string: ["max", "length", "regex", "uuid", "datetime"],
+  array: ["max", "length"],
+  record: [],
+};
+
+function sourceOf({ path: file, lines, added }) {
   const text = lines.join("\n");
   const code = mask(text);
-  const codeLines = code.split("\n");
-  const starts = lineStarts(text);
-  const out = [];
-  const at = (rule, line) => out.push({ path: file, line, rule });
-  for (const n of [...added].sort((a, b) => a - b)) {
-    const raw = lines[n - 1] ?? "";
-    const line = codeLines[n - 1] ?? "";
-    if (!TIMING_FILE.test(file) && !SLOW_LANE.test(file) && boundsRealTime(codeLines, n)) {
-      at("time", n);
-    }
-    if (skips(file, raw, line)) at("skip", n);
-    if (vacuous(code, starts[n - 1], raw, line)) at("vacuous", n);
-  }
-  const internal = internalImportLine(file, text, code, added);
-  if (internal !== undefined) at("internal", internal);
+  return { file, lines, added, text, code, codeLines: code.split("\n"), starts: lineStarts(text) };
+}
+
+function testFindings(changed) {
+  const source = sourceOf(changed);
+  const rules = LINE_RULES.filter((entry) => entry.applies(source.file));
+  const out = [...source.added]
+    .sort((a, b) => a - b)
+    .flatMap((n) =>
+      rules
+        .filter((entry) => entry.breaks(source, n))
+        .map((entry) => ({ path: source.file, line: n, rule: entry.rule })),
+    );
+  const internal = internalImportLine(source);
+  if (internal !== undefined) out.push({ path: source.file, line: internal, rule: "internal" });
   return out;
 }
 
@@ -110,8 +99,11 @@ function boundsRealTime(codeLines, n) {
   if (!BOUND.test(line)) return false;
   if (new RegExp(`\\bexpect\\s*\\([^;]*${CLOCK.source}`).test(line)) return true;
   const bound = /\bexpect\s*\(\s*(\w+)\s*[,)]/.exec(line);
-  if (bound === null) return false;
-  const assigned = new RegExp(`\\b${bound[1]}\\s*=[^=;]*${CLOCK.source}`);
+  return bound !== null && assignedFromClock(codeLines, n, bound[1]);
+}
+
+function assignedFromClock(codeLines, n, name) {
+  const assigned = new RegExp(`\\b${name}\\s*=[^=;]*${CLOCK.source}`);
   for (let i = n - 1; i >= 1; i--) {
     if (assigned.test(codeLines[i - 1])) return true;
     if (/^\s*(?:it|test)\b[\w.]*\s*\(/.test(codeLines[i - 1])) return false;
@@ -119,76 +111,80 @@ function boundsRealTime(codeLines, n) {
   return false;
 }
 
-function skips(file, raw, line) {
-  if (/\bSIMLOCK_/.test(raw)) return false;
+function skips(source, n) {
+  const line = source.codeLines[n - 1] ?? "";
+  if (/\bSIMLOCK_/.test(source.lines[n - 1] ?? "")) return false;
   if (/\b(?:it|test|describe)\.(?:only|skip|todo)\b/.test(line)) return true;
   if (!/\b(?:it|test|describe)\.(?:skipIf|runIf)\s*\(/.test(line)) return false;
-  return !SLOW_LANE.test(file) && !/\bprocess\.platform\b/.test(line);
+  return !SLOW_LANE.test(source.file) && !/\bprocess\.platform\b/.test(line);
 }
 
-function vacuous(code, offset, raw, line) {
+function vacuous(source, n) {
+  const raw = source.lines[n - 1] ?? "";
+  const line = source.codeLines[n - 1] ?? "";
   if (/\.toBeInstanceOf\(\s*Error\s*\)/.test(line)) return true;
   const pending = /\.not\.toBe\(\s*["']pending["']/.exec(raw);
   if (pending !== null && line[pending.index] === raw[pending.index]) return true;
-  for (const m of line.matchAll(/\bexpect\s*\(/g)) {
-    // why: only the argument's text on the expect's own line; a callback spread over the lines
-    // below is setup, and its `?.(` is no assertion.
+  return optionalCallInExpect(source.code, source.starts[n - 1], line);
+}
+
+function optionalCallInExpect(code, offset, line) {
+  // why: only the argument's text on the expect's own line; a callback spread over the lines
+  // below is setup, and its `?.(` is no assertion.
+  return [...line.matchAll(/\bexpect\s*\(/g)].some((m) => {
     const open = offset + m.index + m[0].length - 1;
     const end = Math.min(closing(code, open), offset + line.length);
-    if (code.slice(open, end).includes("?.(")) return true;
-  }
-  return false;
+    return code.slice(open, end).includes("?.(");
+  });
 }
 
-function internalImportLine(file, text, code, added) {
-  const dir = path.posix.dirname(file);
-  if (!exists(`${dir}/index.ts`)) return undefined;
-  const starts = lineStarts(text);
+function internalImportLine(source) {
+  if (!exists(`${path.posix.dirname(source.file)}/index.ts`)) return undefined;
+  const line = firstAddedInternalImport(source);
+  if (line === undefined) return undefined;
+  const first = firstTestBlock(source.codeLines);
+  if (first === -1) return undefined;
+  return hasWhyAbove(source.lines, source.codeLines, first) ? undefined : line;
+}
+
+function firstAddedInternalImport({ text, code, starts, added }) {
   const importRe =
     /^[ \t]*import\s+(type\s+)?(?:[^;]*?)\bfrom\s*["']\.\/([^"'/]+?)(?:\.[jt]sx?)?["']/gm;
-  let line;
-  for (const m of text.matchAll(importRe)) {
-    if (m[1] !== undefined || code[m.index + m[0].indexOf("import")] !== "i") continue;
-    if (ENTRY_FILES.has(m[2]) || m[2].startsWith("test-")) continue;
-    const at = lineOf(starts, m.index + m[0].length - 1);
-    if (added.has(at)) {
-      line = at;
-      break;
-    }
-  }
-  if (line === undefined) return undefined;
-  const codeLines = code.split("\n");
-  const rawLines = text.split("\n");
-  let first = codeLines.findIndex((l) => /^\s*describe\b[\w.]*\s*\(/.test(l));
-  if (first === -1) first = codeLines.findIndex((l) => /^\s*(?:it|test)\b[\w.]*\s*\(/.test(l));
-  if (first === -1) return undefined;
-  return hasWhyAbove(rawLines, codeLines, first) ? undefined : line;
+  return [...text.matchAll(importRe)]
+    .filter((m) => isInternalValueImport(m, code))
+    .map((m) => lineOf(starts, m.index + m[0].length - 1))
+    .find((line) => added.has(line));
 }
 
-function contractFindings({ path: file, lines, added }) {
-  const text = lines.join("\n");
-  const code = mask(text);
-  const starts = lineStarts(text);
-  const rawLines = text.split("\n");
-  const codeLines = code.split("\n");
-  const out = [];
-  for (const m of code.matchAll(/\bz\s*\.\s*(string|array|record)\s*\(/g)) {
-    const line = lineOf(starts, m.index + m[0].length - 1);
-    if (!added.has(line)) continue;
-    const close = closing(code, m.index + m[0].length - 1);
-    const chain = chainMethods(code, close);
-    const bounded =
-      m[1] === "string"
-        ? ["max", "length", "regex", "uuid", "datetime"].some((name) => chain.includes(name))
-        : m[1] === "array"
-          ? chain.includes("max") || chain.includes("length")
-          : false;
-    if (bounded) continue;
-    const statement = lineOf(starts, m.index);
-    if (hasWhyAbove(rawLines, codeLines, statement - 1, 1)) continue;
-    out.push({ path: file, line, rule: "bound" });
-  }
-  return out;
+function isInternalValueImport(m, code) {
+  if (m[1] !== undefined || code[m.index + m[0].indexOf("import")] !== "i") return false;
+  return !ENTRY_FILES.has(m[2]) && !m[2].startsWith("test-");
+}
+
+function firstTestBlock(codeLines) {
+  const first = codeLines.findIndex((l) => /^\s*describe\b[\w.]*\s*\(/.test(l));
+  if (first !== -1) return first;
+  return codeLines.findIndex((l) => /^\s*(?:it|test)\b[\w.]*\s*\(/.test(l));
+}
+
+function contractFindings(changed) {
+  const source = sourceOf(changed);
+  return [...source.code.matchAll(/\bz\s*\.\s*(string|array|record)\s*\(/g)]
+    .filter((m) => unboundedAddedShape(source, m))
+    .map((m) => ({
+      path: source.file,
+      line: lineOf(source.starts, m.index + m[0].length - 1),
+      rule: "bound",
+    }));
+}
+
+function unboundedAddedShape(source, m) {
+  const open = m.index + m[0].length - 1;
+  if (!source.added.has(lineOf(source.starts, open))) return false;
+  const chain = chainMethods(source.code, closing(source.code, open));
+  if (BOUNDED_BY[m[1]].some((name) => chain.includes(name))) return false;
+  const statement = lineOf(source.starts, m.index);
+  return !hasWhyAbove(source.lines, source.codeLines, statement - 1, 1);
 }
 
 function chainMethods(code, from) {
@@ -219,10 +215,13 @@ function hasWhyAbove(rawLines, codeLines, index, within = 3) {
   for (let i = index - 1; i >= Math.max(0, index - within); i--) {
     if (WHY.test(rawLines[i]) && codeLines[i] !== rawLines[i]) return true;
   }
-  let i = index - 1;
-  while (i >= 0 && codeLines[i].trim() === "" && rawLines[i].trim() !== "") {
+  return whyInCommentBlock(rawLines, codeLines, index);
+}
+
+function whyInCommentBlock(rawLines, codeLines, index) {
+  for (let i = index - 1; i >= 0; i--) {
+    if (codeLines[i].trim() !== "" || rawLines[i].trim() === "") return false;
     if (WHY.test(rawLines[i])) return true;
-    i--;
   }
   return false;
 }
@@ -256,83 +255,116 @@ function exists(file) {
 
 // why: blanks every comment and the inside of every string and template literal (keeping the
 // quotes, the `${}` code and every newline), so a pattern matched on the result is code: a lint
-// fixture written as a string in a test is not a finding.
+// fixture written as a string in a test is not a finding. Each scanner reads one kind of token at
+// `s.i` and moves past it; what none of them claims is code.
 function mask(text) {
-  const out = text.split("");
-  const n = text.length;
-  const braces = [];
-  let last = "";
-  let i = 0;
-  const blank = (from, to) => {
-    for (let k = from; k < to; k++) if (out[k] !== "\n") out[k] = " ";
-  };
-  const template = (j) => {
-    const start = j;
-    while (j < n) {
-      if (text[j] === "\\") j += 2;
-      else if (text[j] === "`") {
-        blank(start, j);
-        return j + 1;
-      } else if (text[j] === "$" && text[j + 1] === "{") {
-        blank(start, j);
-        braces.push(0);
-        return j + 2;
-      } else j++;
-    }
-    blank(start, n);
-    return n;
-  };
-  while (i < n) {
-    const c = text[i];
-    const d = text[i + 1];
-    if (c === "/" && d === "/") {
-      const end = text.indexOf("\n", i);
-      const stop = end === -1 ? n : end;
-      blank(i, stop);
-      i = stop;
-    } else if (c === "/" && d === "*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end === -1 ? n : end + 2;
-      blank(i, stop);
-      i = stop;
-    } else if (c === '"' || c === "'") {
-      let j = i + 1;
-      while (j < n && text[j] !== c && text[j] !== "\n") j += text[j] === "\\" ? 2 : 1;
-      blank(i + 1, Math.min(j, n));
-      i = j + 1;
-      last = c;
-    } else if (c === "`") {
-      i = template(i + 1);
-      last = "`";
-    } else if (c === "}" && braces.length > 0 && braces[braces.length - 1] === 0) {
-      braces.pop();
-      i = template(i + 1);
-      last = "`";
-    } else if (c === "/" && regexCanStart(text, i, last)) {
-      let j = i + 1;
-      let inClass = false;
-      while (j < n && text[j] !== "\n") {
-        if (text[j] === "\\") j++;
-        else if (text[j] === "[") inClass = true;
-        else if (text[j] === "]") inClass = false;
-        else if (text[j] === "/" && !inClass) break;
-        j++;
-      }
-      i = j + 1;
-      last = "/";
-    } else {
-      if (braces.length > 0 && c === "{") braces[braces.length - 1]++;
-      if (braces.length > 0 && c === "}") braces[braces.length - 1]--;
-      if (!/\s/.test(c)) last = c;
-      i++;
-    }
-  }
-  return out.join("");
+  const s = { text, out: text.split(""), i: 0, braces: [], last: "" };
+  while (s.i < text.length) (SCANNERS.find((scanner) => scanner.at(s)) ?? CODE).scan(s);
+  return s.out.join("");
 }
 
-function regexCanStart(text, i, last) {
-  if (last === "" || "(,=:[!&|?{};+-*%<>~^".includes(last)) return true;
+const SCANNERS = [
+  { at: (s) => s.text.startsWith("//", s.i), scan: (s) => skipComment(s, "\n", 0) },
+  { at: (s) => s.text.startsWith("/*", s.i), scan: (s) => skipComment(s, "*/", 2) },
+  { at: (s) => s.text[s.i] === '"' || s.text[s.i] === "'", scan: scanQuoted },
+  { at: (s) => s.text[s.i] === "`", scan: (s) => scanTemplate(s, s.i + 1) },
+  { at: (s) => s.text[s.i] === "}" && s.braces.at(-1) === 0, scan: resumeTemplate },
+  { at: (s) => s.text[s.i] === "/" && regexCanStart(s), scan: scanRegex },
+];
+const CODE = { scan: scanCode };
+
+function blank(s, from, to) {
+  for (let k = from; k < to; k++) if (s.out[k] !== "\n") s.out[k] = " ";
+}
+
+function skipComment(s, terminator, length) {
+  const found = s.text.indexOf(terminator, s.i + 2);
+  const stop = found === -1 ? s.text.length : found + length;
+  blank(s, s.i, stop);
+  s.i = stop;
+}
+
+function scanQuoted(s) {
+  const quote = s.text[s.i];
+  let j = s.i + 1;
+  while (j < s.text.length && s.text[j] !== quote && s.text[j] !== "\n") {
+    j += s.text[j] === "\\" ? 2 : 1;
+  }
+  blank(s, s.i + 1, Math.min(j, s.text.length));
+  s.i = j + 1;
+  s.last = quote;
+}
+
+function resumeTemplate(s) {
+  s.braces.pop();
+  scanTemplate(s, s.i + 1);
+}
+
+function scanTemplate(s, start) {
+  let j = start;
+  while (j < s.text.length && s.text[j] !== "`" && !s.text.startsWith("${", j)) {
+    j += s.text[j] === "\\" ? 2 : 1;
+  }
+  blank(s, start, Math.min(j, s.text.length));
+  if (s.text.startsWith("${", j)) s.braces.push(0);
+  s.i = Math.min(j + (s.text[j] === "`" ? 1 : 2), s.text.length);
+  s.last = "`";
+}
+
+function scanRegex(s) {
+  let j = s.i + 1;
+  let inClass = false;
+  while (j < s.text.length && s.text[j] !== "\n") {
+    const c = s.text[j];
+    if (c === "/" && !inClass) break;
+    if (c === "[" || c === "]") inClass = c === "[";
+    j += c === "\\" ? 2 : 1;
+  }
+  s.i = j + 1;
+  s.last = "/";
+}
+
+function scanCode(s) {
+  const c = s.text[s.i];
+  const top = s.braces.length - 1;
+  if (top >= 0 && (c === "{" || c === "}")) s.braces[top] += c === "{" ? 1 : -1;
+  if (!/\s/.test(c)) s.last = c;
+  s.i++;
+}
+
+function regexCanStart(s) {
+  if (s.last === "" || "(,=:[!&|?{};+-*%<>~^".includes(s.last)) return true;
   return /\b(?:return|typeof|case|of|in|yield|await|void|delete|throw)$/.test(
-    text.slice(Math.max(0, i - 12), i).trimEnd(),
+    s.text.slice(Math.max(0, s.i - 12), s.i).trimEnd(),
   );
+}
+
+// why: the run comes last, so every rule table above is initialised before it is read.
+const args = process.argv.slice(2);
+let base = "origin/main";
+let head;
+const files = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--base") base = args[++i];
+  else if (args[i] === "--head") head = args[++i];
+  else if (args[i].startsWith("--")) usage();
+  else files.push(args[i]);
+}
+if (base === undefined || (args.includes("--head") && head === undefined)) usage();
+
+const findings = [];
+for (const file of changedFiles({ base, head, files: files.length > 0 ? files : null })) {
+  if (TEST_FILE.test(file.path)) findings.push(...testFindings(file));
+  else if (CONTRACT_FILE.test(file.path) && !HELPER_FILE.test(file.path)) {
+    findings.push(...contractFindings(file));
+  }
+}
+const seen = new Set();
+const unique = findings
+  .map((f) => `${f.path}:${f.line}: ${MESSAGES[f.rule]}`)
+  .filter((line) => !seen.has(line) && seen.add(line));
+for (const line of unique) console.log(line);
+if (unique.length > 0) {
+  console.error(`test-lint: ${unique.length} finding${unique.length === 1 ? "" : "s"}`);
+  process.exit(1);
 }
