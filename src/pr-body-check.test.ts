@@ -35,6 +35,9 @@ function check(body: string, ...args: string[]) {
 
 interface GitHub {
   readonly origin?: boolean;
+  // why: the directory the script's git commands run in; a case about commit ancestry gives a
+  // scratch repository, since CI's unit job checks the repo out one commit deep.
+  readonly cwd?: string;
   readonly comments?: readonly string[];
   // why: what each other `repos/o/r/<path>` answers; null is GitHub's 404.
   readonly routes?: Readonly<Record<string, unknown>>;
@@ -73,7 +76,7 @@ process.stdout.write(JSON.stringify(routes[key]));
     GH_REPO: "o/r",
     GITHUB_ACTIONS: "",
   };
-  let cwd: string | undefined;
+  let cwd = options.cwd;
   if (options.origin === true) {
     delete (env as { GH_REPO?: string }).GH_REPO;
     cwd = join(dir, "clone");
@@ -91,6 +94,25 @@ process.stdout.write(JSON.stringify(routes[key]));
 
 // why: an issue with no Done when, no parent and no stack, for cases about other rules.
 const LONE_ISSUE = { "issues/7": { body: "" }, "issues/7/parent": null };
+
+// why: two commits of our own, so a case about ancestry does not read this clone's history,
+// which CI's unit job fetches one commit deep.
+function scratchRepo(): { dir: string; head: string; older: string } {
+  const dir = mkdtempSync(join(tmpdir(), "pr-body-repo-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+  git("init", "-q");
+  writeFileSync(join(dir, "a"), "1\n");
+  git("add", "a");
+  git("commit", "-qm", "one");
+  const older = git("rev-parse", "HEAD");
+  writeFileSync(join(dir, "a"), "2\n");
+  git("commit", "-qam", "two");
+  return { dir, head: git("rev-parse", "HEAD"), older };
+}
 
 const valid = [
   "Closes #12",
@@ -227,14 +249,13 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
   });
 
   it("fails an open finding, a malformed or repeated round, a round off the head, and two notes comments", () => {
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    const older = execFileSync("git", ["rev-parse", "HEAD~1"], { encoding: "utf8" }).trim();
+    const { dir, head, older } = scratchRepo();
     const ledger = (rounds: string, findings = "[]") =>
       `## Review ledger\n\n${rounds}\n\`\`\`json\n{"findings": ${findings}}\n\`\`\``;
     const task = (...comments: string[]) =>
       fromGitHub(
         { body: valid, head: { ref: "task/7", sha: older } },
-        { comments, routes: LONE_ISSUE },
+        { comments, routes: LONE_ISSUE, cwd: dir },
       );
 
     expect(task(ledger(`Round 1: ${older}\nRound fix-check: ${older}`))).toEqual({
