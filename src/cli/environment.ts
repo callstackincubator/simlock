@@ -21,6 +21,15 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
 
+const EXIT_GRACE_MS = 2_000;
+// why: a daemon whose start failed is already stopping when it answers, so its stopping refusal is the failed start.
+const STARTING_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "DAEMON_CONNECTION_LOST",
+  "DAEMON_STOPPING",
+]);
+// why: the daemon bounds its own startup read at STARTUP_READ_LIMIT_MS, so the CLI waits past it before it calls a daemon that is still starting stuck.
+const STARTING_WAIT_EXTRA_MS = 30_000;
+
 class AutoLaunchAdminConnector {
   private startupDeadline: number | undefined;
 
@@ -33,7 +42,10 @@ class AutoLaunchAdminConnector {
     private readonly checkConfig: () => Promise<void>,
   ) {}
 
-  async connect(resolveCredential: () => Promise<string | undefined>): Promise<SimlockAdminClient> {
+  async connect(
+    resolveCredential: () => Promise<string | undefined>,
+    options: { readonly untilStarted?: boolean } | undefined = undefined,
+  ): Promise<SimlockAdminClient> {
     try {
       return await this.finishConnection(this.connectClient(resolveCredential));
     } catch (error: unknown) {
@@ -52,8 +64,10 @@ class AutoLaunchAdminConnector {
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
-        return await this.finishConnection(this.connectClient(resolveCredential));
+        const client = await this.finishConnection(this.connectClient(resolveCredential));
+        return options?.untilStarted === true ? await this.untilStarted(client, launched) : client;
       } catch (error: unknown) {
+        await this.failStoppingStart(error, options, launched);
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
         if (exit !== undefined)
@@ -70,6 +84,64 @@ class AutoLaunchAdminConnector {
       startTimeoutMessage(errorMessage(lastError), output),
       {},
     );
+  }
+
+  /** why: the first `status.get` answer arrives while the daemon is still converging, and a start that fails later (an HTTP port it cannot bind) must not be reported as running. */
+  private async untilStarted(
+    client: SimlockAdminClient,
+    launched: LaunchedDaemon,
+  ): Promise<SimlockAdminClient> {
+    const { isSimlockError, SimlockError } = await import("../contract/index.js");
+    const { STARTUP_READ_LIMIT_MS } = await import("../core/index.js");
+    const giveUpAt = this.clock.now() + STARTUP_READ_LIMIT_MS + STARTING_WAIT_EXTRA_MS;
+    for (;;) {
+      let health: string | undefined;
+      try {
+        health = (await client.getStatus()).daemon.health;
+      } catch (error: unknown) {
+        if (!isSimlockError(error) || !STARTING_FAILURE_CODES.has(error.code)) throw error;
+      }
+      if (health === "running") return client;
+      if (health === "starting") {
+        if (this.clock.now() >= giveUpAt) {
+          await client.close().catch(() => undefined);
+          throw new SimlockError(
+            "DAEMON_STARTUP_FAILED",
+            "transport",
+            "The daemon is still starting; check simlock daemon status or daemon.log",
+            {},
+          );
+        }
+        await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
+        continue;
+      }
+      await client.close().catch(() => undefined);
+      throw await this.failedStart(launched);
+    }
+  }
+
+  /** why: a daemon whose start failed is already stopping when it answers the startup probe; that refusal is the failed start, reported as the daemon's own error. */
+  private async failStoppingStart(
+    error: unknown,
+    options: { readonly untilStarted?: boolean } | undefined,
+    launched: LaunchedDaemon,
+  ): Promise<void> {
+    if (options?.untilStarted === true && (await isStoppingRefusal(error)))
+      throw await this.failedStart(launched);
+  }
+
+  /** why: a daemon launched through a service manager has no child to exit, so the wait for its exit is short and the log is read either way. */
+  private async failedStart(launched: LaunchedDaemon): Promise<Error> {
+    const { SimlockError } = await import("../contract/index.js");
+    const exit = await Promise.race([
+      launched.exited,
+      new Promise<DaemonExit>((resolve) =>
+        this.clock.setTimer(EXIT_GRACE_MS, () => resolve({ code: null, signal: null })),
+      ),
+    ]);
+    const output = await launched.readOutput().catch(() => "");
+    const { startErrorFrom } = await import("../ports/index.js");
+    return new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
   }
 
   private async connectAfterExit(
@@ -137,6 +209,11 @@ class AutoLaunchAdminConnector {
       if (timer !== undefined) this.clock.cancel(timer);
     }
   }
+}
+
+async function isStoppingRefusal(error: unknown): Promise<boolean> {
+  const { isSimlockError } = await import("../contract/index.js");
+  return isSimlockError(error) && error.code === "DAEMON_STOPPING";
 }
 
 /** why: the class lives behind the ports barrel, which this module must not load at CLI start;
@@ -292,7 +369,7 @@ export function buildCliEnvironment(
     codexHome: ports.codexHome,
     runTool: ports.runTool,
     filesystem,
-    connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
+    connectAdmin: (resolveCredential, options) => autoLaunch.connect(resolveCredential, options),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     daemonEndpointPresent: async () => {
       const { resolveDaemonSocketPath } = await import("../ports/index.js");

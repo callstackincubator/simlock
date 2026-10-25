@@ -60,8 +60,10 @@ export interface CliEnvironment {
   readonly codexHome?: string | undefined;
   readonly runTool: RunTool;
   readonly filesystem: Filesystem;
+  /** why: `untilStarted` makes a launch return only once the daemon has left `starting`, so a start that fails after its first answer is reported as the daemon's own error. */
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
+    options?: { readonly untilStarted?: boolean },
   ) => Promise<SimlockAdminClient>;
   readonly connectExistingAdmin: (
     resolveCredential: () => Promise<string | undefined>,

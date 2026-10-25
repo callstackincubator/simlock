@@ -2223,7 +2223,7 @@ describe(
       expect(answer.error).toBeUndefined();
       const sent = member.fake.rpcRequests("agent_device.command").at(-1)?.params;
       const flags = (sent?.["flags"] ?? {}) as Record<string, unknown>;
-      expect(flags["device"]).toBe(addressOfLease(rig, 1));
+      expect(flags["device"]).toBe(`simlock-${addressOfLease(rig, 1)}`);
     });
 
     it("after a gateway restart, a command naming a `deviceKey` on the adopted lease is accepted and sets it; a later command naming another `deviceKey` is refused `refused: simlock picks the device`", async () => {

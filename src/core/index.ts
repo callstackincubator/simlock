@@ -123,7 +123,7 @@ export {
   type ServiceCheck,
   type StallInput,
 } from "./doctor.js";
-export { StartupRead } from "./startup-read.js";
+export { StartupRead, STARTUP_READ_LIMIT_MS } from "./startup-read.js";
 export { type HostFacts, HostFactsReader } from "./host-facts.js";
 export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
 export type { EnsureOwnedRootOptions } from "./device-root.js";

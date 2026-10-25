@@ -308,7 +308,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#replyEdit = edit;
   }
 
-  // why: agent-device names the device it picked beside the lease in its allocate reply; `"none"` is a reply that names no device.
+  // why: agent-device 0.21.28 names no device in its allocate reply, so a test that needs one in the reply asks for it here; `"none"` is the default.
   nameDeviceInNextReply(device: FakeReplyDevice | "none"): void {
     this.#replyDevice = device;
   }
@@ -522,9 +522,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     });
     return envelope(id, {
       data: {
-        ...(picked === "none" || address === undefined
-          ? {}
-          : { device: { id: address, name: `simlock-${address}`, ...picked } }),
+        ...replyDevice(picked, address),
         lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
       },
       ok: true,
@@ -670,6 +668,16 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       if ("body" in inventory) return new Response(inventory.body, { status: 200 });
       return envelope(id, { data: { devices: inventory.list }, ok: true });
     }
+    // why: agent-device names a leased device `simlock-<id>` in its inventory only, never in the allocate reply.
+    if (command === "devices" && typeof leaseId === "string" && this.leases.has(leaseId)) {
+      const address = this.leases.get(leaseId)?.address;
+      if (address !== undefined) {
+        return envelope(id, {
+          data: { devices: [{ id: address, name: `simlock-${address}` }] },
+          ok: true,
+        });
+      }
+    }
     if (endedLeases.length > 0) {
       const data = command === "batch" ? { endedLeases, results: [] } : { endedLeases };
       return envelope(id, { command, data, ok: true });
@@ -692,6 +700,15 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+// why: agent-device's allocate reply names no device; only a test that asks for one gets one.
+function replyDevice(
+  picked: FakeReplyDevice | "none" | undefined,
+  address: string | undefined,
+): { readonly device?: Record<string, unknown> } {
+  if (picked === undefined || picked === "none" || address === undefined) return {};
+  return { device: { id: address, name: `simlock-${address}`, ...picked } };
 }
 
 export function agentDeviceModuleWith(fakes: {

@@ -62,6 +62,7 @@ import {
   deviceModeWiring,
   modelPreferenceWiring,
   discoverDrivers,
+  logAndroidDiagnostic,
   productionDeviceDataTables,
   resolveDeviceDataTables,
   emitSlimDiagnostic,
@@ -1833,6 +1834,58 @@ describe("startDaemon HTTP gateway bind failure", () => {
       expect(startedIndex).toBeLessThan(stoppingIndex);
     }
   });
+
+  // why: the bind is held until convergence has had every chance to finish, then fails, so a start that does not wait for the listener (either role's convergence) would already have logged "Daemon started".
+  it.each(["worker", "gateway"] as const)(
+    "fails a %s start whose HTTP listener cannot bind before it reports running, stopping with http-start-failed",
+    async (role) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-late-bind-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const sink = new MemoryLogSink();
+      const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+      const port = await freeLoopbackPort();
+      const occupier = createServer();
+      await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+      const hold = holdTcpListen();
+      try {
+        const settled = startDaemon({
+          clock,
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
+          filesystem: new MemoryFilesystem(),
+          hostLoadProbe: null,
+          logger,
+          role,
+          version: "1.2.3",
+        } as StartDaemonOptions).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        await hold.bindRequested;
+        // why: yields whole event-loop turns, not wall time: convergence is in-memory, so a start that does not wait for the bind logs "Daemon started" within them.
+        for (
+          let turn = 0;
+          turn < 200 && !sink.records.some((record) => record.message === "Daemon started");
+          turn += 1
+        ) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        hold.release();
+        expect(String(await settled)).toMatch(/EADDRINUSE|address already in use/i);
+      } finally {
+        hold.restore();
+        await new Promise((resolve) => occupier.close(resolve));
+      }
+
+      const messages = sink.records.map((record) => record.message);
+      expect(messages).not.toContain("Daemon started");
+      const stopping = sink.records.find((record) => record.message === "Daemon stopping");
+      expect(stopping?.fields?.reason).toBe("http-start-failed");
+    },
+  );
 });
 
 async function pollUntilListening(port: number, secret: string): Promise<unknown> {
@@ -2182,6 +2235,67 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     },
   );
 
+  it("logs a warning when the Android driver reports that devices.xml could not be read", async () => {
+    const filesystem = await androidSdk();
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+    const previousUserHome = process.env.ANDROID_USER_HOME;
+    process.env.ANDROID_USER_HOME = "/android-user";
+    try {
+      await filesystem.mkdirp("/android-user");
+      await filesystem.writeFileAtomic("/android-user/devices.xml", "not xml at all {{{");
+      const sink = new MemoryLogSink();
+      const processRunner = new ScriptedProcessRunner([
+        {
+          match: {
+            args: ["list", "device"],
+            command: "/android-sdk/cmdline-tools/latest/bin/avdmanager",
+          },
+          result: { code: 0, stderr: "", stdout: "Available devices:\n" },
+        },
+      ]);
+
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        logger: new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }),
+        processRunner,
+      });
+      await drivers.find((driver) => driver.platform === "android")?.listCatalog();
+
+      expect(sink.records.filter((record) => record.level === "warn")).toContainEqual(
+        expect.objectContaining({
+          fields: expect.objectContaining({ path: "/android-user/devices.xml" }),
+          message: "Android device profile source could not be read",
+        }),
+      );
+    } finally {
+      if (previousUserHome === undefined) {
+        delete process.env.ANDROID_USER_HOME;
+      } else {
+        process.env.ANDROID_USER_HOME = previousUserHome;
+      }
+    }
+  });
+
+  it("logs a warning, with the AVD name and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
+    const sink = new MemoryLogSink();
+
+    logAndroidDiagnostic(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }), {
+      avdName: "simlock_one",
+      kind: "snapshot-cold-boot",
+      readyAfterMs: 30_000,
+    });
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        fields: { avdName: "simlock_one", readyAfterMs: 30_000 },
+        level: "warn",
+      }),
+    ]);
+  });
+
   /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
@@ -2203,7 +2317,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "processRunner">
+      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "logger" | "processRunner">
     > = {},
   ) {
     return discoverDrivers({
@@ -2216,11 +2330,13 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: INSTANCE_ID,
-      logger: new JsonLinesLogger({
-        clock: new FakeClock(),
-        level: "debug",
-        sink: new MemoryLogSink(),
-      }),
+      logger:
+        overrides.logger ??
+        new JsonLinesLogger({
+          clock: new FakeClock(),
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
       processRunner: overrides.processRunner ?? new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(livePids),
       simlockHome: SIMLOCK_HOME,
@@ -2778,6 +2894,52 @@ function delayTcpListen(delayMs: number): () => void {
   } as typeof Server.prototype.listen;
   return () => {
     Server.prototype.listen = original;
+  };
+}
+
+/** why: holds every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) until
+ * `release()`, then runs it for real; a Unix-socket `listen(path, callback)` call (a string first
+ * argument) passes straight through. `bindRequested` settles when the first TCP bind is asked for.
+ * Holds the HTTP gateway's own bind open without touching `src/http`: `@hono/node-server`'s
+ * `serve()` ultimately calls `http.Server#listen`, which is `net.Server`'s own method. Always
+ * call `restore`, even on failure. */
+function holdTcpListen(): {
+  readonly bindRequested: Promise<void>;
+  readonly release: () => void;
+  readonly restore: () => void;
+} {
+  const original = Server.prototype.listen;
+  type ListenFn = (...callArgs: unknown[]) => Server;
+  const held: Array<() => void> = [];
+  let released = false;
+  let requested: () => void = () => undefined;
+  const bindRequested = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  Server.prototype.listen = function patchedListen(this: Server, ...args: unknown[]) {
+    const isTcp =
+      typeof args[0] === "number" ||
+      (typeof args[0] === "object" && args[0] !== null && !("path" in (args[0] as object)));
+    if (!isTcp) {
+      return (original as ListenFn).apply(this, args);
+    }
+    const run = (): void => {
+      (original as ListenFn).apply(this, args);
+    };
+    if (released) run();
+    else held.push(run);
+    requested();
+    return this;
+  } as typeof Server.prototype.listen;
+  return {
+    bindRequested,
+    release: () => {
+      released = true;
+      for (const run of held.splice(0)) run();
+    },
+    restore: () => {
+      Server.prototype.listen = original;
+    },
   };
 }
 
